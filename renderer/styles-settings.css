@@ -382,6 +382,165 @@
   color: #e19a9a;
 }
 
+.source-plugin-settings-card {
+  display: grid;
+  grid-template-columns: minmax(240px,.72fr) minmax(0,1.28fr);
+  gap: 22px;
+  margin-bottom: 12px;
+  padding: 18px 19px;
+  border: 1px solid #2d3d52;
+  border-radius: 16px;
+  background: radial-gradient(circle at 100% 0,rgba(76,139,245,.1),transparent 34%),linear-gradient(120deg,#0f1a20,#0a1219);
+  box-shadow: inset 0 1px rgba(255,255,255,.025);
+}
+
+.source-plugin-settings-copy>span {
+  color: #7188ad;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.source-plugin-settings-copy h3 {
+  margin: 7px 0 0;
+  color: #e3e9f2;
+  font-size: 16px;
+}
+
+.source-plugin-settings-copy p {
+  max-width: 430px;
+  margin: 7px 0 0;
+  color: #82909e;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.source-plugin-settings-list {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 9px;
+}
+
+.source-plugin-option {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(0,1fr) 38px;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb,var(--plugin) 38%,#263740);
+  border-radius: 12px;
+  background: color-mix(in srgb,var(--plugin) 8%,#0c151c);
+  cursor: pointer;
+  transition: border-color .18s ease,background .18s ease,opacity .18s ease,transform .18s ease;
+}
+
+.source-plugin-option:hover:not(.unavailable) {
+  border-color: color-mix(in srgb,var(--plugin) 60%,#31454e);
+  transform: translateY(-1px);
+}
+
+.source-plugin-option.disabled {
+  border-color: #29343c;
+  background: #0b1218;
+  opacity: .76;
+}
+
+.source-plugin-option.unavailable {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.source-plugin-option[data-busy="true"] {
+  cursor: wait;
+  opacity: .62;
+  pointer-events: none;
+}
+
+.source-plugin-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb,var(--plugin) 48%,#31414d);
+  border-radius: 10px;
+  background: color-mix(in srgb,var(--plugin) 13%,#111a22);
+  color: color-mix(in srgb,var(--plugin) 78%,#e7edf3);
+  font: 800 11px/1 "Geist Mono","Cascadia Code",Consolas,monospace;
+}
+
+.source-plugin-copy {
+  min-width: 0;
+}
+
+.source-plugin-copy b,
+.source-plugin-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-plugin-copy b {
+  color: #e3e9ef;
+  font-size: 12px;
+}
+
+.source-plugin-copy small {
+  margin-top: 4px;
+  color: #748590;
+  font-size: 11px;
+}
+
+.source-plugin-copy small+small {
+  color: #64747f;
+}
+
+.source-plugin-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.source-plugin-toggle {
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border: 1px solid #3b4b54;
+  border-radius: 999px;
+  background: #172129;
+  transition: background .18s ease,border-color .18s ease;
+}
+
+.source-plugin-toggle i {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #72818a;
+  transition: transform .18s ease,background .18s ease;
+}
+
+.source-plugin-option input:checked+.source-plugin-toggle {
+  border-color: color-mix(in srgb,var(--plugin) 72%,#4b6477);
+  background: color-mix(in srgb,var(--plugin) 24%,#152530);
+}
+
+.source-plugin-option input:checked+.source-plugin-toggle i {
+  transform: translateX(16px);
+  background: var(--plugin);
+}
+
+.source-plugin-option:has(input:focus-visible) {
+  outline: 2px solid color-mix(in srgb,var(--plugin) 78%,#fff);
+  outline-offset: 2px;
+}
+
 .provider-visibility-card {
   display: grid;
   grid-template-columns: minmax(240px,.72fr) minmax(0,1.28fr);
@@ -896,6 +1055,7 @@ body[data-current-view="settings"] .topbar h1 {
 
 @media (max-width: 880px) {
   .attention-popup-settings-card,
+  .source-plugin-settings-card,
   .provider-visibility-card {
     grid-template-columns: 1fr;
   }
@@ -903,6 +1063,7 @@ body[data-current-view="settings"] .topbar h1 {
 
 @media (max-width: 560px) {
   .attention-popup-settings-card,
+  .source-plugin-settings-list,
   .provider-visibility-list {
     grid-template-columns: 1fr;
   }

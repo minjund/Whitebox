@@ -1,9 +1,10 @@
 # Legacy update bridge
 
-Whitebox versions 1.6.3 through 1.6.22 only trust release assets whose URL is
-under `minjund/LodeToAgent`. GitHub repository redirects return canonical
-`minjund/Whitebox` asset URLs, so those installed binaries cannot download a
-current release directly.
+Published Whitebox versions 1.6.3-1.6.14 and 1.6.16-1.6.22 only trust release
+assets whose URL is under `minjund/LodeToAgent`. Version 1.6.15 was never
+published. GitHub repository redirects return canonical `minjund/Whitebox`
+asset URLs, so those installed binaries cannot download a current release
+directly.
 
 The recovery channel is intentionally two-step:
 
@@ -30,14 +31,41 @@ helper extracted from the installed bridge and requires the current Whitebox
 relaunch handshake before exposing the bridge artifact for download.
 
 The frozen v1.6.3 bootstrap and app process both watch and remove the same
-helper-ready file. If the app wins that race, the bootstrap can time out after
-the silent NSIS child has already started. The integration accepts only that
-exact historical timeout from the same fresh helper log, requires exactly one
-successful installer exit (`exitCode=0`) with no install, version, or relaunch
-failure marker, then requires both the installed EXE and packaged `app.asar` to
-report 1.6.23 before reopening the updated app. In that case the user may need
-to start LoadToAgent once more, but never needs to download or run an installer
-manually. Every other first-hop failure remains fatal.
+helper-ready file. If the bootstrap acknowledges first, the integration
+requires the official helper's exact eight-line raw success log: `helperStarted`,
+`exitCode=0`, the exact v1.6.23 `candidate` and `relaunchPath`, followed by the
+attempt-one `relaunchStarted`, `windowRestored`, `rendererReady`, and
+`relaunchReady` records bound to one authenticated PID and a positive window
+handle. The official v1.6.3 source has no `allAppProcessesStopped=true` marker;
+that omission is accepted only for this fully pinned path after the parent and
+installer exit, v1.6.23 EXE and `app.asar` stabilize, the native profile is
+proven, and all helper/bootstrap/ready artifacts self-delete.
+
+If the app wins the ready-file race, the bootstrap can terminate the helper at
+any complete boundary of the eight official helper lines. The only timeout
+grammar is an exact non-empty prefix followed by the literal 10-second
+`bootstrapError`; the only natural-exit race grammar is all eight lines followed
+by the exact code-zero bootstrap error. BOM, CRLF, order, parent PID, path,
+version, relaunch PID, and window handle are exact. Every nonzero, duplicate,
+retry, recovery, stopping, or otherwise extra line remains fatal.
+
+`Start-Process` occurs between the logged `relaunchPath` and `relaunchStarted`,
+so a four-line prefix does not prove that no app was launched. The integration
+allows reopening only after no installed process, final or temporary signal
+exists and the owned native profile is still marker-only. At the four-line gap,
+all four absence conditions must remain stable for at least five seconds;
+otherwise the same-run compact renderer JSON is required to authenticate the
+main PID, exact executable, process ancestry, creation time, exact captured
+helper direct parent, positive live window equal to any helper-recorded handle,
+and native profile. Partial logged
+relaunches require that JSON; a complete `relaunchReady` trace may have already
+self-deleted it, but its exact 48-hex token and direct-child path remain
+mandatory. Exact owned helper or authenticated renderer residue is removed
+one file at a time, while bootstrap, ready, and temporary files must already be
+absent and stay absent. Missing identity, signal, cleanup, or stable package
+evidence is fatal; the 10-second timeout is never success by itself. A verified
+fallback may require the user to start LoadToAgent once more, but never to
+download or run an installer manually.
 
 Run that workflow only from the fully reviewed commit, passing its complete
 40-character commit SHA as `source_sha`. Keep the Actions run summary with the

@@ -12,7 +12,7 @@ const { parseArguments } = require('../../bin/whitebox');
 const { parseGeneric, buildSummary, snapshotWithoutSessions } = require('../../src/agentMonitor');
 const { AgentRunner, commandSpec, handleClaude } = require('../../src/agentRunner');
 const { BridgeServer, decodeBase64 } = require('../../src/bridgeServer');
-const { ProcessMonitor, processRows, powershellProcessRows, posixProcessRows, providerFromPosixProcess, selectAgentProcesses, processSessionExternalId, promptFingerprint, bridgeLinkScore, applyRuntimePresence, inferredBridgeBindings } = require('../../src/processMonitor');
+const { ProcessMonitor, processRows, powershellProcessRows, posixProcessRows, providerFromPosixProcess, selectAgentProcesses, processSessionExternalId, promptFingerprint, bridgeLinkScore, applyRuntimePresence, forkBridgeBindingGuardSessionIds, inferredBridgeBindings } = require('../../src/processMonitor');
 const { TerminalManager, normalizeLaunchOptions, launchSpec, resolveWindowsCommand, resolvePosixShell, killPtyTree } = require('../../src/terminalManager');
 const {
   TerminalHostServer,
@@ -486,6 +486,73 @@ function registerNativeProcessTests(context) {
     const oneHistory = ambiguousTerminals.find(session => session.id === 'codex:one-history');
     assert.equal((oneHistory.runtimePresence || []).some(presence => presence.kind === 'bridge'), false);
     assert.equal(ambiguousTerminals.filter(session => session.id.startsWith('bridge:terminal:')).length, 2);
+
+    const forkSourceSessionId = 'codex:desktop-source';
+    const forkBridge = {
+      id: 'terminal:fork', terminalId: 'terminal:fork', provider: 'codex', pid: 777,
+      cwd: 'D:\\repo', startedAt: '2026-07-14T09:59:30Z', environment: 'windows', distro: '',
+      creationId: 'create:fork-proof', forkProofAuthority: 'codex-fork-lineage-v1',
+      agentForkSourceSessionId: forkSourceSessionId,
+      agentForkSourceSignature: `acs1:${'a'.repeat(64)}`,
+    };
+    const forkChild = {
+      ...base,
+      id: 'codex:fork-child', externalId: 'fork-child', clientKind: 'codex-cli',
+      startedAt: '2026-07-14T09:59:35Z', messages: [],
+      forkSourceSessionId,
+      forkHistoryBaseSessionId: forkSourceSessionId,
+      forkHistoryEndOrdinalExclusive: 7111,
+      forkHistoryEndByteOffset: 33758971,
+    };
+    const observedFork = applyRuntimePresence([forkChild], {}, { processes: [] }, now, [forkBridge]);
+    assert.deepStrictEqual(inferredBridgeBindings(observedFork), [],
+      'Codex가 child ID를 직접 반환하지 않는 동안에는 lineage/cwd/time만으로 fork transcript를 채택하면 안 됩니다.');
+    assert.equal(observedFork.some(session => session.id === 'bridge:terminal:fork'), false,
+      '원본 카드에 연결된 provisional fork PTY를 별도 synthetic 대화 카드로 노출하면 안 됩니다.');
+    assert.deepStrictEqual(forkBridgeBindingGuardSessionIds([forkChild], [forkBridge]), ['codex:fork-child']);
+
+    const childVariant = (id, overrides = {}) => ({
+      ...forkChild,
+      id: `codex:${id}`,
+      externalId: id,
+      ...overrides,
+    });
+    const guardedVariants = [
+      childVariant('fork-child-source-only', { forkHistoryBaseSessionId: '' }),
+      childVariant('fork-child-history-only', { forkSourceSessionId: '', forkHistoryBaseSessionId: forkSourceSessionId }),
+      childVariant('fork-child-conflicting-source', { forkHistoryBaseSessionId: 'codex:other-source' }),
+      childVariant('fork-child-conflicting-history', { forkSourceSessionId: 'codex:other-source' }),
+      childVariant('fork-child-slow', { startedAt: '2026-07-14T10:05:00Z' }),
+      childVariant('fork-child-cwd-drift', { cwd: 'D:\\moved-repo', originCwd: 'D:\\different-origin' }),
+    ];
+    assert.deepStrictEqual(
+      forkBridgeBindingGuardSessionIds(guardedVariants, [forkBridge]).sort(),
+      guardedVariants.map(session => session.id).sort(),
+      'live writer 동안에는 한 lineage 필드만 맞거나 cwd/시각이 달라도 source child 카드를 숨겨야 합니다.',
+    );
+    assert.equal(bridgeLinkScore(guardedVariants[0], forkBridge, now), -Infinity);
+
+    const unguardedVariants = [
+      childVariant('fork-child-wrong-lineage', {
+        forkSourceSessionId: 'codex:other-source',
+        forkHistoryBaseSessionId: 'codex:other-source',
+      }),
+      childVariant('fork-child-no-lineage', { forkSourceSessionId: '', forkHistoryBaseSessionId: '' }),
+      childVariant('fork-child-other-environment', { environment: { kind: 'macos', distro: '' } }),
+      childVariant('fork-child-other-distro', { environment: { kind: 'windows', distro: 'Ubuntu' } }),
+    ];
+    assert.deepStrictEqual(forkBridgeBindingGuardSessionIds(unguardedVariants, [forkBridge]), [],
+      'source lineage 또는 environment/distro가 다른 transcript까지 provisional fork child로 추측하면 안 됩니다.');
+
+    const ambiguousForks = applyRuntimePresence([
+      forkChild,
+      { ...forkChild, id: 'codex:fork-child-2', externalId: 'fork-child-2' },
+    ], {}, { processes: [] }, now, [forkBridge]);
+    assert.deepStrictEqual(inferredBridgeBindings(ambiguousForks), []);
+    assert.deepStrictEqual(forkBridgeBindingGuardSessionIds([
+      forkChild,
+      { ...forkChild, id: 'codex:fork-child-2', externalId: 'fork-child-2' },
+    ], [forkBridge]).sort(), ['codex:fork-child', 'codex:fork-child-2']);
   });
 
 }
@@ -4230,13 +4297,18 @@ function registerTerminalLifecycleTests(context) {
     replacementServer?.dispose();
   });
 
-  test('native PTY 입력 정책이 오래된 v10 호스트는 자연 종료를 확인한 뒤 v12 호스트로 교체한다', async () => {
+  test('fork lineage를 모르는 protocol-12 호스트는 자연 종료를 확인한 뒤 protocol-13 호스트로 교체한다', async () => {
     class EmptyManager extends EventEmitter {
       constructor(sessions = []) {
         super();
         this.sessions = sessions;
+        this.createCalls = 0;
       }
       list() { return this.sessions.map(session => ({ ...session })); }
+      create(options) {
+        this.createCalls += 1;
+        return { id: 'terminal:unexpected-legacy-create', ...options };
+      }
       on() { return super.on(...arguments); }
       removeListener() { return super.removeListener(...arguments); }
     }
@@ -4254,23 +4326,23 @@ function registerTerminalLifecycleTests(context) {
     const transitionOrder = [];
     oldServer = new TerminalHostServer({
       manager,
-      endpoint: endpoint('v10'),
+      endpoint: endpoint('v12'),
       discoveryFile: discovery,
-      token: 'v10-protocol-token',
+      token: 'v12-protocol-token',
       idleShutdownMs: 50,
       onShutdown: () => {
         legacyExitedNaturally = true;
         transitionOrder.push('legacy-exit');
         oldServer.dispose();
-        // This test simulates a v10 daemon with the current server class. Its
-        // v12 dispose validator intentionally cannot remove the tampered v10
-        // discovery, while the real v10 daemon removes its own discovery.
+        // This test simulates a protocol-12 daemon with the current server
+        // class. Its protocol-13 dispose validator intentionally cannot remove
+        // the tampered discovery, while the real old daemon removes its own.
         removeLegacyDiscovery(discovery);
       },
     });
     await oldServer.start();
     const oldDiscovery = JSON.parse(fs.readFileSync(discovery, 'utf8'));
-    fs.writeFileSync(discovery, JSON.stringify({ ...oldDiscovery, protocol: 10 }), 'utf8');
+    fs.writeFileSync(discovery, JSON.stringify({ ...oldDiscovery, protocol: 12 }), 'utf8');
     manager.sessions = [];
 
     let replacementServer = null;
@@ -4283,9 +4355,9 @@ function registerTerminalLifecycleTests(context) {
         transitionOrder.push('spawn');
         replacementServer = new TerminalHostServer({
           manager,
-          endpoint: endpoint('v12'),
+          endpoint: endpoint('v13'),
           discoveryFile: discovery,
-          token: 'v12-protocol-token',
+          token: 'v13-protocol-token',
         });
         await replacementServer.start();
       },
@@ -4296,14 +4368,14 @@ function registerTerminalLifecycleTests(context) {
         && error.retryable === true,
     );
     assert.equal(await waitUntil(() => client.connected, 4_000), true,
-      'idle v10 verifier가 연결을 놓은 뒤 legacy daemon이 자연 종료되면 v12를 시작해야 합니다.');
+      'idle protocol-12 verifier가 연결을 놓은 뒤 legacy daemon이 자연 종료되면 protocol-13을 시작해야 합니다.');
 
     const replacementDiscovery = JSON.parse(fs.readFileSync(discovery, 'utf8'));
-    assert.equal(TERMINAL_HOST_PROTOCOL, 12);
+    assert.equal(TERMINAL_HOST_PROTOCOL, 13);
     assert.equal(legacyExitedNaturally, true);
-    assert.equal(terminateCalls, 0, '인증된 idle v10 host도 tree-kill하면 안 됩니다.');
+    assert.equal(terminateCalls, 0, '인증된 idle protocol-12 host도 tree-kill하면 안 됩니다.');
     assert.equal(client.connected, true);
-    assert.equal(replacementDiscovery.protocol, 12);
+    assert.equal(replacementDiscovery.protocol, 13);
     assert.deepStrictEqual(transitionOrder, ['legacy-exit', 'spawn']);
     client.dispose();
     replacementServer?.dispose();
@@ -4320,9 +4392,9 @@ function registerTerminalLifecycleTests(context) {
     let activeLegacyExitedNaturally = false;
     activeOldServer = new TerminalHostServer({
       manager: activeManager,
-      endpoint: endpoint('active-v10'),
+      endpoint: endpoint('active-v12'),
       discoveryFile: activeDiscovery,
-      token: 'active-v10-protocol-token',
+      token: 'active-v12-protocol-token',
       idleShutdownMs: 50,
       onShutdown: () => {
         activeLegacyExitedNaturally = true;
@@ -4332,7 +4404,7 @@ function registerTerminalLifecycleTests(context) {
     });
     await activeOldServer.start();
     const activeOldDiscovery = JSON.parse(fs.readFileSync(activeDiscovery, 'utf8'));
-    fs.writeFileSync(activeDiscovery, JSON.stringify({ ...activeOldDiscovery, protocol: 10 }), 'utf8');
+    fs.writeFileSync(activeDiscovery, JSON.stringify({ ...activeOldDiscovery, protocol: 12 }), 'utf8');
 
     let activeTerminateCalls = 0;
     let activeSpawnCalls = 0;
@@ -4345,9 +4417,9 @@ function registerTerminalLifecycleTests(context) {
         activeSpawnCalls += 1;
         activeReplacementServer = new TerminalHostServer({
           manager: activeManager,
-          endpoint: endpoint('active-v12'),
+          endpoint: endpoint('active-v13'),
           discoveryFile: activeDiscovery,
-          token: 'active-v12-protocol-token',
+          token: 'active-v13-protocol-token',
         });
         await activeReplacementServer.start();
       },
@@ -4360,15 +4432,30 @@ function registerTerminalLifecycleTests(context) {
     );
     assert.equal(activeTerminateCalls, 0, '실행 중인 구버전 PTY가 있으면 host tree를 종료하면 안 됩니다.');
     assert.equal(activeSpawnCalls, 0, '실행 중인 구버전 PTY가 있으면 대체 host도 시작하면 안 됩니다.');
+    await assert.rejects(
+      activeClient.create({
+        type: 'agent',
+        provider: 'codex',
+        args: ['fork', '019f-protocol-12-source'],
+        sessionBackend: 'direct',
+        agentForkSourceSessionId: 'codex:019f-protocol-12-source',
+        agentForkSourceSignature: `acs1:${'a'.repeat(64)}`,
+        creationId: 'create:protocol-12-fork-blocked',
+      }),
+      error => error.code === 'TERMINAL_HOST_REPLACEMENT_DEFERRED_ACTIVE_SESSIONS',
+    );
+    assert.equal(activeManager.createCalls, 0,
+      'protocol-12 host가 새 lineage 계약을 모르는 상태에서 codex fork를 실행하면 안 됩니다.');
+    assert.equal(activeSpawnCalls, 0, 'fork 요청도 active legacy host를 우회해 replacement를 시작하면 안 됩니다.');
 
     activeManager.sessions = [];
     activeManager.emit('state', { change: 'updated', session: null, sessions: [] });
     assert.equal(await waitUntil(() => activeClient.connected, 4_000), true,
-      '구버전 PTY가 모두 끝나고 daemon이 자연 종료되면 background retry가 v12를 시작해야 합니다.');
+      '구버전 PTY가 모두 끝나고 daemon이 자연 종료되면 background retry가 protocol-13을 시작해야 합니다.');
     assert.equal(activeLegacyExitedNaturally, true);
     assert.equal(activeTerminateCalls, 0);
     assert.equal(activeSpawnCalls, 1);
-    assert.equal(JSON.parse(fs.readFileSync(activeDiscovery, 'utf8')).protocol, 12);
+    assert.equal(JSON.parse(fs.readFileSync(activeDiscovery, 'utf8')).protocol, 13);
     activeClient.dispose();
     activeReplacementServer?.dispose();
 
@@ -4381,14 +4468,14 @@ function registerTerminalLifecycleTests(context) {
     let raceOldServer = null;
     raceOldServer = new TerminalHostServer({
       manager: raceManager,
-      endpoint: endpoint('race-v10'),
+      endpoint: endpoint('race-v12'),
       discoveryFile: raceDiscovery,
-      token: 'race-v10-protocol-token',
+      token: 'race-v12-protocol-token',
       idleShutdownMs: 50,
     });
     await raceOldServer.start();
     const raceOldDiscovery = JSON.parse(fs.readFileSync(raceDiscovery, 'utf8'));
-    fs.writeFileSync(raceDiscovery, JSON.stringify({ ...raceOldDiscovery, protocol: 10 }), 'utf8');
+    fs.writeFileSync(raceDiscovery, JSON.stringify({ ...raceOldDiscovery, protocol: 12 }), 'utf8');
     raceManager.sessions = [];
 
     let emptySnapshotObserved = false;

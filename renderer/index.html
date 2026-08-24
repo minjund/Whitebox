@@ -27,7 +27,7 @@
           </div>
           <button id="sidebarNewProjectBtn" type="button" aria-label="프로젝트 추가" data-i18n-aria-label="studio.sidebar.new_project" title="프로젝트 추가" data-i18n-title="studio.sidebar.new_project">＋</button>
         </header>
-        <div id="projectSidebarList" class="project-sidebar-list" role="toolbar" aria-orientation="vertical" aria-label="프로젝트별 작업 보기" data-i18n-aria-label="studio.sidebar.project_filter"></div>
+        <div id="projectSidebarList" class="project-sidebar-list" role="tree" aria-label="프로젝트별 작업 보기" data-i18n-aria-label="studio.sidebar.project_filter"></div>
       </section>
 
       <section class="sidebar-section">
@@ -202,6 +202,15 @@
             <span class="attention-popup-toggle" aria-hidden="true"><i></i></span>
             <span><b data-i18n="settings.attention_popups.toggle_label">권한·질문 팝업</b><small id="attentionPopupStatus" aria-live="polite">켜짐</small></span>
           </label>
+        </section>
+
+        <section id="sourcePluginSettingsCard" class="source-plugin-settings-card" aria-labelledby="sourcePluginSettingsTitle">
+          <div class="source-plugin-settings-copy">
+            <span data-i18n="settings.plugins.eyebrow">외부 도구 연동</span>
+            <h3 id="sourcePluginSettingsTitle" data-i18n="settings.plugins.title">프로젝트 플러그인</h3>
+            <p id="sourcePluginSettingsDescription" data-i18n="settings.plugins.description">활성화한 플러그인의 로컬 작업 기록만 읽습니다. 왼쪽 목록에서 프로젝트를 열면 연결된 프로그램과 플러그인을 구분해 볼 수 있습니다.</p>
+          </div>
+          <div id="sourcePluginSettingsList" class="source-plugin-settings-list" aria-describedby="sourcePluginSettingsDescription"></div>
         </section>
 
         <section class="provider-visibility-card" aria-labelledby="providerVisibilityTitle">

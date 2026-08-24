@@ -5,6 +5,18 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.6 - 2026-08-24
+
+- Open Codex Desktop conversations in a provider-native forked PTY instead of
+  attaching a second writer to the immutable original thread, while preserving
+  the prior conversation context and preventing passive duplicate forks.
+- Add opt-in OpenCode and Aside source integrations with explicit provenance,
+  project filtering, read-only imported history, and fail-closed control
+  boundaries for app-owned work.
+- Refine the project studio, source filters, settings, and embedded terminal
+  lifecycle so refresh, attention, and explicit user actions cannot race into
+  duplicate sessions or replace the active PTY.
+
 ## 1.7.5 - 2026-08-24
 
 - Keep the Windows installer-ready signal until both the app and bootstrap have
@@ -13,9 +25,9 @@ GitHub release notes remain the authoritative version history.
 - Exercise the real packaged 1.7.3 updater against each new Windows installer
   before publication, including its frozen one-reopen recovery path and the
   corrected automatic relaunch handshake in the new package.
-- Restore updates for installed 1.6.3-1.6.22 Windows clients through an
-  immutable LoadToAgent compatibility bridge, then verify the second hop to
-  the latest Whitebox release against the live GitHub channels.
+- Restore updates for published 1.6.3-1.6.14 and 1.6.16-1.6.22 Windows clients
+  through an immutable LoadToAgent compatibility bridge, then verify the
+  second hop to the latest Whitebox release against the live GitHub channels.
 
 ## 1.7.0 - 2026-08-13
 

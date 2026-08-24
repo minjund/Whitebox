@@ -30,11 +30,72 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, parsed));
 }
 
-function openCodeDbPath(options = {}) {
-  if (options.dbPath) return path.resolve(String(options.dbPath));
+function openCodeDataDir(options = {}) {
   const env = options.env || process.env;
-  if (env.OPENCODE_DATA_DIR) return path.resolve(String(env.OPENCODE_DATA_DIR), 'opencode.db');
-  return path.join(options.homeDir || options.home || os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
+  if (options.dataDir) return path.resolve(String(options.dataDir));
+  // OPENCODE_DATA_DIR is a legacy Whitebox integration override. OpenCode
+  // itself resolves Global.Path.data from XDG_DATA_HOME.
+  if (env.OPENCODE_DATA_DIR) return path.resolve(String(env.OPENCODE_DATA_DIR));
+  if (env.XDG_DATA_HOME) return path.resolve(String(env.XDG_DATA_HOME), 'opencode');
+  return path.join(options.homeDir || options.home || os.homedir(), '.local', 'share', 'opencode');
+}
+
+function dbPathKey(file, platform = process.platform) {
+  const normalized = file === ':memory:' ? file : path.normalize(file);
+  return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function uniqueDbPaths(files, platform) {
+  const seen = new Set();
+  const result = [];
+  for (const file of files) {
+    if (!file) continue;
+    const normalized = file === ':memory:' ? file : path.normalize(file);
+    const key = dbPathKey(normalized, platform);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function openCodeDbPaths(options = {}) {
+  const env = options.env || process.env;
+  const platform = options.platform || process.platform;
+  if (options.dbPath) {
+    const explicit = String(options.dbPath);
+    return [explicit === ':memory:' ? explicit : path.resolve(explicit)];
+  }
+  if (Array.isArray(options.dbPaths) && options.dbPaths.length) {
+    return uniqueDbPaths(options.dbPaths.map(value => {
+      const file = String(value || '');
+      return file === ':memory:' ? file : path.resolve(file);
+    }), platform);
+  }
+
+  const dataDir = openCodeDataDir(options);
+  if (env.OPENCODE_DB) {
+    const configured = String(env.OPENCODE_DB);
+    if (configured === ':memory:') return [configured];
+    return [path.isAbsolute(configured) ? path.normalize(configured) : path.resolve(dataDir, configured)];
+  }
+
+  const canonical = path.join(dataDir, 'opencode.db');
+  let channelFiles = [];
+  try {
+    channelFiles = fs.readdirSync(dataDir, { withFileTypes: true })
+      .filter(entry => /^opencode-[a-zA-Z0-9._-]+\.db$/.test(entry.name) && entry.isFile())
+      .map(entry => path.join(dataDir, entry.name))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (_missingDataDirectory) {
+    // The canonical path remains watchable even before OpenCode creates it.
+  }
+  return uniqueDbPaths([canonical, ...channelFiles], platform);
+}
+
+function openCodeDbPath(options = {}) {
+  const candidates = openCodeDbPaths(options);
+  return candidates.find(file => file === ':memory:' || fs.existsSync(file)) || candidates[0];
 }
 
 function omoConfigPaths(options = {}) {
@@ -147,10 +208,12 @@ class OmoOpenCodeMonitor {
   }
 
   watchRoots() {
+    if (this.dbPath === ':memory:') return [];
     return [path.dirname(this.dbPath)];
   }
 
   watchFiles() {
+    if (this.dbPath === ':memory:') return [];
     return [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`];
   }
 
@@ -393,7 +456,9 @@ module.exports = {
   hasOmoSessionEvidence,
   omoConfigPaths,
   normalizeModelProvider,
+  openCodeDataDir,
   openCodeDbPath,
+  openCodeDbPaths,
   parseOpenCodeSession,
   parsedMessageRow,
   parsedPartRow,

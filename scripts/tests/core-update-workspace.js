@@ -9,7 +9,12 @@ const { EventEmitter } = require('events');
 const packageMetadata = require('../../package.json');
 const { parseCliArguments, desktopLaunchSpec, readCodexEndpoint } = require('../../bin/whitebox');
 const { providerList, normalizeProvider, modelContextWindow } = require('../../src/providerRegistry');
-const { UpdateManager, compareVersions, normalizeVersion, safeFileName, selectReleaseAsset } = require('../../src/updateManager');
+const { UpdateManager, compareVersions, normalizeVersion, safeFileName } = require('../../src/updateManager');
+const {
+  assertReleaseAssetSelections,
+  fixtureReleaseAssets,
+  selectionDecoys,
+} = require('../release-asset-contract');
 const {
   canInstallSilently,
   findInstalledDesktopApp,
@@ -29,7 +34,11 @@ const {
   readBundleMetadata,
   terminateApplication,
 } = require('../../src/macUpdateHelper');
-const { readUpdateRelaunchRequest, signalRendererReady } = require('../../src/updateRelaunch');
+const {
+  applyWindowsUpdateRelaunchProfile,
+  readUpdateRelaunchRequest,
+  signalRendererReady,
+} = require('../../src/updateRelaunch');
 const { normalizeWorkspaces, readWorkspaces, removeWorkspace, writeWorkspaces } = require('../../src/workspaceStore');
 const { macPathEntries, preferredNvmBin } = require('../../src/platformPath');
 const { ensureMacNodePtyRuntime, unpackedAsarPath } = require('../../src/nodePtyRuntime');
@@ -37,6 +46,11 @@ const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('../
 const afterPack = require('../after-pack');
 const legacyBridgeConfig = require('../legacy-update-bridge.config');
 const { classifyNameStatus, parseNameStatus } = require('../updater-review-scope');
+const {
+  IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR,
+  IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+  parseImmutableV163FirstHopLog,
+} = require('../immutable-v163-first-hop-contract');
 const {
   checkUpdateCompatibilityCohorts,
   cohortList,
@@ -526,6 +540,135 @@ function registerCliAndUpdateTests(context) {
     assert.deepStrictEqual(await signalRendererReady({ environment: {} }), { signaled: false, readyPath: '' });
   });
 
+  test('Windows 업데이트 재실행은 검증된 격리 APPDATA를 Electron 프로필로 적용한다', () => {
+    const appDataPath = 'C:\\attempt\\roaming';
+    const userDataPath = `${appDataPath}\\Whitebox`;
+    const directoryRecords = new Map([
+      [appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: false }],
+    ]);
+    const stateFor = candidate => {
+      const record = directoryRecords.get(String(candidate).toLowerCase());
+      if (!record) throw Object.assign(new Error(`missing: ${candidate}`), { code: 'ENOENT' });
+      return {
+        isDirectory: () => true,
+        isSymbolicLink: () => record.symbolic,
+      };
+    };
+    const realpath = candidate => stateFor(candidate) && directoryRecords.get(String(candidate).toLowerCase()).canonical;
+    realpath.native = realpath;
+    const fileSystem = {
+      lstatSync: stateFor,
+      mkdirSync: (candidate, options) => {
+        assert.deepStrictEqual(options, { mode: 0o700 });
+        directoryRecords.set(String(candidate).toLowerCase(), { canonical: String(candidate), symbolic: false });
+      },
+      realpathSync: realpath,
+    };
+    const setPaths = [];
+    const electronApp = {
+      commandLine: { hasSwitch: () => false },
+      setPath: (name, value) => setPaths.push([name, value]),
+    };
+    const request = {
+      readyPath: `C:\\attempt\\install-renderer-ready-${'a'.repeat(48)}.json`,
+      token: 'a'.repeat(48),
+    };
+
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      productName: 'Whitebox',
+      request,
+    }), { applied: true, appDataPath, userDataPath });
+    assert.deepStrictEqual(setPaths, [
+      ['appData', appDataPath],
+      ['userData', userDataPath],
+    ]);
+
+    let fileSystemTouched = false;
+    const explicitSetPaths = [];
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({
+      app: {
+        commandLine: { hasSwitch: name => name === 'user-data-dir' },
+        setPath: (...values) => explicitSetPaths.push(values),
+      },
+      environment: { APPDATA: 'relative' },
+      fileSystem: {
+        lstatSync: () => { fileSystemTouched = true; throw new Error('unexpected'); },
+      },
+      platform: 'win32',
+      request,
+    }), { applied: false, reason: 'explicit-user-data-dir' });
+    assert.equal(fileSystemTouched, false);
+    assert.deepStrictEqual(explicitSetPaths, []);
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({ platform: 'linux', request }), {
+      applied: false,
+      reason: 'not-windows',
+    });
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({ platform: 'win32' }), {
+      applied: false,
+      reason: 'not-update-relaunch',
+    });
+
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: 'relative' },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /APPDATA.*절대 경로/);
+    directoryRecords.set(appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: true });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /APPDATA.*실제 디렉터리/);
+    directoryRecords.set(appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: false });
+    directoryRecords.set(userDataPath.toLowerCase(), { canonical: userDataPath, symbolic: true });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /userData.*실제 디렉터리/);
+    directoryRecords.set(userDataPath.toLowerCase(), {
+      canonical: 'C:\\outside\\Whitebox',
+      symbolic: false,
+    });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /userData.*APPDATA 밖/);
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request: { readyPath: 'C:\\attempt\\unexpected.json', token: 'a'.repeat(48) },
+    }), /재실행 요청.*올바르지/);
+    assert.equal(setPaths.length, 2, '검증 실패 뒤 Electron 프로필 경로를 부분 적용하면 안 됩니다.');
+
+    const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+    const profileIndex = mainSource.indexOf('applyWindowsUpdateRelaunchProfile({');
+    const brandSelectionIndex = mainSource.indexOf('selectBrandUserData({');
+    assert(profileIndex >= 0 && profileIndex < brandSelectionIndex,
+      '업데이트 재실행 프로필은 브랜드 프로필 선택보다 먼저 적용해야 합니다.');
+  });
+
   test('Git 태그 버전을 SemVer 순서로 비교한다', () => {
     assert.equal(normalizeVersion('refs/tags/v3.2.1').raw, '3.2.1');
     assert.equal(compareVersions('3.10.0', '3.9.9'), 1);
@@ -617,12 +760,91 @@ function registerCliAndUpdateTests(context) {
     assert.equal(liveResult.tagName, `v${previousFixed.version}`);
   });
 
+  test('불변 v1.6.3 first-hop 로그를 공식 유한 상태 문법으로만 분류한다', () => {
+    const parentPid = 321;
+    const executable = 'C:\\fresh-attempt\\installed-v163\\LoadToAgent.exe';
+    const relaunchPid = 654;
+    const windowHandle = '9223372036854775807';
+    const helperLines = [
+      `helperStarted=true;parentPid=${parentPid};expectedVersion=1.6.23`,
+      'exitCode=0',
+      `candidate=${executable};version=1.6.23`,
+      `relaunchPath=${executable};installedVersion=1.6.23;expectedVersion=1.6.23`,
+      `relaunchStarted=true;attempt=1;pid=${relaunchPid}`,
+      `windowRestored=true;pid=${relaunchPid};handle=${windowHandle}`,
+      `rendererReady=true;attempt=1;pid=${relaunchPid}`,
+      `relaunchReady=true;attempt=1;pid=${relaunchPid}`,
+    ];
+    const raw = lines => `\uFEFF${lines.join('\r\n')}\r\n`;
+    const options = { parentPid, executable, version: '1.6.23' };
+    const acknowledged = parseImmutableV163FirstHopLog(raw(helperLines), {
+      ...options,
+      outcome: 'acknowledged',
+    });
+    assert.equal(acknowledged.helperStage, 8);
+    assert.equal(acknowledged.relaunchPid, relaunchPid);
+    assert.equal(acknowledged.windowHandle, windowHandle,
+      '64-bit HWND는 손실 가능한 JS Number가 아니라 exact decimal string으로 유지해야 합니다.');
+    for (let helperStage = 1; helperStage <= 8; helperStage += 1) {
+      const parsed = parseImmutableV163FirstHopLog(raw([
+        ...helperLines.slice(0, helperStage),
+        IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+      ]), { ...options, outcome: 'bootstrap-race' });
+      assert.equal(parsed.helperStage, helperStage);
+      assert.equal(parsed.bootstrapError, IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR);
+      assert.equal(parsed.relaunchPid, helperStage >= 5 ? relaunchPid : 0);
+    }
+    const naturalExit = parseImmutableV163FirstHopLog(raw([
+      ...helperLines,
+      IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR,
+    ]), { ...options, outcome: 'bootstrap-race' });
+    assert.equal(naturalExit.helperStage, 8);
+    assert.equal(naturalExit.bootstrapError, IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR);
+
+    for (const invalid of [
+      raw([IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines.slice(0, 7), IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR]),
+      raw([helperLines[0], 'exitCode=1', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([helperLines[0], helperLines[2], 'exitCode=0', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines, 'unexpected=true', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines, 'bootstrapError=unexpected']),
+      raw([
+        ...helperLines.slice(0, 5),
+        `windowRestored=true;pid=${relaunchPid};handle=9223372036854775808`,
+        ...helperLines.slice(6),
+        IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+      ]),
+      `\uFEFF${helperLines.join('\n')}\n`,
+    ]) {
+      assert.throws(
+        () => parseImmutableV163FirstHopLog(invalid, { ...options, outcome: 'bootstrap-race' }),
+        error => error instanceof assert.AssertionError,
+      );
+    }
+    assert.throws(
+      () => parseImmutableV163FirstHopLog({ toString: () => raw(helperLines) }, {
+        ...options,
+        outcome: 'acknowledged',
+      }),
+      /primitive string/,
+    );
+    assert.throws(
+      () => parseImmutableV163FirstHopLog(raw(helperLines), {
+        ...options,
+        executable: { toString: () => executable },
+        outcome: 'acknowledged',
+      }),
+      /primitive string/,
+    );
+  });
+
   test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', () => {
     const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
     const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
+    const legacyClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-legacy-update-bridge-integration.js'), 'utf8');
     const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
     const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
     for (const requiredEvidence of [
@@ -633,7 +855,7 @@ function registerCliAndUpdateTests(context) {
       'pinned official fixed v1.7.5 installer',
       'Updater compatibility gate',
       'cannot by themselves justify approval',
-      'all three packaged Windows E2E results',
+      'all four packaged Windows E2E results',
     ]) {
       assert(normalizedAgentInstructions.includes(requiredEvidence), `검수 지침에서 필수 증거가 사라졌습니다: ${requiredEvidence}`);
     }
@@ -644,9 +866,19 @@ function registerCliAndUpdateTests(context) {
     assert.match(workflow, /\n  push:\r?\n/, '구버전 Windows 검증은 최종 main 커밋에서 다시 실행되어야 합니다.');
     assert(!workflow.split(/\npermissions:\r?\n/, 1)[0].includes('paths:'), '필수 최종 check가 사라지므로 workflow-level paths 필터를 두면 안 됩니다.');
     assert(workflow.includes('name: Updater compatibility gate'), '모든 PR에 생성되는 안정적인 최종 게이트가 사라졌습니다.');
+    assert(workflow.includes("github.event_name == 'pull_request' && github.ref || github.sha"), 'main의 updater E2E는 후속 push가 취소하지 못하도록 commit SHA별로 격리되어야 합니다.');
+    assert(workflow.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), '진행 중인 updater E2E 취소는 PR 갱신에만 허용되어야 합니다.');
     assert(workflow.includes('git diff --name-status --no-renames'), '이동과 삭제를 포함한 event diff 분류가 사라졌습니다.');
     assert(workflow.includes('node scripts/updater-review-scope.js'), '단일 updater 경로 분류기가 CI에 연결되지 않았습니다.');
     assert(workflow.includes('true|false') && workflow.includes('invalid sensitivity value'), '분류기 출력이 누락되거나 잘못된 경우 fail-closed 해야 합니다.');
+    assert.equal((workflow.match(/npm run check:update:cohorts/g) || []).length, 1,
+      'PR/main workflow는 Ubuntu에서 공개 latest를 무인증으로 정확히 한 번 검증해야 합니다.');
+    assert(workflow.includes('id: public_latest')
+      && workflow.includes('cohort_manifest: ${{ steps.public_latest.outputs.cohort_manifest }}')
+      && workflow.includes('EXPECTED_COHORT_MANIFEST: ${{ needs.classify.outputs.cohort_manifest }}')
+      && workflow.includes('$actualManifest -cne $env:EXPECTED_COHORT_MANIFEST')
+      && workflow.includes('differs from the public-latest validated manifest'),
+    'Windows packaged E2E는 중복 공개 API 호출 없이 선택 SHA의 전체 manifest를 선행 무인증 latest 증거에 묶어야 합니다.');
     for (const [label, workflowSource] of [
       ['PR/main', workflow],
       ['tag release', releaseWorkflow],
@@ -656,15 +888,460 @@ function registerCliAndUpdateTests(context) {
       assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
       assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
       assert(workflowSource.includes('$cohorts.Count -ne 3') && workflowSource.includes('$attempt -ne 3'), `${label} workflow는 정확히 세 번 실행되지 않으면 실패해야 합니다.`);
+      assert(workflowSource.includes('LoadToAgent-Setup-1.6.3.exe'), `${label} workflow가 공식 v1.6.3 설치본을 고정해야 합니다.`);
+      assert(workflowSource.includes('LoadToAgent-Setup-1.6.23.exe'), `${label} workflow가 공식 immutable bridge를 고정해야 합니다.`);
+      assert(workflowSource.includes('WHITEBOX_LEGACY_CANDIDATE_E2E=true'), `${label} workflow가 후보 버전 legacy 모드를 명시해야 합니다.`);
+      assert(workflowSource.includes('npm run test:update:win:legacy-bridge'), `${label} workflow가 공식 legacy 전체 경로를 실행해야 합니다.`);
       assert(workflowSource.includes('npm run check:update:cohorts'), `${label} workflow가 공개 latest와 previousFixed를 비교해야 합니다.`);
       assert(!workflowSource.includes('GITHUB_TOKEN:'), `${label} workflow의 공개 latest 증거는 인증 요청을 사용하면 안 됩니다.`);
     }
     assert(!releaseWorkflow.includes('--clobber'), '기존 릴리스 자산을 덮어쓰면 안 됩니다.');
+    assert(releaseWorkflow.includes('group: whitebox-stable-release') && releaseWorkflow.includes('cancel-in-progress: false'),
+      '서로 다른 stable tag 릴리스가 latest 채널을 동시에 변경하지 못하도록 직렬화해야 합니다.');
+    assert(releaseWorkflow.includes('Refusing to move latest backward')
+      && releaseWorkflow.includes('Public latest resolved to $published_latest instead of $RELEASE_TAG'),
+    '릴리스 공개 단계는 latest 채널의 SemVer 역행을 거부하고 공개 결과를 다시 검증해야 합니다.');
+    assert(!releaseWorkflow.includes('releases/latest" --jq .tag_name 2>/dev/null || true'),
+      '기존 public latest 조회 실패를 릴리스 없음으로 간주해 downgrade 검사를 우회하면 안 됩니다.');
     assert(releaseWorkflow.includes('Draft asset bytes differ from the verified build artifact'), '공개 전 draft 자산 byte 검증이 사라졌습니다.');
     assert(releaseWorkflow.includes('fetch-depth: 0'), '릴리스 태그 검증에는 전체 Git 계보가 필요합니다.');
     assert(releaseWorkflow.includes('${GITHUB_REF}^{commit}') && releaseWorkflow.includes('${GITHUB_SHA,,}'), '릴리스는 tag SHA, tag commit, HEAD가 모두 같은지 확인해야 합니다.');
     assert(releaseWorkflow.includes('git merge-base --is-ancestor "$tag_commit" origin/main'), '릴리스 태그 커밋은 origin/main의 선조여야 합니다.');
     assert(frozenClientTest.includes("require('./check-update-compatibility-cohorts')"), 'Windows E2E가 공용 cohort 매니페스트 검증기를 읽어야 합니다.');
+    assert(frozenClientTest.includes('installationStarted = true;'), 'Windows E2E는 설치 시작 이후 정리 계약을 반드시 활성화해야 합니다.');
+    assert(frozenClientTest.includes("assert.equal(uninstallerAttemptCount, 0, 'The installed-product uninstaller must be invoked exactly once per attempt.')"),
+      'Windows E2E는 각 attempt에서 두 번째 uninstaller 실행을 거부해야 합니다.');
+    assert(frozenClientTest.includes('if (uninstallerAttemptCount !== 1)') && frozenClientTest.includes('if (validUninstallerRunCount !== 1)'),
+      'Windows E2E는 설치가 시작된 각 attempt에서 정확히 한 번의 유효한 uninstaller 실행을 입증해야 합니다.');
+    assert(!frozenClientTest.includes('if (fs.existsSync(uninstaller))'), '설치 시작 후 uninstaller 누락을 cleanup 성공으로 처리하면 안 됩니다.');
+    assert(frozenClientTest.includes('runningProcessesUnderDirectory(installDir)'), 'Windows E2E는 설치 경로 아래의 모든 프로세스 제거를 검증해야 합니다.');
+    assert(frozenClientTest.includes('waitForInstallCleanup()'), 'Windows E2E는 설치 디렉터리와 registry 정리가 완료될 때까지 기다려야 합니다.');
+    assert(frozenClientTest.includes('perUserUninstallRegistryEntries()'), 'Windows E2E는 HKCU uninstall registry 정리를 검증해야 합니다.');
+    assert(frozenClientTest.includes('assert.equal(fs.existsSync(installDir), false'), 'Windows E2E는 test root 삭제 전에 설치 디렉터리 제거를 검증해야 합니다.');
+    assert(legacyClientTest.includes("process.env.RUNNER_ENVIRONMENT === 'github-hosted'"), '레거시 설치 E2E는 GitHub 호스팅 일회성 러너에서만 자동 실행되어야 합니다.');
+    assert(legacyClientTest.includes('WHITEBOX_ALLOW_LEGACY_INSTALL_INTEGRATION'), '격리된 로컬 Windows E2E를 위한 명시적 override가 유지되어야 합니다.');
+    for (const [label, integrationSource] of [
+      ['frozen-client', frozenClientTest],
+      ['legacy-bridge', legacyClientTest],
+    ]) {
+      const prepareProfile = integrationSource.indexOf('prepareIsolatedProfileEnvironment();');
+      const integrationMain = integrationSource.indexOf('async function main()');
+      assert(prepareProfile >= 0 && integrationMain > prepareProfile,
+        `${label} E2E는 설치/실행 전에 attempt 전용 Electron 프로필 환경을 준비해야 합니다.`);
+      assert(integrationSource.includes("const isolatedProfileRoot = path.join(testRoot, 'isolated-profile')")
+        && integrationSource.includes("const isolatedAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Roaming')")
+        && integrationSource.includes("const isolatedLocalAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Local')")
+        && integrationSource.includes("const inheritedUserDataDir = path.join(isolatedAppDataRoot, 'Whitebox')"),
+      `${label} E2E의 APPDATA·LOCALAPPDATA는 같은 fresh testRoot 아래에 고정되어야 합니다.`);
+      assert(integrationSource.includes('process.env.APPDATA = isolatedAppDataRoot')
+        && integrationSource.includes('process.env.LOCALAPPDATA = isolatedLocalAppDataRoot'),
+      `${label} E2E는 immutable helper가 물려받는 기본 Electron 프로필 환경을 격리해야 합니다.`);
+      assert(integrationSource.includes("assert.equal(fs.existsSync(inheritedUserDataDir), false")
+        && integrationSource.includes("assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile')"),
+      `${label} E2E는 NSIS의 APPDATA 부수효과가 아닌 정확한 fresh %APPDATA%\\Whitebox 생성·사용을 입증해야 합니다.`);
+      assert(integrationSource.includes("const isolatedBridgeHome = path.join(testRoot, 'isolated-bridge-home')")
+        && integrationSource.includes('process.env.WHITEBOX_BRIDGE_HOME = isolatedBridgeHome')
+        && integrationSource.includes('process.env.LOADTOAGENT_BRIDGE_HOME = isolatedBridgeHome')
+        && integrationSource.includes('bridgeHomeState.isDirectory() && !bridgeHomeState.isSymbolicLink()'),
+      `${label} E2E는 양쪽 bridge home 변수를 같은 fresh real testRoot 디렉터리로 격리해야 합니다.`);
+      assert(integrationSource.includes('assertPathWithin(testRoot, candidate, label)')
+        && integrationSource.includes('assertInstalledAppProfileIsolation')
+        && integrationSource.includes('userDataReferences(record.commandLine)'),
+      `${label} E2E는 프로필 경로 이탈과 실행 중 앱의 외부 --user-data-dir 참조를 fail-closed 검증해야 합니다.`);
+      assert(integrationSource.includes("assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile')")
+        && integrationSource.includes("assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile')"),
+      `${label} E2E는 direct 프로필과 helper 상속 기본 프로필이 실제 생성·사용됐음을 입증해야 합니다.`);
+      const exactProcessEvidence = integrationSource.slice(
+        integrationSource.indexOf('function exactProcessRecord'),
+        integrationSource.indexOf('function runningInstalledAppCommandLines'),
+      );
+      assert(exactProcessEvidence.includes("Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $processId)")
+        && exactProcessEvidence.includes('Get-Process -Id $processId')
+        && exactProcessEvidence.includes('$imagePath = [string]$process.Path')
+        && exactProcessEvidence.includes('$commandLine = [string]$cim[0].CommandLine')
+        && exactProcessEvidence.includes('IsNullOrWhiteSpace($imagePath)')
+        && exactProcessEvidence.includes('IsNullOrWhiteSpace($commandLine)'),
+      `${label} E2E는 expected PID의 실제 image path와 CIM command line을 경로 선필터 없이 각각 fail-closed 조회해야 합니다.`);
+      const profileEvidence = integrationSource.slice(
+        integrationSource.indexOf('function runningInstalledAppCommandLines'),
+        integrationSource.indexOf('function assertProfileDirectoryUsed'),
+      );
+      assert(integrationSource.includes('fs.realpathSync.native(path.resolve(candidate))')
+        && profileEvidence.includes('canonicalExistingPath(expectedRecord.executablePath)')
+        && profileEvidence.includes('canonicalExistingPath(expectedExecutable)')
+        && profileEvidence.includes('runningInstalledAppCommandLines(expectedExecutable).filter(record => record.pid !== expectedPid)')
+        && profileEvidence.includes("[string]$_.Name -ieq $executableName")
+        && profileEvidence.includes('canonicalReference = canonicalExistingPath(reference)'),
+      `${label} E2E는 8.3·long·junction 표기를 canonical exact executable/profile 증거로 통합해야 합니다.`);
+      assert(!integrationSource.includes('$executablePath.StartsWith($directory')
+        && !integrationSource.includes('[string]$_.ExecutablePath -ieq $env:WHITEBOX_INTEGRATION_EXECUTABLE'),
+      `${label} E2E는 raw WMI 경로 prefix/equality로 프로세스 증거를 먼저 버리면 안 됩니다.`);
+      const exactPathProcessEvidence = integrationSource.slice(
+        integrationSource.indexOf('function runningProcessIds(executable)'),
+        integrationSource.indexOf('function stopProcessTree'),
+      );
+      assert(exactPathProcessEvidence.includes("].join('\\n')"),
+        `${label} E2E의 PowerShell exact-path process query는 각 statement 경계를 보존해야 합니다.`);
+      const cleanupEvidence = integrationSource.slice(
+        integrationSource.indexOf('function rememberInstalledProcessImageNames'),
+        integrationSource.indexOf('function stopProcessesUnderDirectory'),
+      );
+      assert(integrationSource.includes('const installedProcessImageNames = new Set(')
+        && cleanupEvidence.includes("fs.readdirSync(currentDirectory, { withFileTypes: true })")
+        && cleanupEvidence.includes('entry.isSymbolicLink()')
+        && cleanupEvidence.includes("path.extname(entry.name).toLowerCase() === '.exe'")
+        && cleanupEvidence.includes('installedProcessImageNames.add(entry.name)')
+        && cleanupEvidence.includes("WHITEBOX_INTEGRATION_EXECUTABLE_NAMES: guardedNames.join('|')")
+        && cleanupEvidence.includes('Get-CimInstance Win32_Process -ErrorAction Stop')
+        && cleanupEvidence.includes('canonicalDirectory = canonicalPath(directory)')
+        && cleanupEvidence.includes('pathIsWithin(canonicalDirectory, canonicalExistingPath(record.executablePath))')
+        && cleanupEvidence.includes('Executable path was unavailable for guarded PID'),
+      `${label} E2E cleanup은 설치 트리의 모든 executable 이름을 보존하고 canonical 경로로 short/long 표기를 통합해야 합니다.`);
+      for (const profilePath of [
+        'isolatedProfileRoot',
+        'isolatedAppDataRoot',
+        'isolatedLocalAppDataRoot',
+        'inheritedUserDataDir',
+        'directUserDataDir',
+        'isolatedBridgeHome',
+      ]) {
+        assert(integrationSource.includes(`assert.equal(fs.existsSync(${profilePath}), false`),
+          `${label} E2E cleanup은 ${profilePath}가 testRoot와 함께 제거됐음을 검증해야 합니다.`);
+      }
+    }
+    assert.equal((frozenClientTest.match(/spawn\(installedExecutable, \[directUserDataArgument\]/g) || []).length, 1,
+      'frozen-client E2E의 direct installed-app 실행은 fresh --user-data-dir를 정확히 한 곳에서 사용해야 합니다.');
+    const frozenDirectStart = frozenClientTest.slice(
+      frozenClientTest.indexOf('async function startInstalledApp'),
+      frozenClientTest.indexOf('async function downloadWithFrozenUpdater'),
+    );
+    const directProfileProcessCheck = frozenDirectStart.indexOf('assertInstalledAppProfileIsolation');
+    const directProfileDirectoryCheck = frozenDirectStart.indexOf('assertProfileDirectoryUsed');
+    const directReadySignalCleanup = frozenDirectStart.indexOf('fs.rmSync(rendererReadyPath');
+    assert(frozenDirectStart.includes('let lastProfileEvidenceError = null')
+      && frozenDirectStart.includes('lastProfileEvidenceError = error')
+      && frozenDirectStart.includes('Last profile evidence error:')
+      && frozenDirectStart.includes('child.signalCode !== null')
+      && frozenDirectStart.includes('observedSignal && !processAlive(child.pid)')
+      && directProfileProcessCheck >= 0
+      && directProfileDirectoryCheck > directProfileProcessCheck
+      && directReadySignalCleanup > directProfileDirectoryCheck,
+    'frozen-client E2E는 renderer-ready 신호를 보존한 채 일시적인 CIM/profile 증거 지연을 재시도하고 최종 원인을 노출해야 합니다.');
+    assert.equal((legacyClientTest.match(/spawn\(executable, \[directUserDataArgument\]/g) || []).length, 2,
+      'legacy E2E의 parent 및 renderer-ready fallback/manual 실행은 모두 fresh --user-data-dir를 사용해야 합니다.');
+    assert(legacyClientTest.includes('const pid = await waitForRelaunch(')
+      && legacyClientTest.includes('options.expectedVersion,')
+      && legacyClientTest.includes('options.relaunchAppPath,')
+      && legacyClientTest.includes('assertInstalledAppProfileIsolation(')
+      && legacyClientTest.includes('expectedExecutable,'),
+    'legacy E2E의 bridge와 Whitebox 재실행은 각 hop의 정확한 설치 실행 파일 identity를 따로 검증해야 합니다.');
+    const legacyRendererReadyStart = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function startInstalledAppWithRendererReady'),
+      legacyClientTest.indexOf('async function waitForInstallCleanup'),
+    );
+    const legacyProfileProcessCheck = legacyRendererReadyStart.indexOf('assertInstalledAppProfileIsolation');
+    const legacyProfileDirectoryCheck = legacyRendererReadyStart.indexOf('assertProfileDirectoryUsed');
+    const legacyReadySignalCleanup = legacyRendererReadyStart.indexOf('fs.rmSync(rendererReadyPath');
+    assert(legacyRendererReadyStart.includes('`install-renderer-ready-${rendererReadyToken}.json`')
+      && !legacyRendererReadyStart.includes('manual-install-renderer-ready-')
+      && legacyRendererReadyStart.includes('let lastProfileEvidenceError = null')
+      && legacyRendererReadyStart.includes('lastProfileEvidenceError = error')
+      && legacyRendererReadyStart.includes('Last profile evidence error:')
+      && legacyRendererReadyStart.includes('child.signalCode !== null')
+      && legacyRendererReadyStart.includes('observedSignal && !processAlive(child.pid)')
+      && legacyProfileProcessCheck >= 0
+      && legacyProfileDirectoryCheck > legacyProfileProcessCheck
+      && legacyReadySignalCleanup > legacyProfileDirectoryCheck,
+    'legacy manual/fallback 실행도 인증 가능한 파일명으로 renderer-ready 신호를 보존하고 exact process/profile 증거 뒤에만 삭제해야 합니다.');
+    assert(!frozenClientTest.includes('spawn(installedExecutable, [],') && !legacyClientTest.includes('spawn(executable, [],'),
+      '패키지 Windows E2E에 격리되지 않은 direct installed-app 실행을 남기면 안 됩니다.');
+    assert(legacyClientTest.includes('async function waitForProfileDirectoryUsed')
+      && legacyClientTest.includes("await waitForProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile', child)")
+      && legacyClientTest.includes('child.exitCode !== null || child.signalCode !== null')
+      && !legacyClientTest.includes('await new Promise(resolve => setTimeout(resolve, 1_000))'),
+    'legacy 초기 앱은 고정 1초 지연 대신 child 조기 종료를 감시하는 bounded profile polling을 사용해야 합니다.');
+    assert(legacyClientTest.includes('function windowsKnownRoamingAppData()')
+      && legacyClientTest.includes('[Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)')
+      && legacyClientTest.indexOf('const capturedNativeAppDataRoot = String(process.env.APPDATA')
+        < legacyClientTest.indexOf('process.env.APPDATA = isolatedAppDataRoot')
+      && legacyClientTest.includes('CANDIDATE_E2E && disposableGithubRunner')
+      && legacyClientTest.includes("const immutableBridgeNativeUserDataDir = nativeAppDataRoot ? path.join(nativeAppDataRoot, 'Whitebox') : ''")
+      && legacyClientTest.includes("path.join(nativeAppDataRoot, 'loadtoagent')")
+      && legacyClientTest.includes("path.join(nativeAppDataRoot, 'LoadToAgent')")
+      && legacyClientTest.includes('canonicalExistingPath(capturedNativeAppDataRoot), canonicalExistingPath(nativeAppDataRoot)')
+      && legacyClientTest.includes('for (const candidate of immutableBridgeNativeProfileCandidates)'),
+    '불변 1.6.23의 native 프로필 예외는 disposable runner의 실제 Known Folder와 fresh 브랜드 후보에만 적용해야 합니다.');
+    const immutableBridgeProfileException = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertInstalledAppProfileIsolation'),
+      legacyClientTest.indexOf('async function waitForProfileDirectoryUsed'),
+    );
+    assert(immutableBridgeProfileException.includes('canonicalReference === immutableBridgeNativeProfile')
+      && immutableBridgeProfileException.includes('canonicalExistingPath(expectedExecutable), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeProfileException.includes('immutableBridgeNativeReferenceCount > 0')
+      && immutableBridgeProfileException.includes('profileState.isDirectory() && !profileState.isSymbolicLink()')
+      && immutableBridgeProfileException.includes('path.dirname(canonicalNativeProfile), canonicalNativeRoot')
+      && immutableBridgeProfileException.includes('immutableBridgeNativeProfileObserved = true'),
+    '불변 bridge 예외는 exact 실행 파일·exact native profile 참조·real non-symlink·실제 앱 파일 사용을 입증해야 합니다.');
+    const immutableBridgeOwnership = legacyClientTest.slice(
+      legacyClientTest.indexOf('function armImmutableBridgeNativeProfileOwnership'),
+      legacyClientTest.indexOf('function completeCandidateReleaseAssets'),
+    );
+    assert(immutableBridgeOwnership.includes("firstHopOptions.repository, 'LodeToAgent'")
+      && immutableBridgeOwnership.includes("firstHopOptions.currentVersion, '1.6.3'")
+      && immutableBridgeOwnership.includes('firstHopOptions.expectedVersion, bridgeVersion')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.installer), canonicalExistingPath(bridgeInstaller)')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.appPath), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.relaunchAppPath), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeOwnership.includes('assertPinnedInstaller(sourceInstaller')
+      && immutableBridgeOwnership.includes('assertPinnedInstaller(bridgeInstaller')
+      && immutableBridgeOwnership.includes('flag: \'wx\'')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwned = true')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwnershipArmed = true')
+      && immutableBridgeOwnership.includes('runningProcessIdsReferencing(immutableBridgeNativeUserDataDir), []')
+      && immutableBridgeOwnership.includes('An immutable bridge native profile remained after ownership rollback')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwned = false')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfilePolicy = Object.freeze'),
+    'native bridge 프로필 소유권은 exact 공식 first-hop pin과 wx marker 검증 뒤 opaque policy로만 발급하고 부분 실패를 되돌려야 합니다.');
+    const immutableBridgeRelaunch = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function waitForRelaunch'),
+      legacyClientTest.indexOf('async function waitForInstalledPackage'),
+    );
+    assert(immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
+      && immutableBridgeRelaunch.includes('assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableBridgeRelaunch.includes('expectedVersion, bridgeVersion')
+      && immutableBridgeRelaunch.includes('assertImmutableBridgeNativeProfileUsed()'),
+    'native 프로필 예외는 첫 hop에서 발급한 동일 opaque policy의 고정 bridge relaunch에만 적용해야 합니다.');
+    const immutableBridgeCleanup = legacyClientTest.slice(
+      legacyClientTest.indexOf("await capture('remove owned immutable bridge native profile'"),
+      legacyClientTest.indexOf('asar.uncacheAll()'),
+    );
+    assert(immutableBridgeCleanup.includes('if (!immutableBridgeNativeProfileOwned)')
+      && immutableBridgeCleanup.includes('Refusing to remove an unattributed native profile')
+      && immutableBridgeCleanup.includes('runningProcessesUnderDirectory(installDir), []')
+      && immutableBridgeCleanup.includes('await waitForProcessesReferencingPathExit(')
+      && immutableBridgeCleanup.includes('immutableBridgeNativeProfileOwnerToken')
+      && immutableBridgeCleanup.includes('fs.rmSync(immutableBridgeNativeUserDataDir')
+      && immutableBridgeCleanup.includes('for (const candidate of immutableBridgeNativeProfileCandidates)')
+      && !legacyClientTest.includes('fs.rmSync(nativeAppDataRoot)'),
+    'native bridge 프로필은 exact 소유 증거와 프로세스 종료 뒤에만 삭제하고 부재를 입증해야 합니다.');
+    assert.equal((legacyClientTest.match(/immutableBridgeNativeProfilePolicy = armImmutableBridgeNativeProfileOwnership\(firstHopOptions\)/g) || []).length, 1,
+      '불변 bridge native profile policy는 exact first-hop에서 한 번만 발급·전달해야 합니다.');
+    assert.equal((legacyClientTest.match(/assert\.strictEqual\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/g) || []).length, 7,
+      '불변 bridge opaque policy는 ack·race·cleanup·launch·relaunch의 모든 진입점에서 strict identity로 검증해야 합니다.');
+    assert.equal(/assert\.equal\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/.test(legacyClientTest), false,
+      '불변 bridge opaque policy에 loose assert.equal을 다시 도입하면 안 됩니다.');
+    const issuedOpaquePolicyFixture = Object.freeze({ kind: 'official-v1.6.3-to-v1.6.23-native-profile' });
+    assert.throws(
+      () => assert.strictEqual('[object Object]', issuedOpaquePolicyFixture),
+      error => error instanceof assert.AssertionError,
+      '문자열 object coercion은 발급된 opaque policy identity로 인정되면 안 됩니다.',
+    );
+    assert(releaseGuide.includes('.whitebox-integration-owner-<48 lowercase hex>')
+      && releaseGuide.includes('The native roaming root and any')
+      && releaseGuide.includes('unowned profile must never be deleted'),
+    '릴리스 계약은 불변 1.6.23 native profile marker와 소유·정리 제한을 명시해야 합니다.');
+    const immutableV163ProcessTree = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function assertImmutableV163AuthenticatedProcessTree'),
+      legacyClientTest.indexOf('function stopProcessesUnderDirectory'),
+    );
+    assert(immutableV163ProcessTree.includes('expectedHelperIdentity')
+      && immutableV163ProcessTree.includes('mainRecord.parentPid, expectedHelperIdentity.pid')
+      && immutableV163ProcessTree.includes('Date.parse(mainRecord.createdAt) >= helperCreatedAtMs')
+      && immutableV163ProcessTree.includes('currentWindowHandle, loggedWindowHandle'),
+    '불변 v1.6.3 재실행은 exact captured helper의 직접 자식과 helper가 기록한 동일 live HWND에 묶여야 합니다.');
+    const immutableV163BootstrapAckInstall = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertCompletedImmutableV163BootstrapAckInstall'),
+      legacyClientTest.indexOf('async function waitForPathRemoval'),
+    );
+    assert(immutableV163BootstrapAckInstall.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableV163BootstrapAckInstall.includes("options.label, 'first-hop-downloads'")
+      && immutableV163BootstrapAckInstall.includes("options.repository, 'LodeToAgent'")
+      && immutableV163BootstrapAckInstall.includes("options.currentVersion, '1.6.3'")
+      && immutableV163BootstrapAckInstall.includes("bridgeVersion, '1.6.23'")
+      && immutableV163BootstrapAckInstall.includes("options.expectedVersion, '1.6.23'")
+      && immutableV163BootstrapAckInstall.includes("launched && launched.mode, 'automatic'")
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(sourceInstaller')
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(bridgeInstaller')
+      && immutableV163BootstrapAckInstall.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
+      && immutableV163BootstrapAckInstall.includes('downloadedState.isFile() && !downloadedState.isSymbolicLink()')
+      && immutableV163BootstrapAckInstall.includes('path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir')
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(downloadedInstaller')
+      && immutableV163BootstrapAckInstall.includes("WINDOWS_UPDATE_HELPER.includes('allAppProcessesStopped=true'), false")
+      && immutableV163BootstrapAckInstall.includes('exactProcessRecord(relaunchPid)')
+      && immutableV163BootstrapAckInstall.includes('immutableBridgeNativeProfileObserved, true')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIds(downloadedInstaller), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(downloadedInstaller), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedHelperPath), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedBootstrapPath), []')
+      && immutableV163BootstrapAckInstall.includes('fs.lstatSync(file, { throwIfNoEntry: false }), undefined')
+      && immutableV163BootstrapAckInstall.includes('parseImmutableV163FirstHopLog(readLog(expectedLogPath)')
+      && immutableV163BootstrapAckInstall.includes("outcome: 'acknowledged'")
+      && immutableV163BootstrapAckInstall.includes('parsed.helperStage, 8')
+      && immutableV163BootstrapAckInstall.includes("parsed.bootstrapError, ''")
+      && immutableV163BootstrapAckInstall.includes('immutableV163RendererReadyTemporaryArtifacts(launched), []')
+      && immutableV163BootstrapAckInstall.includes('await assertImmutableV163AuthenticatedProcessTree(')
+      && !immutableV163BootstrapAckInstall.includes('fs.unlinkSync')
+      && !immutableV163BootstrapAckInstall.includes('fs.rmSync'),
+    '불변 v1.6.3 bootstrap-ack 정상 경로는 official 8행 raw log와 exact pin·프로세스·artifact 부재를 전용 계약으로 검증해야 합니다.');
+    const immutableV163HelperArtifact = legacyClientTest.slice(
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
+      legacyClientTest.indexOf('async function waitForRelaunch'),
+    );
+    const immutableV163ReadyRaceLog = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertImmutableV163ReadyRaceLog'),
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
+    );
+    assert(immutableV163ReadyRaceLog.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableV163ReadyRaceLog.includes("options.label, 'first-hop-downloads'")
+      && immutableV163ReadyRaceLog.includes("options.currentVersion, '1.6.3'")
+      && immutableV163ReadyRaceLog.includes("bridgeVersion, '1.6.23'")
+      && immutableV163ReadyRaceLog.includes("options.expectedVersion, '1.6.23'")
+      && immutableV163ReadyRaceLog.includes("launched && launched.mode, 'automatic'")
+      && immutableV163ReadyRaceLog.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163ReadyRaceLog.includes("path.join(expectedDownloadsDir, 'install-update.log')")
+      && immutableV163ReadyRaceLog.includes('logState.isFile() && !logState.isSymbolicLink()')
+      && immutableV163ReadyRaceLog.includes('path.dirname(canonicalLogPath), canonicalDownloadsDir')
+      && immutableV163ReadyRaceLog.includes('parseImmutableV163FirstHopLog(log')
+      && immutableV163ReadyRaceLog.includes("outcome: 'bootstrap-race'"),
+    '불변 v1.6.3 ready-race 로그는 별도 공식 BOM/CRLF 유한 상태 parser로만 분류해야 합니다.');
+    const immutableV163RendererScope = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertImmutableV163RendererReadyScope'),
+      legacyClientTest.indexOf('function immutableV163RendererReadyTemporaryArtifacts'),
+    );
+    assert(immutableV163RendererScope.includes("typeof launched.rendererReadyToken, 'string'")
+      && immutableV163RendererScope.includes('/^[0-9a-f]{48}$/')
+      && immutableV163RendererScope.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163RendererScope.includes('launched.rendererReadyPath, expectedPath')
+      && immutableV163RendererScope.includes('path.dirname(canonicalDownloadsDir), canonicalTestRoot'),
+    '불변 v1.6.3 renderer capability scope는 signal 부재에도 exact token과 direct-child path로 고정되어야 합니다.');
+    const immutableV163StageFour = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function classifyImmutableV163StageFourRelaunch'),
+      legacyClientTest.indexOf('async function waitForStableImmutableV163RendererReadyAbsence'),
+    );
+    assert(immutableV163StageFour.includes('stableAbsenceMs = 5_000')
+      && immutableV163StageFour.includes('runningProcessesUnderDirectory(installDir)')
+      && immutableV163StageFour.includes('immutableV163RendererReadyTemporaryArtifacts(launched)')
+      && immutableV163StageFour.includes('immutableBridgeNativeProfileUsagePresent()')
+      && immutableV163StageFour.includes('waitForImmutableV163UnloggedRendererReadySignal')
+      && immutableV163StageFour.includes('assertImmutableBridgeNativeProfileUnused()'),
+    '불변 v1.6.3 stage-four Start-Process gap은 process·signal·temp·native profile의 안정 부재 또는 exact signal 인증으로만 분류해야 합니다.');
+    assert(immutableV163HelperArtifact.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableV163HelperArtifact.includes("options.currentVersion, '1.6.3'")
+      && immutableV163HelperArtifact.includes('options.expectedVersion, bridgeVersion')
+      && immutableV163HelperArtifact.includes("launched && launched.mode, 'automatic'")
+      && immutableV163HelperArtifact.includes('assertPinnedInstaller(sourceInstaller')
+      && immutableV163HelperArtifact.includes('assertPinnedInstaller(bridgeInstaller')
+      && immutableV163HelperArtifact.includes('assertImmutableV163ReadyRaceLog(launched, options)')
+      && immutableV163HelperArtifact.includes('detectedReadyRaceLog, readyRace.rawLog')
+      && immutableV163HelperArtifact.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163HelperArtifact.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
+      && immutableV163HelperArtifact.includes("path.join(expectedDownloadsDir, 'install-update.ps1')")
+      && immutableV163HelperArtifact.includes('downloadedState.isFile() && !downloadedState.isSymbolicLink()')
+      && immutableV163HelperArtifact.includes('path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir')
+      && immutableV163HelperArtifact.includes('assertPinnedInstaller(downloadedInstaller')
+      && immutableV163HelperArtifact.includes('runningProcessIds(downloadedInstaller), []')
+      && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(downloadedInstaller), []')
+      && immutableV163HelperArtifact.includes('runningProcessesUnderDirectory(installDir), []')
+      && immutableV163HelperArtifact.includes('const helperMustRemain = readyRace.helperStage < 8')
+      && immutableV163HelperArtifact.includes('const helperMustSelfDelete = readyRace.bootstrapError === IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR')
+      && immutableV163HelperArtifact.includes('helperState.isFile() && !helperState.isSymbolicLink()')
+      && immutableV163HelperArtifact.includes('path.dirname(canonicalHelperPath), canonicalDownloadsDir')
+      && immutableV163HelperArtifact.includes('Buffer.from(`\\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, \'utf8\')')
+      && immutableV163HelperArtifact.includes("crypto.createHash('sha256').update(expectedBytes).digest('hex')")
+      && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(expectedHelperPath), []')
+      && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(launched.bootstrapPath), []')
+      && immutableV163HelperArtifact.includes('Another immutable v1.6.3 ${label} artifact remained before exact helper cleanup')
+      && immutableV163HelperArtifact.includes('const partialAuthenticatedRelaunch = authenticatedRelaunchPid > 0 && readyRace.helperStage < 8')
+      && immutableV163HelperArtifact.includes('assertImmutableV163RendererReadySignal(')
+      && immutableV163HelperArtifact.includes('fs.unlinkSync(launched.rendererReadyPath)')
+      && immutableV163HelperArtifact.includes('fs.unlinkSync(expectedHelperPath)')
+      && immutableV163HelperArtifact.includes('await waitForStableImmutableV163RendererReadyAbsence(launched)')
+      && immutableV163HelperArtifact.includes('ready-race log changed during exact artifact cleanup')
+      && !immutableV163HelperArtifact.includes('fs.rmSync'),
+    '불변 v1.6.3 ready-race artifact 예외는 stage별 exact helper·renderer signal만 단일 unlink하고 재생성 부재를 입증해야 합니다.');
+    assert(normalizedReleaseGuide.includes('BOM + official packaged v1.6.3 helper source')
+      && normalizedReleaseGuide.includes('one exact bootstrap-ack grammar and one finite historical ready-race state machine')
+      && normalizedReleaseGuide.includes('exact eight-line raw log')
+      && normalizedReleaseGuide.includes('cannot emit the newer `allAppProcessesStopped=true` marker')
+      && normalizedReleaseGuide.includes('No fallback residue deletion is allowed on this normal path')
+      && normalizedReleaseGuide.includes('exact non-empty prefix of those helper lines')
+      && normalizedReleaseGuide.includes('complete eight-line sequence followed by the exact `bootstrapError` ending in `코드: 0`')
+       && normalizedReleaseGuide.includes('`Start-Process` after writing `relaunchPath` and before writing `relaunchStarted`')
+       && normalizedReleaseGuide.includes('absence conditions must remain stable for at least five seconds')
+       && normalizedReleaseGuide.includes("direct parent must equal the exact captured helper PID")
+       && normalizedReleaseGuide.includes('transitive installed-process lineage')
+       && normalizedReleaseGuide.includes('live main-window handle must equal any helper-recorded handle')
+       && normalizedReleaseGuide.includes('48-hex capability token and exact direct-child path remain mandatory')
+      && normalizedReleaseGuide.includes('bounded stability window after cleanup')
+      && normalizedReleaseGuide.includes('A timeout by itself, missing signal, PID or lineage mismatch')
+      && releaseGuide.includes('a release failure'),
+    '릴리스 계약은 불변 v1.6.3 강제 종료 artifact의 exact cleanup과 fail-closed 제한을 명시해야 합니다.');
+    const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
+    const automaticInstallSuccess = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function installWithPackagedUpdater'),
+      legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"),
+    );
+    const successProcessCleanup = automaticInstallSuccess.indexOf('await waitForUpdateProcessCleanup(launched)');
+    const successInstallerCleanup = automaticInstallSuccess.indexOf("await waitForExactExecutableProcessExit(downloadedInstaller, 'Packaged installer')");
+    const successFinalRaceClassification = automaticInstallSuccess.indexOf("linesStarting(logLines(launched.logPath), 'bootstrapError=')");
+    const successArtifactCleanup = automaticInstallSuccess.indexOf('await waitForUpdateArtifactCleanup(launched)');
+    const successImmutableDispatch = automaticInstallSuccess.indexOf('if (hasImmutableBridgeNativeProfilePolicy)', successArtifactCleanup);
+    const successImmutableLogCheck = automaticInstallSuccess.indexOf('assertCompletedImmutableV163BootstrapAckInstall', successImmutableDispatch);
+    const successCurrentLogCheck = automaticInstallSuccess.indexOf('assertCompletedInstall(launched.logPath, options)', successImmutableLogCheck);
+    assert(successProcessCleanup >= 0
+      && successInstallerCleanup > successProcessCleanup
+      && successFinalRaceClassification > successInstallerCleanup
+      && successArtifactCleanup > successFinalRaceClassification
+      && successImmutableDispatch > successArtifactCleanup
+      && successImmutableLogCheck > successImmutableDispatch
+      && successCurrentLogCheck > successImmutableLogCheck,
+    '정상 updater relaunch도 helper·installer 종료와 artifact 부재 뒤 immutable/current 전용 최종 로그를 순서대로 입증해야 합니다.');
+    const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
+    const fallbackInstallerCleanup = legacyFallback.indexOf('await waitForExactExecutableProcessExit(downloadedInstaller', fallbackProcessCleanup);
+    const fallbackStablePackage = legacyFallback.indexOf('await waitForInstalledPackage(options.appPath, options.expectedVersion)', fallbackInstallerCleanup);
+    const fallbackCaughtLog = legacyFallback.indexOf('const readyRaceLog = error.updateLog', fallbackStablePackage);
+    const fallbackParsedLog = legacyFallback.indexOf('const readyRace = assertImmutableV163ReadyRaceLog', fallbackCaughtLog);
+    const fallbackProcessClassification = legacyFallback.indexOf('const installedProcesses = runningProcessesUnderDirectory(installDir)', fallbackParsedLog);
+    const fallbackProfileUnused = legacyFallback.indexOf('assertImmutableBridgeNativeProfileUnused()', fallbackProcessClassification);
+    const fallbackAuthenticatedTree = legacyFallback.indexOf('await assertImmutableV163AuthenticatedProcessTree(', fallbackProcessClassification);
+    const fallbackOwnedArtifactCleanup = legacyFallback.indexOf('removeOwnedImmutableV163ReadyRaceArtifacts', fallbackAuthenticatedTree);
+    const fallbackArtifactCleanup = legacyFallback.indexOf('await waitForUpdateArtifactCleanup(launched)');
+    const fallbackFinalLogCheck = legacyFallback.indexOf('assertImmutableV163ReadyRaceLog(launched, options)', fallbackArtifactCleanup);
+    const fallbackRendererReady = legacyFallback.indexOf('await startInstalledAppWithRendererReady', fallbackFinalLogCheck);
+    const fallbackPostRelaunchLogCheck = legacyFallback.indexOf('assertImmutableV163ReadyRaceLog(launched, options)', fallbackRendererReady);
+    assert(fallbackProcessCleanup >= 0
+      && fallbackInstallerCleanup > fallbackProcessCleanup
+      && fallbackStablePackage > fallbackInstallerCleanup
+      && fallbackCaughtLog > fallbackStablePackage
+      && fallbackParsedLog > fallbackCaughtLog
+      && fallbackProcessClassification > fallbackParsedLog
+      && fallbackProfileUnused > fallbackProcessClassification
+      && fallbackAuthenticatedTree > fallbackProcessClassification
+      && fallbackOwnedArtifactCleanup > fallbackAuthenticatedTree
+      && fallbackArtifactCleanup > fallbackOwnedArtifactCleanup
+      && fallbackFinalLogCheck > fallbackArtifactCleanup
+      && fallbackRendererReady > fallbackFinalLogCheck
+      && fallbackPostRelaunchLogCheck > fallbackRendererReady,
+    '레거시 ready-file 예외는 helper·installer 종료, 안정 package·exact 로그, relaunch/profile 분류, owned artifact 정리, 전체 부재 순으로 검증해야 합니다.');
+    const immutableV163ReadyRaceUses = legacyClientTest.slice(
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
+    );
+    assert.equal((immutableV163ReadyRaceUses.match(/assertImmutableV163ReadyRaceLog\(launched, options\)/g) || []).length, 6,
+      '불변 v1.6.3 exact log assertion은 최종 분류와 cleanup·return 안정성 재검증 지점에 고정되어야 합니다.');
+    const candidateReinstall = legacyClientTest.slice(legacyClientTest.indexOf('async function reinstallCandidateWithPackagedUpdater'), legacyClientTest.indexOf('function stopProcessTree'));
+    assert(candidateReinstall.includes('await downloadWithPackagedUpdater')
+      && candidateReinstall.includes('releaseDecoys: selectionDecoys(CURRENT_VERSION)')
+      && !candidateReinstall.includes('copyFileSync'),
+    '설치된 후보 updater의 same-candidate 검증은 전체 release fixture에서 check·download를 실제 실행해야 합니다.');
+    assert(legacyClientTest.includes('if (uninstallerAttemptCount !== 1)')
+      && legacyClientTest.includes('if (validUninstallerRunCount !== 1)'),
+    '레거시 전체 경로도 설치가 시작되면 정확히 한 번의 유효한 uninstaller 실행을 입증해야 합니다.');
+    assert(legacyClientTest.includes('runningProcessesUnderDirectory(installDir)')
+      && legacyClientTest.includes('perUserUninstallRegistryEntries()')
+      && legacyClientTest.includes('await capture(\'wait for installed product cleanup\', async () => waitForInstallCleanup())'),
+    '레거시 전체 경로는 설치 하위 프로세스·디렉터리·HKCU uninstall registry 정리를 검증해야 합니다.');
+    assert(legacyClientTest.includes('cleanup was not fully verified; retaining ${testRoot} for inspection'),
+      '레거시 cleanup 증거가 누락되면 검사 루트를 지우지 말고 fail-closed 보존해야 합니다.');
     for (const cohort of cohortList(readCohortManifest())) {
       assert(!workflow.includes(cohort.sha256), 'PR/main workflow에 cohort pin이 중복되었습니다.');
       assert(!releaseWorkflow.includes(cohort.sha256), 'tag workflow에 cohort pin이 중복되었습니다.');
@@ -681,7 +1358,12 @@ function registerCliAndUpdateTests(context) {
       'D\tscripts/package-content-check.js\n',
       'M\tscripts/check-update-compatibility-cohorts.js\n',
       'M\tscripts/legacy-update-bridge.config.js\n',
+      'M\tscripts/release-asset-contract.js\n',
       'M\tscripts/update-compatibility-cohorts.json\n',
+      'M\t.github/workflows/legacy-update-bridge.yml\n',
+      'M\t.github/CODEOWNERS\n',
+      'M\tdocs/LEGACY-UPDATE-BRIDGE.md\n',
+      'A\tdocs/UPDATE-COMPATIBILITY-AUDIT-2026-08-24.md\n',
       'R100\tdocs/notes.md\tsrc/updateRelaunch.js\n',
       'R100\tsrc/macUpdateHelper.js\tdocs/removed-helper.md\n',
     ]) {
@@ -694,23 +1376,14 @@ function registerCliAndUpdateTests(context) {
 
   test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {
     const digest = `sha256:${'a'.repeat(64)}`;
-    const canonicalAsset = {
-      name: 'Whitebox-Setup-1.7.4.exe',
-      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe',
-      digest,
-      size: 1024,
-      state: 'uploaded',
-    };
-    const manualBridgeAsset = {
-      ...canonicalAsset,
-      name: 'Whitebox-Manual-Setup-1.7.4-x64.exe',
-      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Manual-Setup-1.7.4-x64.exe',
-    };
+    const currentAssets = fixtureReleaseAssets('1.7.4').map(asset => ({ ...asset, size: 1024, digest }));
+    const canonicalAsset = currentAssets.find(asset => asset.name === 'Whitebox-Setup-1.7.4.exe');
+    const manualBridgeAsset = currentAssets.find(asset => asset.name === 'Whitebox-Manual-Setup-1.7.4-x64.exe');
     const currentRelease = {
       tag_name: 'v1.7.4',
       draft: false,
       prerelease: false,
-      assets: [canonicalAsset, manualBridgeAsset],
+      assets: currentAssets,
     };
     assert.equal(compareVersions('1.7.4', '1.6.3'), 1);
     assert.equal(legacyV163TrustedDownloadUrl(canonicalAsset.browser_download_url), false);
@@ -864,35 +1537,12 @@ function registerCliAndUpdateTests(context) {
   });
 
   test('운영체제와 CPU에 맞는 신뢰된 GitHub Release 파일을 고른다', () => {
-    const base = 'https://github.com/minjund/Whitebox/releases/download/v3.1.0/';
-    const assets = [
-      { name: 'Whitebox-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-portable.exe', browser_download_url: `${base}Whitebox-3.1.0-portable.exe`, state: 'uploaded' },
-      { name: 'Whitebox-Setup-3.1.0.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0.exe`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-arm64.dmg', browser_download_url: `${base}Whitebox-3.1.0-arm64.dmg`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-x64.dmg', browser_download_url: `${base}Whitebox-3.1.0-x64.dmg`, state: 'uploaded' },
-      { name: 'Whitebox-Setup-9.9.9.exe', browser_download_url: 'https://example.com/fake.exe', state: 'uploaded' },
-    ];
-    assert.equal(selectReleaseAsset(assets, { platform: 'win32', arch: 'x64', version: '3.1.0' }).name, 'Whitebox-Setup-3.1.0.exe');
-    for (const nearMatch of [
-      { name: 'LoadToAgent-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}LoadToAgent-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
-      { name: 'Whitebox-Manual-Setup-3.1.0-amd64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-amd64.exe`, state: 'uploaded' },
-    ]) {
-      assert.equal(selectReleaseAsset([nearMatch], { platform: 'win32', arch: 'x64', version: '3.1.0' }), nearMatch);
-    }
-    assert.equal(selectReleaseAsset(assets, { platform: 'darwin', arch: 'arm64', version: '3.1.0' }).name, 'Whitebox-3.1.0-arm64.dmg');
-    assert.equal(selectReleaseAsset(assets, { platform: 'linux', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([assets[4]], { platform: 'darwin', arch: 'arm64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([assets[2]], { platform: 'darwin', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-2.9.0.exe', browser_download_url: `${base}Whitebox-Setup-2.9.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-13.1.0.exe', browser_download_url: `${base}Whitebox-Setup-13.1.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-3.1.0-ia32.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0-ia32.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    const legacyBase = 'https://github.com/minjund/LodeToAgent/releases/download/v3.1.0/';
-    assert.equal(selectReleaseAsset([{
-      name: 'LoadToAgent-Setup-3.1.0.exe',
-      browser_download_url: `${legacyBase}LoadToAgent-Setup-3.1.0.exe`,
-      state: 'uploaded',
-    }], { platform: 'win32', arch: 'x64', version: '3.1.0' }).name, 'LoadToAgent-Setup-3.1.0.exe');
+    const assets = fixtureReleaseAssets('3.1.0');
+    assert.equal(assets.length, 7);
+    assert(selectionDecoys('3.1.0').length >= 10);
+    assertReleaseAssetSelections(assets, '3.1.0');
+    assert.throws(() => fixtureReleaseAssets('3.1.0-beta.1'), /Stable release version is invalid/);
+    assert.throws(() => fixtureReleaseAssets('3.1.0+build.1'), /Stable release version is invalid/);
     assert.equal(safeFileName('..'), '');
     assert.equal(safeFileName('.'), '');
   });
@@ -978,15 +1628,16 @@ function registerCliAndUpdateTests(context) {
       fetch: async () => new Response(JSON.stringify({ ...release, assets: [{ ...asset, size: 'Infinity' }] }), { status: 200 }),
     });
     const malformedSize = await malformedSizeManager.check();
-    assert.equal(malformedSize.asset.size, 0);
+    assert.equal(malformedSize.asset, null);
     assert.equal(malformedSize.totalBytes, 0);
+    assert.match(malformedSize.error, /SHA-256 정보가 올바르지 않아/);
     const missingDigestManager = new UpdateManager({
       currentVersion: '3.0.0', platform: 'win32', arch: 'x64', downloadsDir: downloadDir,
       fetch: async () => new Response(JSON.stringify({ ...release, assets: [{ ...asset, digest: '' }] }), { status: 200 }),
     });
     const missingDigest = await missingDigestManager.check();
     assert.equal(missingDigest.asset, null);
-    assert.match(missingDigest.error, /원본인지 확인할 안전 정보/);
+    assert.match(missingDigest.error, /SHA-256 정보가 올바르지 않아/);
     const downloaded = await manager.download();
     assert.equal(downloaded.status, 'downloaded');
     assert.equal(fs.readFileSync(downloaded.downloadedPath, 'utf8'), payload.toString());
@@ -1002,11 +1653,14 @@ function registerCliAndUpdateTests(context) {
     const automaticOrder = [];
     const verifiedInstallers = [];
     const verifyInstaller = async options => { verifiedInstallers.push(options); };
+    const inheritedEnvironmentKey = Object.keys(process.env)
+      .find(key => key !== 'APPDATA' && key !== 'SystemRoot');
+    assert(inheritedEnvironmentKey, 'Updater spawn environment fixture requires one inherited process variable.');
     const automatic = await launchDownloadedUpdate({
       platform: 'win32', installType: 'desktop', downloadsDir: downloadDir,
       installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
       expectedVersion: '3.1.0',
-      environment: { SystemRoot: 'C:\\Windows' },
+      environment: { APPDATA: 'C:\\attempt\\roaming', SystemRoot: 'C:\\Windows' },
       allowUnsignedWindowsUpdates: true,
       verifyInstaller,
       waitForReady: async (readyPath, _child, timeoutMs) => {
@@ -1055,6 +1709,9 @@ function registerCliAndUpdateTests(context) {
     assert.equal(spawnCall.command, path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
     assert.equal(spawnCall.options.detached, false);
     assert.equal(spawnCall.options.windowsHide, true);
+    assert.equal(spawnCall.options.env.APPDATA, 'C:\\attempt\\roaming');
+    assert.equal(spawnCall.options.env.SystemRoot, 'C:\\Windows');
+    assert.equal(spawnCall.options.env[inheritedEnvironmentKey], process.env[inheritedEnvironmentKey]);
     assert(spawnCall.args.includes(downloaded.downloadedPath));
     assert(spawnCall.args.includes('3.1.0'));
     assert(spawnCall.args.includes('-HelperPath'));

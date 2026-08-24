@@ -803,7 +803,7 @@
   });
 
   const {
-    agentConnectionSignature, tmuxRows, agentTargets, requiredAgentTarget, dispatchAgentCommand, interruptAgent, startAgent, openForAgent, resumeForAgent, ensureForAgent, preconnectForAgents, bindAgentConnection, resetForAgent,
+    agentConnectionSignature, tmuxRows, agentTargets, requiredAgentTarget, dispatchAgentCommand, interruptAgent, startAgent, openForAgent, resumeForAgent, forkSupport, forkForAgent, forkTargetForAgent, ensureForAgent, preconnectForAgents, bindAgentConnection, resetForAgent,
   } = window.WhiteboxTerminalAgentActions({
     $, state, init, notice, moveWorkbench, selectTmux, selectSession, bindAgent, queueHistoryRefresh,
     renderTarget, fitEntry, refreshSessions, resumeSupport, resumeLaunchArgs, preferredWorkspace, providerLabel, terminalTypeLabel, esc,
@@ -839,8 +839,27 @@
     if (agentSession.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };
     const generation = ++state.embeddedGeneration;
     const excludedTerminalIds = new Set((options.excludeTerminalIds || []).map(value => String(value || '')).filter(Boolean));
-    const mountTargets = () => agentTargets(agentSession).filter(item => item.kind !== 'terminal'
-      || !excludedTerminalIds.has(String(item.terminalId || item.id || '')));
+    const forkIfOriginOwned = options.forkIfOriginOwned === true
+      && forkSupport(agentSession).supported;
+    const forkCreationGesture = forkIfOriginOwned && options.forkCreationGesture === true;
+    const mountTargets = () => {
+      if (forkIfOriginOwned) {
+        const target = forkTargetForAgent(agentSession, {
+          excludeTerminalIds: [...excludedTerminalIds],
+        });
+        return target ? [target] : [];
+      }
+      return agentTargets(agentSession).filter(item => item.kind !== 'terminal'
+        || !excludedTerminalIds.has(String(item.terminalId || item.id || '')));
+    };
+    const mountTargetMatches = target => {
+      if (!forkIfOriginOwned) return bindAgentConnection(agentSession, target);
+      const verified = forkTargetForAgent(agentSession, {
+        excludeTerminalIds: [...excludedTerminalIds],
+      });
+      return Boolean(verified
+        && String(verified.terminalId || verified.id || '') === String(target?.terminalId || target?.id || ''));
+    };
     await init();
     if (generation !== state.embeddedGeneration) {
       return { ok: false, reason: 'cancelled', targets: [] };
@@ -855,7 +874,7 @@
     const currentTarget = currentTargets.find(item => item.kind === 'terminal'
       && String(item.terminalId || item.id || '') === state.embeddedTerminalId) || null;
     if (current && currentTarget && (!requestedTargetId || requestedTargetId === state.embeddedTerminalId)
-      && bindAgentConnection(agentSession, currentTarget)) {
+      && mountTargetMatches(currentTarget)) {
       current.host.classList.remove('hidden');
       fitEntry(current, state.embeddedTerminalId);
       return {
@@ -878,7 +897,11 @@
     let target = requested || targets.find(item => item.kind === 'terminal')
       || (options.createIfMissing ? null : targets[0]) || null;
     if (!target && options.createIfMissing) {
-      target = await ensureForAgent(agentSession, { excludeTerminalIds: [...excludedTerminalIds] });
+      target = await ensureForAgent(agentSession, {
+        excludeTerminalIds: [...excludedTerminalIds],
+        forkIfOriginOwned,
+        forkCreationGesture,
+      });
       if (generation !== state.embeddedGeneration || !mount.isConnected) {
         return { ok: false, reason: 'cancelled', targets };
       }
@@ -887,7 +910,7 @@
     }
     if (!target) return { ok: false, reason: 'no-target', targets };
     if (target.kind !== 'terminal') return { ok: false, reason: 'tmux-readonly', target, targets };
-    if (!bindAgentConnection(agentSession, target)) {
+    if (!mountTargetMatches(target)) {
       return { ok: false, reason: 'target-expired', target, targets };
     }
 
@@ -1490,6 +1513,8 @@
     interruptAgent,
     openForAgent,
     resumeForAgent,
+    forkSupport,
+    forkForAgent,
     ensureForAgent,
     preconnectForAgents,
     bindAgentConnection,

@@ -2,8 +2,9 @@
 
 const packageMetadata = require('../package.json');
 
-// v1.6.3-v1.6.22 only trust releases served by the original repository and
-// can only install/relaunch the original Windows product identity. This one-
+// Published v1.6.3-v1.6.14 and v1.6.16-v1.6.22 only trust releases served by
+// the original repository and can only install/relaunch the original Windows
+// product identity. This one-
 // time package deliberately keeps that identity while carrying the current,
 // rename-aware updater. It must remain lower than the canonical Whitebox
 // release so the relaunched bridge immediately offers the second hop.

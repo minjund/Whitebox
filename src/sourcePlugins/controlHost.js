@@ -7,8 +7,9 @@ const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { StringDecoder } = require('string_decoder');
 const { findExecutable } = require('../agentRunner');
-const { ASIDE_MANIFEST, OMO_MANIFEST } = require('./bundled');
+const { ASIDE_MANIFEST, OMO_MANIFEST, OPENCODE_MANIFEST } = require('./bundled');
 const { cleanText, normalizedCapabilities } = require('./contracts');
+const { isSourcePluginEnabled } = require('./settingsStore');
 
 const DELETE_TOKEN_TTL_MS = 30_000;
 const MAX_PROMPT_LENGTH = 120_000;
@@ -47,6 +48,8 @@ function emptySourceStatus(manifest, reason, platform = process.platform) {
     name: manifest.name,
     source: manifest.source,
     platform,
+    platformSupported: manifest.platforms.includes(platform),
+    enabled: true,
     installed: false,
     connected: false,
     available: false,
@@ -75,7 +78,7 @@ class SourcePluginControlHost extends EventEmitter {
     this.aside = null;
     this.disposed = false;
     this.refreshPromise = null;
-    this.statuses.set(OMO_MANIFEST.id, emptySourceStatus(OMO_MANIFEST, 'OpenCode CLI를 확인하는 중입니다.', this.platform));
+    this.statuses.set(OPENCODE_MANIFEST.id, emptySourceStatus(OPENCODE_MANIFEST, 'OpenCode CLI를 확인하는 중입니다.', this.platform));
     this.statuses.set(ASIDE_MANIFEST.id, emptySourceStatus(ASIDE_MANIFEST, this.platform === 'darwin'
       ? 'Aside CLI를 확인하는 중입니다.'
       : 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.', this.platform));
@@ -85,12 +88,43 @@ class SourcePluginControlHost extends EventEmitter {
     return this.settingsStore ? this.settingsStore.snapshot() : { version: 1, asideHistoryFolders: [] };
   }
 
+  pluginEnabled(pluginId) {
+    // Tests and embedders without a settings store retain their legacy
+    // always-on behavior. The desktop app always provides the v2 opt-in store.
+    return !this.settingsStore || isSourcePluginEnabled(this.settings(), pluginId);
+  }
+
+  assertPluginEnabled(pluginId) {
+    if (!this.pluginEnabled(pluginId)) {
+      throw new Error('설정에서 비활성화된 source plugin은 사용할 수 없습니다.');
+    }
+  }
+
+  managedChildren(pluginId) {
+    const id = String(pluginId || '');
+    return [...this.children.values()].filter(record => record.pluginId === id);
+  }
+
+  assertPluginCanDisable(pluginId) {
+    if (this.managedChildren(pluginId).length) {
+      throw new Error('Whitebox에서 실행한 작업이 남아 있습니다. 작업을 먼저 중지한 뒤 source plugin을 비활성화하세요.');
+    }
+  }
+
+  disabledStatus(manifest, reason = '설정에서 활성화하면 이 플러그인의 로컬 작업 기록을 불러옵니다.') {
+    return {
+      ...emptySourceStatus(manifest, reason, this.platform),
+      enabled: false,
+      state: manifest.platforms.includes(this.platform) ? 'disabled' : 'unavailable',
+    };
+  }
+
   listSources() {
     return [...this.statuses.values()].map(status => {
       const { executable: _privateExecutable, ...publicStatus } = status;
-      const managedSessionIds = status.id === OMO_MANIFEST.id
-        ? [...new Set([...this.children.values()]
-          .filter(record => record.pluginId === status.id && record.externalId)
+      const managedSessionIds = [OPENCODE_MANIFEST.id, OMO_MANIFEST.id].includes(status.id)
+        ? [...new Set(this.managedChildren(status.id)
+          .filter(record => record.externalId)
           .map(record => record.externalId))]
         : [];
       return ({
@@ -111,41 +145,85 @@ class SourcePluginControlHost extends EventEmitter {
     return this.listSources();
   }
 
-  async refresh() {
+  async refresh(options = {}) {
     if (this.disposed) return this.listSources();
-    if (this.refreshPromise) return this.refreshPromise;
+    if (this.refreshPromise) {
+      if (options.force !== true) return this.refreshPromise;
+      try {
+        await this.refreshPromise;
+      } catch (_supersededRefreshError) {
+        // A forced refresh represents newer persisted activation state. Apply
+        // it even when the superseded probe or connector cleanup failed.
+      }
+      if (this.disposed) return this.listSources();
+    }
     this.refreshPromise = this.refreshNow().finally(() => { this.refreshPromise = null; });
     return this.refreshPromise;
   }
 
   async refreshNow() {
-    const opencode = this.findExecutable('opencode');
-    const omoConfigured = opencode ? require('./bundled/omo').detectOmoConfiguration({ home: this.home }) : false;
-    this.statuses.set(OMO_MANIFEST.id, opencode && omoConfigured ? {
-      id: OMO_MANIFEST.id,
-      name: OMO_MANIFEST.name,
-      source: OMO_MANIFEST.source,
-      platform: this.platform,
-      installed: true,
-      connected: true,
-      available: true,
-      state: 'ready',
-      reason: '',
-      executable: opencode,
-      capabilities: normalizedCapabilities({
-        start: true, sendInstruction: true, stop: false, archive: false, delete: true, live: true,
-        readConversation: true, readSteps: true, readTabs: false, readArtifacts: true,
-      }),
-      controlUnavailableReasons: { stop: 'Whitebox에서 시작한 OMO 프로세스만 실행 중에 중지할 수 있습니다.', archive: 'OpenCode CLI는 세션 보관 명령을 제공하지 않습니다.' },
-    } : {
-      ...emptySourceStatus(OMO_MANIFEST, opencode
-        ? 'OpenCode는 설치되어 있지만 Oh My OpenAgent 설정을 찾을 수 없습니다.'
-        : 'OpenCode CLI를 찾을 수 없습니다.', this.platform),
-      installed: Boolean(opencode),
-    });
+    const openCodeEnabled = this.pluginEnabled(OPENCODE_MANIFEST.id);
+    const opencode = openCodeEnabled ? this.findExecutable('opencode') : '';
+    this.statuses.set(OPENCODE_MANIFEST.id, !openCodeEnabled
+      ? this.disabledStatus(OPENCODE_MANIFEST)
+      : opencode ? {
+        id: OPENCODE_MANIFEST.id,
+        name: OPENCODE_MANIFEST.name,
+        source: OPENCODE_MANIFEST.source,
+        platform: this.platform,
+        platformSupported: true,
+        enabled: true,
+        installed: true,
+        connected: true,
+        available: true,
+        state: 'ready',
+        reason: '',
+        executable: opencode,
+        capabilities: normalizedCapabilities({
+          start: true, sendInstruction: false, stop: false, archive: false, delete: false, live: true,
+          readConversation: true, readSteps: true, readTabs: false, readArtifacts: true,
+        }),
+        controlUnavailableReasons: {
+          sendInstruction: '가져온 OpenCode 기록은 읽기 전용입니다. 새 작업은 실행 화면에서 시작하세요.',
+          stop: 'Whitebox에서 시작한 OpenCode 프로세스만 실행 중에 중지할 수 있습니다.',
+          archive: 'OpenCode CLI는 세션 보관 명령을 제공하지 않습니다.',
+          delete: '가져온 OpenCode 기록은 Whitebox에서 삭제하지 않습니다.',
+        },
+      } : {
+        ...emptySourceStatus(OPENCODE_MANIFEST, 'OpenCode CLI를 찾을 수 없습니다.', this.platform),
+        enabled: true,
+        installed: false,
+      });
+    if (!openCodeEnabled) delete this.externalSnapshots[OPENCODE_MANIFEST.id];
+
+    const asideEnabled = this.pluginEnabled(ASIDE_MANIFEST.id);
+    if (!asideEnabled) {
+      const previousAside = this.aside;
+      this.aside = null;
+      this.statuses.set(ASIDE_MANIFEST.id, this.disabledStatus(ASIDE_MANIFEST, this.platform === 'darwin'
+        ? undefined
+        : 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.'));
+      delete this.externalSnapshots[ASIDE_MANIFEST.id];
+      this.deleteTokens.clear();
+      this.emit('changed', this.monitorState());
+      if (previousAside && typeof previousAside.dispose === 'function') {
+        try {
+          await previousAside.dispose();
+        } catch (error) {
+          // Activation is authoritative. Cleanup failure must not restore a
+          // disabled connector's controls or its previously imported rows.
+          this.emit('cleanup-error', error);
+        }
+      }
+      return this.listSources();
+    }
 
     if (this.platform !== 'darwin') {
-      this.statuses.set(ASIDE_MANIFEST.id, emptySourceStatus(ASIDE_MANIFEST, 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.', this.platform));
+      this.statuses.set(ASIDE_MANIFEST.id, {
+        ...emptySourceStatus(ASIDE_MANIFEST, 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.', this.platform),
+        enabled: true,
+        platformSupported: false,
+      });
       this.externalSnapshots[ASIDE_MANIFEST.id] = { sessions: [], status: this.statuses.get(ASIDE_MANIFEST.id) };
       this.emit('changed', this.monitorState());
       return this.listSources();
@@ -192,7 +270,8 @@ class SourcePluginControlHost extends EventEmitter {
       if (!capabilities.delete) unavailable.delete = 'Aside MCP가 delete/remove 도구를 제공하지 않았습니다.';
       const status = {
         id: ASIDE_MANIFEST.id, name: ASIDE_MANIFEST.name, source: ASIDE_MANIFEST.source,
-        platform: this.platform, installed: true, connected: Boolean(probe.available), available: true,
+        platform: this.platform, platformSupported: true, enabled: true,
+        installed: true, connected: Boolean(probe.available), available: true,
         state: probe.available && discovered.list ? 'ready' : 'degraded',
         reason: !probe.available
           ? cleanText(probe.reason || 'Aside MCP에 연결할 수 없어 CLI 시작과 이어가기만 사용할 수 있습니다.', 500)
@@ -247,15 +326,35 @@ class SourcePluginControlHost extends EventEmitter {
     return promise;
   }
 
-  start(pluginId, raw = {}) {
+  start(pluginId, raw = {}, options = {}) {
     if (this.disposed) return Promise.resolve({ ok: false, error: '프로그램이 종료 중입니다.' });
     const id = requestId(raw.requestId);
+    if (cleanText(raw.externalId, 500) && options.allowExistingSession !== true) {
+      return Promise.resolve({
+        ok: false,
+        accepted: false,
+        requestId: id,
+        error: '가져온 source 기록은 새 작업 시작 API로 재개할 수 없습니다.',
+      });
+    }
+    try {
+      this.assertPluginEnabled(String(pluginId || ''));
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        accepted: false,
+        requestId: id,
+        error: cleanText(error && error.message || error, 1000),
+      });
+    }
     if (this.requests.has(id)) return this.requests.get(id);
     const action = Promise.resolve().then(async () => {
       const status = this.statuses.get(String(pluginId || ''));
       if (!status || !status.available || !status.capabilities?.start) throw new Error(status?.reason || '선택한 출처에서 새 작업을 시작할 수 없습니다.');
       const input = { ...raw, prompt: safePrompt(raw.prompt), cwd: safeCwd(raw.cwd), requestId: id };
-      if (pluginId === OMO_MANIFEST.id) return this.startCliProcess({ pluginId, executable: status.executable, input, args: this.omoArgs(input) });
+      if ([OPENCODE_MANIFEST.id, OMO_MANIFEST.id].includes(pluginId)) {
+        return this.startCliProcess({ pluginId, executable: status.executable, input, args: this.openCodeArgs(input) });
+      }
       if (pluginId === ASIDE_MANIFEST.id) {
         if (this.aside && typeof this.aside.start === 'function') return this.aside.start(input);
         return this.startCliProcess({ pluginId, executable: status.executable, input, args: [input.prompt] });
@@ -265,13 +364,17 @@ class SourcePluginControlHost extends EventEmitter {
     return this.rememberRequest(id, action);
   }
 
-  omoArgs(input) {
+  openCodeArgs(input) {
     const args = ['run', '--format', 'json', '--dir', input.cwd];
     if (input.externalId) args.push('--session', input.externalId);
     if (input.model) args.push('--model', cleanText(input.model, 160));
     if (input.agent) args.push('--agent', cleanText(input.agent, 160));
     args.push(input.prompt);
     return args;
+  }
+
+  omoArgs(input) {
+    return this.openCodeArgs(input);
   }
 
   startCliProcess({ pluginId, executable, input, args }) {
@@ -318,17 +421,21 @@ class SourcePluginControlHost extends EventEmitter {
 
   async control(session, action, raw = {}) {
     if (!session || !session.sourcePluginId || !session.externalId) throw new Error('조작할 source session을 찾을 수 없습니다.');
+    this.assertPluginEnabled(session.sourcePluginId);
     const status = this.statuses.get(session.sourcePluginId);
     const capability = action === 'send' ? 'sendInstruction' : action;
     if (!['send', 'stop', 'archive', 'delete'].includes(action)) throw new Error('지원하지 않는 source session 조작입니다.');
+    const sessionCapabilities = session.sourceControlCapabilities || session.controlCapabilities || {};
     if (session.sourcePluginId === ASIDE_MANIFEST.id) {
       if (session.readOnly === true || session.controlAuthority !== 'official-session-id') {
         throw new Error('사용자가 선택한 Aside 폴더 기록은 읽기 전용입니다. 공식 Aside 세션 ID만 조작할 수 있습니다.');
       }
-      const sessionCapabilities = session.sourceControlCapabilities || session.controlCapabilities || {};
-      if (!sessionCapabilities[capability]) throw new Error(session.controlUnavailableReasons?.[capability] || '이 Aside 세션에는 해당 조작 권한이 없습니다.');
     }
-    if (!status?.capabilities?.[capability] && !(action === 'stop' && this.managedChild(session))) {
+    const managedStop = action === 'stop' && this.managedChild(session);
+    if (!sessionCapabilities[capability] && !managedStop) {
+      throw new Error(session.controlUnavailableReasons?.[capability] || '이 source session에는 해당 조작 권한이 없습니다.');
+    }
+    if (!status?.capabilities?.[capability] && !managedStop) {
       throw new Error(status?.controlUnavailableReasons?.[capability] || `${action} 기능을 사용할 수 없습니다.`);
     }
     if (action === 'delete') this.consumeDeleteToken(session, raw.deleteToken);
@@ -336,8 +443,12 @@ class SourcePluginControlHost extends EventEmitter {
       const prompt = safePrompt(raw.prompt || raw.input);
       const id = requestId(raw.requestId);
       if (this.requests.has(id)) return this.requests.get(id);
-      const promise = session.sourcePluginId === OMO_MANIFEST.id
-        ? this.start(OMO_MANIFEST.id, { ...raw, prompt, cwd: session.cwd, externalId: session.externalId, requestId: id })
+      const promise = [OPENCODE_MANIFEST.id, OMO_MANIFEST.id].includes(session.sourcePluginId)
+        ? this.start(
+          session.sourcePluginId,
+          { ...raw, prompt, cwd: session.cwd, externalId: session.externalId, requestId: id },
+          { allowExistingSession: true },
+        )
         : this.controlAside(session, 'sendInstruction', { ...raw, prompt, requestId: id });
       return this.rememberRequest(id, Promise.resolve(promise));
     }
@@ -345,7 +456,7 @@ class SourcePluginControlHost extends EventEmitter {
       const child = this.managedChild(session);
       if (child) return this.stopChild(child);
     }
-    if (session.sourcePluginId === OMO_MANIFEST.id) {
+    if ([OPENCODE_MANIFEST.id, OMO_MANIFEST.id].includes(session.sourcePluginId)) {
       if (action === 'delete') {
         await this.execFile(status.executable, ['session', 'delete', session.externalId], { cwd: session.cwd || this.home });
         this.emit('changed', this.monitorState());
@@ -364,7 +475,8 @@ class SourcePluginControlHost extends EventEmitter {
   }
 
   managedChild(session) {
-    return [...this.children.values()].find(item => item.pluginId === session.sourcePluginId && item.externalId && item.externalId === session.externalId) || null;
+    return this.managedChildren(session.sourcePluginId)
+      .find(item => item.externalId && item.externalId === session.externalId) || null;
   }
 
   stopChild(record) {
@@ -380,10 +492,14 @@ class SourcePluginControlHost extends EventEmitter {
 
   prepareDelete(session) {
     if (!session || !session.id || !session.sourcePluginId || !session.externalId) throw new Error('삭제할 source session을 찾을 수 없습니다.');
+    this.assertPluginEnabled(session.sourcePluginId);
     const status = this.statuses.get(session.sourcePluginId);
     if (session.sourcePluginId === ASIDE_MANIFEST.id
       && (session.readOnly === true || session.controlAuthority !== 'official-session-id' || !(session.sourceControlCapabilities || session.controlCapabilities || {}).delete)) {
       throw new Error('읽기 전용 Aside 기록은 삭제할 수 없습니다. 공식 Aside 세션의 delete 도구가 확인되어야 합니다.');
+    }
+    if (!(session.sourceControlCapabilities || session.controlCapabilities || {}).delete) {
+      throw new Error(session.controlUnavailableReasons?.delete || '이 source session은 삭제할 수 없습니다.');
     }
     if (!status?.capabilities?.delete) throw new Error(status?.controlUnavailableReasons?.delete || '이 출처는 삭제를 지원하지 않습니다.');
     const token = crypto.randomBytes(24).toString('base64url');
@@ -408,6 +524,7 @@ class SourcePluginControlHost extends EventEmitter {
   }
 
   async detail(session) {
+    if (session?.sourcePluginId) this.assertPluginEnabled(session.sourcePluginId);
     if (session?.sourcePluginId !== ASIDE_MANIFEST.id || !this.aside || typeof this.aside.detail !== 'function') return null;
     return this.aside.detail(session.externalId);
   }

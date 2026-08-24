@@ -10,12 +10,33 @@ const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost'
 const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
 
 app.disableHardwareAcceleration();
+// Keep cleanup in control after the hidden integration window is destroyed;
+// otherwise Electron may exit successfully on `window-all-closed` before the
+// test can propagate a failure status.
+app.on('window-all-closed', () => {});
 
 const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, 'artifacts');
 const logFile = path.join(artifacts, 'inline-actual-pty-integration.log');
 const screenshotFile = path.join(artifacts, 'whitebox-inline-actual-pty-failure.png');
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-drawer-actual-pty-'));
+const temporary = (() => {
+  const candidate = path.resolve(String(process.env.WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_ROOT || ''));
+  const nonce = String(process.env.WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_NONCE || '');
+  const temporaryParent = fs.realpathSync(os.tmpdir());
+  const stat = fs.lstatSync(candidate);
+  const real = fs.realpathSync(candidate);
+  const owner = JSON.parse(fs.readFileSync(path.join(real, '.whitebox-drawer-actual-pty-owner.json'), 'utf8'));
+  if (!stat.isDirectory()
+    || stat.isSymbolicLink()
+    || path.dirname(real) !== temporaryParent
+    || !path.basename(real).startsWith('whitebox-drawer-actual-pty-')
+    || !nonce
+    || owner.nonce !== nonce
+    || owner.runnerPid !== process.ppid) {
+    throw new Error(`Untrusted actual PTY integration temporary root: ${candidate}`);
+  }
+  return real;
+})();
 const discoveryFile = path.join(temporary, 'terminal-host.json');
 const storeFile = path.join(temporary, 'terminals.json');
 const endpoint = process.platform === 'win32'
@@ -67,6 +88,14 @@ function encodedAdditionalArgument(name, value) {
   return `--${name}=${Buffer.from(String(value || ''), 'utf8').toString('base64url')}`;
 }
 
+function fixtureLaunchArgumentsMarker(args) {
+  const hash = crypto.createHash('sha256')
+    .update(JSON.stringify(args), 'utf8')
+    .digest('hex')
+    .slice(0, 24);
+  return `WHITEBOX_DRAWER_BOUND_PTY_ARGV_${hash}`;
+}
+
 async function rendererValue(win, expression) {
   return win.webContents.executeJavaScript(expression);
 }
@@ -76,14 +105,16 @@ async function waitForRenderer(win, expression, message, timeoutMs = 12_000) {
 }
 
 async function run() {
+  const fixtureProvider = {
+    command: 'node',
+    args: [path.join(__dirname, 'drawer-bound-pty-agent-fixture.js')],
+    label: 'Signed drawer PTY integration',
+  };
   const manager = new TerminalManager({
     storeFile,
     agentProviders: {
-      claude: {
-        command: 'node',
-        args: [path.join(__dirname, 'drawer-bound-pty-agent-fixture.js')],
-        label: 'Signed drawer PTY integration',
-      },
+      claude: fixtureProvider,
+      codex: { ...fixtureProvider, label: 'Codex Desktop fork PTY integration' },
     },
   });
   const server = new TerminalHostServer({
@@ -97,7 +128,9 @@ async function run() {
   const ipcCalls = [];
   let win = null;
   let terminalId = '';
+  let codexForkTerminalId = '';
   let terminalRetired = false;
+  let exitCode = 0;
 
   const collectData = payload => {
     clientData.push(String(payload?.data || ''));
@@ -192,8 +225,11 @@ async function run() {
     await waitUntil(async () => String((await client.get(terminalId, true))?.replay || '').includes(hydrationMarker),
       '실제 PTY replay에 사전 출력 marker가 기록되지 않았습니다.');
     session = await client.get(terminalId, true);
+    const claudeLaunchMarker = fixtureLaunchArgumentsMarker(resumeArgs);
     assert(Number(session?.pid) > 0,
       `실제 node-pty 자식 프로세스 id를 확인하지 못했습니다: ${JSON.stringify(session)}`);
+    assert(String(session?.replay || '').includes(claudeLaunchMarker),
+      `Claude launch spec의 정확한 --resume argv가 실제 node-pty fixture에 도착하지 않았습니다: ${JSON.stringify(session)}`);
 
     win = new BrowserWindow({
       width: 1440,
@@ -275,10 +311,11 @@ async function run() {
       return [
         ...[...screen.querySelectorAll('.xterm-rows > div')].map(row => row.textContent || ''),
         screen.querySelector('.xterm-accessibility-tree')?.textContent || '',
+        screen.querySelector('.xterm-accessibility .live-region')?.textContent || '',
       ].join('\\n');
     })()`;
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(hydrationMarker)})`,
-      'terminalGet replay가 인라인 xterm에 hydrate되지 않았습니다.');
+      'terminalGet replay가 인라인 xterm에 hydrate되지 않았습니다.', 20_000);
 
     const focused = await rendererValue(win, `(() => {
       window.interactionTest.clearCalls();
@@ -374,7 +411,7 @@ async function run() {
     await waitUntil(() => clientData.join('').includes(liveMarker),
       '인라인 PTY 입력 명령이 TerminalHost 소켓을 거쳐 실제 PTY 출력으로 돌아오지 않았습니다.');
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(liveMarker)})`,
-      '실제 PTY live marker가 인라인 xterm에 표시되지 않았습니다.');
+      '실제 PTY live marker가 인라인 xterm 출력과 접근성 버퍼에 표시되지 않았습니다.');
 
     const rendererResult = await rendererValue(win, `(() => ({
       embedded: window.WhiteboxTerminal.embeddedState(),
@@ -406,9 +443,135 @@ async function run() {
     assert(String((await client.get(terminalId, true))?.replay || '').includes(liveMarker),
       'TerminalManager/node-pty replay에서 live marker를 확인하지 못했습니다.');
 
+    const codexForkExternalId = 'actual-pty-fork-source';
+    const codexForkSource = {
+      id: `codex:${codexForkExternalId}`,
+      externalId: codexForkExternalId,
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      cwd: root,
+      environment: {
+        kind: process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux'),
+        distro: '',
+      },
+      parentId: null,
+      runId: '',
+    };
+    const forkLaunch = await rendererValue(win, `(async () => {
+      const source = ${JSON.stringify(codexForkSource)};
+      window.interactionTest.clearCalls();
+      const support = window.WhiteboxTerminal.forkSupport(source);
+      const result = await window.WhiteboxTerminal.forkForAgent(source, '', false, {
+        focus: false,
+        includeReplay: true,
+      });
+      return {
+        support,
+        result: {
+          terminalId: result.terminalId,
+          forked: result.forked,
+          background: result.background,
+          creationId: result.creationId,
+          sourceSessionId: result.forkSourceSessionId,
+          sourceSignature: result.forkSourceSignature,
+        },
+        createCalls: window.interactionTest.getCalls()
+          .filter(call => call.name === 'terminalCreate'),
+      };
+    })()`);
+    codexForkTerminalId = String(forkLaunch?.result?.terminalId || '');
+    const forkCreateOptions = forkLaunch?.createCalls?.[0]?.args?.[0] || null;
+    assert(forkLaunch?.support?.supported === true
+      && JSON.stringify(forkLaunch.support.args) === JSON.stringify(['fork', codexForkExternalId]),
+    `Codex Desktop 대화가 renderer에서 정확한 fork launch로 판별되지 않았습니다: ${JSON.stringify(forkLaunch)}`);
+    assert(codexForkTerminalId
+      && forkLaunch.result.forked === true
+      && forkLaunch.result.background === true
+      && forkLaunch.createCalls.length === 1,
+    `renderer→IPC Codex fork 생성이 정확히 한 번 완주하지 않았습니다: ${JSON.stringify(forkLaunch)}`);
+    assert(forkCreateOptions?.type === 'agent'
+      && forkCreateOptions.provider === 'codex'
+      && JSON.stringify(forkCreateOptions.args) === JSON.stringify(['fork', codexForkExternalId])
+      && forkCreateOptions.cwd === root
+      && forkCreateOptions.sessionBackend === 'direct'
+      && forkCreateOptions.agentForkSourceSessionId === codexForkSource.id
+      && forkCreateOptions.agentForkSourceSignature === forkLaunch.support.sourceSignature
+      && !forkCreateOptions.bridgeId
+      && !forkCreateOptions.recoveryArgs
+      && !forkCreateOptions.initialCommand,
+    `Codex fork renderer launch spec에 원본 attach/resume 또는 질문이 섞였습니다: ${JSON.stringify(forkCreateOptions)}`);
+
+    const codexLaunchArgs = ['fork', codexForkExternalId];
+    const codexLaunchMarker = fixtureLaunchArgumentsMarker(codexLaunchArgs);
+    await waitUntil(async () => {
+      const forkSession = await client.get(codexForkTerminalId, true);
+      return Number(forkSession?.pid) > 0
+        && String(forkSession?.replay || '').includes(codexLaunchMarker);
+    }, 'Codex fork launch spec이 실제 node-pty 자식 fixture에 도착하지 않았습니다.');
+    const codexForkSession = await client.get(codexForkTerminalId, true);
+    assert(codexForkSession.status === 'running'
+      && codexForkSession.provider === 'codex'
+      && codexForkSession.backend === 'direct'
+      && codexForkSession.agentForkSourceSessionId === codexForkSource.id
+      && codexForkSession.agentForkSourceSignature === forkLaunch.support.sourceSignature
+      && codexForkSession.agentResumeSessionId === ''
+      && codexForkSession.conversationBound === false,
+    `실제 Codex fork PTY가 원본 대화 writer에 attach되지 않은 새 세션이 아닙니다: ${JSON.stringify(codexForkSession)}`);
+
+    const codexMount = await rendererValue(win, `(async () => {
+      const source = ${JSON.stringify(codexForkSource)};
+      const mount = document.querySelector('#agentInlineTerminalViewport');
+      const result = await window.WhiteboxTerminal.mountForAgent(source, {
+        mount,
+        targetId: ${JSON.stringify(codexForkTerminalId)},
+        forkIfOriginOwned: true,
+      });
+      return {
+        ok: result.ok,
+        reason: result.reason || '',
+        terminalId: result.target?.terminalId || result.target?.id || '',
+        embedded: window.WhiteboxTerminal.embeddedState(),
+      };
+    })()`);
+    assert(codexMount.ok
+      && codexMount.terminalId === codexForkTerminalId
+      && codexMount.embedded?.connected
+      && codexMount.embedded?.agentSessionId === codexForkSource.id
+      && codexMount.embedded?.terminalId === codexForkTerminalId,
+    `Codex fork 실제 PTY가 renderer xterm에 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
+    await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLaunchMarker)})`,
+      'Codex fork argv marker가 실제 renderer xterm에 hydrate되지 않았습니다.');
+
+    const codexLiveMarker = `LTA_CODEX_FORK_LIVE_${Date.now()}`;
+    const codexLiveCommand = encodedMarkerCommand(codexLiveMarker);
+    const codexPasted = await rendererValue(win, `(() => {
+      const input = document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea');
+      if (!input || !window.WhiteboxTerminal.focusEmbedded()) return false;
+      const clipboard = new DataTransfer();
+      clipboard.setData('text/plain', ${JSON.stringify(codexLiveCommand)});
+      input.dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: clipboard,
+      }));
+      return document.activeElement === input;
+    })()`);
+    assert(codexPasted, 'Codex fork xterm의 실제 입력 경로에 포커스/붙여넣기를 전달하지 못했습니다.');
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    await waitUntil(async () => String((await client.get(codexForkTerminalId, true))?.replay || '').includes(codexLiveMarker),
+      'Codex fork renderer 입력이 TerminalHost/node-pty를 거쳐 되돌아오지 않았습니다.');
+    await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLiveMarker)})`,
+      'Codex fork live marker가 renderer xterm에 표시되지 않았습니다.');
+
     const summary = {
       terminalId,
       pid: session.pid,
+      codexForkTerminalId,
+      codexForkPid: codexForkSession.pid,
+      codexForkSourceSessionId: codexForkSource.id,
+      codexForkArgs: codexLaunchArgs,
+      codexForkLiveMarker: codexLiveMarker,
       hostEndpoint: hostInfo.endpoint,
       authenticatedHostClients: server.clients.size,
       hydrationMarker,
@@ -425,6 +588,19 @@ async function run() {
     log(`failed ${error.stack || error}`);
     if (win && !win.isDestroyed()) {
       try {
+        const diagnostic = await rendererValue(win, `(() => {
+          const viewport = document.querySelector('#agentInlineTerminalViewport');
+          const screen = viewport?.querySelector(':scope > .terminal-screen');
+          return {
+            embedded: window.WhiteboxTerminal?.embeddedState?.() || null,
+            viewportHtml: viewport?.innerHTML?.slice(0, 2_000) || '',
+            rows: [...(screen?.querySelectorAll('.xterm-rows > div') || [])]
+              .map(row => row.textContent || ''),
+            accessibility: screen?.querySelector('.xterm-accessibility-tree')?.textContent || '',
+            liveRegion: screen?.querySelector('.xterm-accessibility .live-region')?.textContent || '',
+          };
+        })()`);
+        log(`failure renderer diagnostic ${JSON.stringify(diagnostic)}`);
         fs.writeFileSync(screenshotFile, (await win.webContents.capturePage()).toPNG());
         log(`failure screenshot ${screenshotFile}`);
       } catch (captureError) {
@@ -432,6 +608,7 @@ async function run() {
       }
     }
     process.stderr.write(`${error.stack || error}\n`);
+    exitCode = 1;
     process.exitCode = 1;
   } finally {
     if (win && !win.isDestroyed()) win.destroy();
@@ -440,38 +617,40 @@ async function run() {
     client.removeListener('disconnect', forwardDisconnect);
     client.removeListener('reconnect', forwardReconnect);
     client.removeListener('reconnect-error', forwardReconnectError);
-    if (terminalId && manager.get(terminalId, false)) {
+    const sessionIdsToRetire = manager.list().map(item => String(item.id || '')).filter(Boolean);
+    for (const sessionId of sessionIdsToRetire) {
       try {
-        await client.retire(terminalId);
-        await waitUntil(() => !manager.get(terminalId, false),
-          '실제 PTY retire 완료가 확인되지 않았습니다.', 5_000);
-        terminalRetired = true;
+        await client.retire(sessionId);
+        await waitUntil(() => !manager.get(sessionId, false),
+          `실제 PTY retire 완료가 확인되지 않았습니다: ${sessionId}`, 5_000);
       } catch (error) {
-        log(`client retire failed ${error.stack || error}`);
+        log(`client retire failed session=${sessionId} ${error.stack || error}`);
+        exitCode = 1;
         try {
-          await manager.retire(terminalId);
-          terminalRetired = !manager.get(terminalId, false);
+          await manager.retire(sessionId);
         } catch (fallbackError) {
-          log(`manager retire fallback failed ${fallbackError.stack || fallbackError}`);
+          log(`manager retire fallback failed session=${sessionId} ${fallbackError.stack || fallbackError}`);
+          exitCode = 1;
         }
       }
-    } else {
-      terminalRetired = true;
     }
+    terminalRetired = manager.list().length === 0;
     log(`cleanup terminalRetired=${terminalRetired}`);
     client.dispose();
     server.dispose();
     await manager.dispose();
     for (const channel of ipcChannels) ipcMain.removeHandler(channel);
-    try { fs.rmSync(temporary, { recursive: true, force: true }); } catch (error) { log(`temporary cleanup failed ${error.message}`); }
-    if (!terminalRetired) process.exitCode = 1;
-    app.exit(process.exitCode || 0);
+    // The Node runner owns this exact temporary root. It waits for this
+    // Electron process to release Chromium's userData locks, then deletes and
+    // verifies the directory before it returns the npm command's exit code.
+    if (!terminalRetired) exitCode = 1;
+    process.exitCode = exitCode;
+    app.exit(exitCode);
   }
 }
 
 app.whenReady().then(run).catch(error => {
   log(`startup failed ${error.stack || error}`);
   process.stderr.write(`${error.stack || error}\n`);
-  process.exitCode = 1;
-  app.quit();
+  app.exit(1);
 });

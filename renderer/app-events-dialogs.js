@@ -443,11 +443,29 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
           : current + (event.key === "ArrowLeft" ? 32 : -32);
       setConversationPanelWidth(next);
     });
+    const selectDrawerTabFromGesture = (tabName) => {
+      const nextTab = String(tabName || "");
+      const explicitTerminalChat = nextTab === "chat"
+        && state.drawerMode === "session"
+        && (state.drawerTab !== "chat"
+          || state.drawerMountTerminal !== true
+          || state.drawerCreateTerminalIfMissing !== true);
+      state.drawerForkCreationGesture = explicitTerminalChat;
+      if (explicitTerminalChat) {
+        // Automatic attention activation deliberately opens read-only. A real
+        // mouse/keyboard Chat gesture hands control back to the user and may
+        // now mount/create the separate fork PTY.
+        state.drawerMountTerminal = true;
+        state.drawerCreateTerminalIfMissing = true;
+      }
+      state.drawerTab = nextTab;
+      state.drawerForceLatest = nextTab === "chat";
+      return explicitTerminalChat;
+    };
     $(".drawer-tabs").addEventListener("click", (event) => {
       const tab = event.target.closest("[data-tab]");
       if (tab) {
-        state.drawerTab = tab.dataset.tab;
-        state.drawerForceLatest = tab.dataset.tab === "chat";
+        selectDrawerTabFromGesture(tab.dataset.tab);
         renderDrawer();
       }
     });
@@ -461,10 +479,9 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
           ? 0
           : event.key === "End"
             ? tabs.length - 1
-            : (current + (["ArrowRight", "ArrowDown", "PageDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
+          : (current + (["ArrowRight", "ArrowDown", "PageDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
       event.preventDefault();
-      state.drawerTab = tabs[next].dataset.tab;
-      state.drawerForceLatest = state.drawerTab === "chat";
+      selectDrawerTabFromGesture(tabs[next].dataset.tab);
       renderDrawer();
       $(`.drawer-tab[data-tab="${state.drawerTab}"]`)?.focus();
     });

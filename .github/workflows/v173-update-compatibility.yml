@@ -16,14 +16,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-frozen-update-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-frozen-update-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   classify:
     name: Classify updater-sensitive changes
     runs-on: ubuntu-latest
     outputs:
+      cohort_manifest: ${{ steps.public_latest.outputs.cohort_manifest }}
       sensitive: ${{ steps.changes.outputs.sensitive }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -34,7 +35,16 @@ jobs:
         with:
           node-version: 22
       - name: Verify previousFixed matches the public latest stable release
-        run: npm run check:update:cohorts
+        id: public_latest
+        shell: bash
+        run: |
+          npm run check:update:cohorts
+          cohort_manifest="$(node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")"
+          if [ -z "$cohort_manifest" ]; then
+            echo "Validated cohort manifest attestation was empty."
+            exit 1
+          fi
+          printf 'cohort_manifest=%s\n' "$cohort_manifest" >> "$GITHUB_OUTPUT"
       - name: Classify the complete event diff before path filtering
         id: changes
         shell: bash
@@ -88,8 +98,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Verify the selected commit's compatibility cohort manifest
-        run: npm run check:update:cohorts
+      - name: Bind the selected commit to the unauthenticated public-latest attestation
+        shell: pwsh
+        env:
+          EXPECTED_COHORT_MANIFEST: ${{ needs.classify.outputs.cohort_manifest }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_COHORT_MANIFEST)) {
+            throw 'The unauthenticated public-latest cohort attestation was missing'
+          }
+          $actualManifest = (& node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to validate the selected compatibility cohort manifest' }
+          if ($actualManifest -cne $env:EXPECTED_COHORT_MANIFEST) {
+            throw 'The selected compatibility cohort manifest differs from the public-latest validated manifest'
+          }
+          Write-Host 'Selected cohort manifest matches the unauthenticated public-latest attestation.'
       - run: npm run check:source
       - run: npm test
       - name: Build the exact Windows release candidate
@@ -135,9 +157,68 @@ jobs:
           Copy-Item -LiteralPath $targetInstaller -Destination $manualInstaller -Force
           if ((Get-Item -LiteralPath $targetInstaller).Length -ne (Get-Item -LiteralPath $manualInstaller).Length) { throw 'Manual bridge installer size differs from canonical Setup' }
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $manualInstaller).Hash) { throw 'Manual bridge installer digest differs from canonical Setup' }
+          $targetSize = (Get-Item -LiteralPath $targetInstaller).Length
+          $targetSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash.ToLowerInvariant()
           "WHITEBOX_CURRENT_INSTALLER=$targetInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_MANUAL_INSTALLER=$manualInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Verify all three packaged compatibility cohorts
+          "WHITEBOX_CURRENT_INSTALLER_SIZE=$targetSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download and verify the official legacy update inputs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $fixtureDir = Join-Path $env:RUNNER_TEMP 'whitebox-legacy-update-inputs'
+          New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
+          function Get-VerifiedReleaseAsset(
+            [string]$Repository,
+            [string]$Tag,
+            [string]$Name,
+            [long]$ExpectedSize,
+            [string]$ExpectedSha256,
+            [bool]$RequireImmutable,
+            [bool]$RequireSoleAsset,
+            [string]$EnvironmentName
+          ) {
+            $release = gh api "repos/$Repository/releases/tags/$Tag" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read $Repository $Tag" }
+            if ($release.tag_name -cne $Tag -or $release.draft -ne $false -or $release.prerelease -ne $false) {
+              throw "Official release state mismatch for $Repository $Tag"
+            }
+            if ($RequireImmutable -and [bool]$release.immutable -ne $true) {
+              throw "Official release is not immutable: $Repository $Tag"
+            }
+            if ($release.html_url -cne "https://github.com/$Repository/releases/tag/$Tag") {
+              throw "Official release URL mismatch for $Repository $Tag"
+            }
+            if ($RequireSoleAsset -and @($release.assets).Count -ne 1) {
+              throw "Official bridge release must contain exactly one asset"
+            }
+            $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
+            if ($matches.Count -ne 1) { throw "Expected exactly one official $Name asset" }
+            $asset = $matches[0]
+            $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$Name"
+            if ($asset.state -cne 'uploaded' -or $asset.browser_download_url -cne $expectedUrl) {
+              throw "Official asset state or URL mismatch for $Name"
+            }
+            if ([long]$asset.size -ne $ExpectedSize -or [string]$asset.digest -cne "sha256:$ExpectedSha256") {
+              throw "Official asset API size or digest mismatch for $Name"
+            }
+            $destination = Join-Path $fixtureDir $Name
+            Invoke-WebRequest -Uri $expectedUrl -OutFile $destination
+            if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize) {
+              throw "Downloaded official asset size mismatch for $Name"
+            }
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+            if ($actualSha256 -cne $ExpectedSha256) {
+              throw "Downloaded official asset SHA-256 mismatch for $Name`: $actualSha256"
+            }
+            "$EnvironmentName=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          Get-VerifiedReleaseAsset 'minjund/Whitebox' 'v1.6.3' 'LoadToAgent-Setup-1.6.3.exe' 92488826 'e38c38698335c2eec4aef8c6da6f1629470addaff1b881fe961172644c86db0f' $false $false 'WHITEBOX_V163_INSTALLER'
+          Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
+      - name: Verify all three packaged Whitebox compatibility cohorts
         shell: pwsh
         timeout-minutes: 30
         run: |
@@ -155,6 +236,10 @@ jobs:
             }
           }
           if ($attempt -ne 3) { throw "Expected three packaged attempts, ran $attempt" }
+      - name: Verify the official v1.6.3 to bridge to candidate path
+        shell: pwsh
+        timeout-minutes: 30
+        run: npm run test:update:win:legacy-bridge
 
   compatibility_gate:
     name: Updater compatibility gate

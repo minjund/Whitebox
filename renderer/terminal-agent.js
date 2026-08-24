@@ -12,6 +12,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     ? terminalTypeLabel
     : terminal => String(terminal?.type || t('terminal.type.terminal'));
   const ensurePromises = new Map();
+  // A fork inherits history but owns a new provider conversation identity.
+  // Keep its source-card association out of the strong resume binding map so
+  // the original Codex Desktop transcript can never become a writable route.
+  const forkAssociations = new Map();
+  const forkPromises = new Map();
   let preconnectRefreshPromise = null;
   const MAX_PRECONNECTED_TERMINAL_HOSTS = 8;
   const SHA256_ROUND_CONSTANTS = Object.freeze([
@@ -269,6 +274,45 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (isCodexDesktopSession(agentSession)) return codexDesktopOriginOwnedError();
     if (isWhiteboxBridgeProjection(agentSession)) return whiteboxBridgeProjectionOriginOwnedError();
     return null;
+  }
+
+  function forkSupport(agentSession) {
+    if (!agentSession) return { supported: false, reason: t('terminal.resume.no_session_info') };
+    if (agentSession.parentId) {
+      return {
+        supported: false,
+        parentControlled: true,
+        reason: t('terminal.resume.parent_controlled'),
+      };
+    }
+    if (!isCodexDesktopSession(agentSession)) {
+      return { supported: false, reason: t('terminal.agent.no_input_target') };
+    }
+    const sessionId = String(agentSession.externalId || '').trim();
+    const sourceSessionId = String(agentSession.id || '').trim();
+    const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
+    const runId = String(agentSession.runId || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(sessionId)
+      || sourceSessionId !== canonicalSourceSessionId
+      || /^(?:terminal|bridge):/i.test(sessionId)
+      || /^process-\d+$/i.test(sessionId)
+      || (runId && runId === sessionId)) {
+      return {
+        supported: false,
+        code: 'CODEX_DESKTOP_FORK_INVALID_SESSION',
+        reason: t('terminal.fork.invalid_session'),
+      };
+    }
+    return {
+      supported: true,
+      originOwned: true,
+      provider: 'codex',
+      sessionId,
+      sourceSessionId,
+      sourceSignature: agentConnectionSignature(agentSession),
+      args: ['fork', sessionId],
+      promptMode: 'terminal',
+    };
   }
 
   function resultError(result, fallback) {
@@ -748,6 +792,309 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     return !['stopped', 'exited', 'failed'].includes(String(terminal.status || '').toLowerCase());
   }
 
+  function forkTerminalIdentityMatches(terminal, support) {
+    if (!terminal || !support?.supported) return false;
+    if (String(terminal.type || '').toLowerCase() !== 'agent') return false;
+    if (String(terminal.provider || '').toLowerCase() !== 'codex') return false;
+    if (String(terminal.backend || terminal.sessionBackend || '').toLowerCase() !== 'direct') return false;
+    const activeForkSourceMatches = String(terminal.agentForkSourceSessionId || '').trim() === support.sourceSessionId
+      && String(terminal.agentForkSourceSignature || '').trim() === support.sourceSignature;
+    // The CLI does not return the new child conversation ID from `codex fork`.
+    // Lineage/process inference cannot distinguish this PTY's child from a
+    // simultaneous external fork, so renderer-side metadata must never revive
+    // a conversation-bound adoption. Only the live provisional PTY association
+    // signed for the source card is mountable.
+    return activeForkSourceMatches
+      && terminal.conversationBound !== true
+      && !String(terminal.bridgeId || '').trim()
+      && !String(terminal.agentConnectionSignature || '').trim();
+  }
+
+  function forkTerminalMatches(terminal, support) {
+    return terminalStillOwnsRuntime(terminal) && forkTerminalIdentityMatches(terminal, support);
+  }
+
+  function forkTargetFromTerminal(terminal, support) {
+    return {
+      id: terminal.id,
+      kind: 'terminal',
+      label: terminal.title || providerLabel('codex'),
+      detail: `${terminalLabel(terminal)} · ${t('session.program_pid', { pid: terminal.pid || '--' })}`,
+      terminalId: terminal.id,
+      reconnectable: false,
+      forked: true,
+      forkSourceSessionId: support.sourceSessionId,
+      forkSourceSignature: support.sourceSignature,
+      creationId: String(terminal.creationId || '').trim(),
+      terminal,
+    };
+  }
+
+  function rememberForkTerminal(support, terminal, record = null) {
+    const remembered = { ...terminal };
+    const next = record || {};
+    next.sourceSessionId = support.sourceSessionId;
+    next.sourceSignature = support.sourceSignature;
+    next.terminalId = remembered.id;
+    next.terminal = remembered;
+    next.creationId = next.creationId || String(terminal.creationId || '').trim();
+    next.creationState = 'accepted';
+    next.inventoryRevision = Number.isSafeInteger(state.terminalSessionRevision)
+      ? state.terminalSessionRevision
+      : null;
+    forkAssociations.set(support.sourceSignature, next);
+    return remembered;
+  }
+
+  function forkTargetForAgent(agentSession, options = {}) {
+    const support = forkSupport(agentSession);
+    if (!support.supported) return null;
+    const excludedTerminalIds = new Set((options.excludeTerminalIds || [])
+      .map(value => String(value || '')).filter(Boolean));
+    const persisted = state.sessions.find(terminal => forkTerminalMatches(terminal, support)
+      && !excludedTerminalIds.has(String(terminal.id || ''))) || null;
+    if (persisted) {
+      const record = forkAssociations.get(support.sourceSignature) || null;
+      return forkTargetFromTerminal(rememberForkTerminal(support, persisted, record), support);
+    }
+
+    let record = forkAssociations.get(support.sourceSignature) || null;
+    if (record?.terminalId) {
+      const authoritative = state.sessions.find(terminal => (
+        String(terminal.id || '') === String(record.terminalId)
+        && forkTerminalIdentityMatches(terminal, support)
+      )) || null;
+      if (authoritative) {
+        rememberForkTerminal(support, authoritative, record);
+        record = forkAssociations.get(support.sourceSignature) || null;
+      }
+    }
+    if (!record) {
+      // A stopped fork is not mountable, but its signed source metadata proves
+      // that this source already consumed a creation gesture. Preserve that
+      // evidence as a tombstone so renderer reload/host restart cannot turn a
+      // passive sync into another `codex fork` invocation.
+      const evidence = state.sessions.find(terminal => forkTerminalIdentityMatches(terminal, support)) || null;
+      if (evidence) {
+        rememberForkTerminal(support, evidence);
+        record = forkAssociations.get(support.sourceSignature) || null;
+      }
+    }
+    const terminal = record?.terminal || null;
+    if (!forkTerminalMatches(terminal, support)
+      || excludedTerminalIds.has(String(terminal?.id || ''))) return null;
+    const currentRevision = Number.isSafeInteger(state.terminalSessionRevision)
+      ? state.terminalSessionRevision
+      : null;
+    // Before an authoritative inventory refresh, the trusted terminalCreate
+    // result is enough to mount immediately. Once a newer inventory omits it,
+    // do not expose a stale target; keep an unknown creation attempt's ledger
+    // identity so an explicit retry can resolve it without spawning twice.
+    if (record.inventoryRevision !== null && currentRevision !== null
+      && currentRevision > record.inventoryRevision
+      && !state.sessions.some(item => item.id === terminal.id
+        && forkTerminalMatches(item, support))) return null;
+    return forkTargetFromTerminal(terminal, support);
+  }
+
+  async function ensureForkTerminal(agentSession, support, options = {}) {
+    await initializeBeforeDelivery();
+    if (!options.inventoryFresh) {
+      try {
+        await refreshSessions();
+      } catch (error) {
+        throw markRejectedBeforeDelivery(error);
+      }
+    }
+    const existing = forkTargetForAgent(agentSession, options);
+    if (existing) return { ...existing, reused: true };
+
+    const pending = forkPromises.get(support.sourceSignature);
+    if (pending) return pending;
+
+    let record = forkAssociations.get(support.sourceSignature) || null;
+    // Inventory refreshes, graph renders and transport reconnects may only
+    // rediscover/reuse an existing child. They must never retry an unknown
+    // create or replace an accepted-but-dead child. Only a fresh surface-open
+    // gesture or the explicit fork button grants creation authority.
+    if (options.forkCreationGesture !== true) return null;
+    // A successfully created fork that is no longer present belongs to an old
+    // explicit gesture. This new gesture may replace its tombstone. Unknown
+    // create outcomes are different: retain the old creationId until the host
+    // resolves whether that exact attempt spawned a PTY.
+    if (record && record.creationState === 'accepted') {
+      forkAssociations.delete(support.sourceSignature);
+      record = null;
+    }
+    if (!record) {
+      record = {
+        sourceSessionId: support.sourceSessionId,
+        sourceSignature: support.sourceSignature,
+        creationId: nextCreationId(),
+        creationState: 'pending',
+        terminalId: '',
+        terminal: null,
+        createOptions: null,
+        inventoryRevision: Number.isSafeInteger(state.terminalSessionRevision)
+          ? state.terminalSessionRevision
+          : null,
+      };
+      forkAssociations.set(support.sourceSignature, record);
+    }
+
+    const task = (async () => {
+      if (!record.createOptions) {
+        try {
+          const cwd = String(agentSession.cwd || preferredWorkspace() || '').trim();
+          if (!cwd) throw rejectedError(t('terminal.agent.cwd_missing'));
+          const environment = agentSession.environment || {};
+          const wslCwd = state.platform?.id === 'win32'
+            && (environment.kind === 'wsl' || /^\/(?:mnt|home|root|workspace)(?:\/|$)/.test(cwd));
+          const distro = wslCwd ? String(environment.distro || '').trim() : '';
+          if (wslCwd && !distro) throw rejectedError(t('terminal.agent.wsl_distro_missing'));
+          record.createOptions = {
+            type: 'agent',
+            provider: 'codex',
+            args: ['fork', support.sessionId],
+            cwd,
+            distro,
+            sessionBackend: 'direct',
+            agentForkSourceSessionId: support.sourceSessionId,
+            agentForkSourceSignature: support.sourceSignature,
+            creationId: record.creationId,
+            // Fork creation is identity-only. Do not even attach initial-command
+            // metadata: a draft is sent through the idempotent command channel
+            // only after the new PTY exists.
+            title: t('session.fresh_session_title', { provider: providerLabel('codex') }),
+            transient: false,
+            cols: 120,
+            rows: 32,
+            includeReplay: options.includeReplay !== false,
+          };
+        } catch (error) {
+          forkAssociations.delete(support.sourceSignature);
+          throw error;
+        }
+      }
+
+      let created;
+      try {
+        created = await createTerminalWithRetry(record.createOptions, record.creationId);
+      } catch (error) {
+        if (error?.creationState === 'rejected') {
+          forkAssociations.delete(support.sourceSignature);
+        } else {
+          record.creationState = 'unknown';
+          forkAssociations.set(support.sourceSignature, record);
+        }
+        throw error;
+      }
+      if (created.creationUnavailable || created.creationFailed
+        || !terminalStillOwnsRuntime(created)) {
+        forkAssociations.delete(support.sourceSignature);
+        const error = rejectedError(created.error || t('terminal.agent.fork_terminal_failed'));
+        error.code = created.code || 'FORK_CREATION_UNAVAILABLE';
+        error.creationId = record.creationId;
+        error.creationState = 'rejected';
+        throw error;
+      }
+      if (!forkTerminalMatches(created, support)) {
+        forkAssociations.delete(support.sourceSignature);
+        const error = rejectedError(t('terminal.agent.fork_terminal_failed'));
+        error.code = 'AGENT_FORK_ASSOCIATION_INVALID';
+        error.creationId = record.creationId;
+        error.creationState = 'rejected';
+        throw error;
+      }
+      const remembered = rememberForkTerminal(support, created, record);
+      let refreshed = false;
+      if (!options.skipPostCreateRefresh) {
+        try {
+          refreshed = await refreshSessions() !== false;
+        } catch (error) {
+          reportPostDeliveryError('terminal-agent-fork-post-create-refresh', error);
+        }
+      }
+      if (refreshed
+        && !state.sessions.some(terminal => forkTerminalMatches(terminal, support))
+        && Number.isSafeInteger(state.terminalSessionRevision)) {
+        // terminalList can trail the just-accepted create response by one
+        // inventory. Trust that verified response for the immediate mount,
+        // but let any later authoritative omission invalidate the association.
+        record.inventoryRevision = state.terminalSessionRevision;
+      }
+      const verified = forkTargetForAgent(agentSession, options);
+      return {
+        ...(verified || forkTargetFromTerminal(remembered, support)),
+        creationId: record.creationId,
+        creationDuplicate: Boolean(created.creationDuplicate),
+        reused: Boolean(created.reused || created.creationDuplicate),
+      };
+    })().finally(() => {
+      if (forkPromises.get(support.sourceSignature) === task) {
+        forkPromises.delete(support.sourceSignature);
+      }
+    });
+    forkPromises.set(support.sourceSignature, task);
+    return task;
+  }
+
+  async function forkForAgent(agentSession, draft = '', sendDraft = false, options = {}) {
+    const support = forkSupport(agentSession);
+    if (!support.supported) {
+      const error = rejectedError(support.reason || t('terminal.agent.no_input_target'), support.code);
+      if (support.parentControlled) error.parentControlled = true;
+      throw error;
+    }
+    const target = await ensureForkTerminal(agentSession, support, {
+      ...options,
+      // Calling forkForAgent is itself an explicit UI action. Internal mount
+      // paths override this to false and must carry a separate gesture token.
+      forkCreationGesture: options.forkCreationGesture !== false,
+    });
+    if (!target) {
+      const error = rejectedError(t('terminal.agent.fork_terminal_failed'));
+      error.code = 'AGENT_FORK_GESTURE_REQUIRED';
+      throw error;
+    }
+    const prompt = String(draft || '').trim();
+    let deliveryState = '';
+    let promptSent = false;
+    let duplicate = false;
+    if (sendDraft && prompt) {
+      const deliveryId = String(options.deliveryId || '').trim()
+        || `fork:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
+      try {
+        const result = await sendInitialCommandWithRetry(target.terminalId, prompt, deliveryId);
+        deliveryState = normalizedDeliveryState(result);
+        promptSent = deliveryState === 'accepted';
+        duplicate = Boolean(result.duplicate);
+      } catch (error) {
+        throw markCreatedTerminalRetry(
+          error,
+          target.terminal,
+          target.creationId || forkAssociations.get(support.sourceSignature)?.creationId || '',
+          deliveryId,
+          error?.deliveryState || 'unknown',
+        );
+      }
+    }
+
+    const result = {
+      ...target,
+      forked: true,
+      promptSent,
+      deliveryState,
+      duplicate,
+    };
+    if (options.focus === false) return { ...result, background: true };
+    state.mode = 'general';
+    moveWorkbench('general');
+    await selectSession(target.terminalId, 'question');
+    renderTarget();
+    return result;
+  }
+
   async function retireConnectionTarget(target, scope = 'terminal-agent-connection-cleanup') {
     const terminalId = terminalIdOf(target);
     if (!terminalId) throw cleanupFailure('Terminal connection cleanup target is missing.');
@@ -1056,6 +1403,19 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   async function ensureForAgent(agentSession, options = {}) {
     if (!agentSession?.id) throw rejectedError(t('terminal.resume.no_session_info'));
     if (agentSession.parentId) throw rejectedError(t('terminal.resume.parent_controlled'));
+    if (isCodexDesktopSession(agentSession) && options.forkIfOriginOwned === true) {
+      const support = forkSupport(agentSession);
+      if (!support.supported) {
+        throw rejectedError(support.reason || t('terminal.agent.no_input_target'), support.code);
+      }
+      return ensureForkTerminal(agentSession, support, {
+        forkCreationGesture: options.forkCreationGesture === true,
+        excludeTerminalIds: options.excludeTerminalIds,
+        inventoryFresh: options.inventoryFresh,
+        includeReplay: options.includeReplay,
+        skipPostCreateRefresh: options.skipPostCreateRefresh,
+      });
+    }
     const originOwnedError = originOwnedSessionError(agentSession);
     if (originOwnedError) throw originOwnedError;
 
@@ -1257,6 +1617,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   return {
     agentConnectionSignature, tmuxRows, agentTargets, requiredAgentTarget, dispatchAgentCommand, interruptAgent,
     freshAgentLaunchOptions, startAgent,
-    openForAgent, resumeForAgent, ensureForAgent, preconnectForAgents, bindAgentConnection, resetForAgent,
+    openForAgent, resumeForAgent, forkSupport, forkForAgent, forkTargetForAgent,
+    ensureForAgent, preconnectForAgents, bindAgentConnection, resetForAgent,
   };
 };

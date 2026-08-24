@@ -794,6 +794,551 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(workbenchOpened, false, '백그라운드 전송은 터미널 화면을 강제로 열지 않아야 합니다.');
   });
 
+  test('Codex Desktop 기록은 원본 resume이 아닌 별도 fork PTY를 만들고 질문을 spawn 뒤 한 번만 보낸다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    const commandCalls = [];
+    const bindings = [];
+    let createdRecord = null;
+    const state = {
+      snapshot: null,
+      sessions: [],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+      terminalSessionRevision: 1,
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls.push(options);
+            createdRecord = {
+              id: 'terminal:desktop-fork',
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              status: 'running',
+              pid: 7310,
+              title: options.title,
+            };
+            return createdRecord;
+          },
+          terminalCommand: async (terminalId, prompt, options) => {
+            commandCalls.push([terminalId, prompt, options]);
+            return { ok: true, deliveryState: 'accepted' };
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
+      state,
+      init: async () => {},
+      notice: () => {},
+      moveWorkbench: () => {},
+      selectSession: async () => {},
+      bindAgent: (...args) => bindings.push(args),
+      queueHistoryRefresh: () => {},
+      renderTarget: () => {},
+      refreshSessions: async () => {
+        if (createdRecord) state.sessions = [createdRecord];
+      },
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+      tmuxTargetKey: () => '',
+    });
+    const session = {
+      id: 'codex:019f-desktop-source',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-source',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+      status: 'completed',
+    };
+    const prompt = '새 세션에서만 이어서 질문 & | $(안전)';
+
+    const support = actions.forkSupport(session);
+    const result = await actions.forkForAgent(session, prompt, true, {
+      focus: false,
+      deliveryId: 'delivery:desktop-fork:1',
+    });
+
+    assert.equal(support.supported, true);
+    assert.equal(support.sourceSessionId, session.id);
+    assert.equal(support.sourceSignature, actions.agentConnectionSignature(session));
+    assert.deepStrictEqual(Array.from(support.args), ['fork', session.externalId]);
+    assert.equal(createCalls.length, 1);
+    const launch = createCalls[0];
+    assert.deepStrictEqual(Array.from(launch.args), ['fork', session.externalId]);
+    assert.equal(launch.sessionBackend, 'direct');
+    assert.equal(launch.transient, false);
+    assert.match(launch.creationId, /^create:/);
+    assert.equal(launch.agentForkSourceSessionId, session.id);
+    assert.equal(launch.agentForkSourceSignature, support.sourceSignature);
+    for (const forbidden of [
+      'bridgeId', 'agentConnectionSignature', 'recoveryArgs', 'reuseBridge',
+      'initialCommand', 'initialCommandInArgs',
+    ]) {
+      assert.equal(Object.hasOwn(launch, forbidden), false, `fork 생성 옵션에 ${forbidden}가 포함됐습니다.`);
+    }
+    assert.equal(commandCalls.length, 1, 'fork spawn 뒤 질문은 terminalCommand로 한 번만 보내야 합니다.');
+    assert.equal(commandCalls[0][0], createdRecord.id);
+    assert.equal(commandCalls[0][1], prompt);
+    assert.equal(commandCalls[0][2].deliveryId, 'delivery:desktop-fork:1');
+    assert.equal(result.forked, true);
+    assert.equal(result.background, true);
+    assert.equal(result.promptSent, true);
+    assert.equal(bindings.length, 0, '원본 Desktop 대화에 fork PTY를 strong resume binding하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(actions.agentTargets(session)), [],
+      '원본 transcript composer가 fork PTY를 writable target으로 보면 안 됩니다.');
+    assert.equal(actions.forkTargetForAgent(session).id, createdRecord.id,
+      '별도 fork-source association으로만 새 PTY를 찾아야 합니다.');
+    assert.equal(state.agentConnectionSignatures?.size || 0, 0,
+      'fork-source association이 strong resume signature map을 오염시켰습니다.');
+
+    const childSession = {
+      id: 'codex:019f-fork-child',
+      provider: 'codex',
+      externalId: '019f-fork-child',
+      environment: { kind: 'windows', distro: '' },
+    };
+    const childSignature = actions.agentConnectionSignature(childSession);
+    const adoptedRecord = {
+      ...createdRecord,
+      conversationBound: true,
+      bridgeId: childSession.id,
+      agentConnectionSignature: childSignature,
+      agentResumeSessionId: childSession.externalId,
+      agentLinkedSessionId: childSession.id,
+      agentLinkedExternalId: childSession.externalId,
+      agentLinkedEnvironment: 'windows',
+      agentLinkedDistro: '',
+      agentForkSourceSessionId: '',
+      agentForkSourceSignature: '',
+      agentForkedFromSessionId: support.sourceSessionId,
+      agentForkedFromSignature: support.sourceSignature,
+      agentForkProofAuthority: 'codex-fork-lineage-v1',
+    };
+    state.sessions = [adoptedRecord];
+    state.terminalSessionRevision += 1;
+    assert.equal(actions.forkTargetForAgent(session), null,
+      '과거의 inferred child metadata만으로 conversation-bound fork PTY를 다시 채택하면 안 됩니다.');
+    state.sessions = [{ ...adoptedRecord, agentLinkedSessionId: support.sourceSessionId }];
+    state.terminalSessionRevision += 1;
+    assert.equal(actions.forkTargetForAgent(session), null,
+      '원본 Desktop ID 또는 불일치 child binding은 fork PTY로 다시 노출하면 안 됩니다.');
+  });
+
+  test('Codex Desktop fork 생성 응답 유실과 동시 요청은 같은 creationId로 실제 PTY를 한 번만 만든다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    const createdById = new Map();
+    let spawnCount = 0;
+    let createdRecord = null;
+    const state = {
+      snapshot: null,
+      sessions: [],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls.push(options);
+            if (createdById.has(options.creationId)) {
+              createdRecord = createdById.get(options.creationId);
+              return { ...createdRecord, creationDuplicate: true };
+            }
+            spawnCount += 1;
+            createdRecord = {
+              id: 'terminal:desktop-fork-deduped',
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              status: 'running',
+            };
+            createdById.set(options.creationId, createdRecord);
+            throw new Error('PTY는 생성됐지만 create 응답이 유실됨');
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state,
+      init: async () => {},
+      refreshSessions: async () => {
+        if (createdRecord) state.sessions = [createdRecord];
+      },
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+    });
+    const session = {
+      id: 'codex:019f-desktop-deduped',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-deduped',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+    };
+
+    const [first, second] = await Promise.all([
+      actions.forkForAgent(session, '', false, { focus: false }),
+      actions.forkForAgent(session, '', false, { focus: false }),
+    ]);
+    const third = await actions.forkForAgent(session, '', false, { focus: false });
+
+    assert.equal(createCalls.length, 2, 'create transport 유실은 같은 ledger로 한 번만 재진입해야 합니다.');
+    assert.strictEqual(createCalls[1], createCalls[0], '한 fork 시도의 create 재시도는 같은 옵션 객체여야 합니다.');
+    assert.equal(createCalls[1].creationId, createCalls[0].creationId);
+    assert.equal(spawnCount, 1, '동시 fork 요청과 응답 유실이 실제 child 대화를 두 번 만들었습니다.');
+    assert.equal(first.id, createdRecord.id);
+    assert.equal(second.id, first.id);
+    assert.equal(third.id, first.id);
+    assert.equal(first.creationId, createCalls[0].creationId);
+    assert.equal(createCalls.length, 2, '검증된 source association은 재렌더에서 같은 fork PTY를 재사용해야 합니다.');
+  });
+
+  test('Codex Desktop fork create 결과가 계속 불명이면 다음 명시적 재시도도 creationId를 바꾸지 않는다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    let resolveCreate = false;
+    const state = {
+      snapshot: null,
+      sessions: [],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls.push(options);
+            if (!resolveCreate) throw new Error('create 결과를 아직 확인할 수 없음');
+            const terminal = {
+              id: 'terminal:desktop-fork-late-confirmation',
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              creationDuplicate: true,
+              status: 'running',
+            };
+            state.sessions = [terminal];
+            return terminal;
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state,
+      init: async () => {},
+      refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+    });
+    const session = {
+      id: 'codex:019f-desktop-unknown',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-unknown',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+    };
+
+    await assert.rejects(
+      actions.forkForAgent(session, '', false, { focus: false }),
+      error => error.creationState === 'unknown' && error.creationId === createCalls[0].creationId,
+    );
+    resolveCreate = true;
+    const result = await actions.forkForAgent(session, '', false, { focus: false });
+
+    assert.equal(createCalls.length, 3);
+    assert.strictEqual(createCalls[1], createCalls[0]);
+    assert.strictEqual(createCalls[2], createCalls[0],
+      'unknown create를 확인하는 다음 명시적 재시도도 원래 fingerprint 객체를 유지해야 합니다.');
+    assert.equal(createCalls[2].creationId, createCalls[0].creationId,
+      'unknown create 결과를 확인하기 전에 creationId를 회전하면 child 대화가 중복 생성됩니다.');
+    assert.equal(result.id, 'terminal:desktop-fork-late-confirmation');
+    assert.equal(result.creationId, createCalls[0].creationId);
+  });
+
+  test('fork 직후 한 번 늦은 terminal inventory는 즉시 mount를 허용하고 다음 누락 inventory에서 만료한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    const state = {
+      snapshot: null,
+      sessions: [],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+      terminalSessionRevision: 0,
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls.push(options);
+            return {
+              id: `terminal:desktop-fork-inventory-grace:${createCalls.length}`,
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              status: 'running',
+            };
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state,
+      init: async () => {},
+      refreshSessions: async () => {
+        // Simulate terminalList lagging behind the accepted create result.
+        state.sessions = [];
+        state.terminalSessionRevision += 1;
+      },
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+    });
+    const session = {
+      id: 'codex:019f-desktop-inventory-grace',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-inventory-grace',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+    };
+
+    const created = await actions.forkForAgent(session, '', false, { focus: false });
+    const immediateMountTarget = actions.forkTargetForAgent(session);
+
+    assert.equal(created.id, 'terminal:desktop-fork-inventory-grace:1');
+    assert.equal(immediateMountTarget.id, created.id,
+      '첫 post-create 목록이 늦어도 검증된 create 결과는 즉시 mount할 수 있어야 합니다.');
+    state.sessions = [{ ...created.terminal, status: 'stopped' }];
+    state.terminalSessionRevision += 1;
+    assert.equal(actions.forkTargetForAgent(session), null,
+      '그 뒤 authoritative 목록에서 stopped 상태면 fork-source mount association을 만료해야 합니다.');
+    const passive = await actions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+      inventoryFresh: true,
+    });
+    assert.equal(passive, null, '만료된 fork의 passive sync는 새 target을 만들면 안 됩니다.');
+    assert.equal(createCalls.length, 1, 'passive sync가 accepted fork의 creationId를 회전해 다시 fork했습니다.');
+
+    const reopened = await actions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+      forkCreationGesture: true,
+      inventoryFresh: true,
+      skipPostCreateRefresh: true,
+    });
+    assert.equal(reopened.id, 'terminal:desktop-fork-inventory-grace:2');
+    assert.equal(createCalls.length, 2, '새 surface-open gesture가 사라진 fork를 명시적으로 교체하지 않았습니다.');
+    assert.notEqual(createCalls[1].creationId, createCalls[0].creationId,
+      '서로 다른 명시적 fork gesture가 같은 accepted creationId를 재사용했습니다.');
+
+    const restartedCreateCalls = [];
+    const restartedState = {
+      snapshot: null,
+      sessions: [{
+        id: 'terminal:desktop-fork-before-host-restart',
+        type: 'agent',
+        provider: 'codex',
+        backend: 'direct',
+        conversationBound: false,
+        agentForkSourceSessionId: createCalls[0].agentForkSourceSessionId,
+        agentForkSourceSignature: createCalls[0].agentForkSourceSignature,
+        creationId: createCalls[0].creationId,
+        status: 'stopped',
+      }],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+      terminalSessionRevision: 20,
+    };
+    const restartedSandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            restartedCreateCalls.push(options);
+            return {
+              id: 'terminal:desktop-fork-after-host-restart',
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              status: 'running',
+            };
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, restartedSandbox, { filename: 'terminal-agent-restarted.js' });
+    const restartedActions = restartedSandbox.window.WhiteboxTerminalAgentActions({
+      state: restartedState,
+      init: async () => {},
+      refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+    });
+    const passiveAfterHostRestart = await restartedActions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+    });
+    assert.equal(passiveAfterHostRestart, null);
+    assert.equal(restartedCreateCalls.length, 0,
+      'renderer/host restart 뒤 stopped fork evidence를 passive sync가 새 fork로 치유했습니다.');
+    const explicitAfterHostRestart = await restartedActions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+      forkCreationGesture: true,
+      inventoryFresh: true,
+      skipPostCreateRefresh: true,
+    });
+    assert.equal(explicitAfterHostRestart.id, 'terminal:desktop-fork-after-host-restart');
+    assert.equal(restartedCreateCalls.length, 1);
+    assert.notEqual(restartedCreateCalls[0].creationId, createCalls[0].creationId,
+      'host restart 뒤 명시적 새 gesture가 stopped fork tombstone의 creationId를 재사용했습니다.');
+  });
+
+  test('Codex Desktop fork는 명시적 ensure/mount에서만 허용하고 agentTargets와 project preconnect는 계속 차단한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const terminalSource = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
+    let initCalls = 0;
+    let createCalls = 0;
+    const state = {
+      snapshot: null,
+      sessions: [],
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls += 1;
+            const terminal = {
+              id: 'terminal:desktop-explicit-fork',
+              type: 'agent',
+              provider: 'codex',
+              backend: 'direct',
+              conversationBound: false,
+              agentForkSourceSessionId: options.agentForkSourceSessionId,
+              agentForkSourceSignature: options.agentForkSourceSignature,
+              creationId: options.creationId,
+              status: 'running',
+            };
+            state.sessions = [terminal];
+            return terminal;
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state,
+      init: async () => { initCalls += 1; },
+      refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+    });
+    const session = {
+      id: 'codex:019f-desktop-explicit',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-explicit',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+    };
+
+    for (const externalId of ['terminal:stale-row', 'bridge:recursive-source', 'x'.repeat(195)]) {
+      const invalidSupport = actions.forkSupport({
+        ...session,
+        id: `codex:${externalId}`,
+        externalId,
+      });
+      assert.equal(invalidSupport.supported, false);
+      assert.equal(invalidSupport.code, 'CODEX_DESKTOP_FORK_INVALID_SESSION');
+    }
+
+    await assert.rejects(
+      actions.ensureForAgent(session),
+      error => error.code === 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED',
+    );
+    const preconnected = await actions.preconnectForAgents([session]);
+    assert.equal(preconnected[0].status, 'rejected');
+    assert.equal(preconnected[0].reason.code, 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED');
+    assert.equal(initCalls, 0, 'Desktop-origin project preconnect는 terminal host를 초기화하면 안 됩니다.');
+    assert.equal(createCalls, 0, 'Desktop-origin project preconnect가 자동 fork를 만들었습니다.');
+
+    const passiveFirstMount = await actions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+    });
+    assert.equal(passiveFirstMount, null,
+      'association이 없는 restored/passive 첫 mount는 user gesture 없이 target을 만들면 안 됩니다.');
+    assert.equal(createCalls, 0,
+      'state.session이 비어 보이는 passive 첫 mount가 새 Codex fork를 만들었습니다.');
+
+    const explicit = await actions.ensureForAgent(session, {
+      forkIfOriginOwned: true,
+      forkCreationGesture: true,
+    });
+    assert.equal(explicit.id, 'terminal:desktop-explicit-fork');
+    assert.equal(createCalls, 1);
+    assert.deepStrictEqual(Array.from(actions.agentTargets(session)), [],
+      '명시적 fork 뒤에도 원본 card composer에는 writable target이 생기면 안 됩니다.');
+    assert.equal(actions.forkTargetForAgent(session).id, explicit.id);
+    await assert.rejects(
+      actions.ensureForAgent(session),
+      error => error.code === 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED',
+      'fork가 있어도 기본 ensure가 origin-owned 차단을 우회하면 안 됩니다.',
+    );
+    assert.match(terminalSource,
+      /const forkIfOriginOwned = options\.forkIfOriginOwned === true[\s\S]*forkTargetForAgent\(agentSession/s,
+      'embedded mount가 명시적 fork 플래그와 검증된 source association을 함께 확인해야 합니다.');
+    assert.match(terminalSource,
+      /ensureForAgent\(agentSession, \{[\s\S]*forkIfOriginOwned,[\s\S]*forkCreationGesture,[\s\S]*\}\);/s,
+      'embedded mount가 fork 대상 허용과 별도 사용자 creation gesture를 core ensure 경로에 전달해야 합니다.');
+  });
+
   test('대화창을 열면 질문 없이 같은 세션의 실제 PTY를 한 번만 만들고 재사용한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const createCalls = [];
@@ -2580,6 +3125,7 @@ function registerTerminalAgentActionTests(context) {
           errorText: (_error, key) => key,
         },
         WhiteboxTerminal: {
+          forkSupport: () => ({ supported: true, reason: 'terminal.fork.codex_desktop' }),
           resumeSupport: () => {
             underlyingResumeChecks += 1;
             return { supported: true, args: ['resume', 'must-not-resume'] };
@@ -2625,8 +3171,9 @@ function registerTerminalAgentActionTests(context) {
     assert.deepStrictEqual(JSON.parse(JSON.stringify(support)), {
       supported: false,
       originOwned: true,
+      forkSupported: true,
       code: 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED',
-      reason: 'terminal.resume.codex_desktop_live',
+      reason: 'terminal.fork.codex_desktop',
     });
     assert.equal(underlyingResumeChecks, 0, 'Codex Desktop 지원 확인이 일반 resume 경로로 내려갔습니다.');
     assert.deepStrictEqual(Array.from(actions.agentCommandTargets(desktopCompleted)), []);
@@ -2639,7 +3186,7 @@ function registerTerminalAgentActionTests(context) {
     const composer = actions.agentCommandComposer(desktopCompleted);
     assert.match(composer, /control-origin-owned/u);
     assert.match(composer, /<textarea[^>]*disabled/u);
-    assert.match(composer, /terminal\.resume\.codex_desktop_live/u);
+    assert.match(composer, /agent\.codex_desktop_fork_help/u);
     assert.equal(composer.includes('<button type="submit"'), false,
       '완료·attention Desktop 카드가 resume 전송 버튼을 노출했습니다.');
   });

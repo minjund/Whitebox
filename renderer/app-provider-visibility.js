@@ -36,8 +36,17 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     return state.providers.filter((provider) => isProviderVisible(provider.id));
   }
 
+  function isSourcePluginVisible(pluginId) {
+    const rawId = String(pluginId || "");
+    const id = rawId === "builtin.omo" ? "builtin.opencode" : rawId;
+    return !id || (state.sourcePluginSettings?.enabledPluginIds || []).includes(id);
+  }
+
   function visibleSessions() {
-    return (state.snapshot?.sessions || []).filter((session) => session.sourcePluginId || isProviderVisible(session.provider));
+    return (state.snapshot?.sessions || []).filter((session) => (
+      isSourcePluginVisible(session.sourcePluginId)
+      && (session.sourcePluginId || isProviderVisible(session.provider))
+    ));
   }
 
   function visibleTmux(tmux = (state.rawSnapshot || state.snapshot)?.tmux) {
@@ -71,21 +80,39 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
 
   function projectVisibleSnapshot(snapshot = state.rawSnapshot || state.snapshot) {
     if (!snapshot) return snapshot;
-    const sessions = (snapshot.sessions || []).filter((session) => session.sourcePluginId || isProviderVisible(session.provider));
+    const sessions = (snapshot.sessions || []).filter((session) => (
+      isSourcePluginVisible(session.sourcePluginId)
+      && (session.sourcePluginId || isProviderVisible(session.provider))
+    ));
     const usage = Object.fromEntries(USAGE_KEYS.map((key) => [
       key,
       sessions.reduce((sum, session) => sum + Number(session.usage?.[key] || 0), 0),
     ]));
+    const activeSession = session => session.status === "running" || session.status === "starting";
+    const providers = (snapshot.summary?.providers || []).filter((provider) => isProviderVisible(provider.id)).map((provider) => {
+      const own = sessions.filter((session) => session.provider === provider.id);
+      return {
+        ...provider,
+        sessions: own.length,
+        active: own.filter(activeSession).length,
+        waiting: own.filter((session) => session.status === "waiting").length,
+        subagents: own.filter((session) => session.parentId).length,
+        usage: Object.fromEntries(USAGE_KEYS.map((key) => [
+          key,
+          own.reduce((sum, session) => sum + Number(session.usage?.[key] || 0), 0),
+        ])),
+      };
+    });
     return {
       ...snapshot,
       sessions,
       tmux: visibleTmux(snapshot.tmux),
       summary: {
         ...(snapshot.summary || {}),
-        providers: (snapshot.summary?.providers || []).filter((provider) => isProviderVisible(provider.id)),
+        providers,
         totals: {
           sessions: sessions.length,
-          active: sessions.filter((session) => session.status === "running" || session.status === "starting").length,
+          active: sessions.filter(activeSession).length,
           waiting: sessions.filter((session) => session.status === "waiting").length,
           subagents: sessions.filter((session) => session.parentId).length,
           usage,
@@ -114,6 +141,7 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     loadProviderVisibility,
     saveProviderVisibility,
     isProviderVisible,
+    isSourcePluginVisible,
     visibleProviders,
     visibleSessions,
     visibleTmux,

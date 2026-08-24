@@ -75,6 +75,7 @@ app.whenReady().then(async () => {
       win,
       `Boolean([...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(item => item.dataset.workspace === 'D:\\\\fixture-other')
+        ?.closest('.project-sidebar-project')
         ?.querySelector('.project-sidebar-result-ready'))`,
       '완료 결과가 있는 프로젝트 배지를 찾지 못했습니다.',
     );
@@ -132,7 +133,8 @@ app.whenReady().then(async () => {
         const card = badge?.closest('.memory-record');
         const projectButton = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
           .find(item => item.dataset.workspace === 'D:\\\\fixture-other');
-        const projectBadge = projectButton?.querySelector('.project-sidebar-result-ready');
+        const projectBadge = projectButton?.closest('.project-sidebar-project')
+          ?.querySelector('.project-sidebar-result-ready');
         const probe = document.createElement('i');
         probe.style.color = 'var(--theme-success)';
         document.body.appendChild(probe);
@@ -145,13 +147,15 @@ app.whenReady().then(async () => {
           successColor,
           projectBadgeVisible: Boolean(projectBadge?.getBoundingClientRect().width && projectBadge?.getBoundingClientRect().height),
           projectBadgeText: projectBadge?.textContent.replace(/\s+/g, ' ').trim() || '',
+          projectBadgeLabel: projectBadge?.getAttribute('aria-label') || '',
           projectBadgeColor: projectBadge ? getComputedStyle(projectBadge.querySelector('b')).color : '',
         };
       })()`);
       if (themeStates[theme].badgeColor !== themeStates[theme].successColor) {
         throw new Error(`${theme} 테마의 작업 완료 배지가 성공 색상을 사용하지 않습니다: ${JSON.stringify(themeStates[theme])}`);
       }
-      if (!themeStates[theme].projectBadgeVisible || !/^1\s*완료 결과$/.test(themeStates[theme].projectBadgeText)) {
+      if (!themeStates[theme].projectBadgeVisible || themeStates[theme].projectBadgeText !== '1'
+        || themeStates[theme].projectBadgeLabel !== '확인할 완료 결과 1건') {
         throw new Error(`${theme} 테마의 프로젝트 완료 결과 배지가 올바르지 않습니다: ${JSON.stringify(themeStates[theme])}`);
       }
       outputs[theme] = await capture(win, path.join(outputDir, `whitebox-result-review-${theme}.png`));
@@ -167,6 +171,7 @@ app.whenReady().then(async () => {
       win,
       `!([...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(item => item.dataset.workspace === 'D:\\\\fixture-other')
+        ?.closest('.project-sidebar-project')
         ?.querySelector('.project-sidebar-result-ready'))`,
       '프로젝트를 확인한 뒤 완료 결과 배지가 사라지지 않았습니다.',
     );
@@ -177,7 +182,8 @@ app.whenReady().then(async () => {
       const session = control.state.snapshot.sessions.find(item => item.id === 'fixture-project-result-ready');
       return {
         count: Number(projectButton?.dataset.resultReadyCount || 0),
-        badgeExists: Boolean(projectButton?.querySelector('.project-sidebar-result-ready')),
+        badgeExists: Boolean(projectButton?.closest('.project-sidebar-project')
+          ?.querySelector('.project-sidebar-result-ready')),
         pendingResultCount: control.resultReviewTargets(session).length,
         actualReviewComplete: control.isResultReviewComplete(session),
       };
@@ -413,6 +419,7 @@ app.whenReady().then(async () => {
       win,
       `Boolean([...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(item => item.dataset.workspace === 'D:\\\\fixture')
+        ?.closest('.project-sidebar-project')
         ?.querySelector('.project-sidebar-attention'))`,
       '확인 필요가 있는 프로젝트 배지를 찾지 못했습니다.',
     );
@@ -425,6 +432,7 @@ app.whenReady().then(async () => {
       win,
       `!([...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(item => item.dataset.workspace === 'D:\\\\fixture')
+        ?.closest('.project-sidebar-project')
         ?.querySelector('.project-sidebar-attention'))`,
       '프로젝트를 확인한 뒤 확인 필요 배지가 사라지지 않았습니다.',
     );
@@ -438,7 +446,8 @@ app.whenReady().then(async () => {
         failedRun: control.needsManagementInbox(byId('fixture-failed')),
         optionalOffer: control.needsManagementInbox(byId('fixture-optional')),
         projectAttentionCount: Number(projectButton?.dataset.attentionSessionCount || 0),
-        projectAttentionBadge: Boolean(projectButton?.querySelector('.project-sidebar-attention')),
+        projectAttentionBadge: Boolean(projectButton?.closest('.project-sidebar-project')
+          ?.querySelector('.project-sidebar-attention')),
         visibleIds: [...document.querySelectorAll('.home-attention-item[data-open-session]')]
           .map(item => item.dataset.openSession),
       };

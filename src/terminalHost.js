@@ -11,10 +11,11 @@ const { spawn } = require('child_process');
 const { endpointFor, safeWriteJson } = require('./bridgeServer');
 const { runBestEffort } = require('./diagnostics');
 
-// Protocol 12 adds Codex shared-app-server launch preparation. Long-lived
-// terminal daemons must be replaced so a newer renderer can never fall back to
-// an independent Codex writer through an older host.
-const TERMINAL_HOST_PROTOCOL = 12;
+// Protocol 13 adds provider-native Codex fork lineage, child-session adoption,
+// and source-level writer locks. Long-lived terminal daemons must be replaced
+// so a newer renderer can never send `codex fork` through a host that cannot
+// preserve and verify the resulting child-session identity.
+const TERMINAL_HOST_PROTOCOL = 13;
 const TERMINAL_HOST_RUNTIME = `node-pty-${require('node-pty/package.json').version}`;
 // A retained replay may contain two million control characters. JSON escapes
 // each one as six characters (for example ESC -> "\\u001b"), so a valid get

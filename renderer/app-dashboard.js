@@ -134,6 +134,26 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return normalized.split("/").filter(Boolean).pop() || t("workspace.unknown");
   }
 
+  function sessionProjectSource(session) {
+    const sourceId = String(session?.sourcePluginId || "direct");
+    return sourceId === "builtin.omo" ? "builtin.opencode" : sourceId;
+  }
+
+  function sidebarProjectKey(projectPath) {
+    return projectPath === PROJECTLESS_WORKSPACE ? PROJECTLESS_WORKSPACE : normalizedProjectPath(projectPath);
+  }
+
+  function sidebarSourceKey(projectPath, sourceId) {
+    return `${sidebarProjectKey(projectPath)}::${String(sourceId || "direct")}`;
+  }
+
+  function sourcePluginLabel(sourceId) {
+    if (!sourceId || sourceId === "direct") return "Whitebox";
+    const source = (state.sourcePlugins || []).find((item) => item.id === sourceId);
+    if (source?.source?.label) return source.source.label;
+    return sourceId === "builtin.opencode" ? "OpenCode" : sourceId === "builtin.aside" ? "Aside Browser" : sourceId;
+  }
+
   function observedProjects(sessions = displaySessions().filter((session) => !session.parentId)) {
     const projects = new Map();
     const saved = state.workspaces.map((item, index) => ({ ...item, key: normalizedProjectPath(item.path), order: index }));
@@ -223,6 +243,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   function matchesWorkspaceFilter(session) {
     if (state.workspace === "all") return true;
     const workspaceOwner = workspaceRootSession(session);
+    const requestedSource = String(state.workspaceSource || "all");
+    if (requestedSource !== "all" && sessionProjectSource(workspaceOwner) !== requestedSource) return false;
     if (state.workspace === PROJECTLESS_WORKSPACE) return isProjectlessSession(workspaceOwner);
     return !isProjectlessSession(workspaceOwner)
       && projectContainsPath(state.workspace, sessionOriginPath(workspaceOwner));
@@ -310,7 +332,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       }
       return actors;
     };
-    const ownerMatches = (root, projectPath) => normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(projectPath);
+    const ownerMatches = (root, projectPath, sourceId = "all") => (
+      normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(projectPath)
+      && (sourceId === "all" || sessionProjectSource(root) === sourceId)
+    );
     const resultEntries = (root) => {
       if (controlRoomStatus(root) !== "completed" || typeof context.resultReviewTargets !== "function") return [];
       return context.resultReviewTargets(root)
@@ -330,20 +355,20 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       if (prompt && !context.isProjectNoticeSeen?.("terminal", session, prompt)) entries.push({ kind: "terminal", session, prompt });
       return entries;
     });
-    const signalsForProject = (projectPath) => rootSessions
-      .filter(root => ownerMatches(root, projectPath))
+    const signalsForProject = (projectPath, sourceId = "all") => rootSessions
+      .filter(root => ownerMatches(root, projectPath, sourceId))
       .map(root => ({ root, result: resultEntries(root), attention: attentionEntries(root) }))
       .filter(signal => signal.result.length || signal.attention.length);
     return { rootSessionFor, actorsForRoot, signalsForProject, resultEntries, attentionEntries };
   }
 
-  function projectNoticeSignals(projectPath) {
-    return projectNoticeModel().signalsForProject(projectPath);
+  function projectNoticeSignals(projectPath, sourceId = "all") {
+    return projectNoticeModel().signalsForProject(projectPath, sourceId);
   }
 
-  function acknowledgeProjectNotices(projectPath) {
+  function acknowledgeProjectNotices(projectPath, sourceId = "all") {
     if (!projectPath || projectPath === "all" || projectPath === PROJECTLESS_WORKSPACE) return 0;
-    const entries = projectNoticeSignals(projectPath).flatMap(signal => [...signal.result, ...signal.attention]);
+    const entries = projectNoticeSignals(projectPath, sourceId).flatMap(signal => [...signal.result, ...signal.attention]);
     return context.markProjectNoticesSeen?.(entries) || 0;
   }
 
@@ -385,14 +410,6 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       }
       return current || session;
     };
-    const sessionProjectPath = (session) => {
-      const root = rootSessionFor(session);
-      return sessionOriginPath(root) || sessionOriginPath(session);
-    };
-    const sessionsForProject = (item) => allVisibleSessions.filter((session) => (
-      !isProjectlessSession(rootSessionFor(session))
-      && projectContainsPath(item.path, sessionProjectPath(session))
-    ));
     const uniqueRootSessions = (sessions) => {
       const roots = new Map();
       sessions.forEach((session) => {
@@ -401,13 +418,24 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       });
       return [...roots.values()];
     };
-    const projectLiveSessions = (item) => uniqueRootSessions(sessionsForProject(item).filter(isControlRoomSession));
     const noticeModel = projectNoticeModel();
-    const noticesByProject = new Map(projects.map(project => [
-      normalizedProjectPath(project.path),
-      noticeModel.signalsForProject(project.path),
-    ]));
+    const sourceIds = [
+      "direct",
+      ...(state.sourcePlugins || [])
+        .map((source) => String(source.id || ""))
+        .filter((id) => id && (state.sourcePluginSettings?.enabledPluginIds || []).includes(id)),
+      ...rootSessions.map(sessionProjectSource).filter((id) => id !== "direct"),
+    ].filter((id, index, values) => values.indexOf(id) === index);
+    const sidebarGroups = sourceIds.map((sourceId) => {
+      const scopedSessions = rootSessions.filter((session) => sessionProjectSource(session) === sourceId);
+      const scopedProjects = observedProjects(scopedSessions)
+        .filter((project) => sourceId === "direct" || Number(project.count || 0) > 0)
+        .map((project) => ({ ...project, sourceId }));
+      const projectlessCount = scopedSessions.filter(isProjectlessSession).length;
+      return { sourceId, label: sourcePluginLabel(sourceId), projects: scopedProjects, projectlessCount };
+    }).filter((group) => group.projects.length > 0 || group.projectlessCount > 0);
     const projectlessCount = rootSessions.filter(isProjectlessSession).length;
+    const sidebarProjects = sidebarGroups.flatMap((group) => group.projects);
     const liveProjectlessCount = liveRootSessions.filter(isProjectlessSession).length;
     const nonFolderWork = (name) => /관련 작업 모음|컴퓨터 작업 창 묶음|컴퓨터 작업 창 그룹|작업 창 그룹|다시 시작한 작업/.test(String(name || ""));
     const folderLiveProjects = liveProjects.filter((project) => !nonFolderWork(project.name));
@@ -425,16 +453,31 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       ...liveProjects.map((item) => `${projectKindLabel(item)} ${Number(item.count || 0)}건`),
       ...(liveProjectlessCount ? [`${t("control.other_projects")} ${liveProjectlessCount}건`] : []),
     ].join(" + ");
-    const savedWorkspaceExists = state.workspace === "all"
+    const activeWorkspaceSource = String(state.workspaceSource || "all");
+    const aggregateWorkspaceExists = state.workspace === "all"
       || (state.workspace === PROJECTLESS_WORKSPACE && projectlessCount > 0)
       || projects.some((project) => normalizedProjectPath(project.path) === normalizedProjectPath(state.workspace))
-      || liveProjects.some((project) => normalizedProjectPath(project.path) === normalizedProjectPath(state.workspace));
-    if (!savedWorkspaceExists) state.workspace = "all";
-    const projectButton = (item, compactClass = "") => `<button type="button" class="workspace-item observed-project ${compactClass} ${Number(item.liveCount || 0) ? "has-live-sessions" : ""} ${state.workspace === item.path ? "selected" : ""}"
-      data-workspace="${esc(item.path)}" title="${esc(item.path)}"
+      || liveProjects.some((project) => normalizedProjectPath(project.path) === normalizedProjectPath(state.workspace))
+      || sidebarProjects.some((project) => normalizedProjectPath(project.path) === normalizedProjectPath(state.workspace));
+    const scopedWorkspaceExists = activeWorkspaceSource === "all"
+      || (state.workspace === PROJECTLESS_WORKSPACE
+        ? Number(sidebarGroups.find((group) => group.sourceId === activeWorkspaceSource)?.projectlessCount || 0) > 0
+        : sidebarProjects.some((project) => project.sourceId === activeWorkspaceSource
+          && normalizedProjectPath(project.path) === normalizedProjectPath(state.workspace)));
+    if (!aggregateWorkspaceExists) {
+      state.workspace = "all";
+      state.workspaceSource = "all";
+    } else if (!scopedWorkspaceExists) {
+      state.workspaceSource = "all";
+    }
+    const projectButton = (item, compactClass = "") => {
+      const selected = String(state.workspaceSource || "all") === "all"
+        && normalizedProjectPath(state.workspace) === normalizedProjectPath(item.path);
+      return `<button type="button" class="workspace-item observed-project ${compactClass} ${Number(item.liveCount || 0) ? "has-live-sessions" : ""} ${selected ? "selected" : ""}"
+      data-workspace="${esc(item.path)}" data-project-source="all" title="${esc(item.path)}"
       data-live-session-count="${Number(item.liveCount || 0)}"
       aria-label="${esc(t("project.filter_named", { name: item.name, count: item.count }))}"
-      aria-pressed="${state.workspace === item.path ? "true" : "false"}">
+      aria-pressed="${selected ? "true" : "false"}">
       <strong>${esc(beginnerWorkLocation(item.name))}</strong><small>${compactClass
         ? `${Number(item.count || 0)}건`
         : esc(nonFolderWork(item.name)
@@ -444,16 +487,17 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? `<span class="workspace-live-state" aria-label="진행 중인 작업 ${Number(item.liveCount)}건"><i aria-hidden="true"></i><b>진행 중 ${Number(item.liveCount)}건</b></span>`
         : ""}
       </button>`;
+    };
     const mobileHtml =
       `<button type="button" class="workspace-item ${state.workspace === "all" ? "selected" : ""}"
-        data-workspace="all" aria-pressed="${state.workspace === "all" ? "true" : "false"}">
+        data-workspace="all" data-project-source="all" aria-pressed="${state.workspace === "all" ? "true" : "false"}">
       <strong>${window.WhiteboxI18n.t("project.all")}</strong><small>${esc(t("control.all_folder_count", { count: rootSessions.length }))}</small>
       </button>` +
       (projectlessCount
-        ? `<button type="button" class="workspace-item projectless ${state.workspace === PROJECTLESS_WORKSPACE ? "selected" : ""}"
-          data-workspace="${PROJECTLESS_WORKSPACE}"
+        ? `<button type="button" class="workspace-item projectless ${state.workspace === PROJECTLESS_WORKSPACE && state.workspaceSource === "all" ? "selected" : ""}"
+          data-workspace="${PROJECTLESS_WORKSPACE}" data-project-source="all"
           title="${esc(window.WhiteboxI18n.t("ui.session_not_linked_to_a_specific_project"))}"
-          aria-pressed="${state.workspace === PROJECTLESS_WORKSPACE ? "true" : "false"}">
+          aria-pressed="${state.workspace === PROJECTLESS_WORKSPACE && state.workspaceSource === "all" ? "true" : "false"}">
         <strong>${window.WhiteboxI18n.t("ui.no_project")}</strong>
         <small>${esc(t("control.folder_count", { count: projectlessCount }))}</small>
         </button>`
@@ -465,101 +509,233 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           title="${esc(window.WhiteboxI18n.t("ui.remove_from_list"))}">×</button>
         </div>` : projectButton(item)).join("") +
       (!projects.length && !projectlessCount ? `<div class="workspace-empty">${window.WhiteboxI18n.t("project.empty")}</div>` : "");
-    const sidebarProjectStates = new Map(projects.map((project) => {
-      const live = projectLiveSessions(project);
-      const notices = noticesByProject.get(normalizedProjectPath(project.path)) || [];
+    if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
+    if (!(state.sidebarCollapsedSources instanceof Set)) state.sidebarCollapsedSources = new Set();
+    const sidebarSourceOrder = new Map(sourceIds.map((sourceId, index) => [sourceId, index]));
+    const sourceKind = (sourceId) => sourceId === "direct" ? "program" : "plugin";
+    const sourceMark = (sourceId) => sourceId === "direct" ? "WB" : sourceId === "builtin.opencode" ? "OC" : "AS";
+    const sourceState = (item, sourceId, projectless = false) => {
+      const rootMatches = (root) => sessionProjectSource(root) === sourceId
+        && (projectless
+          ? isProjectlessSession(root)
+          : !isProjectlessSession(root)
+            && normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(item.path));
+      const sessions = latestSessionSort(rootSessions.filter(rootMatches));
+      const relatedSessions = allVisibleSessions.filter((session) => rootMatches(rootSessionFor(session)));
+      const live = uniqueRootSessions(relatedSessions.filter(isControlRoomSession));
+      const notices = noticeModel.signalsForProject(item.path, sourceId);
       const attention = notices.filter(signal => signal.attention.length).map(signal => signal.root);
       const resultReady = notices.filter(signal => signal.result.length).map(signal => signal.root);
-      return [normalizedProjectPath(project.path), {
+      return {
         live,
         attention,
         resultReady,
+        sessions,
         priority: attention.length ? "attention" : resultReady.length ? "result-ready" : live.length ? "live" : "idle",
-      }];
-    }));
+      };
+    };
+    const sidebarProjectNodes = new Map();
+    const appendSidebarSource = (item, sourceId, projectless = false) => {
+      const key = sidebarProjectKey(item.path);
+      const current = sidebarProjectNodes.get(key) || {
+        key,
+        path: item.path,
+        name: item.name,
+        saved: false,
+        count: 0,
+        sources: [],
+        live: [],
+        attention: [],
+        resultReady: [],
+      };
+      const scopedState = sourceState(item, sourceId, projectless);
+      const source = {
+        ...item,
+        ...scopedState,
+        sourceId,
+        sourceKey: sidebarSourceKey(item.path, sourceId),
+        sourceLabel: sourcePluginLabel(sourceId),
+        sourceKind: sourceKind(sourceId),
+      };
+      if (sourceId === "direct") {
+        current.path = item.path;
+        current.name = item.name;
+      }
+      current.saved = current.saved || Boolean(item.saved);
+      current.count += Number(item.count || 0);
+      current.sources.push(source);
+      current.live.push(...scopedState.live);
+      current.attention.push(...scopedState.attention);
+      current.resultReady.push(...scopedState.resultReady);
+      sidebarProjectNodes.set(key, current);
+    };
+    sidebarGroups.forEach((group) => {
+      group.projects.forEach((item) => appendSidebarSource(item, group.sourceId));
+      if (Number(group.projectlessCount || 0) > 0) {
+        appendSidebarSource({
+          path: PROJECTLESS_WORKSPACE,
+          name: t("ui.no_project"),
+          saved: false,
+          count: Number(group.projectlessCount || 0),
+        }, group.sourceId, true);
+      }
+    });
+    sidebarProjectNodes.forEach((project) => {
+      project.sources.sort((left, right) => Number(sidebarSourceOrder.get(left.sourceId) ?? Number.MAX_SAFE_INTEGER)
+        - Number(sidebarSourceOrder.get(right.sourceId) ?? Number.MAX_SAFE_INTEGER));
+      project.priority = project.attention.length
+        ? "attention"
+        : project.resultReady.length ? "result-ready" : project.live.length ? "live" : "idle";
+    });
     const sidebarPriorityRank = { attention: 0, "result-ready": 1, live: 2, idle: 3 };
     const sidebarNameCollator = new Intl.Collator("ko-KR", { numeric: true, sensitivity: "base" });
-    const defaultSidebarProjects = [...projects].sort((left, right) => {
-      const leftPriority = sidebarProjectStates.get(normalizedProjectPath(left.path))?.priority || "idle";
-      const rightPriority = sidebarProjectStates.get(normalizedProjectPath(right.path))?.priority || "idle";
-      return sidebarPriorityRank[leftPriority] - sidebarPriorityRank[rightPriority]
+    const defaultSidebarProjects = [...sidebarProjectNodes.values()]
+      .filter((item) => item.key !== PROJECTLESS_WORKSPACE)
+      .sort((left, right) => sidebarPriorityRank[left.priority] - sidebarPriorityRank[right.priority]
         || sidebarNameCollator.compare(String(left.name || ""), String(right.name || ""))
-        || sidebarNameCollator.compare(normalizedProjectPath(left.path), normalizedProjectPath(right.path));
-    });
-    const sidebarProjectOrder = ensureProjectOrder(defaultSidebarProjects.map((item) => normalizedProjectPath(item.path)));
+        || sidebarNameCollator.compare(left.key, right.key));
+    const sidebarProjectOrder = ensureProjectOrder(defaultSidebarProjects.map((item) => item.key));
     const sidebarProjectRank = new Map(sidebarProjectOrder.map((key, index) => [key, index]));
-    const sidebarProjects = defaultSidebarProjects.sort((left, right) =>
-      Number(sidebarProjectRank.get(normalizedProjectPath(left.path)) ?? Number.MAX_SAFE_INTEGER)
-      - Number(sidebarProjectRank.get(normalizedProjectPath(right.path)) ?? Number.MAX_SAFE_INTEGER));
-    const canReorderSidebarProjects = sidebarProjects.length > 1;
-    const sidebarProjectItem = (item) => {
-      const projectState = sidebarProjectStates.get(normalizedProjectPath(item.path))
-        || { live: [], attention: [], resultReady: [], priority: "idle" };
-      const { live, attention, resultReady, priority } = projectState;
-      const selected = normalizedProjectPath(state.workspace) === normalizedProjectPath(item.path);
-      const filterLabel = t("project.filter_named", { name: item.name, count: item.count });
-      const accessibleLabel = resultReady.length
-        ? `${filterLabel}. ${t("studio.sidebar.result_ready_label", { count: resultReady.length })}`
-        : filterLabel;
-      return `<div class="project-sidebar-group ${selected ? "selected" : ""} ${attention.length ? "has-attention" : ""} ${resultReady.length ? "has-result-ready" : ""}"
-        data-project-sortable="${esc(normalizedProjectPath(item.path))}">
-        <div class="project-sidebar-row">
-          <button type="button" class="workspace-item project-sidebar-item ${selected ? "selected" : ""}"
-            data-workspace="${esc(item.path)}" title="${esc(item.path)}"
-            data-live-session-count="${live.length}"
-            data-attention-session-count="${attention.length}"
-            data-result-ready-count="${resultReady.length}"
-            data-project-priority="${priority}"
-            draggable="${canReorderSidebarProjects ? "true" : "false"}"
-            ${canReorderSidebarProjects ? 'aria-grabbed="false" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-describedby="projectReorderHelp"' : ""}
-            aria-label="${esc(accessibleLabel)}"
-            aria-pressed="${selected ? "true" : "false"}">
-            ${canReorderSidebarProjects ? `<span class="project-sidebar-drag-handle" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
-            <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(item.name))}</span>
-            <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><small>${esc(t("studio.sidebar.project_summary", {
-              status: attention.length
-                ? t("studio.sidebar.needs_review")
-                : resultReady.length
-                  ? t("studio.sidebar.result_ready")
-                  : live.length ? t("project.in_progress") : t("studio.sidebar.waiting"),
-              count: Number(item.count || 0),
-            }))}</small></span>
-            ${attention.length
-              ? `<span class="project-sidebar-attention"><i aria-hidden="true"></i><b>${attention.length}</b><small>${esc(t("studio.sidebar.needs_review"))}</small></span>`
-              : resultReady.length
-                ? `<span class="project-sidebar-result-ready" aria-label="${esc(t("studio.sidebar.result_ready_label", { count: resultReady.length }))}"><i aria-hidden="true"></i><b>${resultReady.length}</b><small>${esc(t("studio.sidebar.result_ready"))}</small></span>`
-                : live.length
-                  ? `<span class="project-sidebar-live" aria-label="${esc(t("studio.sidebar.live_label", { count: live.length }))}"><i aria-hidden="true"></i></span>`
-                  : `<span class="project-sidebar-chevron" aria-hidden="true">›</span>`}
-          </button>
-          <button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}"
-            aria-label="${esc(t("workspace.remove_named", { name: item.name }))}"
-            title="${esc(t("workspace.remove_named", { name: item.name }))}">×</button>
-        </div>
-      </div>`;
+    const sortedSidebarProjects = defaultSidebarProjects.sort((left, right) =>
+      Number(sidebarProjectRank.get(left.key) ?? Number.MAX_SAFE_INTEGER)
+      - Number(sidebarProjectRank.get(right.key) ?? Number.MAX_SAFE_INTEGER));
+    const projectlessSidebarProject = sidebarProjectNodes.get(PROJECTLESS_WORKSPACE);
+    if (projectlessSidebarProject) sortedSidebarProjects.push(projectlessSidebarProject);
+    const canReorderSidebarProjects = defaultSidebarProjects.length > 1;
+    const SIDEBAR_SESSION_PREVIEW_LIMIT = 3;
+    const sidebarSessionItem = (session) => {
+      const live = isControlRoomSession(session);
+      const attention = Boolean(context.needsManagementInbox?.(session));
+      const status = attention
+        ? t("studio.sidebar.needs_review")
+        : live ? t("project.in_progress") : t("studio.sidebar.waiting");
+      const title = shortText(session.title || session.workspace || t("studio.session.untitled"), 48);
+      return `<button type="button" class="project-sidebar-session ${attention ? "attention" : live ? "live" : ""}"
+        data-open-session="${esc(session.id)}" role="treeitem" aria-level="3"
+        aria-label="${esc(`${title}. ${status}`)}" title="${esc(title)}">
+        <i aria-hidden="true"></i><b>${esc(title)}</b><small>${esc(status)}</small>
+      </button>`;
     };
-    const sidebarHtml = sidebarProjects.map(sidebarProjectItem).join("")
-      + (projectlessCount
-        ? `<button type="button" class="workspace-item project-sidebar-item projectless ${state.workspace === PROJECTLESS_WORKSPACE ? "selected" : ""}"
-          data-workspace="${PROJECTLESS_WORKSPACE}" aria-pressed="${state.workspace === PROJECTLESS_WORKSPACE ? "true" : "false"}">
-          <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(t("ui.no_project")))}</span>
-          <span class="project-sidebar-copy"><strong>${esc(t("ui.no_project"))}</strong><small>${esc(t("control.folder_count", { count: projectlessCount }))}</small></span>
-          <span class="project-sidebar-chevron" aria-hidden="true">›</span>
-        </button>`
-        : "")
-      + (!sidebarProjects.length && !projectlessCount
-        ? `<div class="workspace-empty">${window.WhiteboxI18n.t("project.empty")}</div>`
-        : "");
+    const sidebarProjectItem = (item, projectIndex) => {
+      const projectSelected = state.workspace !== "all" && (item.key === PROJECTLESS_WORKSPACE
+        ? state.workspace === PROJECTLESS_WORKSPACE
+        : normalizedProjectPath(state.workspace) === item.key);
+      const allSourcesSelected = projectSelected && String(state.workspaceSource || "all") === "all";
+      const projectExpanded = !state.sidebarCollapsedProjects.has(item.key);
+      const sourceListId = `projectSidebarSources${projectIndex}`;
+      const canReorder = item.key !== PROJECTLESS_WORKSPACE && canReorderSidebarProjects;
+      const filterLabel = t("project.filter_named", { name: item.name, count: item.count });
+      const accessibleLabel = item.resultReady.length
+        ? `${filterLabel}. ${t("studio.sidebar.result_ready_label", { count: item.resultReady.length })}`
+        : filterLabel;
+      const projectStatus = item.attention.length
+        ? t("studio.sidebar.needs_review")
+        : item.resultReady.length
+          ? t("studio.sidebar.result_ready")
+          : item.live.length ? t("project.in_progress") : t("studio.sidebar.waiting");
+      const sourceItems = item.sources.map((source, sourceIndex) => {
+        const selected = projectSelected && String(state.workspaceSource || "all") === source.sourceId;
+        const sourceExpanded = !state.sidebarCollapsedSources.has(source.sourceKey);
+        const sessionsId = `projectSidebarSessions${projectIndex}_${sourceIndex}`;
+        const kindLabel = t(source.sourceKind === "program" ? "settings.plugins.type_program" : "settings.plugins.type_plugin");
+        const sourceStatus = source.attention.length
+          ? t("studio.sidebar.needs_review")
+          : source.resultReady.length
+            ? t("studio.sidebar.result_ready")
+            : source.live.length ? t("project.in_progress") : t("studio.sidebar.waiting");
+        const sessionPreview = source.sessions.slice(0, SIDEBAR_SESSION_PREVIEW_LIMIT);
+        const remainingSessionCount = Math.max(0, source.sessions.length - sessionPreview.length);
+        return `<section class="project-sidebar-source ${selected ? "selected" : ""} ${source.attention.length ? "has-attention" : ""} ${source.resultReady.length ? "has-result-ready" : ""}"
+          data-sidebar-source-key="${esc(source.sourceKey)}" data-project-scope="${esc(source.sourceKey)}"
+          data-source-kind="${source.sourceKind}" role="none">
+          <div class="project-sidebar-source-row">
+            <button type="button" class="project-sidebar-source-toggle" data-sidebar-source-toggle="${esc(source.sourceKey)}"
+              data-live-session-count="${source.live.length}" data-attention-session-count="${source.attention.length}"
+              data-result-ready-count="${source.resultReady.length}" data-project-priority="${source.priority}"
+              aria-expanded="${sourceExpanded ? "true" : "false"}" aria-controls="${sessionsId}" role="treeitem" aria-level="2"
+              aria-label="${esc(t(sourceExpanded ? "studio.sidebar.collapse_source" : "studio.sidebar.expand_source", { source: source.sourceLabel }))}">
+              <span class="project-sidebar-source-mark" aria-hidden="true">${sourceMark(source.sourceId)}</span>
+              <span class="project-sidebar-source-copy"><strong>${esc(source.sourceLabel)}</strong><small><b>${esc(kindLabel)}</b> · ${esc(t("studio.sidebar.source_tasks_summary", { count: source.sessions.length, status: sourceStatus }))}</small></span>
+              <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
+            </button>
+            <button type="button" class="project-sidebar-source-filter ${selected ? "selected" : ""}"
+              data-workspace="${esc(item.path)}" data-project-source="${esc(source.sourceId)}"
+              data-sidebar-project-ref="${esc(item.key)}" data-sidebar-source-ref="${esc(source.sourceKey)}"
+              aria-label="${esc(t("studio.sidebar.view_source", { source: source.sourceLabel, project: item.name }))}"
+              aria-pressed="${selected ? "true" : "false"}">${esc(t("studio.sidebar.view_action"))}</button>
+          </div>
+          <div id="${sessionsId}" class="project-sidebar-sessions" role="group"${sourceExpanded ? "" : " hidden"}>
+            ${sessionPreview.length
+              ? sessionPreview.map(sidebarSessionItem).join("")
+              : `<p class="project-sidebar-session-empty">${esc(t("studio.sidebar.no_source_sessions"))}</p>`}
+            ${remainingSessionCount
+              ? `<p class="project-sidebar-session-more" data-remaining-session-count="${remainingSessionCount}">${esc(t("studio.sidebar.more_source_sessions", { count: remainingSessionCount }))}</p>`
+              : ""}
+          </div>
+        </section>`;
+      }).join("");
+      return `<section class="project-sidebar-group project-sidebar-project ${projectSelected ? "selected" : ""} ${item.attention.length ? "has-attention" : ""} ${item.resultReady.length ? "has-result-ready" : ""}"
+        data-sidebar-project-key="${esc(item.key)}" ${canReorder ? `data-project-sortable="${esc(item.key)}"` : ""} role="none">
+        <div class="project-sidebar-row">
+          <button type="button" class="workspace-item project-sidebar-item project-sidebar-project-toggle"
+            data-sidebar-project-toggle="${esc(item.key)}" title="${esc(item.path)}"
+            data-live-session-count="${item.live.length}"
+            data-attention-session-count="${item.attention.length}"
+            data-result-ready-count="${item.resultReady.length}"
+            data-project-priority="${item.priority}"
+            draggable="${canReorder ? "true" : "false"}"
+            ${canReorder ? 'aria-grabbed="false" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-describedby="projectReorderHelp"' : ""}
+            aria-label="${esc(t(projectExpanded ? "studio.sidebar.collapse_project" : "studio.sidebar.expand_project", { project: accessibleLabel }))}"
+            aria-expanded="${projectExpanded ? "true" : "false"}" aria-controls="${sourceListId}" role="treeitem" aria-level="1">
+            ${canReorder ? `<span class="project-sidebar-drag-handle" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
+            <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(item.name))}</span>
+            <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><small>${esc(t("studio.sidebar.project_tree_summary", {
+              count: Number(item.count || 0),
+              sources: item.sources.length,
+              status: projectStatus,
+            }))}</small></span>
+            <span class="project-sidebar-project-state">
+              ${item.attention.length
+                ? `<span class="project-sidebar-attention" aria-label="${esc(t("studio.sidebar.needs_review"))}"><i aria-hidden="true"></i><b>${item.attention.length}</b></span>`
+                : item.resultReady.length
+                  ? `<span class="project-sidebar-result-ready" aria-label="${esc(t("studio.sidebar.result_ready_label", { count: item.resultReady.length }))}"><i aria-hidden="true"></i><b>${item.resultReady.length}</b></span>`
+                  : item.live.length
+                    ? `<span class="project-sidebar-live" aria-label="${esc(t("studio.sidebar.live_label", { count: item.live.length }))}"><i aria-hidden="true"></i></span>`
+                    : ""}
+              <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
+            </span>
+          </button>
+          ${item.saved && item.key !== PROJECTLESS_WORKSPACE
+            ? `<button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}"
+              aria-label="${esc(t("workspace.remove_named", { name: item.name }))}"
+              title="${esc(t("workspace.remove_named", { name: item.name }))}">×</button>`
+            : `<span class="project-sidebar-project-tail" aria-hidden="true"></span>`}
+        </div>
+        <div id="${sourceListId}" class="project-sidebar-source-list" role="group"${projectExpanded ? "" : " hidden"}>
+          <button type="button" class="project-sidebar-project-filter ${allSourcesSelected ? "selected" : ""}"
+            data-workspace="${esc(item.path)}" data-project-source="all"
+            data-sidebar-project-ref="${esc(item.key)}"
+            data-live-session-count="${item.live.length}" data-attention-session-count="${item.attention.length}"
+            data-result-ready-count="${item.resultReady.length}" data-project-priority="${item.priority}"
+            aria-label="${esc(accessibleLabel)}" aria-pressed="${allSourcesSelected ? "true" : "false"}">
+            <strong>${esc(t("studio.sidebar.all_sources"))}</strong><small>${esc(t("settings.plugins.project_count", { count: item.count }))}</small>
+          </button>
+          ${sourceItems}
+        </div>
+      </section>`;
+    };
+    const sidebarHtml = sortedSidebarProjects.map(sidebarProjectItem).join("")
+      || `<div class="workspace-empty">${window.WhiteboxI18n.t("project.empty")}</div>`;
     const desktopHtml =
       `<span class="control-room-filter-label">작업 내용별</span>` +
       `<button type="button" class="workspace-item control-room-project-chip ${state.workspace === "all" ? "selected" : ""}"
-        data-workspace="all" aria-pressed="${state.workspace === "all" ? "true" : "false"}">
+        data-workspace="all" data-project-source="all" aria-pressed="${state.workspace === "all" ? "true" : "false"}">
       <strong>전체</strong><small>${allLiveRootSessions.length}건</small>
       </button>` +
       folderLiveProjects.map((item) => projectButton(item, "control-room-project-chip")).join("") +
       (liveProjectlessCount
-        ? `<button type="button" class="workspace-item projectless control-room-project-chip ${state.workspace === PROJECTLESS_WORKSPACE ? "selected" : ""}"
-          data-workspace="${PROJECTLESS_WORKSPACE}" aria-pressed="${state.workspace === PROJECTLESS_WORKSPACE ? "true" : "false"}">
+        ? `<button type="button" class="workspace-item projectless control-room-project-chip ${state.workspace === PROJECTLESS_WORKSPACE && state.workspaceSource === "all" ? "selected" : ""}"
+          data-workspace="${PROJECTLESS_WORKSPACE}" data-project-source="all" aria-pressed="${state.workspace === PROJECTLESS_WORKSPACE && state.workspaceSource === "all" ? "true" : "false"}">
         <strong>${esc(t("control.other_projects"))}</strong><small>${esc(t("control.folder_count", { count: liveProjectlessCount }))}</small>
         </button>`
         : "") +
@@ -1285,6 +1461,43 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     }).join("");
   }
 
+  function renderSourcePluginSettings() {
+    const list = $("#sourcePluginSettingsList");
+    if (!list) return;
+    const enabledPluginIds = new Set(state.sourcePluginSettings?.enabledPluginIds || []);
+    const statuses = new Map((state.sourcePlugins || []).map((source) => [String(source.id || ""), source]));
+    const definitions = [
+      { id: "builtin.opencode", label: "OpenCode", mark: "OC", color: "#4c8bf5", descriptionKey: "settings.plugins.opencode_description" },
+      { id: "builtin.aside", label: "Aside", mark: "A", color: "#b983ff", descriptionKey: "settings.plugins.aside_description" },
+    ];
+    list.innerHTML = definitions.map((definition) => {
+      const source = statuses.get(definition.id) || {};
+      const enabled = enabledPluginIds.has(definition.id);
+      const platformSupported = source.platformSupported !== false
+        && (definition.id !== "builtin.aside" || state.platform.id === "darwin");
+      const unavailable = !platformSupported;
+      const busy = state.sourcePluginSettingRequests?.has(definition.id);
+      const locked = busy || (unavailable && !enabled);
+      const status = unavailable
+        ? t("settings.plugins.unavailable")
+        : enabled
+          ? t("settings.plugins.enabled", { count: Number(source.sessionCount || 0) })
+          : t("settings.plugins.disabled");
+      const detail = enabled && source.reason
+        ? source.reason
+        : t(definition.descriptionKey);
+      return `<label class="source-plugin-option ${enabled ? "enabled" : "disabled"} ${unavailable ? "unavailable" : ""}"
+        style="--plugin:${definition.color}" data-source-plugin-option="${esc(definition.id)}" ${busy ? 'data-busy="true"' : ""}>
+        <span class="source-plugin-mark" aria-hidden="true">${esc(definition.mark)}</span>
+        <span class="source-plugin-copy"><b>${esc(source.source?.label || definition.label)}</b><small>${esc(status)}</small><small title="${esc(detail)}">${esc(detail)}</small></span>
+        <input type="checkbox" role="switch" data-source-plugin-enabled="${esc(definition.id)}"
+          ${enabled ? "checked" : ""} ${locked ? "disabled" : ""}
+          aria-label="${esc(t(enabled ? "settings.plugins.disable_action" : "settings.plugins.enable_action", { plugin: definition.label }))}">
+        <span class="source-plugin-toggle" aria-hidden="true"><i></i></span>
+      </label>`;
+    }).join("");
+  }
+
   return {
     renderProviderRail: (...args) => preserveFocusDuringRender(() => renderProviderRail(...args)),
     isProjectlessSession,
@@ -1317,5 +1530,6 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     ensureProjectOrder,
     moveProjectOrder,
     renderProviderVisibilitySettings: (...args) => preserveFocusDuringRender(() => renderProviderVisibilitySettings(...args)),
+    renderSourcePluginSettings: (...args) => preserveFocusDuringRender(() => renderSourcePluginSettings(...args)),
   };
 };

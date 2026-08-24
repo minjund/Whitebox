@@ -28,6 +28,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     currentActivity,
     isLiveSession,
     isControlRoomSession = isLiveSession,
+    controlRoomStatus = session => session?.status,
     isResultReviewComplete = () => false,
     latestWorkCopy,
     statusIcon,
@@ -42,6 +43,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     renderProviderFilter,
     renderRuntimeOverview,
     renderProviderVisibilitySettings = () => {},
+    renderSourcePluginSettings = () => {},
     renderAttentionPopupSettings = () => {},
     visibleSnapshot = () => state.snapshot,
     filteredSessions,
@@ -93,7 +95,14 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const originLabel = sessionWorkspaceLabel(session);
     const explicitWaiting = session?.attention?.category === "required"
       && ["execution-approval", "input-tool"].includes(session.attention.source);
-    const presentationStatus = window.WhiteboxTerminal?.pendingPromptForSession?.(session) || explicitWaiting ? "waiting" : session.status;
+    const presentationStatus = window.WhiteboxTerminal?.pendingPromptForSession?.(session) || explicitWaiting
+      ? "waiting"
+      : controlRoomStatus(session);
+    const presentationActivity = presentationStatus === "waiting"
+      ? "notification"
+      : (["running", "starting"].includes(presentationStatus) && (!session.activityState || session.activityState === "idle")
+        ? "working"
+        : session.activityState || "idle");
     return `<article class="session-card session-record ${opts.live ? "live-card" : ""} ${statusClass(presentationStatus)} ${session.parentId ? "subagent" : ""}"
       data-session-id="${esc(session.id)}"
       data-session-sortable="${esc(session.id)}"
@@ -106,7 +115,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
       <div class="card-head">
         <span class="provider-mark">${esc(provider.mark)}</span>
         <div class="card-head-main"><div class="card-provider-line"><b>${esc(provider.label)}</b><span>${esc(session.model || t("session.model_unknown"))}</span></div></div>
-        <span class="status-pill ${statusClass(presentationStatus)} activity-${esc(presentationStatus === "waiting" ? "notification" : session.activityState || "idle")}">${esc(sessionStatusLabel(session, presentationStatus))}</span>
+        <span class="status-pill ${statusClass(presentationStatus)} activity-${esc(presentationActivity)}">${esc(sessionStatusLabel(session, presentationStatus))}</span>
       </div>
       ${sessionBadgesHtml(session, { compact: true })}
       <h3 id="${accessibleId}-title" class="card-title" title="${esc(titlePreview.full)}">${esc(titlePreview.text)}</h3>
@@ -314,6 +323,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     if (settingsView) {
       $("#liveSection").classList.add("hidden");
       renderAttentionPopupSettings();
+      renderSourcePluginSettings();
       renderProviderVisibilitySettings();
       if (window.WhiteboxTerminal) window.WhiteboxTerminal.deactivate();
       if (!deferMotion) playMotionLayout(previousLayout, motionKind);
@@ -426,6 +436,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
         renderProviderOverview();
         renderProviderFilter();
         renderAttentionPopupSettings();
+        renderSourcePluginSettings();
         renderProviderVisibilitySettings();
         renderSessions(motionKind, true);
         if (state.selectedId && $("#detailDrawer").classList.contains("open")) context.renderDrawer();

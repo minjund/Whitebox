@@ -2,6 +2,20 @@
 
 const { validateManifest } = require('./contracts');
 
+const OPENCODE_MANIFEST = validateManifest({
+  apiVersion: 1,
+  id: 'builtin.opencode',
+  version: '1.0.0',
+  name: 'OpenCode',
+  source: { id: 'opencode', label: 'OpenCode' },
+  platforms: ['win32', 'darwin', 'linux'],
+  capabilities: {
+    history: { list: true, detail: true },
+    live: true,
+    control: { start: true, sendInstruction: true, stop: false, archive: false, delete: true },
+  },
+});
+
 const OMO_MANIFEST = validateManifest({
   apiVersion: 1,
   id: 'builtin.omo',
@@ -35,12 +49,12 @@ const ASIDE_MANIFEST = validateManifest({
 function bundledSourceDefinitions(options = {}) {
   return [
     {
-      manifest: OMO_MANIFEST,
+      manifest: OPENCODE_MANIFEST,
       createMonitor(context) {
-        const adapter = require('./bundled/omo');
-        if (typeof adapter.createOmoMonitorPlugin === 'function') return adapter.createOmoMonitorPlugin(context);
-        if (typeof adapter.OmoOpenCodeMonitor === 'function') return new adapter.OmoOpenCodeMonitor(context);
-        throw new Error('OMO monitor adapter를 불러오지 못했습니다.');
+        const adapter = require('./bundled/opencode');
+        if (typeof adapter.createOpenCodeMonitorPlugin === 'function') return adapter.createOpenCodeMonitorPlugin(context);
+        if (typeof adapter.OpenCodeHistoryMonitor === 'function') return new adapter.OpenCodeHistoryMonitor(context);
+        throw new Error('OpenCode monitor adapter를 불러오지 못했습니다.');
       },
     },
     {
@@ -55,4 +69,4 @@ function bundledSourceDefinitions(options = {}) {
   ].map(definition => ({ ...definition, options }));
 }
 
-module.exports = { ASIDE_MANIFEST, OMO_MANIFEST, bundledSourceDefinitions };
+module.exports = { ASIDE_MANIFEST, OMO_MANIFEST, OPENCODE_MANIFEST, bundledSourceDefinitions };

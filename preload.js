@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   probeProviders: () => ipcRenderer.invoke('providers:probe'),
   listSources: () => ipcRenderer.invoke('sources:list'),
   refreshSources: () => ipcRenderer.invoke('sources:refresh'),
+  setSourcePluginEnabled: (pluginId, enabled) => ipcRenderer.invoke('sources:set-enabled', pluginId, enabled),
   startSourceTask: (pluginId, input) => ipcRenderer.invoke('sources:start', pluginId, input),
   controlSourceSession: (sessionId, action, input) => ipcRenderer.invoke('sources:control', sessionId, action, input),
   prepareSourceDelete: sessionId => ipcRenderer.invoke('sources:prepare-delete', sessionId),
