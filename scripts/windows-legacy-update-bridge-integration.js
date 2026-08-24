@@ -15,6 +15,7 @@ const {
   IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
   parseImmutableV163FirstHopLog,
 } = require('./immutable-v163-first-hop-contract');
+const { readWindowsUpdateLogForPolling } = require('./windows-update-log-read');
 const {
   assertCompleteReleaseAssetSet,
   assertReleaseAssetSelections,
@@ -1000,11 +1001,15 @@ function readLog(logPath) {
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
 }
 
-function logLines(logPath) {
-  return readLog(logPath)
+function rawLogLines(rawLog) {
+  return rawLog
     .split(/\r?\n/)
     .map(line => line.replace(/^\uFEFF/, '').trim())
     .filter(Boolean);
+}
+
+function logLines(logPath) {
+  return rawLogLines(readLog(logPath));
 }
 
 function linesStarting(lines, prefix) {
@@ -1672,10 +1677,10 @@ async function removeOwnedImmutableV163ReadyRaceArtifacts(
   return readyRace.rawLog;
 }
 
-function immutableV163BootstrapRaceError(logPath) {
-  const error = new Error(`The frozen legacy bootstrap raced its packaged helper:\n${readLog(logPath)}`);
+function immutableV163BootstrapRaceError(logPath, rawLog = readLog(logPath)) {
+  const error = new Error(`The frozen legacy bootstrap raced its packaged helper:\n${rawLog}`);
   error.code = 'LEGACY_BOOTSTRAP_READY_RACE';
-  error.updateLog = readLog(logPath);
+  error.updateLog = rawLog;
   return error;
 }
 
@@ -1687,18 +1692,28 @@ async function waitForRelaunch(
   nativeProfilePolicy = null,
 ) {
   const startedAt = Date.now();
+  let lastReadableLog = '';
+  let lastTransientReadError = null;
   while (Date.now() - startedAt < timeoutMs) {
-    const lines = logLines(logPath);
+    const snapshot = readWindowsUpdateLogForPolling(() => readLog(logPath));
+    if (snapshot.status === 'retry') {
+      lastTransientReadError = snapshot.error;
+      await new Promise(resolve => setTimeout(resolve, 200));
+      continue;
+    }
+    lastReadableLog = snapshot.rawLog;
+    lastTransientReadError = null;
+    const lines = rawLogLines(lastReadableLog);
     const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
     if (bootstrapErrors.length) {
       if (nativeProfilePolicy !== null) {
         assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy,
           'The immutable bridge bootstrap error received an unknown native profile policy.');
       }
-      throw immutableV163BootstrapRaceError(logPath);
+      throw immutableV163BootstrapRaceError(logPath, lastReadableLog);
     }
     const fatal = fatalLogLines(lines);
-    if (fatal.length) throw new Error(`Updater helper failed before relaunch: ${fatal.join(', ')}\n${readLog(logPath)}`);
+    if (fatal.length) throw new Error(`Updater helper failed before relaunch: ${fatal.join(', ')}\n${lastReadableLog}`);
     const ready = linesStarting(lines, 'relaunchReady=');
     if (ready.length) {
       assert.equal(ready.length, 1, 'The helper relaunched more than once.');
@@ -1735,7 +1750,13 @@ async function waitForRelaunch(
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${readLog(logPath) || '(no update log)'}`);
+  if (lastTransientReadError !== null) {
+    throw new Error([
+      `Timed out waiting for updater relaunch ${expectedVersion} because the update log remained locked (${lastTransientReadError.code}).`,
+      lastReadableLog || '(no readable update log)',
+    ].join('\n'));
+  }
+  throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${lastReadableLog || '(no update log)'}`);
 }
 
 async function waitForInstalledPackage(appPath, expectedVersion, timeoutMs = 120_000) {
