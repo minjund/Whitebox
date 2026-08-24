@@ -51,6 +51,7 @@ const {
   IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
   parseImmutableV163FirstHopLog,
 } = require('../immutable-v163-first-hop-contract');
+const { readWindowsUpdateLogForPolling } = require('../windows-update-log-read');
 const {
   checkUpdateCompatibilityCohorts,
   cohortList,
@@ -845,6 +846,29 @@ function registerCliAndUpdateTests(context) {
     const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
     const legacyClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-legacy-update-bridge-integration.js'), 'utf8');
+    const exactLogEvidence = '\uFEFFhelperStarted=true\r\nmalformed-or-stale-evidence=true\r\n';
+    assert.deepStrictEqual(
+      readWindowsUpdateLogForPolling(() => exactLogEvidence),
+      { status: 'read', rawLog: exactLogEvidence },
+      'Windows updater log polling must return readable evidence byte-for-byte.',
+    );
+    for (const code of ['EBUSY', 'EPERM']) {
+      const transientError = Object.assign(new Error(`fixture ${code}`), { code });
+      const transientResult = readWindowsUpdateLogForPolling(() => { throw transientError; });
+      assert.equal(transientResult.status, 'retry');
+      assert.strictEqual(transientResult.error, transientError);
+    }
+    const missingError = Object.assign(new Error('fixture missing log'), { code: 'ENOENT' });
+    assert.throws(
+      () => readWindowsUpdateLogForPolling(() => { throw missingError; }),
+      error => error === missingError,
+      'Missing update-log evidence must not be classified as a transient Windows lock.',
+    );
+    assert.throws(
+      () => readWindowsUpdateLogForPolling(() => ({ toString: () => exactLogEvidence })),
+      /primitive string/,
+      'Non-primitive update-log evidence must not be coerced during polling.',
+    );
     const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
     const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
     for (const requiredEvidence of [
@@ -1106,11 +1130,17 @@ function registerCliAndUpdateTests(context) {
       legacyClientTest.indexOf('async function waitForRelaunch'),
       legacyClientTest.indexOf('async function waitForInstalledPackage'),
     );
-    assert(immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
+    assert(immutableBridgeRelaunch.includes('readWindowsUpdateLogForPolling(() => readLog(logPath))')
+      && immutableBridgeRelaunch.includes("snapshot.status === 'retry'")
+      && immutableBridgeRelaunch.includes('lastTransientReadError = snapshot.error')
+      && immutableBridgeRelaunch.includes('const lines = rawLogLines(lastReadableLog)')
+      && immutableBridgeRelaunch.includes('immutableV163BootstrapRaceError(logPath, lastReadableLog)')
+      && immutableBridgeRelaunch.includes('because the update log remained locked')
+      && immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
       && immutableBridgeRelaunch.includes('assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableBridgeRelaunch.includes('expectedVersion, bridgeVersion')
       && immutableBridgeRelaunch.includes('assertImmutableBridgeNativeProfileUsed()'),
-    'native 프로필 예외는 첫 hop에서 발급한 동일 opaque policy의 고정 bridge relaunch에만 적용해야 합니다.');
+    'legacy log polling은 EBUSY/EPERM만 bounded 재시도하고 exact raw 증거와 native-profile relaunch 계약을 유지해야 합니다.');
     const immutableBridgeCleanup = legacyClientTest.slice(
       legacyClientTest.indexOf("await capture('remove owned immutable bridge native profile'"),
       legacyClientTest.indexOf('asar.uncacheAll()'),
