@@ -31,8 +31,18 @@ helper extracted from the installed bridge and requires the current Whitebox
 relaunch handshake before exposing the bridge artifact for download.
 
 The frozen v1.6.3 bootstrap and app process both watch and remove the same
-helper-ready file. If the app wins that race, the bootstrap can time out after
-the silent NSIS child has already started. The helper can be terminated before
+helper-ready file. If the bootstrap acknowledges first, the integration
+requires the official helper's exact eight-line raw success log: `helperStarted`,
+`exitCode=0`, the exact v1.6.23 `candidate` and `relaunchPath`, followed by the
+attempt-one `relaunchStarted`, `windowRestored`, `rendererReady`, and
+`relaunchReady` records bound to one authenticated PID and a positive window
+handle. The official v1.6.3 source has no `allAppProcessesStopped=true` marker;
+that omission is accepted only for this fully pinned path after the parent and
+installer exit, v1.6.23 EXE and `app.asar` stabilize, the native profile is
+proven, and all helper/bootstrap/ready artifacts self-delete.
+
+If the app wins the ready-file race, the bootstrap can time out after the
+silent NSIS child has already started. The helper can be terminated before
 recording the NSIS result, or just after recording `exitCode=0` but before its
 final self-delete. The integration accepts only those two exact raw-log
 variants from the same fresh helper: `helperStarted` followed by the exact

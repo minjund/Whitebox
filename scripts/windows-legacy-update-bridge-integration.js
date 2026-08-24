@@ -861,6 +861,160 @@ function assertCompletedInstall(logPath, options) {
   assert.deepStrictEqual(fatalLogLines(lines), [], `Updater helper logged a fatal marker:\n${readLog(logPath)}`);
 }
 
+function assertCompletedImmutableV163BootstrapAckInstall(
+  launched,
+  options,
+  downloadedInstaller,
+  relaunchPid,
+) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable v1.6.3 bootstrap-ack success is only valid on a disposable official candidate runner.');
+  assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+    'The immutable v1.6.3 bootstrap-ack success received an unknown first-hop policy.');
+  assert.equal(options.label, 'first-hop-downloads', 'The immutable bootstrap-ack attempt label changed.');
+  assert.equal(options.repository, 'LodeToAgent', 'The immutable bootstrap-ack repository changed.');
+  assert.equal(options.currentVersion, '1.6.3', 'The immutable bootstrap-ack source version changed.');
+  assert.equal(bridgeVersion, '1.6.23', 'The immutable bootstrap-ack bridge version changed.');
+  assert.equal(options.expectedVersion, '1.6.23', 'The immutable bootstrap-ack target version changed.');
+  assert.equal(options.allowLegacyBootstrapFallback, true, 'The immutable bootstrap-ack first-hop contract changed.');
+  assert.equal(launched && launched.mode, 'automatic', 'The immutable bootstrap-ack was not an automatic launch.');
+  assert.equal(canonicalExistingPath(options.installer), canonicalExistingPath(bridgeInstaller),
+    'The immutable bootstrap-ack target installer changed.');
+  assert.equal(canonicalExistingPath(options.appPath), canonicalExistingPath(legacyExecutable),
+    'The immutable bootstrap-ack installed executable changed.');
+  assert.equal(canonicalExistingPath(options.relaunchAppPath), canonicalExistingPath(legacyExecutable),
+    'The immutable bootstrap-ack relaunch executable changed.');
+  assertPinnedInstaller(sourceInstaller, {
+    name: V163_INSTALLER_NAME,
+    size: V163_INSTALLER_SIZE,
+    sha256: V163_INSTALLER_SHA256,
+  }, 'official v1.6.3 bootstrap-ack source');
+  assertPinnedInstaller(bridgeInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'official immutable v1.6.23 bootstrap-ack target');
+
+  const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
+  const expectedDownloadedInstaller = path.join(expectedDownloadsDir, V1623_INSTALLER_NAME);
+  const expectedHelperPath = path.join(expectedDownloadsDir, 'install-update.ps1');
+  const expectedBootstrapPath = path.join(expectedDownloadsDir, 'install-update-bootstrap.ps1');
+  const expectedLogPath = path.join(expectedDownloadsDir, 'install-update.log');
+  const expectedReadyPath = path.join(expectedDownloadsDir, 'install-update.ready');
+  assert.equal(path.resolve(downloadedInstaller), expectedDownloadedInstaller,
+    'The immutable bootstrap-ack did not install the exact fresh first-hop download.');
+  assert.equal(path.resolve(launched.helperPath), expectedHelperPath,
+    'The immutable bootstrap-ack helper path changed.');
+  assert.equal(path.resolve(launched.bootstrapPath), expectedBootstrapPath,
+    'The immutable bootstrap-ack bootstrap path changed.');
+  assert.equal(path.resolve(launched.logPath), expectedLogPath,
+    'The immutable bootstrap-ack log path changed.');
+  assert.equal(path.resolve(launched.readyPath), expectedReadyPath,
+    'The immutable bootstrap-ack ready path changed.');
+  assert.match(String(launched.rendererReadyToken || ''), /^[0-9a-f]{48}$/,
+    'The immutable bootstrap-ack renderer-ready token changed.');
+  assert.equal(
+    path.resolve(launched.rendererReadyPath),
+    path.join(expectedDownloadsDir, `install-renderer-ready-${launched.rendererReadyToken}.json`),
+    'The immutable bootstrap-ack renderer-ready path changed.',
+  );
+  const downloadedState = fs.lstatSync(expectedDownloadedInstaller, { throwIfNoEntry: false });
+  assert(downloadedState && downloadedState.isFile() && !downloadedState.isSymbolicLink(),
+    `The immutable bootstrap-ack downloaded installer was missing or changed: ${expectedDownloadedInstaller}`);
+  assertPinnedInstaller(downloadedInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'downloaded immutable v1.6.23 bootstrap-ack target');
+  assert.equal(typeof options.installerModule.WINDOWS_UPDATE_HELPER, 'string',
+    'The official v1.6.3 bootstrap-ack helper source was unavailable.');
+  assert.equal(options.installerModule.WINDOWS_UPDATE_HELPER.includes('allAppProcessesStopped=true'), false,
+    'The immutable v1.6.3 helper unexpectedly gained a current-helper-only process marker.');
+  assert.equal(executableVersion(legacyExecutable), bridgeVersion,
+    'The immutable bootstrap-ack log was accepted before the bridge executable was installed.');
+  assert.equal(packagedMetadata(path.join(installDir, 'resources', 'app.asar')).version, bridgeVersion,
+    'The immutable bootstrap-ack log was accepted before the bridge app.asar was installed.');
+  assert.equal(processAlive(options.parentPid), false,
+    'The immutable bootstrap-ack parent process was still alive after replacement.');
+  const relaunchedRecord = exactProcessRecord(relaunchPid);
+  assert.equal(canonicalExistingPath(relaunchedRecord.executablePath), canonicalExistingPath(legacyExecutable),
+    'The immutable bootstrap-ack PID did not resolve to the exact bridge executable.');
+  assert.equal(immutableBridgeNativeProfileObserved, true,
+    'The immutable bootstrap-ack relaunch did not prove its exact native profile.');
+  assert.deepStrictEqual(runningProcessIds(downloadedInstaller), [],
+    'The immutable bootstrap-ack installer process was still running.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(downloadedInstaller), [],
+    'A process still referenced the immutable bootstrap-ack installer.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(expectedHelperPath), [],
+    'A process still referenced the immutable bootstrap-ack helper.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(expectedBootstrapPath), [],
+    'A process still referenced the immutable bootstrap-ack bootstrap.');
+  for (const [label, file] of [
+    ['helper', expectedHelperPath],
+    ['bootstrap', expectedBootstrapPath],
+    ['ready signal', expectedReadyPath],
+    ['renderer-ready signal', launched.rendererReadyPath],
+    ['helper PID sidecar', launched.helperPidPath],
+    ['integration ready signal', launched.integrationReadyPath],
+    ['integration helper PID sidecar', launched.integrationHelperPidPath],
+  ]) {
+    if (!file) continue;
+    assert.equal(fs.lstatSync(file, { throwIfNoEntry: false }), undefined,
+      `The immutable bootstrap-ack ${label} artifact remained: ${file}`);
+  }
+
+  const downloadsState = fs.lstatSync(expectedDownloadsDir, { throwIfNoEntry: false });
+  assert(downloadsState && downloadsState.isDirectory() && !downloadsState.isSymbolicLink(),
+    `The immutable bootstrap-ack downloads directory changed: ${expectedDownloadsDir}`);
+  const logState = fs.lstatSync(expectedLogPath, { throwIfNoEntry: false });
+  assert(logState && logState.isFile() && !logState.isSymbolicLink(),
+    `The immutable bootstrap-ack log was missing or changed: ${expectedLogPath}`);
+  const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
+  const canonicalDownloadedInstaller = canonicalExistingPath(expectedDownloadedInstaller);
+  const canonicalLogPath = canonicalExistingPath(expectedLogPath);
+  assert.equal(path.dirname(canonicalDownloadsDir), canonicalExistingPath(testRoot),
+    'The immutable bootstrap-ack downloads directory escaped the fresh integration root.');
+  assert.equal(path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir,
+    'The immutable bootstrap-ack downloaded installer escaped its exact first-hop directory.');
+  assert.equal(path.dirname(canonicalLogPath), canonicalDownloadsDir,
+    'The immutable bootstrap-ack log escaped its exact first-hop directory.');
+
+  assert(Number.isSafeInteger(options.parentPid) && options.parentPid > 0,
+    'The immutable bootstrap-ack parent PID was invalid.');
+  const lines = logLines(expectedLogPath);
+  assert.equal(lines.length, 8, `The immutable bootstrap-ack log changed length:\n${readLog(expectedLogPath)}`);
+  const relaunchStarted = String(lines[4] || '').match(/^relaunchStarted=true;attempt=1;pid=(\d+)$/);
+  assert(relaunchStarted, `The immutable bootstrap-ack relaunch-start record changed: ${lines[4] || '(missing)'}`);
+  const loggedRelaunchPid = Number(relaunchStarted[1]);
+  assert(Number.isSafeInteger(loggedRelaunchPid) && loggedRelaunchPid > 0,
+    `The immutable bootstrap-ack relaunch PID was invalid: ${relaunchStarted[1]}`);
+  assert.equal(loggedRelaunchPid, relaunchPid,
+    'The immutable bootstrap-ack log did not identify the authenticated relaunched process.');
+  const windowRestored = String(lines[5] || '').match(/^windowRestored=true;pid=(\d+);handle=([1-9]\d*)$/);
+  assert(windowRestored, `The immutable bootstrap-ack window-restored record changed: ${lines[5] || '(missing)'}`);
+  assert.equal(windowRestored[1], String(relaunchPid),
+    'The immutable bootstrap-ack window record identified another process.');
+  const expectedLines = [
+    `helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23`,
+    'exitCode=0',
+    `candidate=${legacyExecutable};version=1.6.23`,
+    `relaunchPath=${legacyExecutable};installedVersion=1.6.23;expectedVersion=1.6.23`,
+    `relaunchStarted=true;attempt=1;pid=${relaunchPid}`,
+    `windowRestored=true;pid=${relaunchPid};handle=${windowRestored[2]}`,
+    `rendererReady=true;attempt=1;pid=${relaunchPid}`,
+    `relaunchReady=true;attempt=1;pid=${relaunchPid}`,
+  ];
+  const expectedLog = `\uFEFF${expectedLines.join('\r\n')}\r\n`;
+  const log = readLog(expectedLogPath);
+  assert.equal(log, expectedLog, [
+    'Refusing the immutable v1.6.3 bootstrap-ack success without its exact official eight-line log.',
+    log || '(no update log)',
+  ].join('\n'));
+  assert.deepStrictEqual(fatalLogLines(lines), [],
+    'The immutable v1.6.3 bootstrap-ack log contained a fatal marker.');
+  return log;
+}
+
 async function waitForPathRemoval(file, timeoutMs = 20_000) {
   if (!file) return;
   const startedAt = Date.now();
@@ -909,13 +1063,13 @@ async function waitForExactExecutableProcessExit(executable, label, timeoutMs = 
     if (!remaining.length) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`${label} processes remained after the immutable helper was terminated: ${remaining.join(',')}`);
+  throw new Error(`${label} processes remained after packaged updater completion: ${remaining.join(',')}`);
 }
 
 function assertImmutableV163ReadyRaceLog(launched, options) {
   assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
     'The immutable v1.6.3 ready-race log is only valid on a disposable official candidate runner.');
-  assert.equal(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+  assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
     'The immutable v1.6.3 ready-race log received an unknown first-hop policy.');
   assert.equal(options.label, 'first-hop-downloads', 'The immutable ready-race attempt label changed.');
   assert.equal(options.repository, 'LodeToAgent', 'The immutable ready-race repository changed.');
@@ -990,7 +1144,7 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
 ) {
   assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
     'The immutable v1.6.3 helper artifact exception is only valid on a disposable official candidate runner.');
-  assert.equal(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+  assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
     'The immutable v1.6.3 helper artifact exception received an unknown first-hop policy.');
   assert.equal(options.repository, 'LodeToAgent', 'The immutable helper artifact repository changed.');
   assert.equal(options.currentVersion, '1.6.3', 'The immutable helper artifact source version changed.');
@@ -1054,6 +1208,12 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
   const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
   assert.equal(path.dirname(canonicalDownloadsDir), canonicalTestRoot,
     'The immutable helper artifact directory escaped the fresh integration root.');
+  const downloadedState = fs.lstatSync(expectedDownloadedInstaller, { throwIfNoEntry: false });
+  assert(downloadedState && downloadedState.isFile() && !downloadedState.isSymbolicLink(),
+    `The immutable helper artifact downloaded installer was missing or changed: ${expectedDownloadedInstaller}`);
+  const canonicalDownloadedInstaller = canonicalExistingPath(expectedDownloadedInstaller);
+  assert.equal(path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir,
+    'The immutable helper artifact downloaded installer escaped its exact first-hop directory.');
   const helperState = fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false });
   assert(helperState !== undefined,
     `The immutable v1.6.3 forced-termination helper residue was unexpectedly absent: ${expectedHelperPath}`);
@@ -1124,7 +1284,7 @@ async function waitForRelaunch(
       const pid = Number(match[1]);
       const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null;
       if (immutableBridgeHistoricalRelaunch) {
-        assert.equal(nativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+        assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy,
           'The immutable bridge relaunch received an unknown native profile policy.');
         assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
           'The immutable bridge relaunch policy escaped the disposable official candidate run.');
@@ -1256,6 +1416,10 @@ async function installWithPackagedUpdater(options) {
   fs.mkdirSync(downloadsDir, { recursive: true });
   const downloadedInstaller = await downloadWithPackagedUpdater(options, downloadsDir);
   downloadedInstallerPaths.add(path.resolve(downloadedInstaller));
+  const hasImmutableBridgeNativeProfilePolicy = Object.prototype.hasOwnProperty.call(
+    options,
+    'immutableBridgeNativeProfilePolicy',
+  );
   let launched = null;
   try {
     launched = await options.installerModule.launchDownloadedUpdate({
@@ -1291,12 +1455,17 @@ async function installWithPackagedUpdater(options) {
       options.expectedVersion,
       options.relaunchAppPath,
       120_000,
-      options.immutableBridgeNativeProfilePolicy || null,
+      hasImmutableBridgeNativeProfilePolicy ? options.immutableBridgeNativeProfilePolicy : null,
     );
     await waitForInstalledPackage(options.relaunchAppPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
+    await waitForExactExecutableProcessExit(downloadedInstaller, 'Packaged installer');
     await waitForUpdateArtifactCleanup(launched);
-    assertCompletedInstall(launched.logPath, options);
+    if (hasImmutableBridgeNativeProfilePolicy) {
+      assertCompletedImmutableV163BootstrapAckInstall(launched, options, downloadedInstaller, pid);
+    } else {
+      assertCompletedInstall(launched.logPath, options);
+    }
     return { pid, launched, parentPid: options.parentPid, legacyFallback: false };
   } catch (error) {
     if (!options.allowLegacyBootstrapFallback || error.code !== 'LEGACY_BOOTSTRAP_READY_RACE') throw error;
@@ -1741,7 +1910,7 @@ async function cleanupIntegration() {
       'A local bridge build owned the immutable official-client profile exception.');
     assert.equal(immutableBridgeNativeProfileObserved, false,
       'A local bridge build observed the immutable official-client profile exception.');
-    assert.equal(immutableBridgeNativeProfilePolicy, null,
+    assert.strictEqual(immutableBridgeNativeProfilePolicy, null,
       'A local bridge build issued the immutable official-client profile policy.');
   }
 

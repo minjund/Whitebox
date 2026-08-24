@@ -1016,7 +1016,7 @@ function registerCliAndUpdateTests(context) {
       legacyClientTest.indexOf('async function waitForInstalledPackage'),
     );
     assert(immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
-      && immutableBridgeRelaunch.includes('nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableBridgeRelaunch.includes('assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableBridgeRelaunch.includes('expectedVersion, bridgeVersion')
       && immutableBridgeRelaunch.includes('assertImmutableBridgeNativeProfileUsed()'),
     'native 프로필 예외는 첫 hop에서 발급한 동일 opaque policy의 고정 bridge relaunch에만 적용해야 합니다.');
@@ -1035,10 +1035,60 @@ function registerCliAndUpdateTests(context) {
     'native bridge 프로필은 exact 소유 증거와 프로세스 종료 뒤에만 삭제하고 부재를 입증해야 합니다.');
     assert.equal((legacyClientTest.match(/immutableBridgeNativeProfilePolicy = armImmutableBridgeNativeProfileOwnership\(firstHopOptions\)/g) || []).length, 1,
       '불변 bridge native profile policy는 exact first-hop에서 한 번만 발급·전달해야 합니다.');
+    assert.equal((legacyClientTest.match(/assert\.strictEqual\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/g) || []).length, 4,
+      '불변 bridge opaque policy는 bootstrap-ack·ready-race·residue·relaunch 네 지점에서 strict identity로 검증해야 합니다.');
+    assert.equal(/assert\.equal\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/.test(legacyClientTest), false,
+      '불변 bridge opaque policy에 loose assert.equal을 다시 도입하면 안 됩니다.');
+    const issuedOpaquePolicyFixture = Object.freeze({ kind: 'official-v1.6.3-to-v1.6.23-native-profile' });
+    assert.throws(
+      () => assert.strictEqual('[object Object]', issuedOpaquePolicyFixture),
+      error => error instanceof assert.AssertionError,
+      '문자열 object coercion은 발급된 opaque policy identity로 인정되면 안 됩니다.',
+    );
     assert(releaseGuide.includes('.whitebox-integration-owner-<48 lowercase hex>')
       && releaseGuide.includes('The native roaming root and any')
       && releaseGuide.includes('unowned profile must never be deleted'),
     '릴리스 계약은 불변 1.6.23 native profile marker와 소유·정리 제한을 명시해야 합니다.');
+    const immutableV163BootstrapAckInstall = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertCompletedImmutableV163BootstrapAckInstall'),
+      legacyClientTest.indexOf('async function waitForPathRemoval'),
+    );
+    assert(immutableV163BootstrapAckInstall.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableV163BootstrapAckInstall.includes("options.label, 'first-hop-downloads'")
+      && immutableV163BootstrapAckInstall.includes("options.repository, 'LodeToAgent'")
+      && immutableV163BootstrapAckInstall.includes("options.currentVersion, '1.6.3'")
+      && immutableV163BootstrapAckInstall.includes("bridgeVersion, '1.6.23'")
+      && immutableV163BootstrapAckInstall.includes("options.expectedVersion, '1.6.23'")
+      && immutableV163BootstrapAckInstall.includes("launched && launched.mode, 'automatic'")
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(sourceInstaller')
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(bridgeInstaller')
+      && immutableV163BootstrapAckInstall.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
+      && immutableV163BootstrapAckInstall.includes('downloadedState.isFile() && !downloadedState.isSymbolicLink()')
+      && immutableV163BootstrapAckInstall.includes('path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir')
+      && immutableV163BootstrapAckInstall.includes('assertPinnedInstaller(downloadedInstaller')
+      && immutableV163BootstrapAckInstall.includes("WINDOWS_UPDATE_HELPER.includes('allAppProcessesStopped=true'), false")
+      && immutableV163BootstrapAckInstall.includes('exactProcessRecord(relaunchPid)')
+      && immutableV163BootstrapAckInstall.includes('immutableBridgeNativeProfileObserved, true')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIds(downloadedInstaller), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(downloadedInstaller), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedHelperPath), []')
+      && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedBootstrapPath), []')
+      && immutableV163BootstrapAckInstall.includes('fs.lstatSync(file, { throwIfNoEntry: false }), undefined')
+      && immutableV163BootstrapAckInstall.includes('lines.length, 8')
+      && immutableV163BootstrapAckInstall.includes('helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23')
+      && immutableV163BootstrapAckInstall.includes("'exitCode=0'")
+      && immutableV163BootstrapAckInstall.includes('candidate=${legacyExecutable};version=1.6.23')
+      && immutableV163BootstrapAckInstall.includes('relaunchPath=${legacyExecutable};installedVersion=1.6.23;expectedVersion=1.6.23')
+      && immutableV163BootstrapAckInstall.includes('relaunchStarted=true;attempt=1;pid=${relaunchPid}')
+      && immutableV163BootstrapAckInstall.includes('windowRestored=true;pid=${relaunchPid};handle=${windowRestored[2]}')
+      && immutableV163BootstrapAckInstall.includes('rendererReady=true;attempt=1;pid=${relaunchPid}')
+      && immutableV163BootstrapAckInstall.includes('relaunchReady=true;attempt=1;pid=${relaunchPid}')
+      && immutableV163BootstrapAckInstall.includes("const expectedLog = `\\uFEFF${expectedLines.join('\\r\\n')}\\r\\n`")
+      && immutableV163BootstrapAckInstall.includes('assert.equal(log, expectedLog')
+      && immutableV163BootstrapAckInstall.includes('fatalLogLines(lines), []')
+      && !immutableV163BootstrapAckInstall.includes('fs.unlinkSync')
+      && !immutableV163BootstrapAckInstall.includes('fs.rmSync'),
+    '불변 v1.6.3 bootstrap-ack 정상 경로는 official 8행 raw log와 exact pin·프로세스·artifact 부재를 전용 계약으로 검증해야 합니다.');
     const immutableV163HelperArtifact = legacyClientTest.slice(
       legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
       legacyClientTest.indexOf('async function waitForRelaunch'),
@@ -1047,7 +1097,7 @@ function registerCliAndUpdateTests(context) {
       legacyClientTest.indexOf('function assertImmutableV163ReadyRaceLog'),
       legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
     );
-    assert(immutableV163ReadyRaceLog.includes('options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+    assert(immutableV163ReadyRaceLog.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163ReadyRaceLog.includes("options.label, 'first-hop-downloads'")
       && immutableV163ReadyRaceLog.includes("options.currentVersion, '1.6.3'")
       && immutableV163ReadyRaceLog.includes("bridgeVersion, '1.6.23'")
@@ -1066,7 +1116,7 @@ function registerCliAndUpdateTests(context) {
       && immutableV163ReadyRaceLog.includes("linesStarting(lines, 'exitCode=')")
       && immutableV163ReadyRaceLog.includes('fatalLogLines(lines), []'),
     '불변 v1.6.3 ready-race 로그 예외는 공식 first-hop의 두 exact BOM/CRLF 변형만 허용하고 다른 NSIS exit·fatal marker를 거부해야 합니다.');
-    assert(immutableV163HelperArtifact.includes('options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+    assert(immutableV163HelperArtifact.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163HelperArtifact.includes("options.currentVersion, '1.6.3'")
       && immutableV163HelperArtifact.includes('options.expectedVersion, bridgeVersion')
       && immutableV163HelperArtifact.includes("launched && launched.mode, 'automatic'")
@@ -1077,6 +1127,8 @@ function registerCliAndUpdateTests(context) {
       && immutableV163HelperArtifact.includes("path.join(testRoot, 'first-hop-downloads')")
       && immutableV163HelperArtifact.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
       && immutableV163HelperArtifact.includes("path.join(expectedDownloadsDir, 'install-update.ps1')")
+      && immutableV163HelperArtifact.includes('downloadedState.isFile() && !downloadedState.isSymbolicLink()')
+      && immutableV163HelperArtifact.includes('path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir')
       && immutableV163HelperArtifact.includes('assertPinnedInstaller(downloadedInstaller')
       && immutableV163HelperArtifact.includes('runningProcessIds(downloadedInstaller), []')
       && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(downloadedInstaller), []')
@@ -1093,6 +1145,10 @@ function registerCliAndUpdateTests(context) {
       && !immutableV163HelperArtifact.includes('fs.rmSync'),
     '불변 v1.6.3 ready-race artifact 예외는 공식 pin·exact owned helper bytes·프로세스 부재 뒤 단일 파일만 제거해야 합니다.');
     assert(releaseGuide.includes('BOM + official packaged v1.6.3 helper source')
+      && normalizedReleaseGuide.includes('one exact bootstrap-ack success grammar')
+      && normalizedReleaseGuide.includes('exact eight-line raw log')
+      && normalizedReleaseGuide.includes('cannot emit the newer `allAppProcessesStopped=true` marker')
+      && normalizedReleaseGuide.includes('No fallback residue deletion is allowed on this normal path')
       && normalizedReleaseGuide.includes('one of only two exact raw logs')
       && normalizedReleaseGuide.includes('or the same lines with exactly one `exitCode=0` between them')
       && normalizedReleaseGuide.includes('A nonzero, duplicate, or reordered exit code,')
@@ -1105,12 +1161,18 @@ function registerCliAndUpdateTests(context) {
       legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"),
     );
     const successProcessCleanup = automaticInstallSuccess.indexOf('await waitForUpdateProcessCleanup(launched)');
+    const successInstallerCleanup = automaticInstallSuccess.indexOf("await waitForExactExecutableProcessExit(downloadedInstaller, 'Packaged installer')");
     const successArtifactCleanup = automaticInstallSuccess.indexOf('await waitForUpdateArtifactCleanup(launched)');
-    const successFinalLogCheck = automaticInstallSuccess.indexOf('assertCompletedInstall(launched.logPath, options)');
+    const successImmutableDispatch = automaticInstallSuccess.indexOf('if (hasImmutableBridgeNativeProfilePolicy)');
+    const successImmutableLogCheck = automaticInstallSuccess.indexOf('assertCompletedImmutableV163BootstrapAckInstall', successImmutableDispatch);
+    const successCurrentLogCheck = automaticInstallSuccess.indexOf('assertCompletedInstall(launched.logPath, options)', successImmutableLogCheck);
     assert(successProcessCleanup >= 0
-      && successArtifactCleanup > successProcessCleanup
-      && successFinalLogCheck > successArtifactCleanup,
-    '정상 updater relaunch도 helper 프로세스 종료 뒤 artifact 부재와 최종 로그를 순서대로 입증해야 합니다.');
+      && successInstallerCleanup > successProcessCleanup
+      && successArtifactCleanup > successInstallerCleanup
+      && successImmutableDispatch > successArtifactCleanup
+      && successImmutableLogCheck > successImmutableDispatch
+      && successCurrentLogCheck > successImmutableLogCheck,
+    '정상 updater relaunch도 helper·installer 종료와 artifact 부재 뒤 immutable/current 전용 최종 로그를 순서대로 입증해야 합니다.');
     const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
     const fallbackInstallerCleanup = legacyFallback.indexOf('await waitForExactExecutableProcessExit(downloadedInstaller', fallbackProcessCleanup);
     const fallbackStablePackage = legacyFallback.indexOf('await waitForInstalledPackage(options.appPath, options.expectedVersion)', fallbackInstallerCleanup);

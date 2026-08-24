@@ -86,18 +86,32 @@ The packaged scenario must prove all parts of the contract:
    exited before deleting that owned child. The native roaming root and any
    unowned profile must never be deleted, and all three candidate paths must be
    absent at the end of the same run.
-5. The immutable v1.6.3 ready-file race can force-terminate its helper after an
-   installer child has replaced the package, either before the helper records
-   the NSIS exit or after it records success but before final self-delete. Only
-   for that exact official first hop, the harness may accept one of only two
-   exact raw logs: `helperStarted` followed by the 10-second `bootstrapError`,
-   or the same lines with exactly one `exitCode=0` between them. Both variants
-   require the exact BOM, CRLF, order, parent PID, and literal v1.6.23 values,
-   with no relaunch lifecycle or other fatal marker. A nonzero, duplicate, or
-   reordered exit code, or any extra log line, must fail. The harness must first
-   prove the downloaded official v1.6.23 installer and helper/bootstrap
-   processes have exited, no installed app is running, and the installed EXE
-   and `app.asar` remain stably at v1.6.23. It may then unlink only the owned
+5. The immutable v1.6.3 first hop has one exact bootstrap-ack success grammar
+   and two exact ready-file forced-termination grammars. On normal bootstrap
+   acknowledgement, require the exact eight-line raw log in official helper
+   order: `helperStarted`, `exitCode=0`, the exact v1.6.23 `candidate` and
+   `relaunchPath`, then attempt-one `relaunchStarted`, `windowRestored`,
+   `rendererReady`, and `relaunchReady` records bound to the same authenticated
+   PID and a positive window handle. The official helper cannot emit the newer
+   `allAppProcessesStopped=true` marker, so only this fully scoped first hop may
+   omit it. Re-pin both official installers, require the stable v1.6.23 EXE and
+   `app.asar`, prove the parent and downloaded installer exited, prove the
+   exact relaunched process and native profile, and require every helper,
+   bootstrap, and ready artifact to self-delete. No fallback residue deletion
+   is allowed on this normal path.
+
+   The ready-file race can instead force-terminate the helper after an installer
+   child has replaced the package, either before the helper records the NSIS
+   exit or after it records success but before final self-delete. Only for that
+   exact official first hop, the harness may accept one of only two exact raw
+   logs: `helperStarted` followed by the 10-second `bootstrapError`, or the same
+   lines with exactly one `exitCode=0` between them. Both variants require the
+   exact BOM, CRLF, order, parent PID, and literal v1.6.23 values, with no
+   relaunch lifecycle or other fatal marker. A nonzero, duplicate, or reordered
+   exit code, or any extra log line, must fail. The harness must first prove the
+   downloaded official v1.6.23 installer and helper/bootstrap processes have
+   exited, no installed app is running, and the installed EXE and `app.asar`
+   remain stably at v1.6.23. It may then unlink only the owned
    `first-hop-downloads/install-update.ps1` after proving its path is a real
    non-link direct child of the fresh attempt and its size and SHA-256 match
    `BOM + official packaged v1.6.3 helper source`. All tracked artifacts must
