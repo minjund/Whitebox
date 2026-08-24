@@ -900,6 +900,96 @@ async function waitForUpdateProcessCleanup(launched, timeoutMs = 30_000) {
   await waitForProcessesReferencingPathExit(launched.bootstrapPath, 'Update bootstrap', timeoutMs);
 }
 
+function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable v1.6.3 helper artifact exception is only valid on a disposable official candidate runner.');
+  assert.equal(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+    'The immutable v1.6.3 helper artifact exception received an unknown first-hop policy.');
+  assert.equal(options.repository, 'LodeToAgent', 'The immutable helper artifact repository changed.');
+  assert.equal(options.currentVersion, '1.6.3', 'The immutable helper artifact source version changed.');
+  assert.equal(options.expectedVersion, bridgeVersion, 'The immutable helper artifact target version changed.');
+  assert.equal(options.allowLegacyBootstrapFallback, true, 'The immutable helper artifact lost its ready-race contract.');
+  assert.equal(launched && launched.mode, 'automatic', 'The immutable helper artifact did not come from an automatic launch.');
+  assert.equal(canonicalExistingPath(options.installer), canonicalExistingPath(bridgeInstaller),
+    'The immutable helper artifact target installer changed.');
+  assert.equal(canonicalExistingPath(options.appPath), canonicalExistingPath(legacyExecutable),
+    'The immutable helper artifact installed executable changed.');
+  assert.equal(canonicalExistingPath(options.relaunchAppPath), canonicalExistingPath(legacyExecutable),
+    'The immutable helper artifact relaunch executable changed.');
+  assertPinnedInstaller(sourceInstaller, {
+    name: V163_INSTALLER_NAME,
+    size: V163_INSTALLER_SIZE,
+    sha256: V163_INSTALLER_SHA256,
+  }, 'official v1.6.3 helper artifact source');
+  assertPinnedInstaller(bridgeInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'official immutable v1.6.23 helper artifact target');
+  assert.equal(executableVersion(legacyExecutable), bridgeVersion,
+    'The immutable helper artifact exception ran before the bridge executable was installed.');
+  assert.equal(packagedMetadata(path.join(installDir, 'resources', 'app.asar')).version, bridgeVersion,
+    'The immutable helper artifact exception ran before the bridge app.asar was installed.');
+  assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+
+  const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
+  const expectedHelperPath = path.join(expectedDownloadsDir, 'install-update.ps1');
+  assert(launched && typeof launched === 'object', 'The immutable helper artifact launch record was missing.');
+  assert.equal(path.resolve(launched.helperPath), expectedHelperPath,
+    'The immutable helper artifact was not the exact first-hop helper.');
+  assert.equal(path.resolve(launched.bootstrapPath), path.join(expectedDownloadsDir, 'install-update-bootstrap.ps1'),
+    'The immutable helper artifact bootstrap path changed.');
+  assert.equal(path.resolve(launched.logPath), path.join(expectedDownloadsDir, 'install-update.log'),
+    'The immutable helper artifact log path changed.');
+  assert.equal(path.resolve(launched.readyPath), path.join(expectedDownloadsDir, 'install-update.ready'),
+    'The immutable helper artifact ready path changed.');
+  assertPathWithin(testRoot, expectedHelperPath, 'immutable v1.6.3 helper artifact');
+  const downloadsState = fs.lstatSync(expectedDownloadsDir, { throwIfNoEntry: false });
+  assert(downloadsState && downloadsState.isDirectory() && !downloadsState.isSymbolicLink(),
+    `The immutable helper artifact directory changed: ${expectedDownloadsDir}`);
+  const canonicalTestRoot = canonicalExistingPath(testRoot);
+  const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
+  assert.equal(path.dirname(canonicalDownloadsDir), canonicalTestRoot,
+    'The immutable helper artifact directory escaped the fresh integration root.');
+  const helperState = fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false });
+  if (helperState === undefined) return false;
+  assert(helperState.isFile() && !helperState.isSymbolicLink(),
+    `Refusing to remove a changed immutable v1.6.3 helper artifact: ${expectedHelperPath}`);
+  const canonicalHelperPath = canonicalExistingPath(expectedHelperPath);
+  assert.equal(path.dirname(canonicalHelperPath), canonicalDownloadsDir,
+    'The immutable v1.6.3 helper artifact escaped its exact first-hop directory.');
+  assertPathWithin(canonicalTestRoot, canonicalHelperPath,
+    'immutable v1.6.3 helper artifact real path');
+  assert.equal(typeof options.installerModule.WINDOWS_UPDATE_HELPER, 'string',
+    'The official v1.6.3 packaged helper source was unavailable.');
+  const expectedBytes = Buffer.from(`\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, 'utf8');
+  assert(expectedBytes.length > 3, 'The official v1.6.3 packaged helper source was empty.');
+  assert.equal(helperState.size, expectedBytes.length, 'The immutable v1.6.3 helper artifact size changed.');
+  const expectedDigest = crypto.createHash('sha256').update(expectedBytes).digest('hex');
+  assert.equal(sha256(expectedHelperPath), expectedDigest, 'The immutable v1.6.3 helper artifact bytes changed.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(expectedHelperPath), [],
+    'A process still referenced the immutable v1.6.3 helper artifact.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(launched.bootstrapPath), [],
+    'A process still referenced the immutable v1.6.3 bootstrap artifact.');
+  for (const [label, file] of [
+    ['bootstrap', launched.bootstrapPath],
+    ['ready signal', launched.readyPath],
+    ['renderer-ready signal', launched.rendererReadyPath],
+    ['helper PID sidecar', launched.helperPidPath],
+    ['integration ready signal', launched.integrationReadyPath],
+    ['integration helper PID sidecar', launched.integrationHelperPidPath],
+  ]) {
+    if (!file) continue;
+    assert.equal(fs.lstatSync(file, { throwIfNoEntry: false }), undefined,
+      `Another immutable v1.6.3 ${label} artifact remained before exact helper cleanup: ${file}`);
+  }
+  fs.unlinkSync(expectedHelperPath);
+  assert.equal(fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false }), undefined,
+    'The owned immutable v1.6.3 helper artifact remained after exact removal.');
+  console.log('✓ Removed the exact owned v1.6.3 helper residue after the verified ready-file forced termination.');
+  return true;
+}
+
 async function waitForRelaunch(
   logPath,
   expectedVersion,
@@ -1137,6 +1227,7 @@ async function installWithPackagedUpdater(options) {
       options.immutableBridgeNativeProfilePolicy || null,
     );
     await waitForInstalledPackage(options.relaunchAppPath, options.expectedVersion);
+    await waitForUpdateProcessCleanup(launched);
     await waitForUpdateArtifactCleanup(launched);
     assertCompletedInstall(launched.logPath, options);
     return { pid, launched, parentPid: options.parentPid, legacyFallback: false };
@@ -1149,6 +1240,8 @@ async function installWithPackagedUpdater(options) {
     // 1.6.23 and model the only required user fallback: reopen the updated app.
     await waitForInstalledPackage(options.appPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
+    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+    removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options);
     await waitForUpdateArtifactCleanup(launched);
     assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
     const fallbackPid = await startInstalledAppWithRendererReady(options.appPath, options.expectedVersion);
@@ -1323,8 +1416,9 @@ async function reinstallCandidateWithPackagedUpdater(options) {
   await waitForProcessExit(options.parentPid);
   const pid = await waitForRelaunch(launched.logPath, CURRENT_VERSION, currentExecutable);
   await waitForInstalledPackage(currentExecutable, CURRENT_VERSION);
-  await waitForUpdateArtifactCleanup(launched);
+  await waitForUpdateProcessCleanup(launched);
   await waitForProcessExit(helperPid, 30_000);
+  await waitForUpdateArtifactCleanup(launched);
   assertCompletedInstall(launched.logPath, {
     parentPid: options.parentPid,
     expectedVersion: CURRENT_VERSION,
