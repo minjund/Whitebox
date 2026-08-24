@@ -70,7 +70,10 @@ function executableVersion(file) {
     '-Command',
     '(Get-Item -LiteralPath $env:WHITEBOX_INTEGRATION_EXECUTABLE).VersionInfo.ProductVersion',
   ], { env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE: file } });
-  return result.stdout.trim().split(/[+\s]/, 1)[0];
+  return result.stdout
+    .trim()
+    .split(/[+\s]/, 1)[0]
+    .replace(/^(\d+\.\d+\.\d+)\.0$/, '$1');
 }
 
 function processAlive(pid) {
