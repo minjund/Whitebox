@@ -119,9 +119,11 @@ async function checkLegacyUpdateChannel(options = {}) {
   if (options.probeAssets !== false) {
     const bridgeAsset = bridgeRelease.assets.find(asset => asset.name === result.bridgeAsset);
     const currentAsset = currentRelease.assets.find(asset => asset.name === result.currentAsset);
+    const automaticAsset = currentRelease.assets.find(asset => asset.name === result.automaticAsset);
     await Promise.all([
       probePublicAsset(fetchImpl, bridgeAsset),
       probePublicAsset(fetchImpl, currentAsset),
+      probePublicAsset(fetchImpl, automaticAsset),
     ]);
   }
   return result;
@@ -130,7 +132,7 @@ async function checkLegacyUpdateChannel(options = {}) {
 if (require.main === module) {
   checkLegacyUpdateChannel()
     .then(result => {
-      process.stdout.write(`Legacy update channel verified: ${result.bridgeVersion} (${result.bridgeAsset}) -> ${result.currentVersion} (${result.currentAsset})\n`);
+      process.stdout.write(`Legacy update channel verified: ${result.bridgeVersion} (${result.bridgeAsset}) -> ${result.currentVersion} (${result.currentAsset}; fixed clients ${result.automaticAsset})\n`);
     })
     .catch(error => {
       process.stderr.write(`${error.stack || error}\n`);

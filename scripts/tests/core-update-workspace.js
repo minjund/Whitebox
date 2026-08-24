@@ -44,8 +44,10 @@ const {
 const {
   LEGACY_UPDATE_BRIDGE_ASSET,
   LEGACY_UPDATE_BRIDGE_VERSION,
+  bridgeV1623AutomaticInstallPlatform,
   legacyV163AutomaticInstallPlatform,
   legacyV163TrustedDownloadUrl,
+  selectBridgeV1623ReleaseAsset,
   selectLegacyV163ReleaseAsset,
   validateLegacyUpdatePath,
 } = require('../legacy-update-compatibility');
@@ -536,11 +538,16 @@ function registerCliAndUpdateTests(context) {
       size: 1024,
       state: 'uploaded',
     };
+    const manualBridgeAsset = {
+      ...canonicalAsset,
+      name: 'Whitebox-Manual-Setup-1.7.4-x64.exe',
+      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Manual-Setup-1.7.4-x64.exe',
+    };
     const currentRelease = {
       tag_name: 'v1.7.4',
       draft: false,
       prerelease: false,
-      assets: [canonicalAsset],
+      assets: [canonicalAsset, manualBridgeAsset],
     };
     assert.equal(compareVersions('1.7.4', '1.6.3'), 1);
     assert.equal(legacyV163TrustedDownloadUrl(canonicalAsset.browser_download_url), false);
@@ -568,12 +575,28 @@ function registerCliAndUpdateTests(context) {
     assert.equal(legacyV163AutomaticInstallPlatform({
       platform: 'win32', installType: 'desktop', fileName: bridgeAsset.name,
     }), 'win32');
+    assert.equal(selectBridgeV1623ReleaseAsset(currentRelease.assets, {
+      platform: 'win32', arch: 'x64', version: '1.7.4',
+    }), manualBridgeAsset, '동결된 브리지는 x64 수동 설치 별칭을 우선해야 합니다.');
+    assert.equal(bridgeV1623AutomaticInstallPlatform({
+      platform: 'win32', installType: 'desktop', fileName: manualBridgeAsset.name,
+    }), '', '동결된 브리지는 shared ready-file bootstrap을 만들면 안 됩니다.');
     assert.deepStrictEqual(validateLegacyUpdatePath({ bridgeRelease, currentRelease }), {
       bridgeVersion: LEGACY_UPDATE_BRIDGE_VERSION,
       bridgeAsset: LEGACY_UPDATE_BRIDGE_ASSET,
       currentVersion: '1.7.4',
-      currentAsset: canonicalAsset.name,
+      currentAsset: manualBridgeAsset.name,
+      automaticAsset: canonicalAsset.name,
     });
+    for (const mismatchedManualAsset of [
+      { ...manualBridgeAsset, size: manualBridgeAsset.size + 1 },
+      { ...manualBridgeAsset, digest: `sha256:${'b'.repeat(64)}` },
+    ]) {
+      assert.throws(() => validateLegacyUpdatePath({
+        bridgeRelease,
+        currentRelease: { ...currentRelease, assets: [canonicalAsset, mismatchedManualAsset] },
+      }), /동일한 검증 바이트/);
+    }
     assert.throws(() => validateLegacyUpdatePath({
       bridgeRelease,
       currentRelease: {
@@ -582,18 +605,18 @@ function registerCliAndUpdateTests(context) {
           ...canonicalAsset,
           name: 'Whitebox-1.7.4-portable.exe',
           browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-1.7.4-portable.exe',
-        }],
+        }, manualBridgeAsset],
       },
-    }), /canonical Whitebox Setup/);
+    }), /canonical Setup/);
     assert.throws(() => validateLegacyUpdatePath({
       bridgeRelease,
       currentRelease: {
         ...currentRelease,
-        assets: [{ ...canonicalAsset, size: (2 * 1024 * 1024 * 1024) + 1 }],
+        assets: [{ ...canonicalAsset, size: (2 * 1024 * 1024 * 1024) + 1 }, manualBridgeAsset],
       },
-    }), /canonical Whitebox Setup/);
+    }), /canonical Setup/);
     assert.equal(selectLegacyV163ReleaseAsset([bridgeAsset], null), null);
-    for (const decoyName of ['Other-Setup-1.7.4.exe', 'Other-Setup-1.7.4-x64.exe']) {
+    for (const decoyName of ['Other-Setup-1.7.4-x64.exe', 'Whitebox-Manual-Setup-1.7.4-amd64.exe']) {
       const decoy = {
         ...canonicalAsset,
         name: decoyName,
@@ -601,8 +624,8 @@ function registerCliAndUpdateTests(context) {
       };
       assert.throws(() => validateLegacyUpdatePath({
         bridgeRelease,
-        currentRelease: { ...currentRelease, assets: [decoy, canonicalAsset] },
-      }), /canonical Whitebox Setup/);
+        currentRelease: { ...currentRelease, assets: [decoy, canonicalAsset, manualBridgeAsset] },
+      }), /수동으로 열 안전한/);
     }
     assert.throws(() => validateLegacyUpdatePath({
       bridgeRelease,
@@ -619,6 +642,7 @@ function registerCliAndUpdateTests(context) {
     assert.equal(legacyBridgeConfig.nsis.perMachine, false);
     assert.equal(legacyBridgeConfig.nsis.allowToChangeInstallationDirectory, true);
     assert.equal(legacyBridgeConfig.nsis.runAfterFinish, false);
+    assert.equal(packageMetadata.build.nsis.runAfterFinish, true, '수동 브리지를 마치면 Whitebox 재실행이 기본 선택이어야 합니다.');
     assert.equal(legacyBridgeConfig.extraMetadata.version, LEGACY_UPDATE_BRIDGE_VERSION);
     assert.deepStrictEqual(legacyBridgeConfig.win.target, [{ target: 'nsis', arch: ['x64'] }]);
 
@@ -679,6 +703,7 @@ function registerCliAndUpdateTests(context) {
   test('운영체제와 CPU에 맞는 신뢰된 GitHub Release 파일을 고른다', () => {
     const base = 'https://github.com/minjund/Whitebox/releases/download/v3.1.0/';
     const assets = [
+      { name: 'Whitebox-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
       { name: 'Whitebox-3.1.0-portable.exe', browser_download_url: `${base}Whitebox-3.1.0-portable.exe`, state: 'uploaded' },
       { name: 'Whitebox-Setup-3.1.0.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0.exe`, state: 'uploaded' },
       { name: 'Whitebox-3.1.0-arm64.dmg', browser_download_url: `${base}Whitebox-3.1.0-arm64.dmg`, state: 'uploaded' },
@@ -686,13 +711,19 @@ function registerCliAndUpdateTests(context) {
       { name: 'Whitebox-Setup-9.9.9.exe', browser_download_url: 'https://example.com/fake.exe', state: 'uploaded' },
     ];
     assert.equal(selectReleaseAsset(assets, { platform: 'win32', arch: 'x64', version: '3.1.0' }).name, 'Whitebox-Setup-3.1.0.exe');
+    for (const nearMatch of [
+      { name: 'LoadToAgent-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}LoadToAgent-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
+      { name: 'Whitebox-Manual-Setup-3.1.0-amd64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-amd64.exe`, state: 'uploaded' },
+    ]) {
+      assert.equal(selectReleaseAsset([nearMatch], { platform: 'win32', arch: 'x64', version: '3.1.0' }), nearMatch);
+    }
     assert.equal(selectReleaseAsset(assets, { platform: 'darwin', arch: 'arm64', version: '3.1.0' }).name, 'Whitebox-3.1.0-arm64.dmg');
     assert.equal(selectReleaseAsset(assets, { platform: 'linux', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([assets[3]], { platform: 'darwin', arch: 'arm64', version: '3.1.0' }), null);
+    assert.equal(selectReleaseAsset([assets[4]], { platform: 'darwin', arch: 'arm64', version: '3.1.0' }), null);
     assert.equal(selectReleaseAsset([assets[2]], { platform: 'darwin', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[1], name: 'Whitebox-Setup-2.9.0.exe' }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[1], name: 'Whitebox-Setup-13.1.0.exe' }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[1], name: 'Whitebox-Setup-3.1.0-ia32.exe' }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
+    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-2.9.0.exe', browser_download_url: `${base}Whitebox-Setup-2.9.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
+    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-13.1.0.exe', browser_download_url: `${base}Whitebox-Setup-13.1.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
+    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-3.1.0-ia32.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0-ia32.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
     const legacyBase = 'https://github.com/minjund/LodeToAgent/releases/download/v3.1.0/';
     assert.equal(selectReleaseAsset([{
       name: 'LoadToAgent-Setup-3.1.0.exe',

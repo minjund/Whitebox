@@ -265,27 +265,43 @@ function validateLegacyUpdatePath(options = {}) {
   if (legacyV163CompareVersions(currentVersion, bridgeVersion) <= 0) {
     throw new Error(`Whitebox 최신 버전(${currentVersion})이 브리지(${bridgeVersion})보다 높지 않습니다.`);
   }
-  const expectedCurrentAsset = `Whitebox-Setup-${currentVersion}.exe`;
-  const currentAsset = exactUploadedAsset(currentRelease, 'Whitebox', expectedCurrentAsset);
+  const expectedAutomaticAsset = `Whitebox-Setup-${currentVersion}.exe`;
+  const expectedManualBridgeAsset = `Whitebox-Manual-Setup-${currentVersion}-x64.exe`;
+  const automaticAsset = exactUploadedAsset(currentRelease, 'Whitebox', expectedAutomaticAsset);
+  const manualBridgeAsset = exactUploadedAsset(currentRelease, 'Whitebox', expectedManualBridgeAsset);
   const selectedCurrentAsset = selectBridgeV1623ReleaseAsset(currentRelease.assets, {
     platform: 'win32',
     arch: 'x64',
     version: currentVersion,
   });
-  if (!currentAsset || selectedCurrentAsset !== currentAsset || !legacyV163HasTrustedDigest(currentAsset)
+  if (!automaticAsset || !legacyV163HasTrustedDigest(automaticAsset)
     || bridgeV1623AutomaticInstallPlatform({
       platform: 'win32',
       installType: 'desktop',
-      fileName: currentAsset.name,
+      fileName: automaticAsset.name,
     }) !== 'win32') {
-    throw new Error('브리지에서 자동 설치할 canonical Whitebox Setup 파일과 digest가 없습니다.');
+    throw new Error('수정된 Whitebox에서 자동 설치할 canonical Setup 파일과 digest가 없습니다.');
+  }
+  if (!manualBridgeAsset || selectedCurrentAsset !== manualBridgeAsset
+    || !legacyV163HasTrustedDigest(manualBridgeAsset)
+    || bridgeV1623AutomaticInstallPlatform({
+      platform: 'win32',
+      installType: 'desktop',
+      fileName: manualBridgeAsset.name,
+    }) !== '') {
+    throw new Error('동결된 Whitebox 브리지에서 수동으로 열 안전한 Windows 설치 파일과 digest가 없습니다.');
+  }
+  if (manualBridgeAsset.size !== automaticAsset.size
+    || String(manualBridgeAsset.digest).toLowerCase() !== String(automaticAsset.digest).toLowerCase()) {
+    throw new Error('수동 Windows 설치 별칭이 canonical Setup과 동일한 검증 바이트가 아닙니다.');
   }
 
   return {
     bridgeVersion,
     bridgeAsset: bridgeAsset.name,
     currentVersion,
-    currentAsset: currentAsset ? currentAsset.name : '',
+    currentAsset: manualBridgeAsset.name,
+    automaticAsset: automaticAsset.name,
   };
 }
 
