@@ -741,6 +741,20 @@ function registerCliAndUpdateTests(context) {
     }
     assert.equal((frozenClientTest.match(/spawn\(installedExecutable, \[directUserDataArgument\]/g) || []).length, 1,
       'frozen-client E2E의 direct installed-app 실행은 fresh --user-data-dir를 정확히 한 곳에서 사용해야 합니다.');
+    const frozenDirectStart = frozenClientTest.slice(
+      frozenClientTest.indexOf('async function startInstalledApp'),
+      frozenClientTest.indexOf('async function downloadWithFrozenUpdater'),
+    );
+    const directProfileProcessCheck = frozenDirectStart.indexOf('assertInstalledAppProfileIsolation');
+    const directProfileDirectoryCheck = frozenDirectStart.indexOf('assertProfileDirectoryUsed');
+    const directReadySignalCleanup = frozenDirectStart.indexOf('fs.rmSync(rendererReadyPath');
+    assert(frozenDirectStart.includes('let lastProfileEvidenceError = null')
+      && frozenDirectStart.includes('lastProfileEvidenceError = error')
+      && frozenDirectStart.includes('Last profile evidence error:')
+      && directProfileProcessCheck >= 0
+      && directProfileDirectoryCheck > directProfileProcessCheck
+      && directReadySignalCleanup > directProfileDirectoryCheck,
+    'frozen-client E2E는 renderer-ready 신호를 보존한 채 일시적인 CIM/profile 증거 지연을 재시도하고 최종 원인을 노출해야 합니다.');
     assert.equal((legacyClientTest.match(/spawn\(executable, \[directUserDataArgument\]/g) || []).length, 2,
       'legacy E2E의 parent 및 renderer-ready fallback/manual 실행은 모두 fresh --user-data-dir를 사용해야 합니다.');
     assert(!frozenClientTest.includes('spawn(installedExecutable, [],') && !legacyClientTest.includes('spawn(executable, [],'),

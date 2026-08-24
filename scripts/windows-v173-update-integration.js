@@ -641,23 +641,49 @@ async function startInstalledApp(expectedVersion) {
   });
   child.unref();
   const startedAt = Date.now();
+  let observedSignal = null;
+  let lastProfileEvidenceError = null;
   while (Date.now() - startedAt < 60_000) {
-    try {
-      const signal = JSON.parse(fs.readFileSync(rendererReadyPath, 'utf8').replace(/^\uFEFF/, '').trim());
-      if (signal.token === rendererReadyToken
-        && Number(signal.pid) === child.pid
-        && signal.version === expectedVersion
-        && String(signal.rendererReadyAt || '').trim()) {
-        fs.rmSync(rendererReadyPath, { force: true });
+    if (!observedSignal && fs.existsSync(rendererReadyPath)) {
+      try {
+        const signal = JSON.parse(fs.readFileSync(rendererReadyPath, 'utf8').replace(/^\uFEFF/, '').trim());
+        assert(signal && typeof signal === 'object' && !Array.isArray(signal),
+          `Installed app renderer-ready payload was not an object for ${expectedVersion}.`);
+        observedSignal = signal;
+      } catch (error) {
+        if (!error || error.code !== 'ENOENT') {
+          throw new Error(`Installed app wrote an invalid renderer-ready signal for ${expectedVersion}: ${error.message}`);
+        }
+      }
+      if (observedSignal) {
+        assert.equal(observedSignal.token, rendererReadyToken,
+          `Installed app renderer-ready token mismatch for ${expectedVersion}.`);
+        assert.equal(Number(observedSignal.pid), child.pid,
+          `Installed app renderer-ready PID mismatch for ${expectedVersion}.`);
+        assert.equal(observedSignal.version, expectedVersion,
+          `Installed app renderer-ready version mismatch for ${expectedVersion}.`);
+        assert(String(observedSignal.rendererReadyAt || '').trim(),
+          `Installed app renderer-ready timestamp was missing for ${expectedVersion}.`);
+      }
+    }
+    if (observedSignal) {
+      try {
         assertInstalledAppProfileIsolation(child.pid, `direct app start ${expectedVersion}`, true);
         assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
+        fs.rmSync(rendererReadyPath, { force: true });
         return child.pid;
+      } catch (error) {
+        lastProfileEvidenceError = error;
       }
-    } catch (_notReady) {}
+    }
     if (child.exitCode !== null) throw new Error(`Installed app exited before renderer readiness (${child.exitCode}).`);
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  throw new Error(`Installed app did not report renderer readiness for ${expectedVersion}: ${child.pid}`);
+  throw new Error([
+    `Installed app did not complete renderer readiness and profile verification for ${expectedVersion}: ${child.pid}`,
+    observedSignal && `Renderer-ready signal: ${JSON.stringify(observedSignal)}`,
+    lastProfileEvidenceError && `Last profile evidence error: ${lastProfileEvidenceError.stack || lastProfileEvidenceError.message}`,
+  ].filter(Boolean).join('\n'));
 }
 
 async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
