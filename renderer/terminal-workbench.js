@@ -277,8 +277,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         terminal.scrollLines(lines);
         rememberUserScroll();
       }, { capture: true, passive: false });
-      host.addEventListener('pointerup', rememberUserScroll, true);
-      host.addEventListener('keyup', event => {
+      // Record scrollbar/touch and keyboard scroll intent before xterm moves
+      // the viewport, so an already queued fit cannot pull the user to tail.
+      host.addEventListener('pointerdown', rememberUserScroll, true);
+      host.addEventListener('keydown', event => {
         if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(event.key)) rememberUserScroll();
       }, true);
       if (!inputDisabled) {
@@ -304,14 +306,50 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return entry;
   }
 
+  function scrollToBottomImmediately(terminal) {
+    const options = terminal?.options;
+    if (!options) {
+      terminal?.scrollToBottom();
+      return;
+    }
+    const smoothScrollDuration = options.smoothScrollDuration;
+    try {
+      // Public xterm scrollToBottom honors smoothScrollDuration. A resize sync
+      // can cancel that animation and restore the pre-fit ydisp, so automatic
+      // follow must be synchronous while ordinary user scrolling stays smooth.
+      options.smoothScrollDuration = 0;
+      terminal.scrollToBottom();
+    } finally {
+      options.smoothScrollDuration = smoothScrollDuration;
+    }
+  }
+
   function fitEntry(entry, _sessionId = '') {
     if (!entry || entry.host.classList.contains('hidden')) return;
+    const activeBuffer = entry.terminal.buffer?.active;
+    const userScrollRevision = entry.userScrollRevision;
+    // A hidden xterm is hydrated at its default grid before it is mounted in
+    // the smaller inline viewport. Preserve the pre-fit follow intent: another
+    // queued fit can otherwise grow baseY before this frame and make the old
+    // bottom look like a user-selected scrollback anchor.
+    const shouldFollow = Boolean(activeBuffer)
+      && Number(activeBuffer.viewportY || 0) >= Number(activeBuffer.baseY || 0);
     requestAnimationFrame(() => {
       try {
+        if (entry.host.classList.contains('hidden')) return;
+        const currentBuffer = entry.terminal.buffer?.active;
+        const stillAtBottom = Boolean(currentBuffer)
+          && Number(currentBuffer.viewportY || 0) >= Number(currentBuffer.baseY || 0);
         if (entry.fixedGrid) {
           entry.host.dataset.fixedGrid = 'true';
           entry.terminal.resize(entry.fixedGrid.cols, entry.fixedGrid.rows);
         } else entry.fit.fit();
+        if (shouldFollow && stillAtBottom && entry.userScrollRevision === userScrollRevision) {
+          // A pending output write may still hold the pre-fit viewport anchor.
+          // Invalidate that restore before moving to the resized buffer tail.
+          entry.outputRestoreGeneration += 1;
+          scrollToBottomImmediately(entry.terminal);
+        }
       } catch (error) {
         window.WhiteboxRendererUtils.reportRecoverableError('terminal-fit', error);
       }

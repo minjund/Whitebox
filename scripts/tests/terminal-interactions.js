@@ -129,6 +129,7 @@ function createWorkbench(root, options = {}) {
         constructor() {
           this.writes = [];
           this.buffer = { active: { viewportY: 0, baseY: 0 } };
+          this.options = { smoothScrollDuration: 100 };
           terminalInstances.push(this);
         }
         loadAddon() {}
@@ -143,6 +144,14 @@ function createWorkbench(root, options = {}) {
         attachCustomKeyEventHandler(callback) { this.keyEventHandler = callback; }
         focus() { this.helperTextarea?.focus(); }
         write(data, callback) { this.writes.push(String(data)); callback?.(); }
+        scrollToBottom() {
+          this.scrollToBottomCalls = Number(this.scrollToBottomCalls || 0) + 1;
+          this.scrollToBottomDurations = [
+            ...(this.scrollToBottomDurations || []),
+            this.options.smoothScrollDuration,
+          ];
+          this.buffer.active.viewportY = this.buffer.active.baseY;
+        }
         dispose() {}
       },
       FitAddon: { FitAddon: class FixtureFitAddon { fit() {} } },
@@ -308,6 +317,53 @@ function registerTerminalInteractionTests(context) {
     assert.strictEqual(document.activeElement, terminalInstances[0].helperTextarea,
       '동일 선택 state 갱신이 xterm 입력 포커스를 잃었습니다.');
     assert.equal(terminalGetCalls, 1, '동일 xterm state 갱신이 replay를 다시 조회했습니다.');
+  });
+
+  test('xterm fit은 기존 하단만 새 행 수의 하단으로 맞추고 사용자 스크롤 위치는 유지한다', async () => {
+    const frames = [];
+    const session = { id: 'terminal:fit-bottom', type: 'agent', status: 'running', title: 'Fit bottom PTY' };
+    const { workbench, terminalInstances } = createWorkbench(root, {
+      session,
+      requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+    });
+    const entry = await workbench.ensureSessionTerminal(session);
+    const terminal = terminalInstances[0];
+    entry.host.classList.remove('hidden');
+    entry.fit.fit = () => { terminal.buffer.active.baseY = 169; };
+
+    terminal.buffer.active = { viewportY: 163, baseY: 163 };
+    entry.outputRestoreGeneration = 7;
+    workbench.fitEntry(entry, session.id);
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    assert.equal(terminal.buffer.active.viewportY, 169,
+      '행 수가 줄어든 뒤 replay tail이 새 viewport 아래에 남았습니다.');
+    assert.equal(terminal.scrollToBottomCalls, 1);
+    assert.deepStrictEqual(terminal.scrollToBottomDurations, [0],
+      '자동 tail 보정이 xterm smooth-scroll 경합을 남겼습니다.');
+    assert.equal(terminal.options.smoothScrollDuration, 100,
+      '자동 tail 보정 뒤 일반 사용자 smooth-scroll 설정을 복원하지 않았습니다.');
+    assert.equal(entry.outputRestoreGeneration, 8,
+      'fit 이전 output anchor가 replay tail을 다시 가리지 않도록 무효화하지 않았습니다.');
+
+    terminal.scrollToBottomCalls = 0;
+    terminal.scrollToBottomDurations = [];
+    entry.outputRestoreGeneration = 11;
+    entry.userScrollRevision = 1;
+    terminal.buffer.active = { viewportY: 163, baseY: 163 };
+    workbench.fitEntry(entry, session.id);
+    // A pointer/keyboard scroll intent arriving after the fit was queued must
+    // win even though that request originally observed the buffer at bottom.
+    entry.userScrollRevision = 2;
+    terminal.buffer.active.viewportY = 120;
+    frames.shift()();
+    assert.equal(terminal.buffer.active.viewportY, 120,
+      '사용자가 위로 스크롤한 viewport를 fit이 강제로 하단으로 이동했습니다.');
+    assert.equal(terminal.scrollToBottomCalls, 0);
+    assert.deepStrictEqual(terminal.scrollToBottomDurations, []);
+    assert.equal(terminal.options.smoothScrollDuration, 100);
+    assert.equal(entry.outputRestoreGeneration, 11,
+      '사용자 scrollback의 output anchor generation을 fit이 변경했습니다.');
   });
 
   test('host reconnect로 xterm을 교체하면 사용 중이던 PTY 입력 포커스를 조건부 복원한다', async () => {
