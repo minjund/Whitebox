@@ -695,6 +695,9 @@ function registerCliAndUpdateTests(context) {
       { version: '1.7.5', env: 'WHITEBOX_V175_INSTALLER', installMode: 'automatic' },
     ]);
     const previousFixed = manifest.previousFixed;
+    assert.equal(previousFixed.version, '1.7.6');
+    assert.equal(cohorts.some(cohort => cohort.version === previousFixed.version), false,
+      'previousFixed is a public-channel attestation, not a frozen source attempt.');
     const latestRelease = {
       tag_name: `v${previousFixed.version}`,
       draft: false,
@@ -723,6 +726,18 @@ function registerCliAndUpdateTests(context) {
     const malformed = cloneManifest();
     malformed.frozen[0].size = String(malformed.frozen[0].size);
     assert.throws(() => validateCohortManifest(malformed), /size must be a positive safe integer/);
+    const wrongFixedMode = cloneManifest();
+    wrongFixedMode.frozen[2].installMode = 'manual';
+    assert.throws(() => validateCohortManifest(wrongFixedMode), /frozen\[2\]\.installMode must be automatic/);
+    const missingFrozen = cloneManifest();
+    missingFrozen.frozen.pop();
+    assert.throws(() => validateCohortManifest(missingFrozen), /exactly 3 frozen cohorts/);
+    const extraFrozen = cloneManifest();
+    extraFrozen.frozen.push({ ...extraFrozen.frozen[2], version: '1.7.6' });
+    assert.throws(() => validateCohortManifest(extraFrozen), /exactly 3 frozen cohorts/);
+    const reorderedFrozen = cloneManifest();
+    [reorderedFrozen.frozen[1], reorderedFrozen.frozen[2]] = [reorderedFrozen.frozen[2], reorderedFrozen.frozen[1]];
+    assert.throws(() => validateCohortManifest(reorderedFrozen), /frozen\[1\]\.version must remain 1\.7\.4/);
     assert.throws(
       () => validateLatestStableRelease(manifest, { ...latestRelease, tag_name: 'v9.9.9' }),
       /does not match public latest stable/,
@@ -908,6 +923,9 @@ function registerCliAndUpdateTests(context) {
       ['tag release', releaseWorkflow],
     ]) {
       assert(workflowSource.includes("Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json'"), `${label} workflow가 공용 cohort 매니페스트를 읽어야 합니다.`);
+      assert(workflowSource.includes('$cohorts = @($manifest.frozen)')
+        && !workflowSource.includes('$cohorts = @($manifest.frozen) + @($manifest.previousFixed)'),
+      `${label} workflow는 previousFixed를 source attempt로 실행하지 않아야 합니다.`);
       assert(workflowSource.includes('foreach ($cohort in $cohorts)'), `${label} workflow가 모든 cohort를 순회해야 합니다.`);
       assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
       assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
@@ -928,6 +946,10 @@ function registerCliAndUpdateTests(context) {
     assert(!releaseWorkflow.includes('releases/latest" --jq .tag_name 2>/dev/null || true'),
       '기존 public latest 조회 실패를 릴리스 없음으로 간주해 downgrade 검사를 우회하면 안 됩니다.');
     assert(releaseWorkflow.includes('Draft asset bytes differ from the verified build artifact'), '공개 전 draft 자산 byte 검증이 사라졌습니다.');
+    assert(releaseWorkflow.includes('--json databaseId,tagName,isDraft,isPrerelease')
+      && releaseWorkflow.includes('repos/$GITHUB_REPOSITORY/releases/$release_id')
+      && !releaseWorkflow.includes('"repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/whitebox-draft-release.json"'),
+    'draft release는 published-only tag endpoint가 아니라 검증된 numeric release ID로 조회해야 합니다.');
     assert(releaseWorkflow.includes('fetch-depth: 0'), '릴리스 태그 검증에는 전체 Git 계보가 필요합니다.');
     assert(releaseWorkflow.includes('${GITHUB_REF}^{commit}') && releaseWorkflow.includes('${GITHUB_SHA,,}'), '릴리스는 tag SHA, tag commit, HEAD가 모두 같은지 확인해야 합니다.');
     assert(releaseWorkflow.includes('git merge-base --is-ancestor "$tag_commit" origin/main'), '릴리스 태그 커밋은 origin/main의 선조여야 합니다.');

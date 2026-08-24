@@ -50,13 +50,16 @@ Its Ubuntu classification job first validates `previousFixed` against the
 unauthenticated public `latest` API and exports the complete validated cohort
 manifest as a job attestation. The Windows job must byte-for-byte match its
 selected SHA's validated manifest to that attestation instead of making a
-second rate-limit-sensitive public API call. It then classifies the complete
+second rate-limit-sensitive public API call. `previousFixed` is only that
+public-channel attestation; the `frozen` array alone drives packaged source
+attempts so publishing a new latest release cannot displace a supported old
+client. The Windows job then classifies the complete
 event diff before any path filtering. A non-sensitive
 diff records an explicit N/A success; a sensitive diff builds the exact event
 SHA, downloads the pinned official v1.7.3, v1.7.4, and v1.7.5 installers,
 verifies each filename, size and SHA-256, and runs the packaged scenario once
-from every cohort with fresh state. It also verifies and executes the official
-v1.6.3 installer and immutable official v1.6.23 bridge as the representative
+from every frozen source cohort with fresh state. It also verifies and executes
+the official v1.6.3 installer and immutable official v1.6.23 bridge as the representative
 full legacy path; all 19 published LoadToAgent packages were separately proven
 to contain byte-identical channel, trust, selector, and automatic-name logic.
 For an otherwise unmatched release change, dispatch it manually with the

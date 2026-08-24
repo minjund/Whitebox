@@ -126,10 +126,10 @@ jobs:
         shell: pwsh
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          if (@($manifest.frozen).Count -ne 2 -or $null -eq $manifest.previousFixed) {
-            throw 'Compatibility cohort manifest must contain two frozen cohorts and one previousFixed cohort'
+          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
+            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
           }
-          $cohorts = @($manifest.frozen) + @($manifest.previousFixed)
+          $cohorts = @($manifest.frozen)
           if ($cohorts.Count -ne 3) { throw "Expected exactly three compatibility cohorts, found $($cohorts.Count)" }
           $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-frozen-source'
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
@@ -223,7 +223,10 @@ jobs:
         timeout-minutes: 30
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          $cohorts = @($manifest.frozen) + @($manifest.previousFixed)
+          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
+            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
+          }
+          $cohorts = @($manifest.frozen)
           if ($cohorts.Count -ne 3) { throw "Expected exactly three compatibility cohorts, found $($cohorts.Count)" }
           $attempt = 0
           foreach ($cohort in $cohorts) {
