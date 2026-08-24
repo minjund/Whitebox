@@ -1,0 +1,900 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "Whitebox",
+    "languages": [
+      "javascript",
+      "css",
+      "html",
+      "json",
+      "markdown",
+      "yaml"
+    ],
+    "frameworks": [
+      "Electron",
+      "GitHub Actions"
+    ],
+    "description": "Claude, Codex, Gemini, Grok의 로컬 AI 세션을 관측하고 관계, 실행, 토큰 사용량과 제어 가능한 터미널을 하나의 데스크톱 관제 모델로 제공한다.",
+    "analyzedAt": "2026-08-24T20:38:59+09:00",
+    "gitCommitHash": "3b44cd63eaa498863061f573d1262d49765bb3d0",
+    "workingTreeChangesIncluded": true
+  },
+  "nodes": [
+    {
+      "id": "domain:session-observability",
+      "type": "domain",
+      "name": "Session Observability",
+      "summary": "여러 AI 제공사의 로컬 기록과 실행 프로세스를 공통 세션 모델로 정규화한다. 대화, 상태, 사용량과 관측 근거를 프로젝트 단위로 제공한다.",
+      "tags": [
+        "sessions",
+        "observability",
+        "providers"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": [
+          "AgentSession",
+          "Provider",
+          "Usage",
+          "LifecycleEvent"
+        ],
+        "businessRules": [
+          "직접 관측값을 추정보다 우선한다",
+          "연결 근거가 부족하면 세션과 프로세스를 임의로 결합하지 않는다"
+        ],
+        "crossDomainInteractions": [
+          "협업 계층과 실행 단위를 보강한다",
+          "터미널 제어 가능 여부를 계산한다"
+        ]
+      }
+    },
+    {
+      "id": "domain:collaboration-topology",
+      "type": "domain",
+      "name": "Collaboration Topology",
+      "summary": "메인 AI, 서브에이전트와 각 AI가 실행한 명령의 인과 관계를 복원한다. 사용자가 작업 위임과 결과 반환 흐름을 탐색할 수 있게 한다.",
+      "tags": [
+        "collaboration",
+        "subagents",
+        "executions"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": [
+          "ParentSession",
+          "Subagent",
+          "Assignment",
+          "ExecutionUnit"
+        ],
+        "businessRules": [
+          "공식 부모 ID와 도구 호출 기록을 우선한다",
+          "보호된 지시 원문을 추정 문구로 대체하지 않는다"
+        ],
+        "crossDomainInteractions": [
+          "세션 관측 데이터에서 관계를 파생한다",
+          "관리 화면에 계층과 진행 신호를 제공한다"
+        ]
+      }
+    },
+    {
+      "id": "domain:terminal-steering",
+      "type": "domain",
+      "name": "Terminal Steering",
+      "summary": "PTY와 격리된 tmux 세션의 수명주기를 관리하고 정확한 AI 세션에 입력을 전달한다. 재연결과 중복 방지 규칙으로 사용자의 개입을 안전하게 만든다.",
+      "tags": [
+        "terminal",
+        "pty",
+        "tmux"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": [
+          "TerminalSession",
+          "ManagedTmuxSession",
+          "Delivery",
+          "BridgeClient"
+        ],
+        "businessRules": [
+          "기존 세션이 확인된 경우에만 재연결한다",
+          "확인되지 않은 전달은 성공으로 단정하거나 자동 재전송하지 않는다"
+        ],
+        "crossDomainInteractions": [
+          "관측 세션의 제어 가능성을 사용한다",
+          "로컬 보안 경계를 통해 입력을 승인한다"
+        ]
+      }
+    },
+    {
+      "id": "domain:local-security-extensibility",
+      "type": "domain",
+      "name": "Local Security and Extensibility",
+      "summary": "로컬 소켓, IPC 검증과 source plugin 계약으로 외부 실행원을 안전하게 연결한다. 출처와 런타임 provenance를 보존하면서 기능별 제어 권한을 제한한다.",
+      "tags": [
+        "security",
+        "plugins",
+        "local-first"
+      ],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entities": [
+          "SourcePlugin",
+          "Manifest",
+          "Capability",
+          "LocalBridge"
+        ],
+        "businessRules": [
+          "렌더러와 로컬 클라이언트의 신원을 검증한다",
+          "플러그인 capability와 경로를 명시적으로 제한한다"
+        ],
+        "crossDomainInteractions": [
+          "새 세션 원천을 관측 계층에 공급한다",
+          "터미널 제어 요청을 인증한다"
+        ]
+      }
+    },
+    {
+      "id": "flow:discover-local-sessions",
+      "type": "flow",
+      "name": "Discover Local Sessions",
+      "summary": "제공사 기록과 실행 프로세스를 탐색해 공통 세션 후보를 만든다.",
+      "tags": [
+        "discovery",
+        "session-files"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "periodic monitor scan",
+        "entryType": "cron"
+      }
+    },
+    {
+      "id": "flow:enrich-management-intelligence",
+      "type": "flow",
+      "name": "Enrich Management Intelligence",
+      "summary": "세션에 주의, 진행, 건강, 근거와 결과 요약을 보강한다.",
+      "tags": [
+        "attention",
+        "evidence"
+      ],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "session snapshot refresh",
+        "entryType": "event"
+      }
+    },
+    {
+      "id": "flow:reconstruct-delegation-hierarchy",
+      "type": "flow",
+      "name": "Reconstruct Delegation Hierarchy",
+      "summary": "공급자별 협업 기록에서 부모와 서브에이전트 관계를 복원한다.",
+      "tags": [
+        "hierarchy",
+        "delegation"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "normalized collaboration events",
+        "entryType": "event"
+      }
+    },
+    {
+      "id": "flow:track-execution-units",
+      "type": "flow",
+      "name": "Track Execution Units",
+      "summary": "AI가 시작한 foreground와 background 명령의 수명주기를 같은 호출 단위로 연결한다.",
+      "tags": [
+        "commands",
+        "background-jobs"
+      ],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "tool call and result events",
+        "entryType": "event"
+      }
+    },
+    {
+      "id": "flow:manage-terminal-lifecycle",
+      "type": "flow",
+      "name": "Manage Terminal Lifecycle",
+      "summary": "AI 터미널을 생성하고 분리, 재연결, 중지와 복구 상태를 관리한다.",
+      "tags": [
+        "terminal-lifecycle",
+        "recovery"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "whitebox run or desktop action",
+        "entryType": "cli"
+      }
+    },
+    {
+      "id": "flow:deliver-session-input",
+      "type": "flow",
+      "name": "Deliver Session Input",
+      "summary": "정확한 연결 대상에 사용자 입력을 한 번 전달하고 관측 가능한 확인 상태를 반환한다.",
+      "tags": [
+        "delivery",
+        "deduplication"
+      ],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "continue conversation",
+        "entryType": "manual"
+      }
+    },
+    {
+      "id": "flow:authorize-local-control",
+      "type": "flow",
+      "name": "Authorize Local Control",
+      "summary": "IPC와 로컬 소켓 요청의 발신자, 토큰과 동작 범위를 검증한다.",
+      "tags": [
+        "authorization",
+        "ipc"
+      ],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "renderer IPC or bridge request",
+        "entryType": "event"
+      }
+    },
+    {
+      "id": "flow:ingest-source-plugins",
+      "type": "flow",
+      "name": "Ingest Source Plugins",
+      "summary": "번들 source plugin의 manifest와 세션 출력을 검증해 공통 관측 모델에 합친다.",
+      "tags": [
+        "source-plugins",
+        "provenance"
+      ],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "source plugin monitor",
+        "entryType": "event"
+      }
+    },
+    {
+      "id": "step:discover-local-sessions:scan-provider-histories",
+      "type": "step",
+      "name": "Scan Provider Histories",
+      "filePath": "src/agentMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "제공사별 로컬 기록 경로에서 최신 세션 파일을 찾는다.",
+      "tags": [
+        "filesystem",
+        "providers"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:discover-local-sessions:normalize-provider-events",
+      "type": "step",
+      "name": "Normalize Provider Events",
+      "filePath": "src/agentMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "공급자별 대화와 도구 이벤트를 공통 AgentSession 형태로 변환한다.",
+      "tags": [
+        "normalization",
+        "events"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:discover-local-sessions:link-runtime-presence",
+      "type": "step",
+      "name": "Link Runtime Presence",
+      "filePath": "src/processMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "OS 프로세스, tmux와 bridge 실행 정보를 기록 세션에 근거 기반으로 연결한다.",
+      "tags": [
+        "processes",
+        "linking"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:enrich-management-intelligence:classify-attention",
+      "type": "step",
+      "name": "Classify Attention",
+      "filePath": "src/sessionIntelligence.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "구조화 입력, 권한, 오류와 일시정지 신호에서 사용자 조치 필요성을 계산한다.",
+      "tags": [
+        "attention",
+        "classification"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:enrich-management-intelligence:calculate-progress-health",
+      "type": "step",
+      "name": "Calculate Progress and Health",
+      "filePath": "src/sessionIntelligence.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "최근 체크포인트, 정체, 실패와 컨텍스트 위험 신호를 계산한다.",
+      "tags": [
+        "progress",
+        "health"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:enrich-management-intelligence:summarize-evidence-outcome",
+      "type": "step",
+      "name": "Summarize Evidence and Outcome",
+      "filePath": "src/sessionIntelligence.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "완료 신호와 로그에서 산출물, 테스트와 관측 신뢰도 후보를 요약한다.",
+      "tags": [
+        "evidence",
+        "outcome"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:reconstruct-delegation-hierarchy:index-recorded-relationships",
+      "type": "step",
+      "name": "Index Recorded Relationships",
+      "filePath": "src/agentMonitor/hierarchy.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "기존 부모 ID와 협업 레코드를 빠르게 조회할 인덱스로 만든다.",
+      "tags": [
+        "indexing",
+        "relationships"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:reconstruct-delegation-hierarchy:resolve-subagent-children",
+      "type": "step",
+      "name": "Resolve Subagent Children",
+      "filePath": "src/agentMonitor/hierarchy.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "spawn 기록과 자식 세션 메타데이터를 사용해 실제 서브에이전트를 찾는다.",
+      "tags": [
+        "subagents",
+        "resolution"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:reconstruct-delegation-hierarchy:reconcile-workflow-states",
+      "type": "step",
+      "name": "Reconcile Workflow States",
+      "filePath": "src/agentMonitor/hierarchy.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "중첩된 자식의 실행과 완료 상태를 부모 workflow로 전파한다.",
+      "tags": [
+        "workflow",
+        "state-rollup"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:track-execution-units:detect-command-start",
+      "type": "step",
+      "name": "Detect Command Start",
+      "filePath": "src/agentMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "공급자별 셸 도구 호출에서 실행 단위와 작업 폴더를 만든다.",
+      "tags": [
+        "commands",
+        "tool-calls"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:track-execution-units:link-background-followups",
+      "type": "step",
+      "name": "Link Background Followups",
+      "filePath": "src/agentMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "wait와 output 후속 호출을 원래 장기 실행 식별자에 연결한다.",
+      "tags": [
+        "background",
+        "correlation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:track-execution-units:finalize-command-status",
+      "type": "step",
+      "name": "Finalize Command Status",
+      "filePath": "src/agentMonitor.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "실제 도구 결과와 종료 코드를 사용해 완료 또는 실패 상태를 확정한다.",
+      "tags": [
+        "exit-code",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:manage-terminal-lifecycle:create-terminal-session",
+      "type": "step",
+      "name": "Create Terminal Session",
+      "filePath": "src/terminalManager.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "검증된 provider와 작업 폴더로 PTY 또는 관리 세션을 생성한다.",
+      "tags": [
+        "pty",
+        "creation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:manage-terminal-lifecycle:detach-or-stop-session",
+      "type": "step",
+      "name": "Detach or Stop Session",
+      "filePath": "src/terminalManager.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "화면 분리와 실제 작업 중지를 구분해 터미널 상태와 기록을 갱신한다.",
+      "tags": [
+        "detach",
+        "stop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:manage-terminal-lifecycle:recover-existing-session",
+      "type": "step",
+      "name": "Recover Existing Session",
+      "filePath": "src/terminalHost.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "백엔드 세션이 실제 존재할 때만 같은 안정 ID로 다시 연결한다.",
+      "tags": [
+        "recovery",
+        "identity"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:deliver-session-input:resolve-exact-target",
+      "type": "step",
+      "name": "Resolve Exact Target",
+      "filePath": "src/terminalManager.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "세션의 canonical identity와 서명된 연결을 사용해 쓰기 대상을 고른다.",
+      "tags": [
+        "identity",
+        "targeting"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:deliver-session-input:write-once",
+      "type": "step",
+      "name": "Write Input Once",
+      "filePath": "src/terminalManager.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "delivery ID 장부를 저장한 뒤 사용자 입력과 Enter를 정확히 한 번 보낸다.",
+      "tags": [
+        "delivery-id",
+        "idempotency"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:deliver-session-input:observe-confirmation",
+      "type": "step",
+      "name": "Observe Delivery Confirmation",
+      "filePath": "src/terminalManager.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "터미널 ACK와 세션 기록 신호를 구분해 accepted, unknown 또는 rejected를 반환한다.",
+      "tags": [
+        "acknowledgement",
+        "evidence"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:authorize-local-control:validate-renderer-sender",
+      "type": "step",
+      "name": "Validate Renderer Sender",
+      "filePath": "main.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "신뢰된 Electron webContents와 로컬 파일 URL에서 온 IPC만 허용한다.",
+      "tags": [
+        "ipc",
+        "sender-validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:authorize-local-control:authenticate-bridge-client",
+      "type": "step",
+      "name": "Authenticate Bridge Client",
+      "filePath": "src/bridgeServer.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "per-user token과 로컬 socket endpoint로 CLI bridge 연결을 인증한다.",
+      "tags": [
+        "bridge",
+        "token"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:authorize-local-control:validate-control-operation",
+      "type": "step",
+      "name": "Validate Control Operation",
+      "filePath": "src/tmuxController.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "터미널, tmux와 agent 동작의 대상과 인자를 allowlist와 수명주기 상태로 제한한다.",
+      "tags": [
+        "validation",
+        "capabilities"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "step:ingest-source-plugins:validate-plugin-manifest",
+      "type": "step",
+      "name": "Validate Plugin Manifest",
+      "filePath": "src/sourcePlugins/contracts.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "source plugin ID, API 버전, 플랫폼과 capability 선언을 검증한다.",
+      "tags": [
+        "manifest",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:ingest-source-plugins:scan-plugin-sessions",
+      "type": "step",
+      "name": "Scan Plugin Sessions",
+      "filePath": "src/sourcePlugins/monitorHost.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "각 plugin monitor를 제한 시간 안에 실행해 외부 세션을 수집한다.",
+      "tags": [
+        "monitor",
+        "timeout"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "step:ingest-source-plugins:normalize-source-provenance",
+      "type": "step",
+      "name": "Normalize Source Provenance",
+      "filePath": "src/sourcePlugins/contracts.js",
+      "lineRange": [
+        0,
+        0
+      ],
+      "summary": "출처, 모델 공급자, 환경과 런타임을 분리해 canonical session ID와 함께 보존한다.",
+      "tags": [
+        "provenance",
+        "normalization"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "domain:session-observability",
+      "target": "flow:discover-local-sessions",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:session-observability",
+      "target": "flow:enrich-management-intelligence",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:collaboration-topology",
+      "target": "flow:reconstruct-delegation-hierarchy",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:collaboration-topology",
+      "target": "flow:track-execution-units",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:terminal-steering",
+      "target": "flow:manage-terminal-lifecycle",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:terminal-steering",
+      "target": "flow:deliver-session-input",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:local-security-extensibility",
+      "target": "flow:authorize-local-control",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "domain:local-security-extensibility",
+      "target": "flow:ingest-source-plugins",
+      "type": "contains_flow",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "flow:discover-local-sessions",
+      "target": "step:discover-local-sessions:scan-provider-histories",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:discover-local-sessions",
+      "target": "step:discover-local-sessions:normalize-provider-events",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:discover-local-sessions",
+      "target": "step:discover-local-sessions:link-runtime-presence",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:enrich-management-intelligence",
+      "target": "step:enrich-management-intelligence:classify-attention",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:enrich-management-intelligence",
+      "target": "step:enrich-management-intelligence:calculate-progress-health",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:enrich-management-intelligence",
+      "target": "step:enrich-management-intelligence:summarize-evidence-outcome",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:reconstruct-delegation-hierarchy",
+      "target": "step:reconstruct-delegation-hierarchy:index-recorded-relationships",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:reconstruct-delegation-hierarchy",
+      "target": "step:reconstruct-delegation-hierarchy:resolve-subagent-children",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:reconstruct-delegation-hierarchy",
+      "target": "step:reconstruct-delegation-hierarchy:reconcile-workflow-states",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:track-execution-units",
+      "target": "step:track-execution-units:detect-command-start",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:track-execution-units",
+      "target": "step:track-execution-units:link-background-followups",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:track-execution-units",
+      "target": "step:track-execution-units:finalize-command-status",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:manage-terminal-lifecycle",
+      "target": "step:manage-terminal-lifecycle:create-terminal-session",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:manage-terminal-lifecycle",
+      "target": "step:manage-terminal-lifecycle:detach-or-stop-session",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:manage-terminal-lifecycle",
+      "target": "step:manage-terminal-lifecycle:recover-existing-session",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:deliver-session-input",
+      "target": "step:deliver-session-input:resolve-exact-target",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:deliver-session-input",
+      "target": "step:deliver-session-input:write-once",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:deliver-session-input",
+      "target": "step:deliver-session-input:observe-confirmation",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:authorize-local-control",
+      "target": "step:authorize-local-control:validate-renderer-sender",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:authorize-local-control",
+      "target": "step:authorize-local-control:authenticate-bridge-client",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:authorize-local-control",
+      "target": "step:authorize-local-control:validate-control-operation",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "flow:ingest-source-plugins",
+      "target": "step:ingest-source-plugins:validate-plugin-manifest",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.3
+    },
+    {
+      "source": "flow:ingest-source-plugins",
+      "target": "step:ingest-source-plugins:scan-plugin-sessions",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "flow:ingest-source-plugins",
+      "target": "step:ingest-source-plugins:normalize-source-provenance",
+      "type": "flow_step",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "domain:session-observability",
+      "target": "domain:collaboration-topology",
+      "type": "cross_domain",
+      "direction": "forward",
+      "description": "정규화된 세션 이벤트가 협업 계층과 실행 기록의 근거가 된다.",
+      "weight": 0.6
+    },
+    {
+      "source": "domain:session-observability",
+      "target": "domain:terminal-steering",
+      "type": "cross_domain",
+      "direction": "forward",
+      "description": "관측된 canonical session identity가 정확한 제어 대상을 결정한다.",
+      "weight": 0.6
+    },
+    {
+      "source": "domain:local-security-extensibility",
+      "target": "domain:session-observability",
+      "type": "cross_domain",
+      "direction": "forward",
+      "description": "검증된 source plugin이 새 관측 데이터를 공급한다.",
+      "weight": 0.6
+    },
+    {
+      "source": "domain:local-security-extensibility",
+      "target": "domain:terminal-steering",
+      "type": "cross_domain",
+      "direction": "forward",
+      "description": "IPC와 bridge 인증이 터미널 조작 경계를 보호한다.",
+      "weight": 0.6
+    }
+  ],
+  "layers": [],
+  "tour": []
+}

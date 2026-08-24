@@ -146,6 +146,10 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = options.tab === "summary" ? "summary" : "chat";
     state.drawerCreateTerminalIfMissing = options.createTerminalIfMissing !== false;
     state.drawerMountTerminal = options.mountTerminal !== false;
+    state.drawerForkCreationGesture = state.drawerTab === "chat"
+      && state.drawerCreateTerminalIfMissing
+      && state.drawerMountTerminal
+      && options.attentionActivation !== true;
     state.drawerForceLatest = state.drawerTab === "chat";
     const reviewed = options.resultReview === true ? markResultReviewComplete(selected || id) : 0;
     if (options.acknowledge !== false && acknowledgeSessionNotices(selected || id) > 0) renderWorkspaces();
@@ -178,6 +182,7 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = "chat";
     state.drawerCreateTerminalIfMissing = false;
     state.drawerMountTerminal = false;
+    state.drawerForkCreationGesture = false;
     state.agentCommandRoutes.delete(id);
     state.drawerForceLatest = true;
     const reviewed = options.resultReview === true ? markResultReviewComplete(child) : 0;
@@ -212,6 +217,7 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = "chat";
     state.drawerCreateTerminalIfMissing = true;
     state.drawerMountTerminal = true;
+    state.drawerForkCreationGesture = false;
     state.drawerForceLatest = false;
     openDrawerSurface("modal");
     renderDrawer();
@@ -223,6 +229,7 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
   function closeDrawer(restoreFocus = true) {
     if (!$("#detailDrawer").classList.contains("open")) return;
     window.WhiteboxDrawerTerminal?.unmount?.({ resetAvailability: true, sessionId: state.selectedId });
+    state.drawerForkCreationGesture = false;
     const presentation = state.drawerPresentation;
     const focusToken = drawerFocusToken;
     $("#detailDrawer").classList.remove("open");
@@ -268,8 +275,9 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     const subagentMode = state.drawerMode === "subagent" && Boolean(session.parentId);
     const executionMode = state.drawerMode === "execution" && Boolean(state.drawerExecutionId);
     // A main conversation is an actual terminal surface, not a terminal-styled
-    // transcript. Reuse its exact PTY when one exists; otherwise resume the
-    // same provider session into a new app-owned PTY without sending a prompt.
+    // transcript. Reuse its exact PTY when one exists. Desktop-owned Codex
+    // history is instead forked into a separate app-owned PTY so its writer is
+    // never attached from two apps; other providers use canonical resume.
     // Parent-controlled subagents and execution details remain read-only.
     const conversationTab = state.drawerTab === "chat";
     // A top-level session's conversation is the PTY itself. The terminal
@@ -561,17 +569,30 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
         : terminalInterrupt ? "agent.terminal_interrupt" : "agent.stop_short");
     }
     const createTerminalIfMissing = state.drawerCreateTerminalIfMissing !== false;
+    const forkCreationGestureArmed = state.drawerForkCreationGesture === true;
+    state.drawerForkCreationGesture = false;
+    const forkCreationGesture = actualTerminalChat
+      && state.drawerMountTerminal !== false
+      && forkCreationGestureArmed;
     if (state.drawerMountTerminal !== false && actualTerminalChat && terminalTarget) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: terminalTarget.id,
         createIfMissing: createTerminalIfMissing,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
       });
     } else if (state.drawerMountTerminal !== false && actualTerminalChat && attachableTerminalTargets.length === 0) {
-      window.WhiteboxDrawerTerminal?.mount?.(session, { createIfMissing: createTerminalIfMissing });
+      window.WhiteboxDrawerTerminal?.mount?.(session, {
+        createIfMissing: createTerminalIfMissing,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
+      });
     } else if (state.drawerMountTerminal !== false && actualTerminalChat) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: attachableTerminalTargets[0].id,
         createIfMissing: false,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
       });
     }
     restoreDisclosureStates(content);

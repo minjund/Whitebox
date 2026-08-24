@@ -82,6 +82,7 @@
   async function init() {
     loadQualityState();
     state.workspace = "all";
+    state.workspaceSource = "all";
     loadGuideState();
     if (!window.whitebox) {
       $("#emptyState").classList.remove("hidden");

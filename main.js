@@ -54,7 +54,9 @@ const { AttentionHookInstaller } = require('./src/attentionHookInstaller');
 const { AttentionActivationCoordinator } = require('./src/attentionActivationCoordinator');
 const { macPathEntries } = require('./src/platformPath');
 const { SourcePluginControlHost } = require('./src/sourcePlugins/controlHost');
-const { SourcePluginSettingsStore } = require('./src/sourcePlugins/settingsStore');
+const { SourcePluginSettingsStore, isSourcePluginEnabled } = require('./src/sourcePlugins/settingsStore');
+const { applySourcePluginEnabled } = require('./src/sourcePlugins/settingsActivation');
+const { summaryForSessions } = require('./src/sourcePlugins/snapshotProjection');
 const { normalizeSourceSession } = require('./src/sourcePlugins/contracts');
 const { ASIDE_MANIFEST } = require('./src/sourcePlugins/bundled');
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('./src/windowsShellIdentity');
@@ -133,6 +135,7 @@ const pendingTerminalPromptResolutions = new Map();
 let sourcePluginControlHost = null;
 let sourcePluginSettingsStore = null;
 let sourcePluginRefreshTimer = null;
+let sourcePluginSettingsUpdateQueue = Promise.resolve();
 let pendingAttentionSessionId = '';
 let pendingAttentionEvent = 'attention';
 let rendererBootstrapped = false;
@@ -371,7 +374,17 @@ function saveProviderVisibility(value = {}) {
 }
 
 function visibleSnapshotSessions(snapshot = lastSnapshot) {
-  return { ...snapshot, sessions: (snapshot.sessions || []).filter(session => session.sourcePluginId || isProviderVisible(session.provider)) };
+  const sourceSettings = sourcePluginSettingsStore?.snapshot() || { enabledPluginIds: [] };
+  const sessions = (snapshot.sessions || []).filter(session => (
+    session.sourcePluginId
+      ? isSourcePluginEnabled(sourceSettings, session.sourcePluginId)
+      : isProviderVisible(session.provider)
+  ));
+  return {
+    ...snapshot,
+    sessions,
+    summary: summaryForSessions(snapshot.summary, sessions),
+  };
 }
 
 function saveWorkspaces(items) {
@@ -731,20 +744,26 @@ function scheduleMonitorWorkerRestart() {
 
 function persistInferredTerminalBindings(bindings) {
   const requested = Array.isArray(bindings) ? bindings : [];
-  if (!requested.length) return Promise.resolve({ failedSessionIds: [] });
+  if (!requested.length) return Promise.resolve({ failedSessionIds: [], boundSessionIds: [] });
   if (!terminalManager || typeof terminalManager.bindAgentSession !== 'function') {
-    return Promise.resolve({ failedSessionIds: requested.map(binding => String(binding?.sessionId || '')).filter(Boolean) });
+    return Promise.resolve({
+      failedSessionIds: requested.map(binding => String(binding?.sessionId || '')).filter(Boolean),
+      boundSessionIds: [],
+    });
   }
   const attempts = [];
   for (const binding of requested) {
     const terminalId = String(binding?.terminalId || '');
     const sessionId = String(binding?.sessionId || '');
     const promptFingerprint = String(binding?.promptFingerprint || '');
-    if (!terminalId || !sessionId || !promptFingerprint) {
+    const forkSourceSessionId = String(binding?.forkSourceSessionId || '');
+    const forkSourceSignature = String(binding?.forkSourceSignature || '');
+    const forkAdoption = Boolean(forkSourceSessionId && forkSourceSignature);
+    if (!terminalId || !sessionId || (!promptFingerprint && !forkAdoption)) {
       attempts.push(Promise.resolve({ ok: false, sessionId }));
       continue;
     }
-    const key = `${terminalId}\u0000${sessionId}\u0000${promptFingerprint}`;
+    const key = `${terminalId}\u0000${sessionId}\u0000${promptFingerprint}\u0000${forkSourceSessionId}\u0000${forkSourceSignature}`;
     const existing = pendingTerminalBindings.get(key);
     if (existing) {
       attempts.push(existing);
@@ -764,6 +783,7 @@ function persistInferredTerminalBindings(bindings) {
   }
   return Promise.all(attempts).then(results => ({
     failedSessionIds: [...new Set(results.filter(result => !result.ok).map(result => result.sessionId).filter(Boolean))],
+    boundSessionIds: [...new Set(results.filter(result => result.ok).map(result => result.sessionId).filter(Boolean))],
   }));
 }
 
@@ -785,7 +805,17 @@ function startMonitorWorker() {
         // canonical card for this scan; unrelated sessions and their rebuilt
         // summary must continue updating.
         if (revision !== monitorSnapshotRevision || monitorWorker !== worker) return;
-        lastSnapshot = snapshotWithoutSessions(message.snapshot, bindingResult.failedSessionIds, availability);
+        const guardedForkSessionIds = (message.forkBindingGuardSessionIds || [])
+          .map(value => String(value || ''))
+          .filter(Boolean);
+        // A live provisional fork has no provider-returned child identity.
+        // Its lineage guard therefore wins even if an unrelated normal bridge
+        // happened to bind the same transcript during this scan.
+        const hiddenSessionIds = [...new Set([
+          ...(bindingResult.failedSessionIds || []),
+          ...guardedForkSessionIds,
+        ])];
+        lastSnapshot = snapshotWithoutSessions(message.snapshot, hiddenSessionIds, availability);
         const snapshot = visibleSnapshotSessions(lastSnapshot);
         attentionNotifier.sync(visibleSnapshotSessions(lastSnapshot));
         reconcileAttentionPopups();
@@ -1818,6 +1848,9 @@ async function setupRuntime() {
     syncSourcePluginMonitorState();
     refreshMonitor();
   });
+  sourcePluginControlHost.on('cleanup-error', error => {
+    reportRecoverableError('source-plugin-cleanup', error);
+  });
   await sourcePluginControlHost.initialize();
   if (process.platform === 'darwin') {
     sourcePluginRefreshTimer = setInterval(() => {
@@ -1864,13 +1897,27 @@ async function setupRuntime() {
   });
 }
 
-function bridgePresence() {
-  if (!terminalManager) return [];
-  const localEnvironment = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux');
-  return terminalManager.list()
+function bridgePresenceSessionEligible(session) {
+  const live = session?.status === 'running' || session?.status === 'starting';
+  const provisionalFork = Boolean(session?.agentForkSourceSessionId
+    && session?.agentForkSourceSignature);
+  // `stopping` is only an intent until the process tree exit is acknowledged.
+  // Keep a provisional fork visible to the monitor during that interval and
+  // for persisted orphan PIDs whose liveness is still alive/unknown. Otherwise
+  // the child-card binding guard disappears early and can expose an unverified
+  // fork child while the original fork process may still own the conversation.
+  const forkExitUnconfirmed = provisionalFork && (session?.status === 'stopping'
+    || session?.terminationPending === true
+    || session?.terminationUncertain === true);
+  return live || forkExitUnconfirmed;
+}
+
+function projectTerminalBridgePresence(sessions, platform = process.platform) {
+  const localEnvironment = platform === 'win32' ? 'windows' : (platform === 'darwin' ? 'macos' : 'linux');
+  return (Array.isArray(sessions) ? sessions : [])
     .filter(session => !session.transient
       && session.type === 'agent'
-      && (session.status === 'running' || session.status === 'starting')
+      && bridgePresenceSessionEligible(session)
       // A still-running v1.7.3 host may retain these records until its next
       // safe restart. Do not project the recursive chain into agent cards.
       && !isInternalTerminalProjectionSessionId(session.bridgeId))
@@ -1883,12 +1930,20 @@ function bridgePresence() {
       pid: session.pid,
       cwd: session.cwd,
       startedAt: session.createdAt,
-      environment: session.distro && process.platform === 'win32' ? 'wsl' : localEnvironment,
+      environment: session.distro && platform === 'win32' ? 'wsl' : localEnvironment,
       distro: session.distro || '',
       initialPromptFingerprint: session.initialPromptFingerprint || '',
+      agentForkSourceSessionId: session.agentForkSourceSessionId || '',
+      agentForkSourceSignature: session.agentForkSourceSignature || '',
+      creationId: session.creationId || '',
+      forkProofAuthority: session.agentForkSourceSessionId ? 'codex-fork-lineage-v1' : '',
       kind: 'bridge',
       label: 'Whitebox 외부 명령창 연결',
     }));
+}
+
+function bridgePresence() {
+  return terminalManager ? projectTerminalBridgePresence(terminalManager.list()) : [];
 }
 
 /** @returns {import('./src/contracts').BootstrapPayload} */
@@ -1913,12 +1968,20 @@ function bootstrapState() {
     providerVisibility: providerVisibilityStore ? providerVisibilityStore.snapshot() : { hidden: [] },
     attentionPopups: attentionPopupPreferenceSnapshot(),
     sourcePlugins: sourcePluginControlHost ? sourcePluginControlHost.listSources() : [],
-    sourcePluginSettings: sourcePluginSettingsStore ? sourcePluginSettingsStore.snapshot() : { version: 1, asideHistoryFolders: [] },
+    sourcePluginSettings: sourcePluginSettingsStore
+      ? sourcePluginSettingsStore.snapshot()
+      : { version: 2, enabledPluginIds: [], asideHistoryFolders: [] },
   };
 }
 
 async function requestAgentDetail(sessionId) {
-  const sourceCard = (lastSnapshot.sessions || []).find(session => session.id === String(sessionId || ''));
+  const requestedSessionId = String(sessionId || '');
+  const sourceCard = (lastSnapshot.sessions || []).find(session => session.id === requestedSessionId);
+  const canonicalSourceMatch = /^(builtin\.(?:opencode|aside)):/.exec(requestedSessionId);
+  const requestedSourcePluginId = sourceCard?.sourcePluginId || canonicalSourceMatch?.[1] || '';
+  if (requestedSourcePluginId && !isSourcePluginEnabled(sourcePluginSettingsStore?.snapshot(), requestedSourcePluginId)) {
+    return null;
+  }
   if (sourceCard?.sourcePluginId === ASIDE_MANIFEST.id && sourcePluginControlHost) {
     try {
       const detail = await sourcePluginControlHost.detail(sourceCard);
@@ -1928,8 +1991,8 @@ async function requestAgentDetail(sessionId) {
     }
   }
   return new Promise(resolve => {
-    if (!monitorWorker || String(sessionId || '').length > 500) return resolve(null);
-    const card = (lastSnapshot.sessions || []).find(session => session.id === String(sessionId || ''));
+    if (!monitorWorker || requestedSessionId.length > 500) return resolve(null);
+    const card = (lastSnapshot.sessions || []).find(session => session.id === requestedSessionId);
     if (card && !card.sourcePluginId && !isProviderVisible(card.provider)) return resolve(null);
     const requestId = ++detailRequestId;
     const timer = setTimeout(() => {
@@ -1943,7 +2006,7 @@ async function requestAgentDetail(sessionId) {
         resolve(value);
       },
     });
-    monitorWorker.postMessage({ type: 'detail', requestId, sessionId: String(sessionId || '') });
+    monitorWorker.postMessage({ type: 'detail', requestId, sessionId: requestedSessionId });
   });
 }
 
@@ -1995,7 +2058,20 @@ function registerIpcHandlers() {
       if (!sessionId || sessionId.length > 500) throw new Error('source session ID가 올바르지 않습니다.');
       const session = (lastSnapshot.sessions || []).find(item => item.id === sessionId && item.sourcePluginId);
       if (!session) throw new Error('source session을 찾을 수 없습니다.');
+      if (!isSourcePluginEnabled(sourcePluginSettingsStore?.snapshot(), session.sourcePluginId)) {
+        throw new Error('설정에서 비활성화된 source plugin의 작업은 조작할 수 없습니다.');
+      }
       return session;
+    },
+    setSourcePluginEnabled: (pluginId, enabled) => {
+      const update = sourcePluginSettingsUpdateQueue.catch(() => {}).then(() => applySourcePluginEnabled({
+        store: sourcePluginSettingsStore,
+        host: sourcePluginControlHost,
+        restartMonitor: restartMonitorWorkerForSourceSettings,
+        reportError: reportRecoverableError,
+      }, pluginId, enabled));
+      sourcePluginSettingsUpdateQueue = update.catch(() => {});
+      return update;
     },
     pickAsideHistoryFolder: async () => {
       const result = await dialog.showOpenDialog(mainWindow, {

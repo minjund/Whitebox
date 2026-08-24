@@ -1,9 +1,19 @@
 'use strict';
 
 function registerSourcePluginIpc(options) {
-  const { handleTrusted, host, resolveSession, pickAsideHistoryFolder, removeAsideHistoryFolder } = options;
+  const {
+    handleTrusted,
+    host,
+    resolveSession,
+    setSourcePluginEnabled,
+    pickAsideHistoryFolder,
+    removeAsideHistoryFolder,
+  } = options;
   handleTrusted('sources:list', () => host().listSources());
   handleTrusted('sources:refresh', () => host().refresh());
+  handleTrusted('sources:set-enabled', (pluginId, enabled) => (
+    setSourcePluginEnabled(String(pluginId || ''), enabled === true)
+  ));
   handleTrusted('sources:start', (pluginId, input) => host().start(String(pluginId || ''), input || {}));
   handleTrusted('sources:prepare-delete', sessionId => {
     const session = resolveSession(String(sessionId || ''));

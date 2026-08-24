@@ -601,11 +601,11 @@ function parseOpenCodeSession(input, options = {}) {
   const result = clipped(resultMessage && resultMessage.text, options.resultLimit || 64 * 1024);
   const controls = {
     managed: false,
-    respond: true,
+    respond: false,
     approve: false,
     deny: false,
-    sendInstruction: true,
-    continue: true,
+    sendInstruction: false,
+    continue: false,
     // This is only an observed stop candidate: the database proves that work
     // is active, not that Whitebox owns its process. SourcePluginMonitorHost
     // intersects it with controlHost.managedSessionIds before the renderer can
@@ -618,7 +618,7 @@ function parseOpenCodeSession(input, options = {}) {
     openOrigin: Boolean(sessionDirectory),
     start: true,
     archive: false,
-    delete: true,
+    delete: false,
     readConversation: true,
     readSteps: true,
     readTabs: false,
@@ -662,6 +662,9 @@ function parseOpenCodeSession(input, options = {}) {
     clientKind: 'opencode-omo',
     conversationTransport: 'plugin',
     terminalBackend: 'opencode',
+    readOnly: true,
+    importMode: 'local-history',
+    controlAuthority: 'read-only-import',
     environment: {
       kind: environment.kind,
       distro: '',
@@ -722,8 +725,10 @@ function parseOpenCodeSession(input, options = {}) {
     sourceControlCapabilities: { ...controls },
     controlCapabilities: controls,
     controlUnavailableReasons: {
+      sendInstruction: '가져온 OpenCode 기록은 읽기 전용입니다.',
       stop: 'Whitebox에서 시작해 현재 소유 중인 OMO 프로세스만 중지할 수 있습니다.',
       archive: 'OpenCode CLI는 세션 보관 명령을 제공하지 않습니다.',
+      delete: '가져온 OpenCode 기록은 Whitebox에서 삭제하지 않습니다.',
     },
     fullHistory: Boolean(options.fullHistory),
     truncated,

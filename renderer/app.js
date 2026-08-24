@@ -37,6 +37,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     providerFilters: new Set(),
     hiddenProviders: new Set(),
     workspace: "all",
+    workspaceSource: "all",
+    sidebarCollapsedProjects: new Set(),
+    sidebarCollapsedSources: new Set(),
     search: "",
     sort: "recent",
     sessionOrder: [],
@@ -53,10 +56,12 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     runProvider: "claude",
     runSource: "direct",
     sourcePlugins: [],
-    sourcePluginSettings: { version: 1, asideHistoryFolders: [] },
+    sourcePluginSettings: { version: 2, enabledPluginIds: [], asideHistoryFolders: [] },
+    sourcePluginSettingRequests: new Set(),
     details: new Map(),
     detailLoadingIds: new Set(),
     drawerForceLatest: false,
+    drawerForkCreationGesture: false,
     visibleLimit: 30,
     graphFocusId: null,
     inlineTerminalSessionId: null,
@@ -360,6 +365,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       && ["execution-approval", "input-tool"].includes(session.attention.source);
     if (status === "waiting" || activityState === "notification" || explicitWaiting) return ACTIVITY_STATUS.notification;
     if (["thinking", "working", "juggling"].includes(activityState)) return ACTIVITY_STATUS[activityState];
+    if (status === "running" || status === "starting") return STATUS[status] || status;
     if (status === "idle" || activityState === "idle") return ACTIVITY_STATUS.idle;
     return STATUS[status] || status;
   };
@@ -887,13 +893,15 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     const provenance = session.provenance || {};
     const sourceId = String(provenance.source?.id || session.orchestrator || (session.runId ? "whitebox" : "direct"));
     const baseSourceLabel = String(provenance.source?.label || session.sourceLabel || ({
-      omo: "OMO · OpenCode", aside: "Aside Browser", whitebox: "Whitebox", direct: "Direct",
+      opencode: "OpenCode", omo: "OMO · OpenCode", aside: "Aside Browser", whitebox: "Whitebox", direct: "Direct",
     })[sourceId] || sourceId);
-    const sourceLabel = session.controlAuthority === "read-only-import" || session.importMode === "selected-folder"
+    const sourceLabel = session.importMode === "selected-folder"
       ? `${baseSourceLabel} · 읽기 전용 폴더`
-      : session.controlAuthority === "official-session-id" || session.importMode === "official-mcp"
-        ? `${baseSourceLabel} · 공식 연결`
-        : baseSourceLabel;
+      : session.controlAuthority === "read-only-import" || session.importMode === "local-history"
+        ? `${baseSourceLabel} · 읽기 전용 기록`
+        : session.controlAuthority === "official-session-id" || session.importMode === "official-mcp"
+          ? `${baseSourceLabel} · 공식 연결`
+          : baseSourceLabel;
     const actualProviderId = String(provenance.provider?.id || provenance.modelProvider?.id || session.modelProvider || session.provider || "unknown");
     const actualProviderLabel = String(provenance.provider?.label || provenance.modelProvider?.label || session.modelProviderLabel || providerInfo(session.provider).label || actualProviderId);
     const rawEnvironment = provenance.environment || session.runtimeEnvironment || session.environment || {};

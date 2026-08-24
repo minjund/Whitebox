@@ -29,10 +29,13 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
   function preconnectProjectAgentTerminals(workspace = state.workspace) {
     const requestedWorkspace = String(workspace || "");
     const requestedKey = normalizedProjectPath(requestedWorkspace);
+    const requestedSource = String(state.workspaceSource || "all");
     const generation = ++projectPreconnectGeneration;
     const stillSelected = () => generation === projectPreconnectGeneration
-      && normalizedProjectPath(state.workspace) === requestedKey;
-    if (!requestedKey || requestedWorkspace === "all" || requestedWorkspace === PROJECTLESS_WORKSPACE) {
+      && normalizedProjectPath(state.workspace) === requestedKey
+      && String(state.workspaceSource || "all") === requestedSource;
+    if (!requestedKey || requestedWorkspace === "all" || requestedWorkspace === PROJECTLESS_WORKSPACE
+      || requestedSource.startsWith("builtin.")) {
       return Promise.resolve([]);
     }
 
@@ -41,12 +44,12 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       const terminal = window.WhiteboxTerminal;
       if (!terminal || typeof terminal.preconnectForAgents !== "function") return [];
       const candidates = controlRoomRootSessions().filter((session) => {
-        if (!session?.id || session.parentId || !isLiveSession(session)) return false;
+        if (!session?.id || session.parentId || session.sourcePluginId || !isLiveSession(session)) return false;
         // An unresolved Whitebox PTY bridge is a runtime projection, not a
         // provider transcript that can be resumed as a new conversation.
         if (isWhiteboxBridgeProjection(session)) return false;
         // A Codex Desktop thread is owned by that app's private writer.
-        // Project selection must not silently start an independent resume.
+        // Project selection must not silently fork a new conversation.
         if (isCodexDesktopSession(session)) return false;
         try {
           const projectKey = normalizedProjectPath(controlRoomProject(session)?.path);
@@ -92,11 +95,20 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
 
   function agentResumeSupport(session) {
     if (isCodexDesktopSession(session)) {
+      let fork = null;
+      try {
+        fork = window.WhiteboxTerminal && typeof window.WhiteboxTerminal.forkSupport === "function"
+          ? window.WhiteboxTerminal.forkSupport(session)
+          : null;
+      } catch (error) {
+        window.WhiteboxRendererUtils.reportRecoverableError("agent-fork-support", error);
+      }
       return {
         supported: false,
         originOwned: true,
+        forkSupported: Boolean(fork?.supported),
         code: "CODEX_DESKTOP_SESSION_ORIGIN_OWNED",
-        reason: t("terminal.resume.codex_desktop_live"),
+        reason: fork?.reason || t("terminal.resume.codex_desktop_live"),
       };
     }
     try {
@@ -376,7 +388,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         : mode === "resume"
           ? t("agent.resume_help")
           : mode === "origin-owned"
-            ? t("terminal.resume.codex_desktop_live")
+            ? t("agent.codex_desktop_fork_help")
           : mode === "origin-resume"
               ? t("agent.origin_resume_help", { provider: (origin && origin.provider) || t("agent.desktop") })
               : mode === "connect"

@@ -137,46 +137,30 @@ function trustedDownloadUrl(value) {
   }
 }
 
+function automaticAssetName(options = {}) {
+  const version = String(options.version || '');
+  const parsed = normalizeVersion(version);
+  if (!parsed || parsed.raw !== version) return '';
+  if (options.platform === 'win32' && options.arch === 'x64') {
+    return `Whitebox-Setup-${version}.exe`;
+  }
+  if (options.platform === 'darwin' && ['arm64', 'x64'].includes(options.arch)) {
+    return `Whitebox-${version}-${options.arch}.dmg`;
+  }
+  return '';
+}
+
 function assetScore(asset, options) {
   const name = String(asset && asset.name || '');
-  const lower = name.toLowerCase();
-  const version = String(options.version || '').toLowerCase();
-  if (!name || asset.state && asset.state !== 'uploaded' || !trustedDownloadUrl(asset.browser_download_url)) return -1;
-  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const hasExactVersion = new RegExp(`(?:^|[-_.])${escapedVersion}(?:[-_.]|$)`).test(lower);
-  if (!version || !hasExactVersion) return -1;
-  const frozenWindowsManualBridge = new RegExp(`^Whitebox-Manual-Setup-${escapedVersion}-x64\\.exe$`, 'i').test(name);
-  const hasArm64 = /(?:^|[-_.])arm64(?:[-_.]|$)/.test(lower);
-  const hasX64 = /(?:^|[-_.])(?:x64|amd64)(?:[-_.]|$)/.test(lower);
-  const hasIa32 = /(?:^|[-_.])(?:ia32|x86)(?:[-_.]|$)/.test(lower);
-  let score = 12;
-  if (options.platform === 'win32') {
-    if (!lower.endsWith('.exe')) return -1;
-    // v1.7.3/v1.7.4 intentionally select this higher-scoring alias so their
-    // immutable ready-file race falls back to shell.openPath. Fixed clients
-    // must keep selecting the canonical Setup asset and automatic handshake.
-    if (frozenWindowsManualBridge) return -1;
-    if (options.arch === 'arm64' && !hasArm64) return -1;
-    if (options.arch === 'x64' && (hasArm64 || hasIa32)) return -1;
-    if (options.arch === 'ia32' && !hasIa32) return -1;
-    if (lower.includes('setup')) score += 100;
-    else if (lower.includes('portable')) score += 70;
-    else score += 30;
-    if (options.arch === 'arm64' && hasArm64) score += 25;
-    if (options.arch === 'x64' && hasX64) score += 25;
-    if (options.arch === 'ia32' && hasIa32) score += 25;
-    return score;
-  }
-  if (options.platform === 'darwin') {
-    if (!lower.endsWith('.dmg')) return -1;
-    if (options.arch === 'arm64' && !hasArm64) return -1;
-    if (options.arch === 'x64' && !hasX64) return -1;
-    score += 90;
-    if (options.arch === 'arm64') score += 30;
-    if (options.arch === 'x64') score += 30;
-    return score;
-  }
-  return -1;
+  const expectedName = automaticAssetName(options);
+  if (!expectedName || name !== expectedName || asset?.state !== 'uploaded') return -1;
+  if (!Number.isSafeInteger(asset.size)
+    || asset.size <= 0
+    || asset.size > MAX_UPDATE_BYTES
+    || !hasTrustedDigest(asset)) return -1;
+  const version = String(options.version || '');
+  const expectedUrl = `https://github.com/minjund/Whitebox/releases/download/v${version}/${expectedName}`;
+  return asset.browser_download_url === expectedUrl ? 100 : -1;
 }
 
 function selectReleaseAsset(assets, options) {
@@ -392,7 +376,15 @@ class UpdateManager extends EventEmitter {
       const latest = normalizeVersion(release && release.tag_name);
       if (!latest || release.draft || release.prerelease) throw new Error('공개된 최신 정식 버전 정보가 올바르지 않습니다.');
       const releaseUrl = trustedReleasePage(release.html_url) ? release.html_url : RELEASE_PAGE;
-      const asset = selectReleaseAsset(release.assets, { platform: this.platform, arch: this.arch, version: latest.raw });
+      const selectionOptions = { platform: this.platform, arch: this.arch, version: latest.raw };
+      const expectedName = automaticAssetName(selectionOptions);
+      const expectedUrl = expectedName
+        ? `https://github.com/minjund/Whitebox/releases/download/v${latest.raw}/${expectedName}`
+        : '';
+      const exactAsset = (Array.isArray(release.assets) ? release.assets : []).find(item => (
+        item?.name === expectedName && item?.browser_download_url === expectedUrl
+      )) || null;
+      const asset = selectReleaseAsset(release.assets, selectionOptions);
       const available = compareVersions(latest.raw, this.currentVersion) > 0;
       const candidateAsset = available && hasTrustedDigest(asset) ? publicAsset(asset) : null;
       const assetTooLarge = Boolean(candidateAsset && candidateAsset.size > this.maxDownloadBytes);
@@ -413,8 +405,10 @@ class UpdateManager extends EventEmitter {
         error: assetTooLarge
           ? '업데이트 파일이 허용된 최대 크기를 초과해 자동으로 받을 수 없습니다.'
           : (available && !asset
-          ? '이 운영체제에 맞는 설치 파일이 공식 파일 받기 페이지에 아직 올라오지 않았습니다.'
-          : (available && !hasTrustedDigest(asset) ? '설치 파일이 원본인지 확인할 안전 정보가 없어 업데이트할 수 없습니다.' : '')),
+          ? (exactAsset
+            ? '공식 설치 파일의 상태, 크기 또는 SHA-256 정보가 올바르지 않아 업데이트할 수 없습니다.'
+            : '이 운영체제에 맞는 설치 파일이 공식 파일 받기 페이지에 아직 올라오지 않았습니다.')
+          : ''),
       });
     } catch (error) {
       if (controller) controller.abort();

@@ -11,6 +11,10 @@ const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
 const { cohortList, readCohortManifest } = require('./check-update-compatibility-cohorts');
+const {
+  assertReleaseAssetSelections,
+  fixtureReleaseAssets,
+} = require('./release-asset-contract');
 
 if (process.platform !== 'win32') {
   console.log('Windows frozen-client update integration skipped: win32 only.');
@@ -50,14 +54,161 @@ const sourceInstaller = path.resolve(String(process.env[sourceCohort.installerEn
 const targetInstaller = path.resolve(String(process.env.WHITEBOX_CURRENT_INSTALLER || ''));
 const manualBridgeInstaller = path.resolve(String(process.env.WHITEBOX_MANUAL_INSTALLER || ''));
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-v173-update-integration-'));
+const isolatedProfileRoot = path.join(testRoot, 'isolated-profile');
+const isolatedAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Roaming');
+const isolatedLocalAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Local');
+const inheritedUserDataDir = path.join(isolatedAppDataRoot, 'Whitebox');
+const directUserDataDir = path.join(isolatedLocalAppDataRoot, 'direct-electron-user-data');
+const directUserDataArgument = `--user-data-dir=${directUserDataDir}`;
+const isolatedBridgeHome = path.join(testRoot, 'isolated-bridge-home');
 const installDir = path.join(testRoot, 'installed-whitebox');
 const installedExecutable = path.join(installDir, 'Whitebox.exe');
 const installedAsar = path.join(installDir, 'resources', 'app.asar');
+const uninstallRegistryKeyName = String(sourcePackageMetadata.build?.nsis?.guid || '').trim();
 const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const updateInstallerPaths = new Set();
 const trackedUpdateProcesses = new Map();
 let activeAppPid = 0;
+let installationStarted = false;
+let uninstallerAttemptCount = 0;
+let validUninstallerRunCount = 0;
+
+function pathIsWithin(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function assertPathWithin(root, candidate, label) {
+  assert.equal(pathIsWithin(root, candidate), true, `${label} escaped ${root}: ${candidate}`);
+}
+
+function prepareIsolatedProfileEnvironment() {
+  for (const [label, candidate] of [
+    ['isolated profile root', isolatedProfileRoot],
+    ['isolated APPDATA root', isolatedAppDataRoot],
+    ['isolated LOCALAPPDATA root', isolatedLocalAppDataRoot],
+    ['updater-inherited Electron user-data directory', inheritedUserDataDir],
+    ['direct Electron user-data directory', directUserDataDir],
+    ['isolated bridge home', isolatedBridgeHome],
+  ]) {
+    assertPathWithin(testRoot, candidate, label);
+  }
+  assert.notEqual(path.resolve(isolatedAppDataRoot).toLowerCase(), path.resolve(isolatedLocalAppDataRoot).toLowerCase(),
+    'APPDATA and LOCALAPPDATA isolation roots must be distinct.');
+  assert.equal(fs.existsSync(inheritedUserDataDir), false,
+    'The updater-inherited Whitebox profile must begin absent for every cohort attempt.');
+  assert.equal(fs.existsSync(directUserDataDir), false, 'The direct Electron profile must begin absent for every cohort attempt.');
+  fs.mkdirSync(isolatedAppDataRoot, { recursive: true });
+  fs.mkdirSync(isolatedLocalAppDataRoot, { recursive: true });
+  fs.mkdirSync(isolatedBridgeHome, { recursive: true });
+  for (const [label, candidate] of [
+    ['isolated APPDATA root', isolatedAppDataRoot],
+    ['isolated LOCALAPPDATA root', isolatedLocalAppDataRoot],
+    ['isolated bridge home', isolatedBridgeHome],
+  ]) {
+    const state = fs.lstatSync(candidate);
+    assert.equal(state.isDirectory() && !state.isSymbolicLink(), true, `${label} must be a real directory: ${candidate}`);
+    assertPathWithin(fs.realpathSync(testRoot), fs.realpathSync(candidate), `${label} real path`);
+    assert.deepStrictEqual(fs.readdirSync(candidate), [], `${label} was not fresh: ${candidate}`);
+  }
+  process.env.APPDATA = isolatedAppDataRoot;
+  process.env.LOCALAPPDATA = isolatedLocalAppDataRoot;
+  process.env.WHITEBOX_BRIDGE_HOME = isolatedBridgeHome;
+  process.env.LOADTOAGENT_BRIDGE_HOME = isolatedBridgeHome;
+}
+
+function assertIsolatedProfileEnvironment(label) {
+  assert.equal(path.resolve(String(process.env.APPDATA || '')).toLowerCase(), path.resolve(isolatedAppDataRoot).toLowerCase(),
+    `${label}: APPDATA no longer points at the attempt-local root.`);
+  assert.equal(path.resolve(String(process.env.LOCALAPPDATA || '')).toLowerCase(), path.resolve(isolatedLocalAppDataRoot).toLowerCase(),
+    `${label}: LOCALAPPDATA no longer points at the attempt-local root.`);
+  assert.equal(path.resolve(String(process.env.WHITEBOX_BRIDGE_HOME || '')).toLowerCase(), path.resolve(isolatedBridgeHome).toLowerCase(),
+    `${label}: WHITEBOX_BRIDGE_HOME no longer points at the attempt-local root.`);
+  assert.equal(path.resolve(String(process.env.LOADTOAGENT_BRIDGE_HOME || '')).toLowerCase(), path.resolve(isolatedBridgeHome).toLowerCase(),
+    `${label}: LOADTOAGENT_BRIDGE_HOME no longer points at the attempt-local root.`);
+  assertPathWithin(testRoot, process.env.APPDATA, `${label} APPDATA`);
+  assertPathWithin(testRoot, process.env.LOCALAPPDATA, `${label} LOCALAPPDATA`);
+  assertPathWithin(testRoot, process.env.WHITEBOX_BRIDGE_HOME, `${label} WHITEBOX_BRIDGE_HOME`);
+  assertPathWithin(testRoot, process.env.LOADTOAGENT_BRIDGE_HOME, `${label} LOADTOAGENT_BRIDGE_HOME`);
+  const bridgeHomeState = fs.lstatSync(isolatedBridgeHome, { throwIfNoEntry: false });
+  assert(bridgeHomeState && bridgeHomeState.isDirectory() && !bridgeHomeState.isSymbolicLink(),
+    `${label}: isolated bridge home is not a real directory.`);
+  assertPathWithin(fs.realpathSync(testRoot), fs.realpathSync(isolatedBridgeHome), `${label} isolated bridge home real path`);
+}
+
+function userDataReferences(commandLine) {
+  const references = [];
+  const pattern = /"--user-data-dir=([^"]+)"|--user-data-dir="([^"]+)"|--user-data-dir=([^\s"]+)|--user-data-dir\s+"([^"]+)"|--user-data-dir\s+([^\s"]+)/gi;
+  let match;
+  while ((match = pattern.exec(String(commandLine || ''))) !== null) {
+    references.push(match.slice(1).find(Boolean));
+  }
+  return references;
+}
+
+function runningInstalledAppCommandLines() {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$directory = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_INSTALL_DIR).TrimEnd([char]92) + [char]92',
+    '$records = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {',
+    '  $executablePath = [string]$_.ExecutablePath',
+    '  if (-not [string]::IsNullOrWhiteSpace($executablePath) -and',
+    '      $executablePath.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase)) {',
+    '    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))',
+    '    ([string]$_.ProcessId) + "|" + $encoded',
+    '  }',
+    '})',
+    '[Console]::Write((@($records | Sort-Object -Unique) -join "`n"))',
+  ].join('\n');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_INSTALL_DIR: installDir },
+    timeout: 30_000,
+  }).stdout.trim();
+  return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
+    const separator = record.indexOf('|');
+    assert(separator > 0, `Unexpected installed-app command-line record: ${record}`);
+    const pid = Number(record.slice(0, separator));
+    assert(Number.isSafeInteger(pid) && pid > 0, `Unexpected installed-app PID record: ${record}`);
+    return {
+      pid,
+      commandLine: Buffer.from(record.slice(separator + 1), 'base64').toString('utf8'),
+    };
+  }) : [];
+}
+
+function assertInstalledAppProfileIsolation(expectedPid, label, requireDirectProfile = false) {
+  assertIsolatedProfileEnvironment(label);
+  const records = runningInstalledAppCommandLines();
+  const expectedRecord = records.find(record => record.pid === expectedPid);
+  assert(expectedRecord, `${label}: installed app process ${expectedPid} was not observable for profile verification.`);
+  for (const record of records) {
+    const references = userDataReferences(record.commandLine);
+    for (const reference of references) {
+      const isExpectedRoot = pathIsWithin(isolatedAppDataRoot, reference)
+        || pathIsWithin(isolatedLocalAppDataRoot, reference);
+      assert.equal(isExpectedRoot, true,
+        `${label}: process ${record.pid} references a user-data path outside the attempt roots: ${reference}`);
+    }
+    if (record.pid === expectedPid && requireDirectProfile) {
+      assert.deepStrictEqual(
+        references.map(reference => path.resolve(reference).toLowerCase()),
+        [path.resolve(directUserDataDir).toLowerCase()],
+        `${label}: directly spawned app did not use exactly the fresh explicit Electron profile.`,
+      );
+    }
+  }
+}
+
+function assertProfileDirectoryUsed(directory, label) {
+  const state = fs.lstatSync(directory, { throwIfNoEntry: false });
+  assert(state && state.isDirectory() && !state.isSymbolicLink(), `${label} was not created as a real directory: ${directory}`);
+  assertPathWithin(fs.realpathSync(testRoot), fs.realpathSync(directory), `${label} real path`);
+  assert(fs.readdirSync(directory).length > 0, `${label} remained unused: ${directory}`);
+  assertPathWithin(testRoot, directory, label);
+}
+
+prepareIsolatedProfileEnvironment();
 
 function existingFile(file, label) {
   const stat = fs.statSync(file, { throwIfNoEntry: false });
@@ -150,6 +301,95 @@ function stopProcessesAtExactPath(executable, label) {
   for (const pid of runningProcessIds(executable)) stopProcessTree(pid);
   const remaining = runningProcessIds(executable);
   if (remaining.length) throw new Error(`${label} processes remained after cleanup: ${remaining.join(',')}`);
+}
+
+function runningProcessesUnderDirectory(directory) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$directory = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_INSTALL_DIR).TrimEnd([char]92) + [char]92',
+    '$records = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {',
+    '  $executablePath = [string]$_.ExecutablePath',
+    '  if (-not [string]::IsNullOrWhiteSpace($executablePath) -and',
+    '      $executablePath.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase)) {',
+    '    ([string]$_.ProcessId) + "|" + $executablePath',
+    '  }',
+    '})',
+    '[Console]::Write((@($records | Sort-Object -Unique) -join "`n"))',
+  ].join('\n');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_INSTALL_DIR: directory },
+    timeout: 30_000,
+  }).stdout.trim();
+  return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
+    const separator = record.indexOf('|');
+    const pid = Number(separator >= 0 ? record.slice(0, separator) : '');
+    if (!Number.isSafeInteger(pid) || pid <= 0 || separator < 0) {
+      throw new Error(`Unexpected installed-path process record: ${record}`);
+    }
+    return { pid, executablePath: record.slice(separator + 1) };
+  }) : [];
+}
+
+function stopProcessesUnderDirectory(directory, label) {
+  for (const processRecord of runningProcessesUnderDirectory(directory)) stopProcessTree(processRecord.pid);
+  const remaining = runningProcessesUnderDirectory(directory);
+  if (remaining.length) {
+    throw new Error(`${label} processes remained after cleanup: ${remaining.map(record => `${record.pid} (${record.executablePath})`).join(', ')}`);
+  }
+}
+
+function perUserUninstallRegistryEntries() {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$installDirectory = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_INSTALL_DIR).TrimEnd([char]92)',
+    '$uninstaller = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_UNINSTALLER)',
+    '$expectedKeyName = $env:WHITEBOX_INTEGRATION_UNINSTALL_KEY',
+    "$uninstallRootName = 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'",
+    '$records = @()',
+    'foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {',
+    '  $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)',
+    '  try {',
+    '    $uninstallRoot = $baseKey.OpenSubKey($uninstallRootName)',
+    '    if ($null -eq $uninstallRoot) { continue }',
+    '    try {',
+    '      foreach ($keyName in $uninstallRoot.GetSubKeyNames()) {',
+    '        $entry = $uninstallRoot.OpenSubKey($keyName)',
+    '        if ($null -eq $entry) { continue }',
+    '        try {',
+    "          $installLocation = [string]$entry.GetValue('InstallLocation', '')",
+    "          $uninstallString = [string]$entry.GetValue('UninstallString', '')",
+    '          $matchesExpectedKey = [string]::Equals($keyName, $expectedKeyName, [StringComparison]::OrdinalIgnoreCase)',
+    '          $matchesInstallLocation = -not [string]::IsNullOrWhiteSpace($installLocation) -and',
+    '            [string]::Equals($installLocation.Trim().TrimEnd([char]92), $installDirectory, [StringComparison]::OrdinalIgnoreCase)',
+    '          $matchesUninstaller = -not [string]::IsNullOrWhiteSpace($uninstallString) -and',
+    '            $uninstallString.IndexOf($uninstaller, [StringComparison]::OrdinalIgnoreCase) -ge 0',
+    '          if ($matchesExpectedKey -or $matchesInstallLocation -or $matchesUninstaller) {',
+    '            $records += ([string]$view) + "|" + $keyName',
+    '          }',
+    '        } finally {',
+    '          $entry.Dispose()',
+    '        }',
+    '      }',
+    '    } finally {',
+    '      $uninstallRoot.Dispose()',
+    '    }',
+    '  } finally {',
+    '    $baseKey.Dispose()',
+    '  }',
+    '}',
+    '[Console]::Write((@($records | Sort-Object -Unique) -join "`n"))',
+  ].join('\n');
+  const uninstaller = path.join(installDir, 'Uninstall Whitebox.exe');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: {
+      ...process.env,
+      WHITEBOX_INTEGRATION_INSTALL_DIR: installDir,
+      WHITEBOX_INTEGRATION_UNINSTALLER: uninstaller,
+      WHITEBOX_INTEGRATION_UNINSTALL_KEY: uninstallRegistryKeyName,
+    },
+    timeout: 30_000,
+  }).stdout.trim();
+  return output ? output.split(/\r?\n/).filter(Boolean) : [];
 }
 
 function processCommandReferences(pid, file) {
@@ -281,6 +521,42 @@ async function waitForPathRemoval(file, timeoutMs = 20_000) {
   throw new Error(`Timed out waiting for update artifact removal: ${file}`);
 }
 
+async function waitForInstallCleanup(timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  let remainingRegistryEntries = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    remainingRegistryEntries = perUserUninstallRegistryEntries();
+    if (!fs.existsSync(installDir) && remainingRegistryEntries.length === 0) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error([
+    `Timed out waiting for the installed directory and per-user uninstall registry entries to be removed: ${installDir}`,
+    remainingRegistryEntries.length && `Remaining registry entries: ${remainingRegistryEntries.join(', ')}`,
+  ].filter(Boolean).join('\n'));
+}
+
+function runInstalledProductUninstaller(uninstaller) {
+  assert.equal(installationStarted, true, 'The installed-product uninstaller cannot run before installation starts.');
+  assert.equal(uninstallerAttemptCount, 0, 'The installed-product uninstaller must be invoked exactly once per attempt.');
+  assert.equal(path.resolve(uninstaller), path.resolve(installDir, 'Uninstall Whitebox.exe'), 'Unexpected installed-product uninstaller path.');
+  existingFile(uninstaller, 'installed-product uninstaller');
+  uninstallerAttemptCount += 1;
+  const result = spawnSync(uninstaller, ['/S', '/currentuser'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 120_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error([
+      `Integration uninstaller cleanup failed (${result.status ?? 'spawn error'}).`,
+      result.error && result.error.stack,
+      result.stdout,
+      result.stderr,
+    ].filter(Boolean).join('\n'));
+  }
+  validUninstallerRunCount += 1;
+}
+
 async function waitForUpdateArtifactCleanup(launched, timeoutMs = 20_000) {
   for (const file of [
     launched.bootstrapPath,
@@ -307,7 +583,10 @@ async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000)
       assert.equal(linesStarting(lines, 'relaunchStarted=').length, 1, 'The helper must start the app exactly once.');
       assert.equal(linesStarting(lines, 'rendererReady=').length, 1, 'The helper must observe one renderer-ready handshake.');
       assert.equal(linesStarting(lines, 'candidate=').some(line => line.endsWith(`;version=${expectedVersion}`)), true);
-      return Number(match[1]);
+      const pid = Number(match[1]);
+      assertInstalledAppProfileIsolation(pid, `updater relaunch ${expectedVersion}`);
+      assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
+      return pid;
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
@@ -347,7 +626,8 @@ async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, sta
 async function startInstalledApp(expectedVersion) {
   const rendererReadyToken = crypto.randomBytes(24).toString('hex');
   const rendererReadyPath = path.join(testRoot, `install-renderer-ready-${rendererReadyToken}.json`);
-  const child = spawn(installedExecutable, [], {
+  assertIsolatedProfileEnvironment(`direct app start ${expectedVersion}`);
+  const child = spawn(installedExecutable, [directUserDataArgument], {
     env: {
       ...process.env,
       WHITEBOX_UPDATE_READY_PATH: rendererReadyPath,
@@ -369,6 +649,8 @@ async function startInstalledApp(expectedVersion) {
         && signal.version === expectedVersion
         && String(signal.rendererReadyAt || '').trim()) {
         fs.rmSync(rendererReadyPath, { force: true });
+        assertInstalledAppProfileIsolation(child.pid, `direct app start ${expectedVersion}`, true);
+        assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
         return child.pid;
       }
     } catch (_notReady) {}
@@ -390,9 +672,13 @@ async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
     digest,
     browser_download_url: `https://github.com/minjund/Whitebox/releases/download/v${targetVersion}/${name}`,
   });
-  const canonicalAsset = releaseAsset(targetInstallerName);
-  const portableAsset = releaseAsset(`Whitebox-${targetVersion}-portable.exe`);
-  const manualBridgeAsset = releaseAsset(manualBridgeInstallerName);
+  const completeAssets = fixtureReleaseAssets(targetVersion).map(asset => (
+    asset.name === targetInstallerName || asset.name === manualBridgeInstallerName
+      ? releaseAsset(asset.name)
+      : asset
+  ));
+  const canonicalAsset = completeAssets.find(asset => asset.name === targetInstallerName);
+  const manualBridgeAsset = completeAssets.find(asset => asset.name === manualBridgeInstallerName);
   const release = {
     tag_name: `v${targetVersion}`,
     draft: false,
@@ -400,7 +686,7 @@ async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
     html_url: `https://github.com/minjund/Whitebox/releases/tag/v${targetVersion}`,
     published_at: '2026-08-24T00:00:00.000Z',
     body: `Windows ${SOURCE_VERSION} packaged update integration fixture`,
-    assets: [canonicalAsset, portableAsset, manualBridgeAsset],
+    assets: completeAssets,
   };
   const fetch = async url => {
     if (String(url) === updaterModule.RELEASE_API) {
@@ -527,7 +813,12 @@ async function launchPackagedInstaller(installerModule, options) {
 }
 
 async function main() {
+  assertIsolatedProfileEnvironment('frozen-client attempt initialization');
+  assert.equal(fs.existsSync(directUserDataDir), false,
+    'The direct Electron profile was touched before the cohort installer/app attempt began.');
   assert.match(targetVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+  assert.match(uninstallRegistryKeyName, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    'The Whitebox NSIS per-user uninstall registry key must be pinned by GUID.');
   assert.equal(compareVersions(targetVersion, '1.7.4') > 0, true, 'The handshake fix must ship at a SemVer version newer than the already-published v1.7.4.');
   assert.equal(path.basename(sourceInstaller), SOURCE_INSTALLER_NAME);
   assert.equal(path.basename(targetInstaller), targetInstallerName);
@@ -542,6 +833,7 @@ async function main() {
   process.env.WHITEBOX_TEST_INSTANCE = '1';
 
   // This direct installer execution establishes the immutable frozen-client baseline.
+  installationStarted = true;
   run(sourceInstaller, ['/S', '/currentuser', `/D=${installDir}`]);
   existingFile(installedExecutable, `installed v${SOURCE_VERSION} executable`);
   assert.equal(executableVersion(installedExecutable), SOURCE_VERSION);
@@ -650,12 +942,16 @@ async function main() {
   const targetInstallerModule = require(path.join(targetModuleDir, 'updateInstaller.js'));
   const targetUpdaterModule = require(path.join(targetModuleDir, 'updateManager.js'));
   assert.equal(typeof targetInstallerModule.waitForUpdateBootstrapExit, 'function', 'The target package lacks bootstrap acknowledgement support.');
-  const releaseBase = `https://github.com/minjund/Whitebox/releases/download/v${targetVersion}/`;
-  const fixedSelection = targetUpdaterModule.selectReleaseAsset([
-    { name: manualBridgeInstallerName, state: 'uploaded', browser_download_url: `${releaseBase}${manualBridgeInstallerName}` },
-    { name: targetInstallerName, state: 'uploaded', browser_download_url: `${releaseBase}${targetInstallerName}` },
-  ], { platform: 'win32', arch: 'x64', version: targetVersion });
-  assert.equal(fixedSelection && fixedSelection.name, targetInstallerName, 'The fixed updater selected the frozen-client manual bridge instead of canonical automatic Setup.');
+  const targetReleaseAssets = fixtureReleaseAssets(targetVersion).map(asset => {
+    if (asset.name !== targetInstallerName && asset.name !== manualBridgeInstallerName) return asset;
+    const installer = asset.name === targetInstallerName ? targetInstaller : manualBridgeInstaller;
+    return {
+      ...asset,
+      size: fs.statSync(installer).size,
+      digest: `sha256:${sha256(installer)}`,
+    };
+  });
+  assertReleaseAssetSelections(targetReleaseAssets, targetVersion, targetUpdaterModule.selectReleaseAsset);
 
   const reinstallDownloadsDir = path.join(testRoot, 'target-reinstall-downloads');
   fs.mkdirSync(reinstallDownloadsDir, { recursive: true });
@@ -698,6 +994,9 @@ async function main() {
   });
   assert.equal(linesStarting(reinstallLines, 'relaunchStarted=').length, 1, 'The no-delay reinstall relaunched more than once.');
   assert.equal(processAlive(activeAppPid), true);
+  assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
+  assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
+  assertInstalledAppProfileIsolation(activeAppPid, 'completed frozen-client attempt');
 
   console.log(`✓ Official Whitebox ${SOURCE_VERSION} reached ${targetVersion} through its packaged ${sourceCohort.installMode} path; the candidate updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }
@@ -706,56 +1005,102 @@ main().catch(error => {
   console.error(error.stack || error);
   dumpUpdateLogs(testRoot);
   process.exitCode = 1;
-}).finally(() => {
-  for (const [pid, commandPath] of trackedUpdateProcesses) {
+}).finally(async () => {
+  const cleanupFailures = [];
+  const captureCleanup = async (label, action) => {
     try {
-      if (processCommandReferences(pid, commandPath)) stopProcessTree(pid);
+      await action();
     } catch (error) {
-      console.error(`Could not stop a tracked integration updater process during cleanup: ${error.message}`);
-      process.exitCode = 1;
+      cleanupFailures.push(`${label}: ${error.stack || error}`);
     }
+  };
+
+  for (const [pid, commandPath] of trackedUpdateProcesses) {
+    await captureCleanup('stop tracked integration updater process', async () => {
+      if (processCommandReferences(pid, commandPath)) stopProcessTree(pid);
+    });
   }
   for (const [pid, commandPath] of trackedUpdateProcesses) {
-    if (!processCommandReferences(pid, commandPath)) continue;
-    console.error(`A tracked integration updater process remained after cleanup: ${pid} (${commandPath})`);
-    process.exitCode = 1;
+    await captureCleanup('verify tracked integration updater process cleanup', async () => {
+      assert.equal(processCommandReferences(pid, commandPath), false,
+        `A tracked integration updater process remained after cleanup: ${pid} (${commandPath})`);
+    });
   }
   for (const installerPath of updateInstallerPaths) {
-    try {
+    await captureCleanup('stop integration installer process', async () => {
       stopProcessesAtExactPath(installerPath, 'Integration installer');
-    } catch (error) {
-      console.error(`Could not stop integration installer processes during cleanup: ${error.message}`);
-      process.exitCode = 1;
-    }
-  }
-  try {
-    stopProcessesAtExactPath(installedExecutable, 'Integration app');
-  } catch (error) {
-    console.error(`Could not stop integration app processes during cleanup: ${error.message}`);
-    process.exitCode = 1;
-  }
-  const uninstaller = path.join(installDir, 'Uninstall Whitebox.exe');
-  if (fs.existsSync(uninstaller)) {
-    const uninstallResult = spawnSync(uninstaller, ['/S', '/currentuser'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 120_000,
     });
-    if (uninstallResult.error || uninstallResult.status !== 0) {
-      console.error([
-        `Integration uninstaller cleanup failed (${uninstallResult.status ?? 'spawn error'}).`,
-        uninstallResult.error && uninstallResult.error.stack,
-        uninstallResult.stdout,
-        uninstallResult.stderr,
-      ].filter(Boolean).join('\n'));
-      process.exitCode = 1;
-    }
   }
+  await captureCleanup('stop installed-path processes', async () => {
+    stopProcessesUnderDirectory(installDir, 'Installed-path');
+  });
+
   asar.uncacheAll();
-  try {
+  const uninstaller = path.join(installDir, 'Uninstall Whitebox.exe');
+  if (installationStarted) {
+    await captureCleanup('verify installed-product uninstall registry entry', async () => {
+      const registryEntries = perUserUninstallRegistryEntries();
+      assert(registryEntries.length > 0, 'No per-user Whitebox uninstall registry entry existed after installation started.');
+      assert(registryEntries.every(entry => entry.toLowerCase().endsWith(`|${uninstallRegistryKeyName.toLowerCase()}`)),
+        `Unexpected per-user uninstall registry entries referenced the integration install: ${registryEntries.join(', ')}`);
+    });
+    await captureCleanup('run installed-product uninstaller exactly once', async () => {
+      runInstalledProductUninstaller(uninstaller);
+    });
+    if (uninstallerAttemptCount !== 1) {
+      cleanupFailures.push(`run installed-product uninstaller exactly once: expected 1 invocation, observed ${uninstallerAttemptCount}`);
+    }
+    if (validUninstallerRunCount !== 1) {
+      cleanupFailures.push(`run one valid installed-product uninstaller: expected 1 successful invocation, observed ${validUninstallerRunCount}`);
+    }
+    await captureCleanup('wait for installed product cleanup', async () => waitForInstallCleanup());
+    await captureCleanup('verify installed-path process cleanup', async () => {
+      const remainingProcesses = runningProcessesUnderDirectory(installDir);
+      assert.deepStrictEqual(remainingProcesses, [],
+        `Installed-path processes remained after uninstall: ${remainingProcesses.map(record => `${record.pid} (${record.executablePath})`).join(', ')}`);
+    });
+    await captureCleanup('verify install directory cleanup', async () => {
+      assert.equal(fs.existsSync(installDir), false, `Installed directory remained after uninstall: ${installDir}`);
+    });
+    await captureCleanup('verify per-user uninstall registry cleanup', async () => {
+      assert.deepStrictEqual(perUserUninstallRegistryEntries(), [],
+        'Per-user Whitebox uninstall registry entries remained after uninstall.');
+    });
+  } else {
+    assert.equal(uninstallerAttemptCount, 0, 'The uninstaller ran without an installation attempt.');
+    assert.equal(validUninstallerRunCount, 0, 'A valid uninstaller run was recorded without an installation attempt.');
+  }
+
+  for (const installerPath of updateInstallerPaths) {
+    await captureCleanup('verify integration installer process cleanup', async () => {
+      assert.deepStrictEqual(runningProcessIds(installerPath), [],
+        `Integration installer processes remained after uninstall: ${installerPath}`);
+    });
+  }
+  for (const [pid, commandPath] of trackedUpdateProcesses) {
+    await captureCleanup('verify updater process cleanup after uninstall', async () => {
+      assert.equal(processCommandReferences(pid, commandPath), false,
+        `A tracked integration updater process remained after uninstall: ${pid} (${commandPath})`);
+    });
+  }
+
+  if (cleanupFailures.length) {
+    console.error(`Frozen-client integration cleanup was not fully verified; retaining ${testRoot} for inspection:\n${cleanupFailures.join('\n')}`);
+    process.exitCode = 1;
+    return;
+  }
+  await captureCleanup('remove integration temporary root', async () => {
     fs.rmSync(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-  } catch (error) {
-    console.error(`Integration temporary directory cleanup failed: ${error.stack || error}`);
+    assert.equal(fs.existsSync(testRoot), false, `Integration temporary root remained after cleanup: ${testRoot}`);
+    assert.equal(fs.existsSync(isolatedProfileRoot), false, `Isolated profile root remained after cleanup: ${isolatedProfileRoot}`);
+    assert.equal(fs.existsSync(isolatedAppDataRoot), false, `Isolated APPDATA root remained after cleanup: ${isolatedAppDataRoot}`);
+    assert.equal(fs.existsSync(isolatedLocalAppDataRoot), false, `Isolated LOCALAPPDATA root remained after cleanup: ${isolatedLocalAppDataRoot}`);
+    assert.equal(fs.existsSync(inheritedUserDataDir), false, `Updater-inherited Electron profile remained after cleanup: ${inheritedUserDataDir}`);
+    assert.equal(fs.existsSync(directUserDataDir), false, `Explicit Electron profile remained after cleanup: ${directUserDataDir}`);
+    assert.equal(fs.existsSync(isolatedBridgeHome), false, `Isolated bridge home remained after cleanup: ${isolatedBridgeHome}`);
+  });
+  if (cleanupFailures.length) {
+    console.error(`Frozen-client integration temporary directory cleanup failed:\n${cleanupFailures.join('\n')}`);
     process.exitCode = 1;
   }
 });

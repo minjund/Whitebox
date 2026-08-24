@@ -53,19 +53,32 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
   function sourceStatus(sourceId) {
     if (sourceId === "direct") return { id: "direct", name: "직접 실행", available: true, state: "ready", reason: "", source: { id: "direct", label: "Whitebox" } };
     return (state.sourcePlugins || []).find(item => item.id === sourceId) || {
-      id: sourceId, name: sourceId === "builtin.omo" ? "OMO · OpenCode" : "Aside Browser",
+      id: sourceId, name: sourceId === "builtin.opencode" ? "OpenCode" : "Aside Browser",
       available: false, reason: "연결 상태를 확인하지 못했습니다.", source: { id: sourceId, label: sourceId },
     };
   }
 
+  function sourcePluginEnabled(sourceId) {
+    return (state.sourcePluginSettings?.enabledPluginIds || []).includes(String(sourceId || ""));
+  }
+
+  function normalizeRunSourceSelection() {
+    if (state.runSource === "direct" || sourcePluginEnabled(state.runSource)) return false;
+    state.runSource = "direct";
+    if (state.runDraft && typeof state.runDraft === "object") state.runDraft.sourcePluginId = "direct";
+    context.saveRunDraft?.();
+    return true;
+  }
+
   function sourcePickerHtml() {
-    const sources = [sourceStatus("direct"), sourceStatus("builtin.omo"), sourceStatus("builtin.aside")];
+    const sources = [sourceStatus("direct"), sourceStatus("builtin.opencode"), sourceStatus("builtin.aside")];
     return sources.map(source => {
       const selected = state.runSource === source.id;
-      const canConfigureAside = source.id === "builtin.aside" && state.platform.id === "darwin";
-      const available = source.id === "direct" || canConfigureAside || Boolean(source.available && source.capabilities?.start !== false);
-      const canStart = source.id === "direct" || Boolean(source.available && source.capabilities?.start !== false);
-      const mark = source.id === "direct" ? ">_" : source.id === "builtin.omo" ? "OMO" : "A";
+      const enabled = source.id === "direct" || sourcePluginEnabled(source.id);
+      const canConfigureAside = enabled && source.id === "builtin.aside" && state.platform.id === "darwin";
+      const available = source.id === "direct" || (enabled && (canConfigureAside || Boolean(source.available && source.capabilities?.start !== false)));
+      const canStart = source.id === "direct" || (enabled && Boolean(source.available && source.capabilities?.start !== false));
+      const mark = source.id === "direct" ? ">_" : source.id === "builtin.opencode" ? "OC" : "A";
       const label = source.id === "direct" ? "직접 실행" : source.name || source.source?.label || source.id;
       const detail = canStart
         ? source.id === "direct" ? "선택한 AI CLI를 Whitebox 명령창에서 실행" : "연결된 출처에서 작업 시작"
@@ -96,6 +109,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
 
   function selectedSourceAvailable() {
     if (state.runSource === "direct") return isProviderVisible(state.runProvider) && Boolean(state.availability[state.runProvider]);
+    if (!sourcePluginEnabled(state.runSource)) return false;
     const source = sourceStatus(state.runSource);
     return Boolean(source.available && source.capabilities?.start !== false);
   }
@@ -324,6 +338,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     }
     if (!runFocusToken) runFocusToken = rememberDialogTrigger("runModal");
     restoreRunDraft();
+    normalizeRunSourceSelection();
     ensureRunSourcePicker();
     const installed = visibleProviders().find((provider) => state.availability[provider.id]);
     if ((!isProviderVisible(state.runProvider) || !state.availability[state.runProvider]) && installed) state.runProvider = installed.id;

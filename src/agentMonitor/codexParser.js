@@ -15,6 +15,8 @@ const COLLABORATION_TOOLS = new Set([
   'list_agents',
 ]);
 
+const OBSERVATION_CLOCK_SKEW_MS = 60_000;
+
 function createCodexParser(dependencies) {
   const {
     thresholds: { ACTIVE_THRESHOLD_MS, STALE_TURN_THRESHOLD_MS },
@@ -63,7 +65,28 @@ function createCodexParser(dependencies) {
     session.branch = meta.git && meta.git.branch || '';
     session.startedAt = timestamp(meta.timestamp || (metaRow && metaRow.timestamp), session.updatedAt);
 
-    if (/codex desktop/i.test(String(meta.originator || ''))) {
+    const forkedFromExternalId = String(meta.forked_from_id || '').trim();
+    const validForkSource = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(forkedFromExternalId)
+      && !/^(?:terminal|bridge):/iu.test(forkedFromExternalId)
+      && !/^process-\d+$/iu.test(forkedFromExternalId);
+    session.forkSourceSessionId = validForkSource ? `codex:${forkedFromExternalId}` : '';
+    const historyBase = meta.history_base || {};
+    const historyBaseExternalId = String(historyBase.thread_id || '').trim();
+    const validHistoryBase = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(historyBaseExternalId)
+      && !/^(?:terminal|bridge):/iu.test(historyBaseExternalId)
+      && !/^process-\d+$/iu.test(historyBaseExternalId);
+    session.forkHistoryBaseSessionId = validHistoryBase ? `codex:${historyBaseExternalId}` : '';
+    const historyEndOrdinalExclusive = Number(historyBase.end_ordinal_exclusive);
+    const historyEndByteOffset = Number(historyBase.end_byte_offset);
+    session.forkHistoryEndOrdinalExclusive = Number.isSafeInteger(historyEndOrdinalExclusive)
+      && historyEndOrdinalExclusive >= 0 ? historyEndOrdinalExclusive : null;
+    session.forkHistoryEndByteOffset = Number.isSafeInteger(historyEndByteOffset)
+      && historyEndByteOffset >= 0 ? historyEndByteOffset : null;
+    const isCliFork = Boolean(session.forkSourceSessionId)
+      && /^cli$/i.test(String(meta.source || '').trim());
+    if (isCliFork) {
+      session.clientKind = 'codex-cli';
+    } else if (/codex desktop/i.test(String(meta.originator || ''))) {
       session.clientKind = 'codex-desktop';
       session.sourceLabel = 'Codex 데스크톱 앱';
     } else if (/vscode|ide/i.test(String(meta.source || ''))) {
@@ -111,6 +134,22 @@ function createCodexParser(dependencies) {
       activityState: 'idle',
       activityAt: 0,
     };
+  }
+
+  function observationAgeMs(state, fileInfo, now = Date.now()) {
+    const latestRowAt = Date.parse(state.latestTs || '');
+    const validObservation = value => Number.isFinite(value)
+      && value > 0
+      && value <= now + OBSERVATION_CLOCK_SKEW_MS;
+    const observationCandidates = [
+      Number(fileInfo && fileInfo.mtimeMs),
+      Number(state.activityAt),
+      latestRowAt,
+    ].filter(validObservation);
+    const observedAt = observationCandidates.length
+      ? Math.max(...observationCandidates)
+      : 0;
+    return observedAt ? Math.max(0, now - observedAt) : Number.POSITIVE_INFINITY;
   }
 
   function beginObservedTurn(session, state, turnId = '') {
@@ -543,6 +582,17 @@ function createCodexParser(dependencies) {
       processToolCall(session, state, row, payload, timing);
     } else if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
       processToolOutput(session, state, row, payload);
+    } else if (payload.type === 'reasoning') {
+      resumeAfterObservedCompletion(session, state, row.timestamp);
+      observeActivity(state, 'thinking', row.timestamp);
+      addLifecycle(session, {
+        id: payload.id || `reasoning:${row.timestamp}`,
+        type: 'reasoning',
+        label: '다음 작업 확인 중',
+        detail: '다음에 할 일을 확인하고 결과를 정리하는 중',
+        status: 'running',
+        timestamp: row.timestamp,
+      });
     } else if (payload.type === 'agent_message') {
       processAgentMessage(session, state, row, payload, timing);
     } else if (payload.type === 'message') {
@@ -595,8 +645,12 @@ function createCodexParser(dependencies) {
     const windowInfo = modelContextWindow('codex', session.model, state.observedWindow);
     session.context = contextInfo(session.turnUsage.total || session.turnUsage.input, windowInfo);
 
+    const observationAge = observationAgeMs(state, fileInfo);
+    const recentTurnObservation = observationAge < STALE_TURN_THRESHOLD_MS;
+    const recentActiveObservation = recentTurnObservation
+      && ['thinking', 'working', 'juggling'].includes(state.activityState);
+
     if (session.status !== 'failed') {
-      const turnAge = Date.now() - fileInfo.mtimeMs;
       const pendingUserInput = state.pendingUserInputCalls.size > 0;
       const inputRequestId = [...state.pendingUserInputCalls].sort().join('|');
       const inputRequestedAt = inputRequestId
@@ -622,7 +676,7 @@ function createCodexParser(dependencies) {
         session.status = 'waiting';
         session.statusDetail = '내 답변을 기다리는 중';
         session.statusObserved = true;
-      } else if (state.activeTurn && turnAge < STALE_TURN_THRESHOLD_MS) {
+      } else if ((state.activeTurn || recentActiveObservation) && recentTurnObservation) {
         session.status = 'running';
         session.statusDetail = '턴 실행 중';
         session.statusObserved = true;
@@ -633,7 +687,7 @@ function createCodexParser(dependencies) {
       } else {
         session.status = 'idle';
         session.statusDetail = state.activeTurn ? '마지막 요청 처리 기록이 종료됨' : '다음 요청 대기';
-        session.statusObserved = Date.now() - fileInfo.mtimeMs < ACTIVE_THRESHOLD_MS;
+        session.statusObserved = observationAge < ACTIVE_THRESHOLD_MS;
       }
     }
     session.activityState = finalizedActivityState({
@@ -641,7 +695,7 @@ function createCodexParser(dependencies) {
       completionObserved: session.completionObserved,
       pendingInput: state.pendingUserInputCalls.size > 0,
       activeSubagents: session.collaboration.spawns.some(record => record.status === 'running'),
-      recent: Date.now() - fileInfo.mtimeMs < STALE_TURN_THRESHOLD_MS,
+      recent: recentTurnObservation,
       observed: state.activityState,
     });
     trimSession(session);

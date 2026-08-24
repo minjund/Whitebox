@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const {
   CodexAppServer,
@@ -240,6 +241,27 @@ function registerCodexSharedAppServerTests(context) {
     assert.deepStrictEqual(spec.args, ['--remote', endpoint, 'resume', 'session-remote']);
     assert.deepStrictEqual(options, snapshot);
     assert.deepStrictEqual(options.args, ['resume', 'session-remote']);
+
+    const forkExternalId = 'session-fork-source';
+    const forkSourceSessionId = `codex:${forkExternalId}`;
+    const forkSourceSignature = `acs1:${crypto.createHash('sha256').update(JSON.stringify([
+      forkSourceSessionId,
+      'codex',
+      forkExternalId,
+      'linux',
+      '',
+    ]), 'utf8').digest('hex')}`;
+    const forkOptions = normalizeLaunchOptions({
+      type: 'agent',
+      provider: 'codex',
+      cwd: process.cwd(),
+      args: ['fork', forkExternalId],
+      agentForkSourceSessionId: forkSourceSessionId,
+      agentForkSourceSignature: forkSourceSignature,
+      sessionBackend: 'direct',
+    }, 'linux');
+    const forkSpec = launchSpec(forkOptions, 'linux', providers);
+    assert.deepStrictEqual(forkSpec.args, ['--remote', endpoint, 'fork', forkExternalId]);
   });
 
   test('Windows WSL Codex는 native app-server remote를 주입하지 않는다', () => {
@@ -301,6 +323,9 @@ function registerCodexSharedAppServerTests(context) {
     assert.equal(processSessionExternalId({
       argv: ['codex', '--remote', '', 'resume', 'must-fail-closed'],
     }, 'codex'), '');
+    assert.equal(processSessionExternalId({
+      argv: ['codex', '--remote', 'ws://127.0.0.1:45123', 'fork', 'fork-source-is-not-current'],
+    }, 'codex'), '', 'fork 원본 ID를 현재 프로세스의 resume identity로 오인했습니다.');
   });
 
   test('Codex app-server 실행 명세는 loopback 동적 포트만 요청한다', () => {

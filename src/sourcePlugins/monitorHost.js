@@ -2,6 +2,7 @@
 
 const { normalizeSourceSession, normalizedCapabilities, validateManifest } = require('./contracts');
 const { bundledSourceDefinitions } = require('./bundled');
+const { isSourcePluginEnabled } = require('./settingsStore');
 
 const SCAN_TIMEOUT_MS = 12_000;
 
@@ -21,6 +22,10 @@ class SourcePluginMonitorHost {
     this.home = options.home;
     this.platform = options.platform || process.platform;
     this.settings = options.settings || {};
+    // Hosts created by older tests or embedders without an activation schema
+    // retain their previous behavior. Production always receives the v2 store
+    // snapshot and therefore fails closed until a plugin is explicitly enabled.
+    this.hasActivationSettings = Array.isArray(this.settings.enabledPluginIds);
     this.definitions = options.definitions || bundledSourceDefinitions(options);
     this.monitors = new Map();
     this.statuses = new Map();
@@ -30,15 +35,43 @@ class SourcePluginMonitorHost {
     this.initialize();
   }
 
+  pluginEnabled(pluginId) {
+    return !this.hasActivationSettings || isSourcePluginEnabled(this.settings, pluginId);
+  }
+
+  runtimeDisabled(pluginId) {
+    return this.runtimeStatuses.get(String(pluginId || ''))?.enabled === false;
+  }
+
   initialize() {
     const ids = new Set();
     for (const definition of this.definitions) {
       const manifest = validateManifest(definition.manifest);
       if (ids.has(manifest.id)) throw new Error(`중복 source plugin ID: ${manifest.id}`);
       ids.add(manifest.id);
-      if (!manifest.platforms.includes(this.platform)) {
+      const platformSupported = manifest.platforms.includes(this.platform);
+      if (!this.pluginEnabled(manifest.id)) {
         this.statuses.set(manifest.id, {
-          id: manifest.id, source: manifest.source, name: manifest.name, available: false, state: 'unavailable',
+          id: manifest.id,
+          source: manifest.source,
+          name: manifest.name,
+          enabled: false,
+          available: false,
+          platformSupported,
+          state: platformSupported ? 'disabled' : 'unavailable',
+          reason: platformSupported
+            ? '설정에서 활성화하면 이 플러그인의 로컬 작업 기록을 불러옵니다.'
+            : manifest.id === 'builtin.aside'
+              ? 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.'
+              : '현재 운영체제에서 지원하지 않습니다.',
+          capabilities: normalizedCapabilities({}, {}),
+        });
+        continue;
+      }
+      if (!platformSupported) {
+        this.statuses.set(manifest.id, {
+          id: manifest.id, source: manifest.source, name: manifest.name, enabled: true, available: false,
+          platformSupported: false, state: 'unavailable',
           reason: manifest.id === 'builtin.aside' ? 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.' : '현재 운영체제에서 지원하지 않습니다.',
           capabilities: normalizedCapabilities({}, {}),
         });
@@ -54,7 +87,8 @@ class SourcePluginMonitorHost {
         });
         if (monitor) this.monitors.set(manifest.id, { manifest, monitor });
         this.statuses.set(manifest.id, {
-          id: manifest.id, source: manifest.source, name: manifest.name, available: Boolean(monitor),
+          id: manifest.id, source: manifest.source, name: manifest.name, enabled: true,
+          platformSupported: true, available: Boolean(monitor),
           state: monitor ? 'ready' : 'degraded', reason: monitor ? '' : '읽을 수 있는 기록원이 없습니다.',
           capabilities: normalizedCapabilities({
             ...manifest.capabilities.control,
@@ -67,7 +101,8 @@ class SourcePluginMonitorHost {
         });
       } catch (error) {
         this.statuses.set(manifest.id, {
-          id: manifest.id, source: manifest.source, name: manifest.name, available: false, state: 'failed',
+          id: manifest.id, source: manifest.source, name: manifest.name, enabled: true,
+          platformSupported: true, available: false, state: 'failed',
           reason: String(error && error.message || error), capabilities: normalizedCapabilities({}, {}),
         });
       }
@@ -85,6 +120,10 @@ class SourcePluginMonitorHost {
     const id = String(pluginId || '');
     const definition = this.definitions.find(item => item.manifest.id === id);
     if (!definition) return false;
+    if (!this.pluginEnabled(id) || this.runtimeDisabled(id)) {
+      this.external.delete(id);
+      return false;
+    }
     this.external.set(id, {
       sessions: Array.isArray(payload.sessions) ? payload.sessions : [],
       status: payload.status || null,
@@ -94,7 +133,8 @@ class SourcePluginMonitorHost {
 
   watchRoots() {
     const roots = [];
-    for (const { monitor } of this.monitors.values()) {
+    for (const [pluginId, { monitor }] of this.monitors.entries()) {
+      if (this.runtimeDisabled(pluginId)) continue;
       try {
         if (typeof monitor.watchRoots === 'function') roots.push(...(monitor.watchRoots() || []));
       } catch {}
@@ -103,10 +143,56 @@ class SourcePluginMonitorHost {
   }
 
   effectiveStatus(manifest) {
-    return this.runtimeStatuses.get(manifest.id)
-      || this.external.get(manifest.id)?.status
-      || this.statuses.get(manifest.id)
-      || null;
+    if (!this.pluginEnabled(manifest.id)) return this.statuses.get(manifest.id) || null;
+    const local = this.statuses.get(manifest.id) || null;
+    const external = this.external.get(manifest.id)?.status || null;
+    const runtime = this.runtimeStatuses.get(manifest.id) || null;
+    if (runtime?.enabled === false) return runtime;
+    if (!external && !runtime) return local;
+    const capabilities = normalizedCapabilities({
+      ...(local?.capabilities || {}),
+      ...(external?.capabilities || {}),
+      ...(runtime?.capabilities || {}),
+    });
+
+    // Aside's official connector is authoritative; selected folders are an
+    // optional read-only fallback and must not degrade a healthy MCP session.
+    if (manifest.id === 'builtin.aside') {
+      const official = external || runtime;
+      const available = Boolean(official?.available || local?.available);
+      return {
+        ...local,
+        ...external,
+        ...runtime,
+        id: manifest.id,
+        available,
+        state: official?.available ? (official.state || 'ready')
+          : available ? 'degraded' : (official?.state || local?.state || 'unavailable'),
+        reason: official?.available ? String(official.reason || '')
+          : String(official?.reason || local?.reason || ''),
+        capabilities,
+      };
+    }
+
+    // OpenCode history and CLI control are independent facets. Reporting the
+    // source as fully ready when its SQLite history is missing hides the exact
+    // reason an enabled plugin produced no projects, so partial readiness is
+    // represented explicitly as degraded.
+    const parts = [local, external, runtime].filter(Boolean);
+    const available = parts.some(status => status.available === true);
+    const unavailableParts = parts.filter(status => status.available === false && status.reason);
+    const partial = available && unavailableParts.length > 0;
+    const reason = [...new Set(unavailableParts.map(status => String(status.reason || '').trim()).filter(Boolean))].join(' ');
+    return {
+      ...local,
+      ...external,
+      ...runtime,
+      id: manifest.id,
+      available,
+      state: partial ? 'degraded' : available ? 'ready' : (runtime?.state || external?.state || local?.state || 'unavailable'),
+      reason: partial || !available ? (reason || String(runtime?.reason || external?.reason || local?.reason || '')) : '',
+      capabilities,
+    };
   }
 
   normalizeRows(rows, manifest) {
@@ -116,7 +202,7 @@ class SourcePluginMonitorHost {
       const observed = raw.sourceControlCapabilities || raw.controlCapabilities || {};
       const readOnlyImport = raw.readOnly === true || raw.controlAuthority === 'read-only-import';
       const officialAside = manifest.id !== 'builtin.aside' || raw.controlAuthority === 'official-session-id';
-      const managedStop = manifest.id === 'builtin.omo'
+      const managedStop = ['builtin.opencode', 'builtin.omo'].includes(manifest.id)
         && Array.isArray(runtime?.managedSessionIds)
         && runtime.managedSessionIds.includes(String(raw.externalId || ''));
       const observedRuntimeIntersection = runtimeControls ? {
@@ -142,7 +228,7 @@ class SourcePluginMonitorHost {
         ? {
           ...observed,
           start: false, sendInstruction: false, continue: false, respond: false, approve: false, deny: false,
-          stop: false, resume: false, archive: false, delete: false, pty: false,
+          stop: Boolean(readOnlyImport && managedStop), resume: false, archive: false, delete: false, pty: false,
         }
         : observedRuntimeIntersection;
       return normalizeSourceSession({
@@ -160,6 +246,12 @@ class SourcePluginMonitorHost {
     const statuses = [];
     for (const definition of this.definitions) {
       const manifest = definition.manifest;
+      if (!this.pluginEnabled(manifest.id) || this.runtimeDisabled(manifest.id)) {
+        this.external.delete(manifest.id);
+        const disabled = this.runtimeStatuses.get(manifest.id) || this.statuses.get(manifest.id);
+        statuses.push({ ...disabled, id: manifest.id, source: manifest.source, name: manifest.name, sessionCount: 0 });
+        continue;
+      }
       const record = this.monitors.get(manifest.id);
       let localRows = [];
       if (record && typeof record.monitor.scan === 'function') {

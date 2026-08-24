@@ -28,6 +28,7 @@ function createInlineHarness(root, options = {}) {
   };
   const mountCalls = [];
   const resumeCalls = [];
+  const forkCalls = [];
   const restartCalls = [];
   const focusCalls = [];
   const unmountCalls = [];
@@ -36,6 +37,7 @@ function createInlineHarness(root, options = {}) {
   const terminalStateListeners = [];
   const resumeAttributes = new Map();
   const resume = {
+    dataset: {},
     classList: classList(),
     disabled: false,
     getAttribute: name => resumeAttributes.get(name) || null,
@@ -149,13 +151,22 @@ function createInlineHarness(root, options = {}) {
       resumeCalls.push(args);
       return options.resumeForAgent(...args, resumeCalls.length);
     },
+    forkForAgent: async (...args) => {
+      forkCalls.push(args);
+      return options.forkForAgent(...args, forkCalls.length);
+    },
     restartForAgent: async (...args) => {
       restartCalls.push(args);
       return options.restartForAgent
         ? options.restartForAgent(...args, restartCalls.length)
         : { ok: true, target: connectedTarget };
     },
-    resumeSupport: () => ({ supported: false, reason: 'not resumable in fixture' }),
+    resumeSupport: mountedSession => options.resumeSupport
+      ? options.resumeSupport(mountedSession)
+      : { supported: true, reason: 'resumable in fixture' },
+    forkSupport: mountedSession => options.forkSupport
+      ? options.forkSupport(mountedSession)
+      : { supported: false, reason: 'not forkable in fixture' },
     unmountEmbedded: () => {
       unmountCalls.push(embedded.terminalId);
       embedded = { connected: false, agentSessionId: '', terminalId: '' };
@@ -193,6 +204,7 @@ function createInlineHarness(root, options = {}) {
     app,
     document,
     focusCalls,
+    forkCalls,
     mountCalls,
     reconnectButton: reconnect,
     restartCalls,
@@ -272,10 +284,10 @@ function createInlineHarness(root, options = {}) {
 function registerInlineAgentTerminalTests(context) {
   const { test, root } = context;
 
-  test('인라인 PTY 자동 연결은 동시·반복 sync에도 한 번만 생성한다', async () => {
-    let releaseMount;
+  test('인라인 PTY 자동 연결은 동시 sync를 합치고 force sync는 pending mount를 안전하게 교체한다', async () => {
+    const releaseMounts = [];
     const harness = createInlineHarness(root, {
-      mountForAgent: () => new Promise(resolve => { releaseMount = resolve; }),
+      mountForAgent: () => new Promise(resolve => { releaseMounts.push(resolve); }),
     });
 
     const first = harness.sync();
@@ -283,17 +295,24 @@ function registerInlineAgentTerminalTests(context) {
     await Promise.resolve();
     assert.equal(harness.mountCalls.length, 1, '동시 sync가 mountForAgent를 중복 호출했습니다.');
     assert.equal(harness.mountCalls[0].options.createIfMissing, true);
+    assert.equal(harness.mountCalls[0].options.forkIfOriginOwned, true,
+      '사용자가 펼친 인라인 PTY가 Desktop-origin fork 허용을 전달하지 않았습니다.');
 
-    releaseMount({
+    const forced = harness.sync({ force: true });
+    await Promise.resolve();
+    assert.equal(harness.mountCalls.length, 2,
+      'pending passive mount 중 force sync가 null pending을 읽거나 기존 promise에 잘못 흡수됐습니다.');
+    releaseMounts[0]({ ok: false, reason: 'superseded' });
+    releaseMounts[1]({
       ok: true,
       target: { id: 'terminal:inline-auto-connect', terminalId: 'terminal:inline-auto-connect', kind: 'terminal' },
     });
-    await Promise.all([first, second]);
+    await Promise.all([first, second, forced]);
     const repeated = await harness.sync();
 
     assert.equal(repeated.ok, true);
     assert.equal(repeated.reused, true);
-    assert.equal(harness.mountCalls.length, 1, '연결된 PTY의 snapshot sync가 새 mount를 시작했습니다.');
+    assert.equal(harness.mountCalls.length, 2, '연결된 PTY의 snapshot sync가 새 mount를 시작했습니다.');
   });
 
   test('인라인 PTY 자동 연결 실패는 같은 펼침에서 반복하지 않고 재펼침에서만 재시도한다', async () => {
@@ -566,6 +585,102 @@ function registerInlineAgentTerminalTests(context) {
     assert.equal(harness.mountCalls.length, 1, '현재 resume 결과를 inline PTY에 mount하지 않았습니다.');
     assert.equal(harness.focusCalls.length, 0,
       'resume await 중 사용자 조작을 완료 뒤 새 focus intent로 덮어써 PTY가 포커스를 빼앗았습니다.');
+  });
+
+  test('Codex Desktop 인라인 PTY는 원본 resume 대신 기록을 이어받은 새 세션을 연다', async () => {
+    let forkAlive = false;
+    const harness = createInlineHarness(root, {
+      session: {
+        id: 'codex:desktop-fork-source',
+        externalId: 'desktop-fork-source',
+        provider: 'codex',
+        clientKind: 'codex-desktop',
+        cwd: 'D:\\fixture',
+        parentId: null,
+      },
+      resumeSupport: () => ({ supported: false, originOwned: true }),
+      forkSupport: () => ({ supported: true, action: 'fork' }),
+      agentTargets: (_session, connectedTarget) => forkAlive && connectedTarget ? [connectedTarget] : [],
+      forkForAgent: async () => {
+        forkAlive = true;
+        return {
+          id: 'terminal:inline-desktop-fork',
+          terminalId: 'terminal:inline-desktop-fork',
+        };
+      },
+      mountForAgent: async (_session, _mountOptions, mountCount) => {
+        if (mountCount === 2) return { ok: false, reason: 'no-target' };
+        forkAlive = true;
+        const terminalId = mountCount === 1
+          ? 'terminal:inline-desktop-fork'
+          : 'terminal:inline-desktop-fork-reopened';
+        return {
+          ok: true,
+          target: { id: terminalId, terminalId, kind: 'terminal' },
+        };
+      },
+    });
+
+    harness.dispatchDocument('click', { target: harness.resumeButton, stopPropagation() {} });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    assert.equal(harness.forkCalls.length, 1, 'Desktop-origin 기록에서 새 Codex fork를 만들지 않았습니다.');
+    assert.equal(harness.resumeCalls.length, 0, 'Desktop-origin 기록을 기존 대화 ID로 resume했습니다.');
+    assert.equal(harness.forkCalls[0][0].externalId, 'desktop-fork-source');
+    assert.equal(harness.forkCalls[0][1], '');
+    assert.equal(harness.forkCalls[0][2], false);
+    assert.equal(harness.forkCalls[0][3].focus, false);
+    assert.equal(harness.mountCalls.length, 1, '새 fork PTY를 인라인 화면에 마운트하지 않았습니다.');
+    assert.equal(harness.mountCalls[0].options.forkIfOriginOwned, true);
+    assert.equal(harness.mountCalls[0].options.forkCreationGesture, false,
+      '명시 fork 버튼 뒤의 force sync가 별도 fork gesture를 다시 발급했습니다.');
+
+    forkAlive = false;
+    harness.setEmbedded({ connected: false, agentSessionId: '', terminalId: '' });
+    const passiveAfterExit = await harness.sync({ force: true });
+    assert.equal(passiveAfterExit.reason, 'no-target');
+    assert.equal(harness.forkCalls.length, 1,
+      '종료된 fork 뒤 passive inline sync가 forkForAgent를 다시 호출했습니다.');
+    assert.equal(harness.mountCalls[1].options.forkCreationGesture, false,
+      '종료된 fork 뒤 passive inline sync가 새 fork 권한을 전달했습니다.');
+
+    assert.equal(harness.close({ render: false }), true);
+    harness.toggle(harness.session.id, { focus: false });
+    const reopened = await harness.sync({ force: true });
+    assert.equal(reopened.ok, true);
+    assert.equal(harness.mountCalls[2].options.forkCreationGesture, true,
+      '사용자가 inline surface를 닫았다 다시 펼친 새 gesture가 fork 권한을 전달하지 않았습니다.');
+
+    let releaseExplicitMount;
+    const forceRace = createInlineHarness(root, {
+      initialOpen: false,
+      session: {
+        id: 'codex:desktop-fork-force-race',
+        externalId: 'desktop-fork-force-race',
+        provider: 'codex',
+        clientKind: 'codex-desktop',
+        cwd: 'D:\\fixture',
+        parentId: null,
+      },
+      forkSupport: () => ({ supported: true, action: 'fork' }),
+      mountForAgent: () => new Promise(resolve => { releaseExplicitMount = resolve; }),
+    });
+    forceRace.toggle(forceRace.session.id, { focus: false });
+    const explicitMount = forceRace.sync();
+    await Promise.resolve();
+    assert.equal(forceRace.mountCalls.length, 1);
+    assert.equal(forceRace.mountCalls[0].options.forkCreationGesture, true);
+    const passiveForce = forceRace.sync({ force: true });
+    await Promise.resolve();
+    assert.equal(forceRace.mountCalls.length, 1,
+      '진행 중인 명시적 inline fork mount를 passive force sync가 취소하면 안 됩니다.');
+    releaseExplicitMount({
+      ok: true,
+      target: { id: 'terminal:inline-force-race', terminalId: 'terminal:inline-force-race', kind: 'terminal' },
+    });
+    const [explicitResult, passiveResult] = await Promise.all([explicitMount, passiveForce]);
+    assert.equal(explicitResult.ok, true);
+    assert.equal(passiveResult.ok, true);
   });
 
   test('A resume 완료는 이미 전환한 B inline PTY를 force sync하지 않는다', async () => {

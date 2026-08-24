@@ -66,7 +66,6 @@ const BOUND_ORPHAN_ERROR_CODES = new Set([
   'AGENT_BOUND_ORPHAN_PID_LIVE',
   'AGENT_BOUND_ORPHAN_PID_UNCONFIRMED',
 ]);
-
 function cleanText(value, max = 200) {
   return String(value == null ? '' : value).replace(/[\u0000\r\n]/g, ' ').trim().slice(0, max);
 }
@@ -139,6 +138,16 @@ function creationPayloadFingerprint(options, details = {}) {
     recoveryArgs,
     Boolean(details.reuseBridge),
   ];
+  // Keep the v1 fingerprint byte-for-byte compatible for every historical
+  // non-fork creation. Fork association is new metadata, so append a tagged
+  // extension only when it is present instead of invalidating old ledgers.
+  if (options.agentForkSourceSessionId || options.agentForkSourceSignature) {
+    canonical.push(
+      'agent-fork-source-v1',
+      options.agentForkSourceSessionId,
+      options.agentForkSourceSignature,
+    );
+  }
   return deliveryFingerprint(JSON.stringify(canonical));
 }
 
@@ -271,6 +280,12 @@ function validateAgentLaunchArguments(provider, value) {
     }
     return;
   }
+  if (provider === 'codex' && args[0] === 'fork') {
+    if (args.length !== 2 || !validAgentSessionId(args[1])) {
+      throw new Error('Codex 분기 인자는 fork와 원본 대화 ID만 정확히 한 번 지정해야 합니다.');
+    }
+    return;
+  }
   if (provider !== 'claude' && provider !== 'gemini' && provider !== 'grok') return;
   const promptSeparator = args.indexOf('--');
   const invocationEnd = promptSeparator >= 0 ? promptSeparator : args.length;
@@ -332,6 +347,27 @@ function agentResumeIdentityKey(options = {}, platform = process.platform) {
     ? (distro ? 'wsl' : 'windows')
     : (platform === 'darwin' ? 'macos' : 'linux');
   return JSON.stringify([String(options.provider).toLowerCase(), resumeSessionId, environment, distro]);
+}
+
+function agentForkIdentityKey(options = {}, platform = process.platform) {
+  const provider = String(options.provider || '').trim().toLowerCase();
+  const sourceSessionId = String(options.agentForkSourceSessionId || '').trim();
+  const sourceSignature = String(options.agentForkSourceSignature || '').trim().toLowerCase();
+  if (options.type !== 'agent'
+    || provider !== 'codex'
+    || !/^codex:[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(sourceSessionId)
+    || !/^acs1:[a-f0-9]{64}$/u.test(sourceSignature)) return '';
+  const distro = cleanText(options.distro, 100).toLowerCase();
+  const environment = terminalEnvironmentKind(options, platform);
+  return JSON.stringify([provider, sourceSessionId, sourceSignature, environment, distro]);
+}
+
+function codexAgentContextKey(options = {}, platform = process.platform) {
+  if (options.type !== 'agent' || String(options.provider || '').trim().toLowerCase() !== 'codex') return '';
+  const environment = terminalEnvironmentKind(options, platform);
+  const distro = environment === 'wsl' ? cleanText(options.distro, 100).toLowerCase() : '';
+  const cwd = normalizedBindingPath(options.cwd, environment);
+  return cwd ? JSON.stringify(['codex', environment, distro, cwd]) : '';
 }
 
 function normalizedEnvironmentKind(value) {
@@ -399,11 +435,212 @@ function normalizeAgentBinding(value, options, initialPromptFingerprint, platfor
   return binding;
 }
 
+const CODEX_FORK_PROOF_AUTHORITY = 'codex-fork-lineage-v1';
+const CODEX_FORK_PROCESS_PROOF_AUTHORITY = 'codex-fork-process-v1';
+const CODEX_FORK_BINDING_CLOCK_SKEW_MS = 5_000;
+const CODEX_FORK_BINDING_WINDOW_MS = 60_000;
+
+function normalizedBindingPath(value, environment) {
+  const normalized = String(value || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return environment === 'windows' ? normalized.toLowerCase() : normalized;
+}
+
+function normalizedForkProcessAncestorPids(value) {
+  if (!Array.isArray(value) || value.length > 64) return null;
+  const result = [];
+  const seen = new Set();
+  for (const rawPid of value) {
+    const pid = Number(rawPid);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || seen.has(pid)) return null;
+    seen.add(pid);
+    result.push(pid);
+  }
+  return result;
+}
+
+function normalizeForkAgentBinding(value, options, target = {}, platform = process.platform) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const provider = cleanText(value.provider, 30).toLowerCase();
+  const sessionId = cleanText(value.sessionId, MAX_AGENT_SESSION_ID_CHARS);
+  const externalId = cleanText(value.externalId, 500);
+  const environment = normalizedEnvironmentKind(value.environment);
+  const distro = cleanText(value.distro, 100);
+  const linkScore = Number(value.linkScore);
+  const sourceSessionId = String(target.sourceSessionId || '').trim();
+  const sourceSignature = String(target.sourceSignature || '').trim().toLowerCase();
+  const sourceExternalId = sourceSessionId.startsWith('codex:') ? sourceSessionId.slice('codex:'.length) : '';
+  // Process ancestry can prove that Codex belongs to this PTY, but it cannot
+  // identify which transcript a simultaneous same-source fork created. Only a
+  // child ID returned by the provider on this launch can close that gap. Codex
+  // does not expose one today, so provisional fork adoption remains disabled.
+  const providerChildExternalId = String(target.providerChildExternalId || '').trim();
+  const expectedEnvironment = terminalEnvironmentKind(options, platform);
+  const expectedDistro = cleanText(options.distro, 100).toLowerCase();
+  const expectedSourceSignature = sourceExternalId ? agentBindingSignature({
+    sessionId: sourceSessionId,
+    provider: 'codex',
+    externalId: sourceExternalId,
+    environment: expectedEnvironment,
+    distro: expectedDistro,
+  }) : '';
+  const creationId = normalizedCreationId(target.creationId);
+  const terminalPid = Number(target.pid);
+  const terminalCreatedAt = Date.parse(target.createdAt || 0);
+  const sessionCreatedAt = Date.parse(target.sessionCreatedAt || target.createdAt || 0);
+  const observedTerminalCreatedAt = Date.parse(value.forkTerminalCreatedAt || 0);
+  const childStartedAt = Date.parse(value.forkChildStartedAt || 0);
+  const processStartedAt = Date.parse(value.forkProcessStartedAt || 0);
+  const processPid = Number(value.forkProcessPid);
+  const processAncestorPids = normalizedForkProcessAncestorPids(value.forkProcessAncestorPids);
+  const processArgs = value.forkProcessArgs;
+  const expectedCwd = normalizedBindingPath(options.cwd, expectedEnvironment);
+  const observedCwd = normalizedBindingPath(value.forkChildCwd, expectedEnvironment);
+  const requiresForkLaunchArgs = target.requireForkLaunchArgs === true;
+  const exactForkLaunchArgs = Array.isArray(options.args)
+    && options.args.length === 2
+    && options.args[0] === 'fork'
+    && options.args[1] === sourceExternalId;
+  if (options.type !== 'agent'
+    || options.sessionBackend !== 'direct'
+    || options.provider !== 'codex'
+    || provider !== 'codex'
+    || !validAgentSessionId(sessionId)
+    || !validAgentSessionId(externalId)
+    || isInternalTerminalProjectionSessionId(externalId)
+    || sessionId !== `codex:${externalId}`
+    || sessionId === sourceSessionId
+    || !validAgentSessionId(providerChildExternalId)
+    || providerChildExternalId !== externalId
+    || !validAgentSessionId(sourceExternalId)
+    || sourceSessionId !== `codex:${sourceExternalId}`
+    || (requiresForkLaunchArgs && !exactForkLaunchArgs)
+    || !/^acs1:[a-f0-9]{64}$/u.test(sourceSignature)
+    || sourceSignature !== expectedSourceSignature
+    || String(target.proofAuthority || '') !== CODEX_FORK_PROOF_AUTHORITY
+    || String(value.forkProofAuthority || '') !== CODEX_FORK_PROOF_AUTHORITY
+    || String(value.forkSourceSessionId || '').trim() !== sourceSessionId
+    || String(value.forkHistoryBaseSessionId || '').trim() !== sourceSessionId
+    || String(value.forkSourceSignature || '').trim().toLowerCase() !== sourceSignature
+    || !creationId
+    || String(value.forkCreationId || '').trim() !== creationId
+    || !Number.isSafeInteger(terminalPid)
+    || terminalPid <= 0
+    || Number(value.forkTerminalPid) !== terminalPid
+    || !Number.isFinite(terminalCreatedAt)
+    || !Number.isFinite(sessionCreatedAt)
+    || terminalCreatedAt !== sessionCreatedAt
+    || !Number.isFinite(observedTerminalCreatedAt)
+    || observedTerminalCreatedAt !== terminalCreatedAt
+    || !Number.isFinite(childStartedAt)
+    || childStartedAt < terminalCreatedAt - CODEX_FORK_BINDING_CLOCK_SKEW_MS
+    || childStartedAt > terminalCreatedAt + CODEX_FORK_BINDING_WINDOW_MS
+    || !expectedCwd
+    || observedCwd !== expectedCwd
+    || String(value.forkClientKind || '').trim().toLowerCase() !== 'codex-cli'
+    || !Number.isSafeInteger(Number(value.forkHistoryEndOrdinalExclusive))
+    || Number(value.forkHistoryEndOrdinalExclusive) < 0
+    || !Number.isSafeInteger(Number(value.forkHistoryEndByteOffset))
+    || Number(value.forkHistoryEndByteOffset) < 0
+    || Number(value.forkBindingTerminalCandidateCount) !== 1
+    || Number(value.forkBindingSessionCandidateCount) !== 1
+    || String(value.forkProcessProofAuthority || '') !== CODEX_FORK_PROCESS_PROOF_AUTHORITY
+    || value.forkProcessSnapshotAvailable !== true
+    || String(value.forkProcessProvider || '').trim().toLowerCase() !== 'codex'
+    || Number(value.forkProcessCandidateCount) !== 1
+    || !Number.isSafeInteger(processPid)
+    || processPid <= 0
+    || !processAncestorPids
+    || (processPid !== terminalPid && !processAncestorPids.includes(terminalPid))
+    || !Array.isArray(processArgs)
+    || processArgs.length !== 2
+    || processArgs[0] !== 'fork'
+    || processArgs[1] !== sourceExternalId
+    || !Number.isFinite(processStartedAt)
+    || processStartedAt < terminalCreatedAt - CODEX_FORK_BINDING_CLOCK_SKEW_MS
+    || processStartedAt > terminalCreatedAt + CODEX_FORK_BINDING_WINDOW_MS
+    || Math.abs(processStartedAt - childStartedAt) > CODEX_FORK_BINDING_CLOCK_SKEW_MS
+    || expectedEnvironment === 'wsl'
+    || environment !== expectedEnvironment
+    || (environment === 'wsl' && distro.toLowerCase() !== expectedDistro)
+    || (environment !== 'wsl' && distro)
+    || !Number.isFinite(linkScore)
+    || linkScore < 15_000) {
+    return null;
+  }
+  const binding = {
+    sessionId,
+    externalId,
+    provider,
+    environment,
+    distro,
+    promptFingerprint: '',
+    linkScore: Math.round(linkScore),
+    boundAt: validTimestamp(value.boundAt, new Date().toISOString()),
+    forkProofAuthority: CODEX_FORK_PROOF_AUTHORITY,
+    forkSourceSessionId: sourceSessionId,
+    forkHistoryBaseSessionId: sourceSessionId,
+    forkSourceSignature: sourceSignature,
+    forkCreationId: creationId,
+    forkTerminalPid: terminalPid,
+    forkTerminalCreatedAt: new Date(terminalCreatedAt).toISOString(),
+    forkChildStartedAt: new Date(childStartedAt).toISOString(),
+    forkChildCwd: String(value.forkChildCwd || '').trim(),
+    forkClientKind: 'codex-cli',
+    forkHistoryEndOrdinalExclusive: Number(value.forkHistoryEndOrdinalExclusive),
+    forkHistoryEndByteOffset: Number(value.forkHistoryEndByteOffset),
+    forkBindingTerminalCandidateCount: 1,
+    forkBindingSessionCandidateCount: 1,
+    forkProcessProofAuthority: CODEX_FORK_PROCESS_PROOF_AUTHORITY,
+    forkProcessSnapshotAvailable: true,
+    forkProcessProvider: 'codex',
+    forkProcessPid: processPid,
+    forkProcessAncestorPids: processAncestorPids,
+    forkProcessArgs: ['fork', sourceExternalId],
+    forkProcessStartedAt: new Date(processStartedAt).toISOString(),
+    forkProcessCandidateCount: 1,
+  };
+  binding.signature = agentBindingSignature(binding);
+  return binding;
+}
+
 function isExactBoundAgentOptions(options = {}) {
   return options.type === 'agent'
     && Boolean(options.bridgeId)
     && Boolean(options.agentConnectionSignature)
     && Boolean(agentResumeSessionId(options));
+}
+
+function sessionAgentResumeIdentityKey(session, platform = process.platform) {
+  const binding = session?.agentBinding;
+  if (binding && binding.provider && binding.externalId) {
+    const options = session.options || {};
+    return agentResumeIdentityKey({
+      type: 'agent',
+      provider: binding.provider,
+      distro: binding.environment === 'wsl' ? binding.distro : '',
+      args: binding.provider === 'codex'
+        ? ['resume', binding.externalId]
+        : ['--resume', binding.externalId],
+    }, platform);
+  }
+  return agentResumeIdentityKey(session?.options || {}, platform);
+}
+
+function sessionAgentForkIdentityKey(session, platform = process.platform) {
+  const options = session?.options || {};
+  const sourceSessionId = String(options.agentForkSourceSessionId
+    || session?.agentForkedFromSessionId
+    || '').trim();
+  const sourceSignature = String(options.agentForkSourceSignature
+    || session?.agentForkedFromSignature
+    || '').trim();
+  return agentForkIdentityKey({
+    type: options.type,
+    provider: options.provider,
+    distro: options.distro,
+    agentForkSourceSessionId: sourceSessionId,
+    agentForkSourceSignature: sourceSignature,
+  }, platform);
 }
 
 function assertBoundAgentCommandSafe(options, value, deliveryId = '', agentBinding = null) {
@@ -997,6 +1234,56 @@ function normalizeLaunchOptions(options = {}, platform = process.platform) {
     throw new Error('여러 명령창 기능은 AI 명령창에서만 사용할 수 있습니다.');
   }
   const args = normalizedArguments(options.args, MAX_AGENT_ARGUMENT_CHARS);
+  const rawAgentForkSourceSessionId = String(options.agentForkSourceSessionId == null
+    ? ''
+    : options.agentForkSourceSessionId).trim();
+  const rawAgentForkSourceSignature = String(options.agentForkSourceSignature == null
+    ? ''
+    : options.agentForkSourceSignature).trim();
+  const hasAgentForkSourceMetadata = Boolean(rawAgentForkSourceSessionId || rawAgentForkSourceSignature);
+  const codexForkExternalId = type === 'agent'
+    && provider === 'codex'
+    && args[0] === 'fork'
+    && args.length === 2
+    && validAgentSessionId(args[1])
+    ? args[1]
+    : '';
+  let agentForkSourceSessionId = '';
+  let agentForkSourceSignature = '';
+  if (codexForkExternalId || hasAgentForkSourceMetadata) {
+    if (!codexForkExternalId) {
+      throw new Error('Codex 분기 원본 정보에는 질문이 섞이지 않은 정확한 fork 인자가 필요합니다.');
+    }
+    if (!rawAgentForkSourceSessionId || !rawAgentForkSourceSignature) {
+      throw new Error('Codex 분기 원본 대화 식별자와 서명이 모두 필요합니다.');
+    }
+    const expectedSourceSessionId = `codex:${codexForkExternalId}`;
+    if (rawAgentForkSourceSessionId.length > MAX_BRIDGE_ID_CHARS
+      || /[\u0000-\u001f\u007f]/u.test(rawAgentForkSourceSessionId)
+      || rawAgentForkSourceSessionId !== expectedSourceSessionId) {
+      throw new Error('Codex 분기 원본 대화 식별자가 실행 인자와 일치하지 않습니다.');
+    }
+    const expectedSourceSignature = agentBindingSignature({
+      sessionId: expectedSourceSessionId,
+      provider: 'codex',
+      externalId: codexForkExternalId,
+      environment: terminalEnvironmentKind({ distro }, platform),
+      distro,
+    });
+    if (!/^acs1:[a-f0-9]{64}$/u.test(rawAgentForkSourceSignature)
+      || rawAgentForkSourceSignature !== expectedSourceSignature) {
+      throw new Error('Codex 분기 원본 대화 서명이 실행 환경과 일치하지 않습니다.');
+    }
+    if (bridgeId || agentConnectionSignature) {
+      throw new Error('Codex 분기 명령창은 기존 대화의 쓰기 연결 정보를 사용할 수 없습니다.');
+    }
+    agentForkSourceSessionId = rawAgentForkSourceSessionId;
+    agentForkSourceSignature = rawAgentForkSourceSignature;
+    // `fork` creates a provider conversation. Re-running it after a detached
+    // tmux target disappears would create another child, so it must remain an
+    // app-owned direct PTY whose one-shot argv is never a recovery recipe.
+    sessionBackend = 'direct';
+  }
   if (type === 'agent' && bridgeId && agentConnectionSignature) {
     const canonicalResumeArgs = resumableAgentArguments({ type, provider, args });
     if (!agentResumeSessionId({ type, provider, args })
@@ -1034,6 +1321,8 @@ function normalizeLaunchOptions(options = {}, platform = process.platform) {
       : '',
     bridgeId,
     agentConnectionSignature,
+    agentForkSourceSessionId,
+    agentForkSourceSignature,
     title: cleanText(options.title, 100),
     transient: Boolean(options.transient),
     cols: numericDimension(options.cols, 120, 20, 500),
@@ -1224,6 +1513,16 @@ function publicSession(session, includeReplay = false) {
     managedTmuxSession: session.options.managedTmuxSession,
     bridgeId: binding?.sessionId || session.options.bridgeId,
     agentConnectionSignature: binding?.signature || session.options.agentConnectionSignature,
+    agentForkSourceSessionId: session.options.agentForkSourceSessionId || '',
+    agentForkSourceSignature: session.options.agentForkSourceSignature || '',
+    agentForkedFromSessionId: session.agentForkedFromSessionId || '',
+    agentForkedFromSignature: session.agentForkedFromSignature || '',
+    agentForkProofAuthority: session.agentForkProofAuthority || '',
+    agentForkProofPid: Number.isSafeInteger(Number(session.agentForkProofPid))
+      && Number(session.agentForkProofPid) > 0
+      ? Number(session.agentForkProofPid)
+      : null,
+    agentForkProofCreatedAt: session.agentForkProofCreatedAt || '',
     agentResumeSessionId: agentResumeSessionId(session.options),
     agentLinkedSessionId: binding?.sessionId || '',
     agentLinkedExternalId: binding?.externalId || '',
@@ -1411,6 +1710,12 @@ function restoredOptions(value = {}, platform = process.platform, storeVersion =
     managedTmuxSession: cleanText(value.managedTmuxSession, 100),
     bridgeId: String(value.bridgeId == null ? '' : value.bridgeId).trim(),
     agentConnectionSignature: cleanText(value.agentConnectionSignature, 1_000),
+    agentForkSourceSessionId: String(value.agentForkSourceSessionId == null
+      ? ''
+      : value.agentForkSourceSessionId).trim(),
+    agentForkSourceSignature: String(value.agentForkSourceSignature == null
+      ? ''
+      : value.agentForkSourceSignature).trim(),
     title: cleanText(value.title, 100),
     transient: Boolean(value.transient),
     cols: numericDimension(value.cols, 120, 20, 500),
@@ -1438,6 +1743,14 @@ function persistedSession(session) {
     creationId: normalizedCreationId(session.creationId),
     creationPayloadFingerprint: validFingerprint(session.creationPayloadFingerprint),
     agentBinding: session.agentBinding ? { ...session.agentBinding } : null,
+    agentForkedFromSessionId: String(session.agentForkedFromSessionId || '').trim(),
+    agentForkedFromSignature: String(session.agentForkedFromSignature || '').trim(),
+    agentForkProofAuthority: String(session.agentForkProofAuthority || '').trim(),
+    agentForkProofPid: Number.isSafeInteger(Number(session.agentForkProofPid))
+      && Number(session.agentForkProofPid) > 0
+      ? Number(session.agentForkProofPid)
+      : null,
+    agentForkProofCreatedAt: String(session.agentForkProofCreatedAt || '').trim(),
     terminationPending: Boolean(session.terminationPending || session.retiring),
     terminationIntent: persistedTerminationIntent(session.terminationIntent),
     terminationUncertain: Boolean(session.terminationUncertain),
@@ -1545,11 +1858,13 @@ class TerminalManager extends EventEmitter {
     this.persistedSessionReconciliationDeferred = options.deferPersistedSessionReconciliation === true;
     this.loadPersistedSessions();
     this.reconcilePersistedBoundDirectSessions();
+    this.reconcilePersistedForkDirectSessions();
     if (!this.persistedSessionReconciliationDeferred) {
       const managedPresence = this.managedSessionPresenceInventory();
       this.reconcilePersistedManagedSessions({ managedPresence });
       this.deduplicateAgentBridgeSessions({ bootstrap: true, managedPresenceCache: managedPresence });
       this.deduplicateAgentResumeSessions({ bootstrap: true, managedPresence });
+      this.deduplicateAgentForkSessions({ bootstrap: true });
     }
   }
 
@@ -1612,14 +1927,29 @@ class TerminalManager extends EventEmitter {
             || Boolean(creationId) !== Boolean(creationPayloadFingerprint)) {
             throw new Error('저장된 명령창 생성 요청 식별자가 올바르지 않습니다.');
           }
-          let agentBinding = normalizeAgentBinding(
-            value.agentBinding,
-            options,
-            initialPromptFingerprint,
-            this.platform,
-          );
+          const persistedForkedFromSessionId = String(value.agentForkedFromSessionId || '').trim();
+          const persistedForkedFromSignature = String(value.agentForkedFromSignature || '').trim().toLowerCase();
+          const persistedForkProofAuthority = String(value.agentForkProofAuthority || '').trim();
+          const persistedForkProofPid = Number(value.agentForkProofPid);
+          const persistedForkProofCreatedAt = String(value.agentForkProofCreatedAt || '').trim();
+          const hasPersistedForkAudit = Boolean(persistedForkedFromSessionId
+            || persistedForkedFromSignature
+            || persistedForkProofAuthority);
+          // Older development builds could persist a child adoption inferred
+          // from transcript/process lineage. Codex does not return an
+          // authoritative child ID for `fork`, so that identity is not safe to
+          // restore. Preserve replay only and clear every writable/resumable
+          // field through the invalid-binding path below.
+          let agentBinding = hasPersistedForkAudit
+            ? null
+            : normalizeAgentBinding(
+                value.agentBinding,
+                options,
+                initialPromptFingerprint,
+                this.platform,
+              );
           if (internalProjectionResume) agentBinding = null;
-          const invalidAgentBinding = Boolean(value.agentBinding && !agentBinding);
+          const invalidAgentBinding = Boolean((value.agentBinding || hasPersistedForkAudit) && !agentBinding);
           if (internalProjectionResume) {
             options.bridgeId = '';
             options.agentConnectionSignature = '';
@@ -1676,6 +2006,21 @@ class TerminalManager extends EventEmitter {
             creationId,
             creationPayloadFingerprint,
             agentBinding,
+            agentForkedFromSessionId: agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+              ? persistedForkedFromSessionId
+              : '',
+            agentForkedFromSignature: agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+              ? persistedForkedFromSignature
+              : '',
+            agentForkProofAuthority: agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+              ? CODEX_FORK_PROOF_AUTHORITY
+              : '',
+            agentForkProofPid: agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+              ? persistedForkProofPid
+              : null,
+            agentForkProofCreatedAt: agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+              ? persistedForkProofCreatedAt
+              : '',
             process: null,
             generation: 0,
             recoveryPending: !internalProjectionResume
@@ -1781,6 +2126,7 @@ class TerminalManager extends EventEmitter {
       managedPresenceCache: managedPresence,
     });
     this.deduplicateAgentResumeSessions({ bootstrap: true, managedPresence });
+    this.deduplicateAgentForkSessions({ bootstrap: true });
     const recovered = [];
     for (const session of this.sessions.values()) {
       if (!session.recoveryPending) continue;
@@ -1881,7 +2227,7 @@ class TerminalManager extends EventEmitter {
     for (const session of this.sessions.values()) {
       if (matchingOptions
         && (!matchingBridge || agentBridgeKey(session.options) !== matchingBridge)
-        && (!matchingResume || agentResumeIdentityKey(session.options, this.platform) !== matchingResume)) continue;
+        && (!matchingResume || sessionAgentResumeIdentityKey(session, this.platform) !== matchingResume)) continue;
       const persistedOrphanUncertain = session.terminationUncertain
         && BOUND_ORPHAN_ERROR_CODES.has(session.terminationErrorCode);
       if ((!session.recoveryPending && !persistedOrphanUncertain)
@@ -1923,6 +2269,120 @@ class TerminalManager extends EventEmitter {
         session.recoverySkippedReason = 'bound-direct-process-unconfirmed';
       }
       changed = true;
+    }
+    if (changed) this.persistNow();
+    return changed;
+  }
+
+  reconcilePersistedForkDirectSessions({ matchingOptions = null } = {}) {
+    let changed = false;
+    const matchingFork = matchingOptions ? agentForkIdentityKey(matchingOptions, this.platform) : '';
+    const matchingContext = matchingOptions ? codexAgentContextKey(matchingOptions, this.platform) : '';
+    for (const session of this.sessions.values()) {
+      if (matchingOptions) {
+        const exactForkMatch = matchingFork
+          && sessionAgentForkIdentityKey(session, this.platform) === matchingFork;
+        const sameContextMatch = !matchingFork
+          && matchingContext
+          && session.options.agentForkSourceSessionId
+          && codexAgentContextKey(session.options, this.platform) === matchingContext;
+        if (!exactForkMatch && !sameContextMatch) continue;
+      }
+      const persistedForkUncertain = session.terminationUncertain;
+      if ((!session.recoveryPending && !persistedForkUncertain)
+        || session.process
+        || session.options.sessionBackend !== 'direct'
+        || !session.options.agentForkSourceSessionId) continue;
+      const pid = Number(session.pid);
+      // A durable pre-spawn creation ledger can survive a host crash before
+      // the follow-up PID checkpoint. PID absence is therefore an unknown
+      // launch outcome, not proof that the provider never started.
+      let state = 'unknown';
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try {
+          this.processKill(pid, 0);
+          state = 'alive';
+        } catch (error) {
+          state = error?.code === 'ESRCH' ? 'absent' : 'unknown';
+        }
+      }
+      session.recoveryPending = false;
+      session.recoveredAfterHostRestart = false;
+      session.updatedAt = new Date().toISOString();
+      if (state === 'absent') {
+        session.status = 'exited';
+        session.pid = null;
+        session.terminationUncertain = false;
+        session.terminationPending = false;
+        session.terminationIntent = '';
+        session.terminationErrorCode = '';
+        session.terminationErrorMessage = '';
+        session.recoverySkippedReason = 'unsafe-agent-restart';
+      } else {
+        session.status = 'stopping';
+        session.terminationUncertain = true;
+        session.terminationPending = false;
+        session.terminationIntent = 'recover';
+        session.terminationErrorCode = state === 'alive'
+          ? 'AGENT_FORK_ORPHAN_PID_LIVE'
+          : 'AGENT_FORK_ORPHAN_PID_UNCONFIRMED';
+        session.terminationErrorMessage = state === 'alive'
+          ? '이전 명령창 호스트의 Codex fork 프로세스가 아직 살아 있어 같은 원본의 재분기를 차단했습니다.'
+          : '이전 Codex fork 프로세스 종료를 확인하지 못해 같은 원본의 재분기를 차단했습니다.';
+        session.recoverySkippedReason = 'fork-direct-process-unconfirmed';
+      }
+      changed = true;
+    }
+    if (changed) this.persistNow();
+    return changed;
+  }
+
+  deduplicateAgentForkSessions({ bootstrap = false } = {}) {
+    const groups = new Map();
+    let changed = false;
+    for (const session of this.sessions.values()) {
+      const key = sessionAgentForkIdentityKey(session, this.platform);
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(session);
+    }
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const possiblyLive = group.filter(session => session.process
+        || session.terminationUncertain
+        || session.terminationPending
+        || ['starting', 'running', 'stopping'].includes(session.status));
+      if (possiblyLive.length > 1) {
+        for (const session of group) {
+          session.recoveryPending = false;
+          session.recoveredAfterHostRestart = false;
+          session.status = 'stopping';
+          session.terminationUncertain = true;
+          session.terminationPending = false;
+          session.terminationIntent = 'deduplicate';
+          session.terminationErrorCode = 'AGENT_FORK_DUPLICATE_LIVE_UNCONFIRMED';
+          session.terminationErrorMessage = '같은 Codex 원본에서 분기된 프로세스가 둘 이상일 수 있어 자동으로 종료 대상을 고르지 않았습니다.';
+          session.recoverySkippedReason = 'duplicate-agent-fork-source';
+          session.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+        continue;
+      }
+      const survivor = possiblyLive[0] || [...group].sort((left, right) => (
+        (Date.parse(right.updatedAt || 0) || 0) - (Date.parse(left.updatedAt || 0) || 0)
+      ))[0];
+      for (const duplicate of group) {
+        if (duplicate === survivor) continue;
+        duplicate.recoveryPending = false;
+        duplicate.recoveredAfterHostRestart = false;
+        duplicate.recoverySkippedReason = 'duplicate-agent-fork-source';
+        changed = true;
+      }
+      if (bootstrap && survivor && !survivor.terminationUncertain) {
+        survivor.recoverySkippedReason = survivor.options.agentForkSourceSessionId
+          ? 'unsafe-agent-restart'
+          : survivor.recoverySkippedReason;
+      }
     }
     if (changed) this.persistNow();
     return changed;
@@ -2029,7 +2489,7 @@ class TerminalManager extends EventEmitter {
     const groups = new Map();
     let changed = false;
     for (const session of this.sessions.values()) {
-      const key = agentResumeIdentityKey(session.options, this.platform);
+      const key = sessionAgentResumeIdentityKey(session, this.platform);
       if (!key) continue;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(session);
@@ -2137,7 +2597,7 @@ class TerminalManager extends EventEmitter {
     const key = agentResumeIdentityKey(options, this.platform);
     if (!key) return [];
     return [...this.sessions.values()]
-      .filter(session => agentResumeIdentityKey(session.options, this.platform) === key)
+      .filter(session => sessionAgentResumeIdentityKey(session, this.platform) === key)
       .filter(session => session.retiring
         || session.terminationPending
         || session.terminationUncertain
@@ -2150,6 +2610,34 @@ class TerminalManager extends EventEmitter {
       ));
   }
 
+  activeAgentForkSessions(options = {}) {
+    const key = agentForkIdentityKey(options, this.platform);
+    if (!key) return [];
+    return [...this.sessions.values()]
+      .filter(session => sessionAgentForkIdentityKey(session, this.platform) === key)
+      .filter(session => session.retiring
+        || session.terminationPending
+        || session.terminationUncertain
+        || ['starting', 'running', 'stopping'].includes(session.status)
+        || Boolean(session.process))
+      .sort((left, right) => (
+        (Date.parse(right.updatedAt || 0) || 0) - (Date.parse(left.updatedAt || 0) || 0)
+      ));
+  }
+
+  activeProvisionalForkSessionsInContext(options = {}) {
+    const context = codexAgentContextKey(options, this.platform);
+    if (!context) return [];
+    return [...this.sessions.values()]
+      .filter(session => session.options.agentForkSourceSessionId
+        && codexAgentContextKey(session.options, this.platform) === context)
+      .filter(session => session.retiring
+        || session.terminationPending
+        || session.terminationUncertain
+        || ['starting', 'running', 'stopping'].includes(session.status)
+        || Boolean(session.process));
+  }
+
   reusableAgentBridge(options = {}, activeCandidates = null) {
     const requestedSignature = String(options.agentConnectionSignature || '');
     const requestedResumeIdentity = agentResumeIdentityKey(options, this.platform);
@@ -2160,7 +2648,7 @@ class TerminalManager extends EventEmitter {
       .filter(session => !requestedSignature
         || String(session.options.agentConnectionSignature || '') === requestedSignature)
       .filter(session => !requestedResumeIdentity
-        || agentResumeIdentityKey(session.options, this.platform) === requestedResumeIdentity);
+        || sessionAgentResumeIdentityKey(session, this.platform) === requestedResumeIdentity);
     const running = candidates.find(session => session.process && session.status === 'running');
     if (running) return running;
     return candidates.find(session => session.options.sessionBackend === 'managed-tmux'
@@ -2365,8 +2853,24 @@ class TerminalManager extends EventEmitter {
         deliveryId,
       );
     }
+    if (launchOptions.agentForkSourceSessionId && !creationId) {
+      throw rejectedCreationError(
+        'Codex 분기 명령창에는 중복 실행을 막을 생성 요청 식별자가 필요합니다.',
+        'AGENT_FORK_CREATION_ID_REQUIRED',
+        '',
+        deliveryId,
+      );
+    }
     if (initialCommand.length > MAX_INPUT_CHARS) {
       throw rejectedDeliveryError('한 번에 보낼 수 있는 입력 크기를 초과했습니다.', 'DELIVERY_TOO_LARGE', deliveryId);
+    }
+    if (launchOptions.agentForkSourceSessionId
+      && (initialCommand || initialCommandInArgs || rawOptions.reuseBridge)) {
+      throw rejectedDeliveryError(
+        'Codex 분기 명령창은 원본 기록만 복사하며 질문 또는 기존 쓰기 연결을 함께 전달할 수 없습니다.',
+        'AGENT_FORK_LAUNCH_PAYLOAD_UNSAFE',
+        deliveryId,
+      );
     }
     assertBoundAgentCommandSafe(launchOptions, initialCommand, deliveryId);
     if (isExactBoundAgentOptions(launchOptions) && initialCommandInArgs) {
@@ -2407,6 +2911,20 @@ class TerminalManager extends EventEmitter {
       recoveryArgs,
       reuseBridge: rawOptions.reuseBridge,
     }) : '';
+    const resumeExternalId = agentResumeSessionId(launchOptions);
+    if (launchOptions.provider === 'codex' && resumeExternalId) {
+      // The monitor cannot know a provisional fork's child ID. Block every
+      // resume writer in the same environment/distro/cwd until the fork PTY is
+      // confirmed gone, including raw IPC that arrives before a guard snapshot.
+      this.reconcilePersistedForkDirectSessions({ matchingOptions: launchOptions });
+      if (this.activeProvisionalForkSessionsInContext(launchOptions).length) {
+        throw rejectedDeliveryError(
+          '같은 작업 위치의 Codex 분기가 아직 실행 중이거나 종료 확인 중이라 대화를 재개할 수 없습니다.',
+          'AGENT_FORK_CHILD_IDENTITY_UNRESOLVED',
+          deliveryId,
+        );
+      }
+    }
     const knownCreation = creationId ? this.creationRecord(creationId) : null;
     if (knownCreation) {
       if (knownCreation.creationPayloadFingerprint !== creationFingerprint) {
@@ -2429,6 +2947,18 @@ class TerminalManager extends EventEmitter {
       throw rejectedCreationError(
         '일회성 명령창에는 재시도 가능한 생성 요청을 사용할 수 없습니다.',
         'CREATION_TRANSIENT_UNSUPPORTED',
+        creationId,
+        deliveryId,
+      );
+    }
+    if (launchOptions.agentForkSourceSessionId) {
+      this.reconcilePersistedForkDirectSessions({ matchingOptions: launchOptions });
+    }
+    if (launchOptions.agentForkSourceSessionId
+      && this.activeAgentForkSessions(launchOptions).length) {
+      throw rejectedCreationError(
+        '같은 Codex 원본에서 만든 새 대화가 아직 실행 중이거나 종료 확인 중입니다.',
+        'AGENT_FORK_SOURCE_ALREADY_ACTIVE',
         creationId,
         deliveryId,
       );
@@ -2465,7 +2995,7 @@ class TerminalManager extends EventEmitter {
     if ((requestedSignature || requestedResumeIdentity) && activeBridgeCandidates.some(session => (
       (requestedSignature && String(session.options.agentConnectionSignature || '') !== requestedSignature)
         || (requestedResumeIdentity
-          && agentResumeIdentityKey(session.options, this.platform) !== requestedResumeIdentity)
+          && sessionAgentResumeIdentityKey(session, this.platform) !== requestedResumeIdentity)
     ))) {
       throw rejectedDeliveryError(
         '같은 AI 대화에 다른 연결 정보의 명령창이 이미 실행 중입니다.',
@@ -2545,6 +3075,11 @@ class TerminalManager extends EventEmitter {
       creationId,
       creationPayloadFingerprint: creationFingerprint,
       agentBinding: null,
+      agentForkedFromSessionId: '',
+      agentForkedFromSignature: '',
+      agentForkProofAuthority: '',
+      agentForkProofPid: null,
+      agentForkProofCreatedAt: '',
       process: null,
       generation: 0,
       recoveryPending: false,
@@ -3136,6 +3671,13 @@ class TerminalManager extends EventEmitter {
       error.code = 'AGENT_BINDING_TARGET_INVALID';
       throw error;
     }
+    const unresolvedForkIdentity = Boolean(session.options.agentForkSourceSessionId)
+      || session.agentBinding?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY;
+    if (unresolvedForkIdentity) {
+      const error = new Error('Codex가 이 PTY 실행에서 만든 child 대화 ID를 반환하지 않아 안전하게 연결할 수 없습니다.');
+      error.code = 'AGENT_FORK_BINDING_UNVERIFIED';
+      throw error;
+    }
     const binding = normalizeAgentBinding(
       rawBinding,
       session.options,
@@ -3559,6 +4101,11 @@ class TerminalManager extends EventEmitter {
     if (session.retiring || session.terminationPending) throw this.terminationInProgressError();
     if (operation === 'detach' && session.options.sessionBackend !== 'managed-tmux') {
       throw new Error('일반 명령창은 작업을 계속 둔 채 화면 연결만 끊을 수 없습니다.');
+    }
+    if (operation === 'restart' && session.options.agentForkSourceSessionId) {
+      const error = new Error('Codex 분기 명령은 새 대화를 다시 만들 수 있어 이 명령창에서 재시작할 수 없습니다.');
+      error.code = 'AGENT_FORK_RESTART_UNSAFE';
+      throw error;
     }
 
     let resolveTransition;

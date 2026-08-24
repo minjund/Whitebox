@@ -9,13 +9,14 @@ const SENSITIVE_PATH_PATTERNS = Object.freeze([
   /^src\/(?:update[^/]*|macUpdateHelper|diagnostics)\.js$/,
   /^src\/ipc(?:\/|$)/,
   /^renderer\/(?:app[^/]*\.js|index\.html|i18n-messages\.js)$/,
-  /^scripts\/(?:after-pack|windows-artifact-check|windows-[^/]*update[^/]*|mac-update-integration-test|package-content-check|check-legacy-update-channel|check-update-compatibility-cohorts|legacy-update-bridge\.config|legacy-update-compatibility|updater-review-scope)\.js$/,
+  /^scripts\/(?:after-pack|windows-artifact-check|windows-[^/]*update[^/]*|mac-update-integration-test|package-content-check|check-legacy-update-channel|check-update-compatibility-cohorts|legacy-update-bridge\.config|legacy-update-compatibility|release-asset-contract|updater-review-scope)\.js$/,
   /^scripts\/update-compatibility-cohorts\.json$/,
   /^scripts\/tests\/core-update-workspace\.js$/,
-  /^\.github\/workflows\/(?:release|v173-update-compatibility)\.yml$/,
+  /^\.github\/workflows\/(?:legacy-update-bridge|legacy-update-channel-canary|release|v173-update-compatibility)\.yml$/,
   /^\.github\/pull_request_template\.md$/,
+  /^\.github\/CODEOWNERS$/,
   /^(?:AGENTS|CONTRIBUTING)\.md$/,
-  /^docs\/RELEASING\.md$/,
+  /^docs\/(?:LEGACY-UPDATE-BRIDGE|RELEASING|UPDATE-COMPATIBILITY-AUDIT-[^/]+)\.md$/,
 ]);
 
 function normalizePath(value) {

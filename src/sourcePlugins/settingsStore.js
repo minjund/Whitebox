@@ -4,19 +4,45 @@ const fs = require('fs');
 const path = require('path');
 const { restrictPathPermissions } = require('../dataRetention');
 
-const DEFAULT_SETTINGS = Object.freeze({ version: 1, asideHistoryFolders: [] });
+const SOURCE_PLUGIN_SETTINGS_VERSION = 2;
+const SUPPORTED_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.opencode', 'builtin.aside']);
+const DEFAULT_SETTINGS = Object.freeze({
+  version: SOURCE_PLUGIN_SETTINGS_VERSION,
+  enabledPluginIds: Object.freeze([]),
+  asideHistoryFolders: Object.freeze([]),
+});
+
+function normalizedEnabledPluginIds(value) {
+  const supported = new Set(SUPPORTED_SOURCE_PLUGIN_IDS);
+  const configured = Array.isArray(value && value.enabledPluginIds)
+    ? value.enabledPluginIds
+    : Object.entries(value && value.enabledPlugins || {})
+      .filter(([, enabled]) => enabled === true)
+      .map(([id]) => id);
+  return [...new Set(configured
+    .map(item => String(item || '').trim())
+    .filter(id => supported.has(id)))];
+}
 
 function normalizeSettings(value) {
   const folders = Array.isArray(value && value.asideHistoryFolders)
     ? value.asideHistoryFolders.map(item => String(item || '').trim()).filter(Boolean).map(item => path.resolve(item))
     : [];
-  return { version: 1, asideHistoryFolders: [...new Set(folders)].slice(0, 20) };
+  return {
+    version: SOURCE_PLUGIN_SETTINGS_VERSION,
+    enabledPluginIds: normalizedEnabledPluginIds(value),
+    asideHistoryFolders: [...new Set(folders)].slice(0, 20),
+  };
+}
+
+function isSourcePluginEnabled(settings, pluginId) {
+  return normalizedEnabledPluginIds(settings).includes(String(pluginId || ''));
 }
 
 class SourcePluginSettingsStore {
   constructor(file) {
     this.file = file;
-    this.value = { ...DEFAULT_SETTINGS };
+    this.value = normalizeSettings(DEFAULT_SETTINGS);
     this.load();
   }
 
@@ -24,20 +50,24 @@ class SourcePluginSettingsStore {
     try {
       this.value = normalizeSettings(JSON.parse(fs.readFileSync(this.file, 'utf8')));
     } catch {
-      this.value = { ...DEFAULT_SETTINGS };
+      this.value = normalizeSettings(DEFAULT_SETTINGS);
     }
     return this.snapshot();
   }
 
   snapshot() {
-    return { ...this.value, asideHistoryFolders: [...this.value.asideHistoryFolders] };
+    return {
+      ...this.value,
+      enabledPluginIds: [...this.value.enabledPluginIds],
+      asideHistoryFolders: [...this.value.asideHistoryFolders],
+    };
   }
 
   save(next) {
-    this.value = normalizeSettings(next);
+    const nextValue = normalizeSettings(next);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(this.value, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(temporary, JSON.stringify(nextValue, null, 2), { encoding: 'utf8', mode: 0o600 });
     try {
       fs.renameSync(temporary, this.file);
     } catch (_renameUnavailable) {
@@ -50,6 +80,7 @@ class SourcePluginSettingsStore {
       }
     }
     restrictPathPermissions(this.file);
+    this.value = nextValue;
     return this.snapshot();
   }
 
@@ -67,6 +98,23 @@ class SourcePluginSettingsStore {
     const resolved = path.resolve(value);
     return this.save({ ...this.value, asideHistoryFolders: this.value.asideHistoryFolders.filter(item => item !== resolved) });
   }
+
+  setPluginEnabled(pluginId, enabled) {
+    const id = String(pluginId || '').trim();
+    if (!SUPPORTED_SOURCE_PLUGIN_IDS.includes(id)) throw new Error('지원하지 않는 source plugin입니다.');
+    const next = new Set(this.value.enabledPluginIds);
+    if (enabled === true) next.add(id);
+    else next.delete(id);
+    return this.save({ ...this.value, enabledPluginIds: [...next] });
+  }
 }
 
-module.exports = { DEFAULT_SETTINGS, SourcePluginSettingsStore, normalizeSettings };
+module.exports = {
+  DEFAULT_SETTINGS,
+  SOURCE_PLUGIN_SETTINGS_VERSION,
+  SUPPORTED_SOURCE_PLUGIN_IDS,
+  SourcePluginSettingsStore,
+  isSourcePluginEnabled,
+  normalizeSettings,
+  normalizedEnabledPluginIds,
+};

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: whitebox-stable-release
+  cancel-in-progress: false
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -50,7 +54,8 @@ jobs:
       - name: Verify release version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: node -e "const expected=process.env.RELEASE_TAG.replace(/^v/,'');const actual=require('./package.json').version;if(actual!==expected){throw new Error('package version '+actual+' does not match release '+expected)}"
+        run: |
+          node -e "const expected=process.env.RELEASE_TAG.replace(/^v/,'');const actual=require('./package.json').version;if(!/^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)$/.test(actual))throw new Error('release version must be stable SemVer: '+actual);if(actual!==expected)throw new Error('package version '+actual+' does not match release '+expected)"
 
   build-desktop:
     needs: prepare
@@ -75,6 +80,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Verify the exact Windows tag commit
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'Tag event SHA must be a full 40-character commit SHA' }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw "Checked out $actual instead of $env:EXPECTED_SOURCE_SHA" }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
@@ -159,9 +173,69 @@ jobs:
           Copy-Item -LiteralPath $targetInstaller -Destination $manualInstaller -Force
           if ((Get-Item -LiteralPath $targetInstaller).Length -ne (Get-Item -LiteralPath $manualInstaller).Length) { throw 'Manual bridge installer size differs from canonical Setup' }
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $manualInstaller).Hash) { throw 'Manual bridge installer digest differs from canonical Setup' }
+          $targetSize = (Get-Item -LiteralPath $targetInstaller).Length
+          $targetSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash.ToLowerInvariant()
           "WHITEBOX_CURRENT_INSTALLER=$targetInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_MANUAL_INSTALLER=$manualInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Verify all three packaged compatibility cohorts
+          "WHITEBOX_CURRENT_INSTALLER_SIZE=$targetSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download and verify the official legacy update inputs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $fixtureDir = Join-Path $env:RUNNER_TEMP 'whitebox-legacy-update-inputs'
+          New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
+          function Get-VerifiedReleaseAsset(
+            [string]$Repository,
+            [string]$Tag,
+            [string]$Name,
+            [long]$ExpectedSize,
+            [string]$ExpectedSha256,
+            [bool]$RequireImmutable,
+            [bool]$RequireSoleAsset,
+            [string]$EnvironmentName
+          ) {
+            $release = gh api "repos/$Repository/releases/tags/$Tag" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read $Repository $Tag" }
+            if ($release.tag_name -cne $Tag -or $release.draft -ne $false -or $release.prerelease -ne $false) {
+              throw "Official release state mismatch for $Repository $Tag"
+            }
+            if ($RequireImmutable -and [bool]$release.immutable -ne $true) {
+              throw "Official release is not immutable: $Repository $Tag"
+            }
+            if ($release.html_url -cne "https://github.com/$Repository/releases/tag/$Tag") {
+              throw "Official release URL mismatch for $Repository $Tag"
+            }
+            if ($RequireSoleAsset -and @($release.assets).Count -ne 1) {
+              throw 'Official bridge release must contain exactly one asset'
+            }
+            $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
+            if ($matches.Count -ne 1) { throw "Expected exactly one official $Name asset" }
+            $asset = $matches[0]
+            $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$Name"
+            if ($asset.state -cne 'uploaded' -or $asset.browser_download_url -cne $expectedUrl) {
+              throw "Official asset state or URL mismatch for $Name"
+            }
+            if ([long]$asset.size -ne $ExpectedSize -or [string]$asset.digest -cne "sha256:$ExpectedSha256") {
+              throw "Official asset API size or digest mismatch for $Name"
+            }
+            $destination = Join-Path $fixtureDir $Name
+            Invoke-WebRequest -Uri $expectedUrl -OutFile $destination
+            if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize) {
+              throw "Downloaded official asset size mismatch for $Name"
+            }
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+            if ($actualSha256 -cne $ExpectedSha256) {
+              throw "Downloaded official asset SHA-256 mismatch for $Name`: $actualSha256"
+            }
+            "$EnvironmentName=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          Get-VerifiedReleaseAsset 'minjund/Whitebox' 'v1.6.3' 'LoadToAgent-Setup-1.6.3.exe' 92488826 'e38c38698335c2eec4aef8c6da6f1629470addaff1b881fe961172644c86db0f' $false $false 'WHITEBOX_V163_INSTALLER'
+          Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
+      - name: Verify all three packaged Whitebox compatibility cohorts
         if: runner.os == 'Windows'
         shell: pwsh
         timeout-minutes: 30
@@ -180,6 +254,11 @@ jobs:
             }
           }
           if ($attempt -ne 3) { throw "Expected three packaged attempts, ran $attempt" }
+      - name: Verify the official v1.6.3 to bridge to candidate path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        run: npm run test:update:win:legacy-bridge
       - if: runner.os == 'macOS'
         run: npm run test:artifacts:mac
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -194,6 +273,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: Whitebox-*
@@ -246,6 +328,13 @@ jobs:
             throw new Error(`Draft release state mismatch: ${JSON.stringify(release)}`);
           }
           NODE
+          gh api -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/whitebox-draft-release.json"
+          WHITEBOX_RELEASE_VERSION="$release_version" \
+            WHITEBOX_RELEASE_ASSET_DIR="release-assets" \
+            WHITEBOX_RELEASE_JSON="$RUNNER_TEMP/whitebox-draft-release.json" \
+            WHITEBOX_EXPECT_DRAFT="true" \
+            node scripts/release-asset-contract.js
           download_dir="$(mktemp -d)"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$download_dir"
           DRAFT_DOWNLOAD_DIR="$download_dir" node <<'NODE'
@@ -333,7 +422,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest --repo "$GITHUB_REPOSITORY"
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          CURRENT_TAG="$RELEASE_TAG" LATEST_TAG="$latest_tag" node <<'NODE'
+          const stable = value => {
+            const match = String(value || '').match(/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+            if (!match) throw new Error(`Public release tag is not stable SemVer: ${value || '<missing>'}`);
+            return match.slice(1).map(Number);
+          };
+          const current = stable(process.env.CURRENT_TAG);
+          if (process.env.LATEST_TAG) {
+            const latest = stable(process.env.LATEST_TAG);
+            for (let index = 0; index < 3; index += 1) {
+              if (current[index] > latest[index]) break;
+              if (current[index] < latest[index]) {
+                throw new Error(`Refusing to move latest backward from ${process.env.LATEST_TAG} to ${process.env.CURRENT_TAG}`);
+              }
+            }
+          }
+          NODE
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest --repo "$GITHUB_REPOSITORY"
+          published_latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          if [ "$published_latest" != "$RELEASE_TAG" ]; then
+            echo "Public latest resolved to $published_latest instead of $RELEASE_TAG."
+            exit 1
+          fi
 
   verify-legacy-update-channel:
     needs: publish-release

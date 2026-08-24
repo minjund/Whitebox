@@ -37,11 +37,12 @@ updater-sensitive change, the reviewer must:
    candidate through its automatic path so the new helper handshake and
    relaunch code run; reaching the candidate through an old updater does not
    test the candidate updater.
-6. Run the race-sensitive packaged Windows test three times on the exact
+6. Run the race-sensitive packaged Windows test four times on the exact
    40-character candidate SHA: from the pinned official v1.7.3 and v1.7.4
-   frozen installers, then from the pinned official fixed v1.7.5 installer.
+   frozen installers, from the pinned official fixed v1.7.5 installer, and
+   through the official v1.6.3 -> immutable official v1.6.23 bridge path.
    Use fresh install, download, log, ready-signal, and profile directories for
-   every attempt. Run all three again in the tag release workflow before
+   every attempt. Run all four again in the tag release workflow before
    publishing.
 7. After publication, verify the unauthenticated live `latest` API, public asset
    `HEAD` responses, names, sizes and digests, draft/prerelease state, and the
@@ -50,7 +51,9 @@ updater-sensitive change, the reviewer must:
 
 Known compatibility cohorts currently include:
 
-- LoadToAgent 1.6.3-1.6.22 -> immutable 1.6.23 bridge -> current Whitebox.
+- Published LoadToAgent 1.6.3-1.6.14 and 1.6.16-1.6.22 -> immutable 1.6.23
+  bridge -> current Whitebox. Version 1.6.15 was never published and is not an
+  installed cohort.
 - Whitebox 1.7.3 and 1.7.4 -> manual installer alias that bypasses their frozen
   shared ready-file race.
 - Whitebox 1.7.5 and newer -> canonical automatic installer handshake.
@@ -68,13 +71,14 @@ cleanup invariants still pass. Never make a timeout or generic fallback count
 as success.
 
 An approval must include the reviewed commit SHA, compatibility matrix, exact
-commands or Actions run URLs, all three packaged Windows E2E results, and live-channel
-result when a release was published. Unit tests, a successful build, or a clean
-install of only the target version cannot by themselves justify approval.
+commands or Actions run URLs, all four packaged Windows E2E results, and the
+live-channel result when a release was published. Unit tests, a successful
+build, or a clean install of only the target version cannot by themselves
+justify approval.
 
 The always-created `Updater compatibility gate` check is the stable merge
 gate. A non-sensitive diff may make its heavy Windows job an explicit N/A, but
 the final check itself must exist and pass. Updater-sensitive changes require
-the v1.7.3, v1.7.4, and v1.7.5 packaged attempts; a skipped, cancelled, or
-missing heavy job is a blocker. Repository rules must require this exact check
-on `main`.
+the v1.7.3, v1.7.4, v1.7.5, and official legacy-bridge packaged attempts; a
+skipped, cancelled, or missing heavy job is a blocker. Repository rules must
+require this exact check on `main`.

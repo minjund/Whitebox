@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   AgentMonitor, parseClaude, parseCodex, parseGeneric, attachHierarchy, isProjectlessSession, mergeManagedWithHistory,
+  buildSummary,
 } = require('../../src/agentMonitor');
 const { bridgeLinkScore } = require('../../src/processMonitor');
 const { MAX_JSON_BYTES } = require('../../src/agentMonitor/sessionFiles');
@@ -620,6 +621,29 @@ function registerCodexParserTests(context) {
     assert.equal(session.statusDetail, '작업 완료');
     assert.equal(session.completionObserved, true);
     assert.equal(session.clientKind, 'codex-desktop');
+
+    const desktopFork = parseCodex(jsonl(path.join(temp, 'codex', 'rollout-desktop-fork.jsonl'), [
+      {
+        timestamp: '2026-07-14T02:01:00Z',
+        type: 'session_meta',
+        payload: {
+          id: 'desktop-fork',
+          cwd: 'D:\\repo',
+          originator: 'Codex Desktop',
+          source: 'cli',
+          forked_from_id: 'codex-session',
+          history_mode: 'paginated',
+          history_base: { thread_id: 'codex-session', end_ordinal_exclusive: 8, end_byte_offset: 4096 },
+        },
+      },
+    ]));
+    assert.equal(desktopFork.clientKind, 'codex-cli');
+    assert.equal(desktopFork.forkSourceSessionId, 'codex:codex-session');
+    assert.equal(desktopFork.forkHistoryBaseSessionId, 'codex:codex-session');
+    assert.equal(desktopFork.forkHistoryEndOrdinalExclusive, 8);
+    assert.equal(desktopFork.forkHistoryEndByteOffset, 4096);
+    assert.equal(session.clientKind, 'codex-desktop', '일반 Codex Desktop 세션 분류는 유지되어야 합니다.');
+
     assert.deepStrictEqual(session.executions.map(item => [item.kind, item.mode, item.status]), [['shell', 'foreground', 'completed']]);
     assert.equal(session.executions[0].command, 'npm test');
     assert.match(session.executions[0].output, /all tests passed/);
@@ -1158,6 +1182,58 @@ function registerCodexRecoveryTests(context) {
     assert.equal(boundedGeneric.truncated, true);
     assert.equal(boundedGeneric.externalId, 'oversized-session');
     assertGenericActivityStates({ temp, jsonl });
+  });
+
+  test('Windows에서 로그 mtime이 고정돼도 최신 Codex 이벤트 시각으로 실행 상태를 유지한다', () => {
+    const now = Date.now();
+    const recentAt = new Date(now - 1_000).toISOString();
+    const oldAt = new Date(now - 10 * 60_000).toISOString();
+    const file = path.join(temp, 'codex', 'rollout-stale-mtime-active.jsonl');
+    const info = jsonl(file, [
+      { timestamp: oldAt, type: 'session_meta', payload: { id: 'stale-mtime-active', cwd: 'D:\\repo' } },
+      { timestamp: recentAt, type: 'event_msg', payload: { type: 'task_started', turn_id: 'active-turn' } },
+      { timestamp: recentAt, type: 'response_item', payload: { type: 'reasoning', id: 'recent-reasoning', summary: [] } },
+    ]);
+    const oldFileTime = new Date(now - 10 * 60_000);
+    fs.utimesSync(file, oldFileTime, oldFileTime);
+    const stat = fs.statSync(file);
+    const session = parseCodex({ ...info, mtimeMs: stat.mtimeMs, size: stat.size });
+    assert.deepStrictEqual(
+      [session.status, session.activityState, session.statusDetail],
+      ['running', 'thinking', '턴 실행 중'],
+    );
+
+    const futureFile = path.join(temp, 'codex', 'rollout-invalid-future-clock.jsonl');
+    const futureInfo = jsonl(futureFile, [
+      { timestamp: oldAt, type: 'session_meta', payload: { id: 'invalid-future-clock', cwd: 'D:\\repo' } },
+      { timestamp: '2999-01-01T00:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'future-turn' } },
+    ]);
+    fs.utimesSync(futureFile, oldFileTime, oldFileTime);
+    const futureStat = fs.statSync(futureFile);
+    const future = parseCodex({ ...futureInfo, mtimeMs: futureStat.mtimeMs, size: futureStat.size });
+    assert.deepStrictEqual([future.status, future.activityState], ['idle', 'idle'], '비정상 미래 시각이 작업을 영구 실행 상태로 고정하면 안 됩니다.');
+
+  });
+
+  test('큰 Codex 카드 로그에서 턴 시작이 잘려도 최신 reasoning으로 실행 상태를 복원한다', () => {
+    const now = Date.now();
+    const file = path.join(temp, 'codex', 'rollout-large-active-tail.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const rows = [
+      { timestamp: new Date(now - 4_000).toISOString(), type: 'session_meta', payload: { id: 'large-active-tail', cwd: 'D:\\repo' } },
+      { timestamp: new Date(now - 3_000).toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'trimmed-turn' } },
+      { timestamp: new Date(now - 2_000).toISOString(), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'x'.repeat(512 * 1024) }] } },
+      { timestamp: new Date(now - 1_000).toISOString(), type: 'response_item', payload: { type: 'reasoning', id: 'tail-reasoning', summary: [] } },
+    ];
+    fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n'));
+    const stat = fs.statSync(file);
+    const session = parseCodex({ file, mtimeMs: stat.mtimeMs, size: stat.size }, { maxBytes: 64 * 1024 });
+    assert.equal(session.truncated, true);
+    assert.deepStrictEqual(
+      [session.status, session.activityState, session.statusDetail],
+      ['running', 'thinking', '턴 실행 중'],
+    );
+    assert.equal(buildSummary([session], {}).totals.active, 1);
   });
 
   test('부모 로그에 spawn 이벤트가 없어도 자식 세션으로 메인 대화 이력을 복원한다', () => {

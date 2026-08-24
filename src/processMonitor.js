@@ -5,13 +5,26 @@ const { execFileSync } = require('child_process');
 const { blankUsage } = require('./providerRegistry');
 
 const DEFAULT_SCAN_TTL_MS = 12_000;
-const WMIC_QUERY = "Name='claude.exe' or Name='codex.exe' or Name='node.exe' or Name='gemini.exe' or Name='grok.exe'";
 const WINDOWS_PROCESS_SCRIPT = [
   "$ProgressPreference = 'SilentlyContinue'",
   "$ErrorActionPreference = 'Stop'",
   '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
   "$names = @('claude.exe','codex.exe','node.exe','gemini.exe','grok.exe')",
-  '$rows = Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | ForEach-Object {',
+  '$all = @(Get-CimInstance Win32_Process)',
+  '$byPid = @{}',
+  'foreach ($process in $all) { $byPid[[int]$process.ProcessId] = $process }',
+  '$included = @{}',
+  'foreach ($candidate in @($all | Where-Object { $names -contains $_.Name })) {',
+  '  $current = $candidate',
+  '  for ($depth = 0; $current -and $depth -lt 64; $depth += 1) {',
+  '    $currentPid = [int]$current.ProcessId',
+  '    if ($currentPid -le 0 -or $included.ContainsKey($currentPid)) { break }',
+  '    $included[$currentPid] = $current',
+  '    $parentPid = [int]$current.ParentProcessId',
+  '    $current = if ($parentPid -gt 0 -and $byPid.ContainsKey($parentPid)) { $byPid[$parentPid] } else { $null }',
+  '  }',
+  '}',
+  '$rows = @($included.Values) | ForEach-Object {',
   "  $started = if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }",
   '  [pscustomobject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; name = [string]$_.Name; commandLine = [string]$_.CommandLine; startedAt = $started }',
   '}',
@@ -168,8 +181,11 @@ function windowsProcessRows(run = execFileSync) {
     return powershellProcessRows(output);
   } catch (powershellError) {
     try {
-      const output = run('wmic.exe', ['process', 'where', WMIC_QUERY, 'get', 'ProcessId,ParentProcessId,CreationDate,Name,CommandLine', '/format:csv'], {
-        encoding: 'utf8', windowsHide: true, timeout: 8_000, maxBuffer: 2 * 1024 * 1024,
+      // WMIC cannot recursively select ancestors in one query. Read the full
+      // process table and let selectAgentProcesses retain only provider leaves
+      // after it has recorded their bounded parent chain.
+      const output = run('wmic.exe', ['process', 'get', 'ProcessId,ParentProcessId,CreationDate,Name,CommandLine', '/format:csv'], {
+        encoding: 'utf8', windowsHide: true, timeout: 8_000, maxBuffer: 8 * 1024 * 1024,
       });
       return processRows(output);
     } catch (wmicError) {
@@ -338,6 +354,15 @@ function processSessionExternalId(processInfo = {}, provider = '') {
   return '';
 }
 
+function exactCodexForkArguments(processInfo = {}) {
+  const args = codexArgumentsWithoutRemoteTransport(providerInvocationArguments(processInfo, 'codex'));
+  if (args.length !== 2 || args[0] !== 'fork') return [];
+  const sourceExternalId = canonicalSessionId(args[1]);
+  return sourceExternalId && sourceExternalId === args[1]
+    ? ['fork', sourceExternalId]
+    : [];
+}
+
 function processInteractionMode(processInfo = {}, provider = '') {
   const commandLine = String(processInfo.commandLine || processInfo.CommandLine || '');
   if (provider === 'claude' && /(?:^|\s)(?:-p|--print)(?:\s|$)/i.test(commandLine)) return 'batch';
@@ -356,11 +381,13 @@ function pathlessSessionId(value) {
 function selectAgentProcesses(rows, options = {}) {
   const providerResolver = options.providerResolver || providerFromWindowsProcess;
   const environment = options.environment || 'windows';
-  const candidates = rows
-    .map(item => ({ ...item, provider: providerResolver(item) }))
-    .filter(item => item.provider && !utilityProcess(item));
+  const rawByPid = new Map((rows || [])
+    .map(item => [Number(item?.pid), item])
+    .filter(([pid]) => Number.isSafeInteger(pid) && pid > 0));
+  const annotatedRows = rows.map(item => ({ ...item, provider: providerResolver(item) }));
+  const candidates = annotatedRows.filter(item => item.provider && !utilityProcess(item));
   const byParent = new Map();
-  for (const item of candidates) {
+  for (const item of annotatedRows) {
     if (!byParent.has(item.parentPid)) byParent.set(item.parentPid, []);
     byParent.get(item.parentPid).push(item);
   }
@@ -371,12 +398,26 @@ function selectAgentProcesses(rows, options = {}) {
       const pid = queue.shift();
       for (const child of byParent.get(pid) || []) {
         if (seen.has(child.pid)) continue;
-        if (child.provider === item.provider) return true;
+        if (child.provider === item.provider && !utilityProcess(child)) return true;
         seen.add(child.pid);
         queue.push(child.pid);
       }
     }
     return false;
+  };
+  const ancestorPids = item => {
+    const result = [];
+    const seen = new Set([Number(item.pid)]);
+    let parentPid = Number(item.parentPid);
+    for (let depth = 0; depth < 64; depth += 1) {
+      if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || seen.has(parentPid)) break;
+      result.push(parentPid);
+      seen.add(parentPid);
+      const parent = rawByPid.get(parentPid);
+      if (!parent) break;
+      parentPid = Number(parent.parentPid);
+    }
+    return result;
   };
   return candidates.filter(item => !hasProviderDescendant(item)).map(item => ({
     id: `${environment}:${item.provider}:${item.pid}`,
@@ -384,10 +425,12 @@ function selectAgentProcesses(rows, options = {}) {
     provider: item.provider,
     pid: item.pid,
     parentPid: item.parentPid,
+    ancestorPids: ancestorPids(item),
     command: String(item.name || '').replace(/\.exe$/i, '').split(/[\\/]/).pop(),
     startedAt: item.startedAt,
     externalId: processSessionExternalId(item, item.provider),
     interactionMode: processInteractionMode(item, item.provider),
+    forkArguments: item.provider === 'codex' ? exactCodexForkArguments(item) : [],
   })).sort((a, b) => a.provider.localeCompare(b.provider) || a.pid - b.pid);
 }
 
@@ -495,6 +538,9 @@ function promptFingerprint(value) {
 
 const BRIDGE_CLOCK_SKEW_MS = 5_000;
 const BRIDGE_DISCOVERY_WINDOW_MS = 5 * 60_000;
+const FORK_DISCOVERY_WINDOW_MS = 60_000;
+const CODEX_FORK_PROOF_AUTHORITY = 'codex-fork-lineage-v1';
+const CODEX_FORK_PROCESS_PROOF_AUTHORITY = 'codex-fork-process-v1';
 
 function withinBridgeDiscoveryWindow(value, bridgeStart) {
   const timestamp = Date.parse(value || 0);
@@ -514,19 +560,169 @@ function bridgePromptMatches(session, bridge) {
   });
 }
 
+function normalizedConnectionPath(value, caseInsensitive = false) {
+  const normalized = String(value || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+function forkBridgeGuardConfigured(bridge) {
+  const sourceSessionId = String(bridge?.agentForkSourceSessionId || '').trim();
+  const sourceSignature = String(bridge?.agentForkSourceSignature || '').trim().toLowerCase();
+  const creationId = String(bridge?.creationId || '').trim();
+  return bridge?.provider === 'codex'
+    && bridge?.forkProofAuthority === CODEX_FORK_PROOF_AUTHORITY
+    && /^codex:[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(sourceSessionId)
+    && /^acs1:[a-f0-9]{64}$/u.test(sourceSignature)
+    && /^create:[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(creationId);
+}
+
+function hasForkBridgeMetadata(bridge) {
+  return Boolean(bridge?.agentForkSourceSessionId
+    || bridge?.agentForkSourceSignature
+    || bridge?.forkProofAuthority);
+}
+
+function forkBridgeConfigured(bridge) {
+  const pid = Number(bridge?.pid);
+  return forkBridgeGuardConfigured(bridge)
+    && Number.isSafeInteger(pid)
+    && pid > 0;
+}
+
+function forkBridgeGuardCandidateMatches(session, bridge) {
+  if (!forkBridgeGuardConfigured(bridge)) return false;
+  const sourceSessionId = String(bridge.agentForkSourceSessionId).trim();
+  const sessionId = String(session?.id || '').trim();
+  const externalId = String(session?.externalId || '').trim();
+  const environment = String(session?.environment?.kind || '').trim().toLowerCase();
+  const bridgeEnvironment = String(bridge?.environment || '').trim().toLowerCase();
+  const distro = String(session?.environment?.distro || '').trim().toLowerCase();
+  const bridgeDistro = String(bridge?.distro || '').trim().toLowerCase();
+  const sourceLineage = String(session?.forkSourceSessionId || '').trim() === sourceSessionId
+    || String(session?.forkHistoryBaseSessionId || '').trim() === sourceSessionId;
+  return session?.provider === 'codex'
+    && !session?.parentId
+    && sessionId === `codex:${externalId}`
+    && sessionId !== sourceSessionId
+    && environment === bridgeEnvironment
+    && distro === bridgeDistro
+    && sourceLineage;
+}
+
+function normalizedObservedAncestorPids(value, parentPid = 0) {
+  if (value != null && !Array.isArray(value)) return null;
+  if (Array.isArray(value) && value.length > 64) return null;
+  const observed = [];
+  const seen = new Set();
+  const values = [parentPid, ...(value || [])];
+  for (const rawPid of values) {
+    const pid = Number(rawPid);
+    if (!pid) continue;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    observed.push(pid);
+  }
+  return observed;
+}
+
+function processForkArguments(processInfo = {}) {
+  const declared = processInfo.forkArguments;
+  if (declared != null) {
+    if (!Array.isArray(declared) || declared.length !== 2) return [];
+    const sourceExternalId = canonicalSessionId(declared[1]);
+    return declared[0] === 'fork' && sourceExternalId === declared[1]
+      ? ['fork', sourceExternalId]
+      : [];
+  }
+  return exactCodexForkArguments(processInfo);
+}
+
+function forkBridgeProcessProof(bridge, processSnapshot) {
+  if (!forkBridgeConfigured(bridge)
+    || processSnapshot?.available !== true
+    || !Array.isArray(processSnapshot.processes)) return null;
+  const bridgeEnvironment = String(bridge.environment || '').trim().toLowerCase();
+  // The local Windows process table exposes wsl.exe but not the Linux provider
+  // PID/start/argv chain inside a distro. Until a WSL-native snapshot carries
+  // that evidence, accepting a Windows launcher PID would be a cross-kernel
+  // identity guess rather than process proof.
+  if (bridgeEnvironment === 'wsl') return null;
+  const terminalPid = Number(bridge.pid);
+  const tied = [];
+  for (const processInfo of processSnapshot.processes) {
+    if (String(processInfo?.provider || '').trim().toLowerCase() !== 'codex'
+      || String(processInfo?.environment || '').trim().toLowerCase() !== bridgeEnvironment) continue;
+    const providerPid = Number(processInfo.pid);
+    if (!Number.isSafeInteger(providerPid) || providerPid <= 0) continue;
+    const ancestorPids = normalizedObservedAncestorPids(processInfo.ancestorPids, processInfo.parentPid);
+    if (!ancestorPids) continue;
+    if (providerPid === terminalPid || ancestorPids.includes(terminalPid)) {
+      tied.push({ processInfo, providerPid, ancestorPids });
+    }
+  }
+  // More than one Codex descendant is not proof of which process produced the
+  // transcript, even if one happens to have the expected argv.
+  if (tied.length !== 1) return null;
+  const [{ processInfo, providerPid, ancestorPids }] = tied;
+  const sourceSessionId = String(bridge.agentForkSourceSessionId || '').trim();
+  const sourceExternalId = sourceSessionId.startsWith('codex:')
+    ? sourceSessionId.slice('codex:'.length)
+    : '';
+  const forkArguments = processForkArguments(processInfo);
+  if (forkArguments.length !== 2 || forkArguments[1] !== sourceExternalId) return null;
+  const terminalStartedAt = Date.parse(bridge.startedAt || 0);
+  const providerStartedAt = Date.parse(processInfo.startedAt || 0);
+  if (!Number.isFinite(terminalStartedAt)
+    || !Number.isFinite(providerStartedAt)
+    || providerStartedAt < terminalStartedAt - BRIDGE_CLOCK_SKEW_MS
+    || providerStartedAt > terminalStartedAt + FORK_DISCOVERY_WINDOW_MS) return null;
+  return {
+    forkProcessProofAuthority: CODEX_FORK_PROCESS_PROOF_AUTHORITY,
+    forkProcessSnapshotAvailable: true,
+    forkProcessProvider: 'codex',
+    forkProcessPid: providerPid,
+    forkProcessAncestorPids: ancestorPids,
+    forkProcessArgs: forkArguments,
+    forkProcessStartedAt: new Date(providerStartedAt).toISOString(),
+    forkProcessCandidateCount: 1,
+  };
+}
+
+function forkBridgeBindingGuardSessionIds(sessions, bridges) {
+  const guarded = new Set();
+  for (const bridge of bridges || []) {
+    if (!forkBridgeGuardConfigured(bridge)) continue;
+    for (const session of sessions || []) {
+      if (forkBridgeGuardCandidateMatches(session, bridge)) {
+        guarded.add(String(session.id || ''));
+      }
+    }
+  }
+  return [...guarded].filter(Boolean);
+}
+
 function bridgeLinkScore(session, bridge, now = Date.now()) {
   if (!session || session.provider !== bridge.provider) return -Infinity;
   if (!session.environment || session.environment.kind !== bridge.environment) return -Infinity;
   if (utilitySession(session)) return -Infinity;
   if (session.clientKind === 'codex-desktop' || session.clientKind === 'codex-ide' || session.clientKind === 'claude-desktop') return -Infinity;
+  const hasForkSource = hasForkBridgeMetadata(bridge);
+  // PID ancestry and exact fork argv prove which provider process belongs to
+  // the PTY, but Codex does not currently return the child conversation ID to
+  // that process. A simultaneous external fork can therefore produce an
+  // indistinguishable transcript. Keep the provisional bridge unresolved and
+  // guarded until a provider-owned child ID exists instead of adopting by
+  // timing/cwd/process inference.
+  if (hasForkSource) return -Infinity;
   // An unbound terminal and a recent history often share provider, cwd, and
   // start time. Those fields alone previously attached a fresh PTY to an older
   // conversation before the provider wrote its new transcript. Require the
   // exact launch prompt observed in that transcript before inferring a link.
   if (bridge.terminalId && !bridgePromptMatches(session, bridge)) return -Infinity;
   let score = session.parentId ? -500 : 3_000;
-  const sessionCwd = String(session.cwd || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
-  const bridgeCwd = String(bridge.cwd || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+  const sessionCwd = normalizedConnectionPath(session.cwd, session.environment.kind === 'windows');
+  const bridgeCwd = normalizedConnectionPath(bridge.cwd, session.environment.kind === 'windows');
   if (sessionCwd && bridgeCwd && sessionCwd === bridgeCwd) score += 8_000;
   const sessionStart = Date.parse(session.startedAt || 0);
   const bridgeStart = Date.parse(bridge.startedAt || 0);
@@ -562,13 +758,18 @@ function inferredBridgeBindings(sessions, minimumScore = 15_000) {
     for (const presence of session.runtimePresence || []) {
       const terminalId = String(presence?.terminalId || '').trim();
       const score = Number(presence?.linkScore);
+      const forkSourceSessionId = String(presence?.agentForkSourceSessionId || '').trim();
+      const forkSourceSignature = String(presence?.agentForkSourceSignature || '').trim().toLowerCase();
+      const forkAdoption = Boolean(forkSourceSessionId && forkSourceSignature);
+      if (forkAdoption) continue;
       if (presence?.kind !== 'bridge'
         || presence?.provider !== provider
         || !terminalId
         || presence.bindingTerminalCandidateCount !== 1
         || presence.bindingSessionCandidateCount !== 1
         || !Number.isFinite(score)
-        || score < minimumScore) continue;
+        || score < minimumScore
+        || !String(presence.initialPromptFingerprint || '').trim()) continue;
       candidates.push({
         terminalId,
         sessionId,
@@ -577,6 +778,20 @@ function inferredBridgeBindings(sessions, minimumScore = 15_000) {
         environment: String(session.environment?.kind || '').trim().toLowerCase(),
         distro: String(session.environment?.distro || '').trim(),
         promptFingerprint: String(presence.initialPromptFingerprint || '').trim().toLowerCase(),
+        forkSourceSessionId,
+        forkHistoryBaseSessionId: String(session.forkHistoryBaseSessionId || '').trim(),
+        forkHistoryEndOrdinalExclusive: session.forkHistoryEndOrdinalExclusive,
+        forkHistoryEndByteOffset: session.forkHistoryEndByteOffset,
+        forkSourceSignature,
+        forkProofAuthority: String(presence.forkProofAuthority || '').trim(),
+        forkCreationId: String(presence.creationId || '').trim(),
+        forkTerminalPid: Number(presence.pid),
+        forkTerminalCreatedAt: String(presence.startedAt || '').trim(),
+        forkChildStartedAt: String(session.startedAt || '').trim(),
+        forkChildCwd: String(session.originCwd || session.cwd || '').trim(),
+        forkClientKind: String(session.clientKind || '').trim(),
+        forkBindingTerminalCandidateCount: Number(presence.bindingTerminalCandidateCount),
+        forkBindingSessionCandidateCount: Number(presence.bindingSessionCandidateCount),
         linkScore: score,
       });
     }
@@ -725,7 +940,9 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
     markRuntime(pair.session, { ...pair.processInfo, kind: pair.processInfo.environment || 'windows', label, linkScore: Math.round(pair.score) });
   }
   for (const bridge of bridges || []) {
-    if (!usedBridgeIds.has(bridge.id)) sessions.push(syntheticBridgeSession(bridge, now));
+    if (!usedBridgeIds.has(bridge.id) && !hasForkBridgeMetadata(bridge)) {
+      sessions.push(syntheticBridgeSession(bridge, now));
+    }
   }
   return sessions.sort((a, b) => {
     const liveA = a.status === 'running' || a.status === 'starting' ? 1 : 0;
@@ -781,6 +998,8 @@ module.exports = {
   runtimeLinkScore,
   promptFingerprint,
   bridgeLinkScore,
+  forkBridgeProcessProof,
+  forkBridgeBindingGuardSessionIds,
   inferredBridgeBindings,
   applyRuntimePresence,
 };

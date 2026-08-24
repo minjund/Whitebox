@@ -2247,6 +2247,9 @@ html[data-theme] :is(
   .settings-help-card,
   .settings-meta-grid,
   .attention-popup-settings-card,
+  .source-plugin-settings-card,
+  .source-plugin-option,
+  .source-plugin-option.enabled,
   .provider-visibility-option,
   .provider-visibility-option.enabled,
   .update-notice
@@ -2262,7 +2265,7 @@ html[data-theme] .settings-help-card {
     var(--theme-surface);
 }
 
-html[data-theme] :is(.language-settings-mark, .attention-popup-settings-mark, .settings-emblem) {
+html[data-theme] :is(.language-settings-mark, .attention-popup-settings-mark, .source-plugin-mark, .settings-emblem) {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
   color: var(--theme-accent);
@@ -2271,6 +2274,7 @@ html[data-theme] :is(.language-settings-mark, .attention-popup-settings-mark, .s
 html[data-theme] :is(
   .language-settings-copy > span,
   .attention-popup-settings-copy > span,
+  .source-plugin-settings-copy > span,
   .settings-help-copy > span,
   .provider-visibility-copy > span,
   .language-select > span
@@ -2281,6 +2285,8 @@ html[data-theme] :is(
 html[data-theme] :is(
   .language-settings-copy h3,
   .attention-popup-settings-copy h3,
+  .source-plugin-settings-copy h3,
+  .source-plugin-copy b,
   .settings-help-copy h3,
   .provider-visibility-copy h3,
   .provider-visibility-name b
@@ -2291,6 +2297,8 @@ html[data-theme] :is(
 html[data-theme] :is(
   .language-settings-copy p,
   .attention-popup-settings-copy p,
+  .source-plugin-settings-copy p,
+  .source-plugin-copy small,
   .settings-help-copy p,
   .provider-visibility-copy p,
   .provider-visibility-name small
@@ -2450,6 +2458,36 @@ html[data-theme] .run-composer .permission-toggle .toggle-track {
 html[data-theme] .run-composer .permission-toggle input:checked + .toggle-track {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-settings-card {
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--theme-accent) 8%, transparent), transparent 34%),
+    var(--theme-surface);
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-option {
+  border-color: color-mix(in srgb, var(--plugin) 28%, var(--theme-border));
+  background: color-mix(in srgb, var(--plugin) 7%, var(--theme-surface-raised));
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-option:hover:not(.unavailable) {
+  border-color: color-mix(in srgb, var(--plugin) 58%, var(--theme-border-strong));
+  background: color-mix(in srgb, var(--plugin) 11%, var(--theme-surface-raised));
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-option.disabled {
+  border-color: var(--theme-border-soft);
+  background: var(--theme-surface-subtle);
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-toggle {
+  border-color: var(--theme-border-strong);
+  background: var(--theme-surface-muted);
+}
+
+html[data-theme] body[data-current-view="settings"] .source-plugin-toggle i {
+  background: var(--theme-text-muted);
 }
 
 html[data-theme] body[data-current-view="settings"] .attention-popup-switch {
@@ -3124,7 +3162,7 @@ body[data-current-view="settings"] #settingsSection > * {
   order: 0;
 }
 
-body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .provider-visibility-card, .update-panel) {
+body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
   grid-column: 1 / -1;
 }
 
@@ -3309,7 +3347,7 @@ body[data-current-view="settings"] .update-panel:is(
 }
 
 @media (max-width: 1375px) {
-  body[data-current-view="settings"] .provider-visibility-card {
+  body[data-current-view="settings"] :is(.source-plugin-settings-card, .provider-visibility-card) {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -3323,7 +3361,7 @@ body[data-current-view="settings"] .update-panel:is(
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .provider-visibility-card, .update-panel) {
+  body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
     grid-column: auto;
   }
 }
@@ -3334,7 +3372,7 @@ body[data-current-view="settings"] .update-panel:is(
     margin-top: 0;
   }
 
-  body[data-current-view="settings"] :is(.language-settings-card, .theme-settings-card, .attention-popup-settings-card, .provider-visibility-card) {
+  body[data-current-view="settings"] :is(.language-settings-card, .theme-settings-card, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card) {
     min-height: 0;
     padding: 18px;
   }

@@ -1,11 +1,20 @@
 # Update and release compatibility gate ownership.
 /.github/workflows/v173-update-compatibility.yml @minjund
 /.github/workflows/release.yml @minjund
+/.github/workflows/legacy-update-bridge.yml @minjund
+/.github/workflows/legacy-update-channel-canary.yml @minjund
 /.github/pull_request_template.md @minjund
 /scripts/updater-review-scope.js @minjund
 /scripts/windows-v173-update-integration.js @minjund
+/scripts/windows-legacy-update-bridge-integration.js @minjund
 /scripts/update-compatibility-cohorts.json @minjund
 /scripts/check-update-compatibility-cohorts.js @minjund
+/scripts/check-legacy-update-channel.js @minjund
+/scripts/release-asset-contract.js @minjund
+/scripts/legacy-update-bridge.config.js @minjund
+/scripts/legacy-update-compatibility.js @minjund
 /scripts/tests/core-update-workspace.js @minjund
 /AGENTS.md @minjund
 /docs/RELEASING.md @minjund
+/docs/LEGACY-UPDATE-BRIDGE.md @minjund
+/docs/UPDATE-COMPATIBILITY-AUDIT-*.md @minjund

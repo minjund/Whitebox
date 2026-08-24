@@ -1,10 +1,17 @@
 'use strict';
 
+const crypto = require('crypto');
 const readline = require('readline');
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const launchArguments = process.argv.slice(2);
+const launchArgumentsHash = crypto.createHash('sha256')
+  .update(JSON.stringify(launchArguments), 'utf8')
+  .digest('hex')
+  .slice(0, 24);
 
 process.stdout.write('WHITEBOX_DRAWER_BOUND_PTY_READY\r\n');
+process.stdout.write(`WHITEBOX_DRAWER_BOUND_PTY_ARGV_${launchArgumentsHash}\r\n`);
 
 rl.on('line', line => {
   const command = String(line || '').trim();

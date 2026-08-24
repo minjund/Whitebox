@@ -42,7 +42,7 @@
 }
 
 .run-provider-option:disabled {
-  opacity: .34;
+  opacity: .58;
   cursor: not-allowed;
 }
 

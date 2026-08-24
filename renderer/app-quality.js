@@ -17,6 +17,17 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
   const MAX_QUALITY_TEXT = 180;
   const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "auto", "bypassPermissions"]);
   const CLAUDE_WRITE_PERMISSION_MODES = new Set(["acceptEdits", "auto", "bypassPermissions"]);
+  const normalizedSourcePluginId = (value) => {
+    const id = String(value || "direct");
+    if (id === "builtin.omo") return "builtin.opencode";
+    return /^(?:direct|builtin\.(?:opencode|aside))$/.test(id) ? id : "direct";
+  };
+  const normalizedWorkspaceSource = (value) => {
+    const id = String(value || "all");
+    if (id === "all") return "all";
+    if (id === "builtin.omo") return "builtin.opencode";
+    return /^(?:direct|builtin\.(?:opencode|aside))$/.test(id) ? id : "all";
+  };
   let activeCommandIndex = 0;
   let visibleCommands = [];
   let quickFocusToken = null;
@@ -46,8 +57,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
 
   function normalizedRunCreationOptions(value = {}) {
     const provider = String(value.provider || "").trim().toLowerCase().slice(0, 40);
-    const sourcePluginId = /^(?:direct|builtin\.(?:omo|aside))$/.test(String(value.sourcePluginId || "direct"))
-      ? String(value.sourcePluginId || "direct") : "direct";
+    const sourcePluginId = normalizedSourcePluginId(value.sourcePluginId);
     const directClaude = sourcePluginId === "direct" && provider === "claude";
     const permissionMode = directClaude && CLAUDE_PERMISSION_MODES.has(value.permissionMode)
       ? value.permissionMode
@@ -141,6 +151,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.workspace = typeof dashboard.workspace === "string" && dashboard.workspace.length <= 2_000
         ? dashboard.workspace
         : "all";
+      state.workspaceSource = normalizedWorkspaceSource(dashboard.workspaceSource);
       state.sort = ["recent", "tokens", "context"].includes(dashboard.sort) ? dashboard.sort : "recent";
       state.controlRoomSort = ["recent", "tokens", "context"].includes(dashboard.controlRoomSort) ? dashboard.controlRoomSort : "recent";
       state.sessionOrder = Array.isArray(dashboard.sessionOrder)
@@ -149,13 +160,26 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.projectOrder = Array.isArray(dashboard.projectOrder)
         ? dashboard.projectOrder.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000)
         : [];
+      state.sidebarCollapsedProjects = new Set(
+        Array.isArray(dashboard.sidebarCollapsedProjects)
+          ? dashboard.sidebarCollapsedProjects.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
+          : [],
+      );
+      state.sidebarCollapsedSources = new Set(
+        Array.isArray(dashboard.sidebarCollapsedSources)
+          ? dashboard.sidebarCollapsedSources.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
+          : [],
+      );
     } else {
       state.search = "";
       state.providerFilters.clear();
       state.workspace = "all";
+      state.workspaceSource = "all";
       state.sort = "recent";
       state.sessionOrder = [];
       state.projectOrder = [];
+      state.sidebarCollapsedProjects = new Set();
+      state.sidebarCollapsedSources = new Set();
     }
     const search = $("#searchInput");
     if (search) search.value = state.search;
@@ -166,7 +190,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
     const draft = safeParse(sessionStorage, RUN_DRAFT_STORAGE_KEY);
     if (draft?.version === RUN_DRAFT_VERSION) {
       const provider = typeof draft.provider === "string" && /^[a-z0-9_-]{1,40}$/i.test(draft.provider) ? draft.provider : "";
-      const sourcePluginId = /^(?:direct|builtin\.(?:omo|aside))$/.test(String(draft.sourcePluginId || "direct")) ? String(draft.sourcePluginId || "direct") : "direct";
+      const sourcePluginId = normalizedSourcePluginId(draft.sourcePluginId);
       const restoredDraft = {
         sourcePluginId,
         prompt: typeof draft.prompt === "string" ? draft.prompt.slice(0, 8_000) : "",
@@ -193,10 +217,15 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       search: normalizedSearch(state.search),
       providers: [...state.providerFilters],
       workspace: String(state.workspace || "all").slice(0, 2_000),
+      workspaceSource: normalizedWorkspaceSource(state.workspaceSource),
       sort: ["recent", "tokens", "context"].includes(state.sort) ? state.sort : "recent",
       controlRoomSort: ["recent", "tokens", "context"].includes(state.controlRoomSort) ? state.controlRoomSort : "recent",
       sessionOrder: (state.sessionOrder || []).filter(id => typeof id === "string" && id.length <= 500).slice(0, 1_000),
       projectOrder: (state.projectOrder || []).filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000),
+      sidebarCollapsedProjects: [...(state.sidebarCollapsedProjects || [])]
+        .filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500),
+      sidebarCollapsedSources: [...(state.sidebarCollapsedSources || [])]
+        .filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500),
     };
     try {
       localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(value));
@@ -284,7 +313,9 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       $("#runClaudePermissionMode").value = restoredMode;
     }
     if (draft.provider) state.runProvider = draft.provider;
-    if (/^(?:direct|builtin\.(?:omo|aside))$/.test(String(draft.sourcePluginId || ""))) state.runSource = draft.sourcePluginId;
+    if (/^(?:direct|builtin\.(?:opencode|aside|omo))$/.test(String(draft.sourcePluginId || ""))) {
+      state.runSource = normalizedSourcePluginId(draft.sourcePluginId);
+    }
   }
 
   function clearRunDraft(options = {}) {

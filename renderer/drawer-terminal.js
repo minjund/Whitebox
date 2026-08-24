@@ -8,6 +8,8 @@
     target: null,
     generation: 0,
     pendingMountKey: '',
+    pendingMountBaseKey: '',
+    pendingMountForkCreationGesture: false,
     connectionSignature: '',
     unavailableTargets: new Map(),
     connectionFailures: new Map(),
@@ -216,30 +218,79 @@
       || { supported: false, reason: '' };
   }
 
-  function setResumeAction(visible) {
+  function forkSupport(session) {
+    return window.WhiteboxTerminal?.forkSupport?.(session)
+      || { supported: false, reason: '' };
+  }
+
+  function launchSupport(session) {
+    const fork = forkSupport(session);
+    if (fork.supported) return { ...fork, action: 'fork' };
+    return { ...resumeSupport(session), action: 'resume' };
+  }
+
+  function setResumeAction(visible, action = 'resume') {
     const button = element('drawerTerminalResumeBtn');
     if (!button) return;
+    button.dataset.terminalLaunchAction = action;
+    button.textContent = t(action === 'fork' ? 'drawer.terminal_fork_action' : 'drawer.terminal_resume_action');
     button.classList.toggle('hidden', !visible);
     button.disabled = !visible;
   }
 
   function showUnavailable(session) {
-    const support = resumeSupport(session);
+    const support = launchSupport(session);
     const resumable = Boolean(support.supported);
-    setResumeAction(resumable);
+    const forking = resumable && support.action === 'fork';
+    setResumeAction(resumable, support.action);
     setEmpty(
       true,
-      resumable ? 'drawer.terminal_resume_available' : 'drawer.terminal_unavailable',
-      resumable ? 'drawer.terminal_resume_available_help' : 'drawer.terminal_unavailable_help',
+      forking ? 'drawer.terminal_fork_available' : resumable ? 'drawer.terminal_resume_available' : 'drawer.terminal_unavailable',
+      forking ? 'drawer.terminal_fork_available_help' : resumable ? 'drawer.terminal_resume_available_help' : 'drawer.terminal_unavailable_help',
     );
-    setStatus('unavailable', resumable ? 'drawer.terminal_resume_available' : 'drawer.terminal_unavailable', support.reason || '');
-    return { ok: false, reason: 'no-target', targets: [], resumable };
+    setStatus(
+      'unavailable',
+      forking ? 'drawer.terminal_fork_available' : resumable ? 'drawer.terminal_resume_available' : 'drawer.terminal_unavailable',
+      support.reason || '',
+    );
+    return { ok: false, reason: 'no-target', targets: [], resumable, forkable: forking };
   }
 
   function selectedTargetId(session, createIfMissing = false, excludedTargetIds = new Set()) {
     const targets = (window.WhiteboxTerminal?.agentTargets?.(session) || [])
       .filter(target => !excludedTargetIds.has(targetIdOf(target)));
     return (targets.find(target => target.kind === 'terminal') || (createIfMissing ? null : targets[0]) || {}).id || '';
+  }
+
+  function blockingConnectionFailure(sessionId, signature, forkCreationGesture = false) {
+    const safeSessionId = String(sessionId || '');
+    let cached = state.connectionFailures.get(safeSessionId) || null;
+    if (cached && (cached.signature !== signature || forkCreationGesture)) {
+      // Signature changes invalidate the old result. A fresh explicit fork
+      // gesture may likewise replace an accepted fork PTY that has since
+      // exited; passive renders still keep the failure tombstone.
+      state.connectionFailures.delete(safeSessionId);
+      cached = null;
+    }
+    return cached;
+  }
+
+  function pendingMountBlocks(baseKey, forkCreationGesture, force = false) {
+    if (!state.pendingMountBaseKey) return false;
+    // Once an explicit fork mount is in flight, no passive render/refresh —
+    // including force refresh — may invalidate it. Session/signature changes
+    // clear the pending record before this check.
+    if (state.pendingMountForkCreationGesture) return true;
+    // A force refresh may replace passive work. Without force, equal passive
+    // work coalesces while an explicit gesture promotes it.
+    if (force || state.pendingMountBaseKey !== baseKey) return false;
+    return !forkCreationGesture;
+  }
+
+  function clearPendingMount() {
+    state.pendingMountKey = '';
+    state.pendingMountBaseKey = '';
+    state.pendingMountForkCreationGesture = false;
   }
 
   function targetMeta(result) {
@@ -263,7 +314,7 @@
       state.reconnectFocusIntent = null;
       window.WhiteboxTerminal?.unmountEmbedded?.();
       state.target = null;
-      state.pendingMountKey = '';
+      clearPendingMount();
     }
     state.session = session;
     state.connectionSignature = signature;
@@ -272,6 +323,12 @@
       setStatus('connecting', 'drawer.terminal_connecting');
     }
     const createIfMissing = options.createIfMissing === true;
+    const forkIfOriginOwned = options.forkIfOriginOwned === true;
+    // `createIfMissing` is used by passive render/refresh paths too. The app
+    // layer arms this separate one-shot token only from openDrawer/chat-tab
+    // user gestures; restored/passive first renders leave it false.
+    const forkCreationGesture = forkIfOriginOwned && createIfMissing
+      && options.forkCreationGesture === true;
     const excludedTargetIds = new Set((options.excludeTargetIds || []).map(value => String(value || '')).filter(Boolean));
     const requestedOptionTargetId = String(options.targetId || '');
     const requestedTargetId = requestedOptionTargetId && !excludedTargetIds.has(requestedOptionTargetId)
@@ -287,11 +344,9 @@
       } else renderStatus();
       return { ok: false, reason: 'unavailable', target: state.target, targets: [] };
     }
-    let cachedFailure = !requestedTargetId ? state.connectionFailures.get(session.id) : null;
-    if (cachedFailure && cachedFailure.signature !== signature) {
-      state.connectionFailures.delete(session.id);
-      cachedFailure = null;
-    }
+    const cachedFailure = !requestedTargetId
+      ? blockingConnectionFailure(session.id, signature, forkCreationGesture)
+      : null;
     if (!options.force && createIfMissing && cachedFailure) {
       setEmpty(true, 'drawer.terminal_failed', 'drawer.terminal_failed_help');
       setStatus('error', 'drawer.terminal_failed', cachedFailure.message || '');
@@ -318,10 +373,17 @@
       renderStatus();
       return { ok: true, reused: true, target: state.target };
     }
-
-    const mountKey = `${signature}:${requestedTargetId}:${createIfMissing ? 'create' : 'reuse'}:${[...excludedTargetIds].sort().join(',')}`;
-    if (!options.force && state.pendingMountKey === mountKey) return { ok: false, reason: 'pending', targets: [] };
+    // A passive refresh is not allowed to consume a later explicit open
+    // gesture. Keep the gesture bit in the in-flight identity so the explicit
+    // call can supersede a passive mount that was already awaiting inventory.
+    const mountBaseKey = `${signature}:${requestedTargetId}:${createIfMissing ? 'create' : 'reuse'}:${forkIfOriginOwned ? 'fork' : 'canonical'}:${[...excludedTargetIds].sort().join(',')}`;
+    const mountKey = `${mountBaseKey}:${forkCreationGesture ? 'gesture' : 'passive'}`;
+    if (pendingMountBlocks(mountBaseKey, forkCreationGesture, options.force === true)) {
+      return { ok: false, reason: 'pending', targets: [] };
+    }
     state.pendingMountKey = mountKey;
+    state.pendingMountBaseKey = mountBaseKey;
+    state.pendingMountForkCreationGesture = forkCreationGesture;
 
     const generation = ++state.generation;
     state.target = null;
@@ -334,6 +396,8 @@
         targetId: requestedTargetId,
         focus: false,
         createIfMissing,
+        forkIfOriginOwned,
+        forkCreationGesture,
         excludeTerminalIds: [...excludedTargetIds],
       });
       if (generation !== state.generation || state.session?.id !== session.id) {
@@ -384,7 +448,7 @@
       report('drawer-terminal-mount', error);
       return { ok: false, reason: 'mount-failed', error, targets: [] };
     } finally {
-      if (generation === state.generation) state.pendingMountKey = '';
+      if (generation === state.generation) clearPendingMount();
     }
   }
 
@@ -394,7 +458,7 @@
     window.WhiteboxTerminal?.unmountEmbedded?.();
     state.session = null;
     state.target = null;
-    state.pendingMountKey = '';
+    clearPendingMount();
     state.connectionSignature = '';
     state.reconnectFocusIntent = null;
     state.reconnectOwnerTerminalId = '';
@@ -428,6 +492,7 @@
         force: true,
         targetId: terminalId,
         createIfMissing: false,
+        forkIfOriginOwned: true,
       });
     } catch (error) {
       setStatus('error', 'drawer.terminal_failed', window.WhiteboxI18n.errorText(error, 'drawer.terminal_failed'));
@@ -440,7 +505,8 @@
     const button = event.currentTarget;
     const session = state.session;
     if (!session || button.getAttribute('aria-busy') === 'true') return;
-    const support = resumeSupport(session);
+    const support = launchSupport(session);
+    const forking = support.action === 'fork';
     if (!support.supported) {
       setResumeAction(false);
       setEmpty(true, 'drawer.terminal_unavailable', 'drawer.terminal_unavailable_help');
@@ -449,31 +515,50 @@
     }
     button.setAttribute('aria-busy', 'true');
     button.disabled = true;
-    setEmpty(true, 'drawer.terminal_resuming', 'drawer.terminal_resuming_help');
-    setStatus('connecting', 'drawer.terminal_resuming');
+    setEmpty(
+      true,
+      forking ? 'drawer.terminal_forking' : 'drawer.terminal_resuming',
+      forking ? 'drawer.terminal_forking_help' : 'drawer.terminal_resuming_help',
+    );
+    setStatus('connecting', forking ? 'drawer.terminal_forking' : 'drawer.terminal_resuming');
     try {
-      // Resuming is explicit: merely viewing an external session must never
-      // spawn another AI process. The existing resume path preserves the
-      // provider session id and creates only the Whitebox-owned PTY needed
-      // for subsequent input and scrollback.
-      const resumed = await window.WhiteboxTerminal.resumeForAgent(session, '', false, { focus: false });
+      // Both paths require an explicit user gesture. Desktop-origin Codex
+      // history is forked into a new identity; other providers keep their
+      // canonical resume behavior.
+      const resumed = forking
+        ? await window.WhiteboxTerminal.forkForAgent(session, '', false, { focus: false })
+        : await window.WhiteboxTerminal.resumeForAgent(session, '', false, { focus: false });
       if (state.session?.id !== session.id) return;
       const terminalId = targetIdOf(resumed);
-      if (!terminalId) throw new Error(t('terminal.agent.resume_terminal_failed'));
+      if (!terminalId) throw new Error(t(forking
+        ? 'terminal.agent.fork_terminal_failed'
+        : 'terminal.agent.resume_terminal_failed'));
       clearUnavailable(session.id, terminalId);
-      const mounted = await mount(session, { force: true, targetId: terminalId });
+      const mounted = await mount(session, {
+        force: true,
+        targetId: terminalId,
+        forkIfOriginOwned: forking,
+      });
       if (!mounted?.ok && !['cancelled', 'pending'].includes(mounted?.reason)) {
-        throw new Error(t('drawer.terminal_resume_failed'));
+        throw new Error(t(forking ? 'drawer.terminal_fork_failed' : 'drawer.terminal_resume_failed'));
       }
     } catch (error) {
       if (state.session?.id !== session.id) return;
-      setResumeAction(true);
-      setEmpty(true, 'drawer.terminal_resume_failed', 'drawer.terminal_resume_failed_help');
-      setStatus('error', 'drawer.terminal_resume_failed', window.WhiteboxI18n.errorText(error, 'drawer.terminal_resume_failed'));
-      report('drawer-terminal-resume', error);
+      setResumeAction(true, support.action);
+      setEmpty(
+        true,
+        forking ? 'drawer.terminal_fork_failed' : 'drawer.terminal_resume_failed',
+        forking ? 'drawer.terminal_fork_failed_help' : 'drawer.terminal_resume_failed_help',
+      );
+      setStatus(
+        'error',
+        forking ? 'drawer.terminal_fork_failed' : 'drawer.terminal_resume_failed',
+        window.WhiteboxI18n.errorText(error, forking ? 'drawer.terminal_fork_failed' : 'drawer.terminal_resume_failed'),
+      );
+      report(forking ? 'drawer-terminal-fork' : 'drawer-terminal-resume', error);
     } finally {
       button.removeAttribute('aria-busy');
-      if (state.session?.id === session.id && !state.target) setResumeAction(true);
+      if (state.session?.id === session.id && !state.target) setResumeAction(true, support.action);
       else button.disabled = false;
     }
   });
@@ -558,6 +643,7 @@
             force: true,
             targetId: terminalId,
             createIfMissing: true,
+            forkIfOriginOwned: true,
           });
           restoreReconnectFocus(focusIntent);
         }, 0);
@@ -569,7 +655,7 @@
           signature: state.connectionSignature || connectionSignature(state.session),
         });
         state.generation += 1;
-        state.pendingMountKey = '';
+        clearPendingMount();
         state.reconnectFocusIntent = null;
         window.WhiteboxTerminal?.unmountEmbedded?.();
         state.target = null;
@@ -599,7 +685,13 @@
     }
   });
   window.addEventListener('whitebox:terminal-prompts-changed', renderStatus);
-  window.addEventListener('whitebox:locale-changed', renderStatus);
+  window.addEventListener('whitebox:locale-changed', () => {
+    renderStatus();
+    const button = element('drawerTerminalResumeBtn');
+    if (button && !button.classList.contains('hidden')) {
+      setResumeAction(true, button.dataset.terminalLaunchAction || 'resume');
+    }
+  });
 
   window.WhiteboxDrawerTerminal = {
     mount,
@@ -613,6 +705,7 @@
       return mount(state.session, {
         force: true,
         createIfMissing: true,
+        forkIfOriginOwned: true,
         excludeTargetIds: missingTargetIds,
       });
     },

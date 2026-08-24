@@ -5,7 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const { AgentMonitor, buildSummary } = require('./agentMonitor');
 const { TmuxMonitor, linkAgentSessions } = require('./tmuxMonitor');
-const { ProcessMonitor, applyRuntimePresence, inferredBridgeBindings } = require('./processMonitor');
+const {
+  ProcessMonitor,
+  applyRuntimePresence,
+  forkBridgeBindingGuardSessionIds,
+  inferredBridgeBindings,
+} = require('./processMonitor');
 const { scanCodexAutomationHomes } = require('./automationMonitor');
 const { reportRecoverableError } = require('./diagnostics');
 const { enrichSession, enrichSessions } = require('./sessionIntelligence');
@@ -235,6 +240,10 @@ function cardSession(session) {
     source: session.source,
     sourceLabel: session.sourceLabel,
     clientKind: session.clientKind || '',
+    forkSourceSessionId: session.forkSourceSessionId || '',
+    forkHistoryBaseSessionId: session.forkHistoryBaseSessionId || '',
+    forkHistoryEndOrdinalExclusive: session.forkHistoryEndOrdinalExclusive,
+    forkHistoryEndByteOffset: session.forkHistoryEndByteOffset,
     sourcePluginId: session.sourcePluginId || '',
     sourcePlugin: session.sourcePlugin || null,
     readOnly: Boolean(session.readOnly),
@@ -297,7 +306,46 @@ function cardSession(session) {
   };
 }
 
-function fingerprint(snapshot, tmux, automations, sourcePlugins = []) {
+function forkPublicationFingerprintState(forkBindingGuardSessionIds = [], bridges = []) {
+  const guardedSessionIds = [...new Set((Array.isArray(forkBindingGuardSessionIds)
+    ? forkBindingGuardSessionIds
+    : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean))].sort();
+  const provisionalForkBridges = (Array.isArray(bridges) ? bridges : [])
+    .filter(bridge => bridge && (
+      String(bridge.agentForkSourceSessionId || '').trim()
+      || String(bridge.agentForkSourceSignature || '').trim()
+      || String(bridge.forkProofAuthority || '').trim()
+    ))
+    .map(bridge => [
+      String(bridge.id || '').trim(),
+      String(bridge.bridgeId || '').trim(),
+      String(bridge.linkedSessionId || '').trim(),
+      String(bridge.terminalId || '').trim(),
+      String(bridge.provider || '').trim().toLowerCase(),
+      Number.isSafeInteger(Number(bridge.pid)) ? Number(bridge.pid) : 0,
+      String(bridge.cwd || '').trim(),
+      String(bridge.startedAt || '').trim(),
+      String(bridge.environment || '').trim().toLowerCase(),
+      String(bridge.distro || '').trim().toLowerCase(),
+      String(bridge.agentForkSourceSessionId || '').trim(),
+      String(bridge.agentForkSourceSignature || '').trim().toLowerCase(),
+      String(bridge.creationId || '').trim(),
+      String(bridge.forkProofAuthority || '').trim(),
+    ])
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return [guardedSessionIds, provisionalForkBridges];
+}
+
+function fingerprint(
+  snapshot,
+  tmux,
+  automations,
+  sourcePlugins = [],
+  forkBindingGuardSessionIds = [],
+  bridges = [],
+) {
   const sessions = snapshot.sessions.map(session => [
     session.id,
     session.updatedAt,
@@ -321,6 +369,10 @@ function fingerprint(snapshot, tmux, automations, sourcePlugins = []) {
     session.outcome && `${session.outcome.status}:${session.outcome.artifacts.length}:${session.outcome.checks.length}`,
     session.sourcePlugin && `${session.sourcePlugin.id}:${session.sourcePlugin.revision}`,
     session.sourcePluginId && `${session.controlAuthority || ''}:${Boolean(session.readOnly)}:${JSON.stringify(session.sourceControlCapabilities || {})}`,
+    session.forkSourceSessionId || '',
+    session.forkHistoryBaseSessionId || '',
+    session.forkHistoryEndOrdinalExclusive,
+    session.forkHistoryEndByteOffset,
     session.provenance && `${session.provenance.source?.id || ''}:${session.provenance.provider?.id || ''}:${session.provenance.environment?.kind || ''}:${session.provenance.runtime?.kind || ''}`,
     (session.resources?.browserTabs || []).map(tab => `${tab.id || ''}:${tab.title || ''}:${tab.url || ''}:${tab.status || ''}`).join(','),
     (session.runtimePresence || []).map(item => `${item.id}:${item.pid}:${item.terminalId || ''}`).join(','),
@@ -352,7 +404,12 @@ function fingerprint(snapshot, tmux, automations, sourcePlugins = []) {
     JSON.stringify(item.capabilities || {}),
     JSON.stringify(item.managedSessionIds || []),
   ]);
-  return JSON.stringify([Math.floor(Date.now() / 60_000), sessions, tmuxState, automationState, sourceState]);
+  const forkPublicationState = forkPublicationFingerprintState(forkBindingGuardSessionIds, bridges);
+  return JSON.stringify([Math.floor(Date.now() / 60_000), sessions, tmuxState, automationState, sourceState, forkPublicationState]);
+}
+
+function snapshotNeedsPublication(previousFingerprint, nextFingerprint, bridgeBindings = []) {
+  return nextFingerprint !== previousFingerprint || (bridgeBindings || []).length > 0;
 }
 
 async function publishSnapshot(snapshot, sourceSnapshot) {
@@ -377,13 +434,27 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
     automations,
     summary: buildSummary(sessions, monitor.availability),
   };
-  const nextFingerprint = fingerprint(runtimeSnapshot, tmux, automations, sourceSnapshot.statuses);
-  if (nextFingerprint === lastFingerprint) return;
+  const bridgeBindings = inferredBridgeBindings(observedSessions);
+  const forkBindingGuardSessionIds = forkBridgeBindingGuardSessionIds(observedSessions, currentBridges);
+  const nextFingerprint = fingerprint(
+    runtimeSnapshot,
+    tmux,
+    automations,
+    sourceSnapshot.statuses,
+    forkBindingGuardSessionIds,
+    currentBridges,
+  );
+  // A transient host/persistence failure must not leave a proven fork child
+  // permanently hidden after one delivery. Retry exact 1:1 proof bindings;
+  // incomplete/ambiguous guard or provisional-bridge identity changes must
+  // still publish once even when there is no binding to retry.
+  if (!snapshotNeedsPublication(lastFingerprint, nextFingerprint, bridgeBindings)) return;
   lastFingerprint = nextFingerprint;
   lastPublishedSessions = sessions;
   parentPort.postMessage({
     type: 'snapshot',
-    bridgeBindings: inferredBridgeBindings(observedSessions),
+    bridgeBindings,
+    forkBindingGuardSessionIds,
     snapshot: {
       generatedAt: snapshot.generatedAt,
       sessions: sessions.map(cardSession),

@@ -9,7 +9,12 @@ const { EventEmitter } = require('events');
 const packageMetadata = require('../../package.json');
 const { parseCliArguments, desktopLaunchSpec, readCodexEndpoint } = require('../../bin/whitebox');
 const { providerList, normalizeProvider, modelContextWindow } = require('../../src/providerRegistry');
-const { UpdateManager, compareVersions, normalizeVersion, safeFileName, selectReleaseAsset } = require('../../src/updateManager');
+const { UpdateManager, compareVersions, normalizeVersion, safeFileName } = require('../../src/updateManager');
+const {
+  assertReleaseAssetSelections,
+  fixtureReleaseAssets,
+  selectionDecoys,
+} = require('../release-asset-contract');
 const {
   canInstallSilently,
   findInstalledDesktopApp,
@@ -623,6 +628,7 @@ function registerCliAndUpdateTests(context) {
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
     const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
+    const legacyClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-legacy-update-bridge-integration.js'), 'utf8');
     const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
     const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
     for (const requiredEvidence of [
@@ -633,7 +639,7 @@ function registerCliAndUpdateTests(context) {
       'pinned official fixed v1.7.5 installer',
       'Updater compatibility gate',
       'cannot by themselves justify approval',
-      'all three packaged Windows E2E results',
+      'all four packaged Windows E2E results',
     ]) {
       assert(normalizedAgentInstructions.includes(requiredEvidence), `검수 지침에서 필수 증거가 사라졌습니다: ${requiredEvidence}`);
     }
@@ -644,6 +650,8 @@ function registerCliAndUpdateTests(context) {
     assert.match(workflow, /\n  push:\r?\n/, '구버전 Windows 검증은 최종 main 커밋에서 다시 실행되어야 합니다.');
     assert(!workflow.split(/\npermissions:\r?\n/, 1)[0].includes('paths:'), '필수 최종 check가 사라지므로 workflow-level paths 필터를 두면 안 됩니다.');
     assert(workflow.includes('name: Updater compatibility gate'), '모든 PR에 생성되는 안정적인 최종 게이트가 사라졌습니다.');
+    assert(workflow.includes("github.event_name == 'pull_request' && github.ref || github.sha"), 'main의 updater E2E는 후속 push가 취소하지 못하도록 commit SHA별로 격리되어야 합니다.');
+    assert(workflow.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), '진행 중인 updater E2E 취소는 PR 갱신에만 허용되어야 합니다.');
     assert(workflow.includes('git diff --name-status --no-renames'), '이동과 삭제를 포함한 event diff 분류가 사라졌습니다.');
     assert(workflow.includes('node scripts/updater-review-scope.js'), '단일 updater 경로 분류기가 CI에 연결되지 않았습니다.');
     assert(workflow.includes('true|false') && workflow.includes('invalid sensitivity value'), '분류기 출력이 누락되거나 잘못된 경우 fail-closed 해야 합니다.');
@@ -656,15 +664,117 @@ function registerCliAndUpdateTests(context) {
       assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
       assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
       assert(workflowSource.includes('$cohorts.Count -ne 3') && workflowSource.includes('$attempt -ne 3'), `${label} workflow는 정확히 세 번 실행되지 않으면 실패해야 합니다.`);
+      assert(workflowSource.includes('LoadToAgent-Setup-1.6.3.exe'), `${label} workflow가 공식 v1.6.3 설치본을 고정해야 합니다.`);
+      assert(workflowSource.includes('LoadToAgent-Setup-1.6.23.exe'), `${label} workflow가 공식 immutable bridge를 고정해야 합니다.`);
+      assert(workflowSource.includes('WHITEBOX_LEGACY_CANDIDATE_E2E=true'), `${label} workflow가 후보 버전 legacy 모드를 명시해야 합니다.`);
+      assert(workflowSource.includes('npm run test:update:win:legacy-bridge'), `${label} workflow가 공식 legacy 전체 경로를 실행해야 합니다.`);
       assert(workflowSource.includes('npm run check:update:cohorts'), `${label} workflow가 공개 latest와 previousFixed를 비교해야 합니다.`);
       assert(!workflowSource.includes('GITHUB_TOKEN:'), `${label} workflow의 공개 latest 증거는 인증 요청을 사용하면 안 됩니다.`);
     }
     assert(!releaseWorkflow.includes('--clobber'), '기존 릴리스 자산을 덮어쓰면 안 됩니다.');
+    assert(releaseWorkflow.includes('group: whitebox-stable-release') && releaseWorkflow.includes('cancel-in-progress: false'),
+      '서로 다른 stable tag 릴리스가 latest 채널을 동시에 변경하지 못하도록 직렬화해야 합니다.');
+    assert(releaseWorkflow.includes('Refusing to move latest backward')
+      && releaseWorkflow.includes('Public latest resolved to $published_latest instead of $RELEASE_TAG'),
+    '릴리스 공개 단계는 latest 채널의 SemVer 역행을 거부하고 공개 결과를 다시 검증해야 합니다.');
+    assert(!releaseWorkflow.includes('releases/latest" --jq .tag_name 2>/dev/null || true'),
+      '기존 public latest 조회 실패를 릴리스 없음으로 간주해 downgrade 검사를 우회하면 안 됩니다.');
     assert(releaseWorkflow.includes('Draft asset bytes differ from the verified build artifact'), '공개 전 draft 자산 byte 검증이 사라졌습니다.');
     assert(releaseWorkflow.includes('fetch-depth: 0'), '릴리스 태그 검증에는 전체 Git 계보가 필요합니다.');
     assert(releaseWorkflow.includes('${GITHUB_REF}^{commit}') && releaseWorkflow.includes('${GITHUB_SHA,,}'), '릴리스는 tag SHA, tag commit, HEAD가 모두 같은지 확인해야 합니다.');
     assert(releaseWorkflow.includes('git merge-base --is-ancestor "$tag_commit" origin/main'), '릴리스 태그 커밋은 origin/main의 선조여야 합니다.');
     assert(frozenClientTest.includes("require('./check-update-compatibility-cohorts')"), 'Windows E2E가 공용 cohort 매니페스트 검증기를 읽어야 합니다.');
+    assert(frozenClientTest.includes('installationStarted = true;'), 'Windows E2E는 설치 시작 이후 정리 계약을 반드시 활성화해야 합니다.');
+    assert(frozenClientTest.includes("assert.equal(uninstallerAttemptCount, 0, 'The installed-product uninstaller must be invoked exactly once per attempt.')"),
+      'Windows E2E는 각 attempt에서 두 번째 uninstaller 실행을 거부해야 합니다.');
+    assert(frozenClientTest.includes('if (uninstallerAttemptCount !== 1)') && frozenClientTest.includes('if (validUninstallerRunCount !== 1)'),
+      'Windows E2E는 설치가 시작된 각 attempt에서 정확히 한 번의 유효한 uninstaller 실행을 입증해야 합니다.');
+    assert(!frozenClientTest.includes('if (fs.existsSync(uninstaller))'), '설치 시작 후 uninstaller 누락을 cleanup 성공으로 처리하면 안 됩니다.');
+    assert(frozenClientTest.includes('runningProcessesUnderDirectory(installDir)'), 'Windows E2E는 설치 경로 아래의 모든 프로세스 제거를 검증해야 합니다.');
+    assert(frozenClientTest.includes('waitForInstallCleanup()'), 'Windows E2E는 설치 디렉터리와 registry 정리가 완료될 때까지 기다려야 합니다.');
+    assert(frozenClientTest.includes('perUserUninstallRegistryEntries()'), 'Windows E2E는 HKCU uninstall registry 정리를 검증해야 합니다.');
+    assert(frozenClientTest.includes('assert.equal(fs.existsSync(installDir), false'), 'Windows E2E는 test root 삭제 전에 설치 디렉터리 제거를 검증해야 합니다.');
+    assert(legacyClientTest.includes("process.env.RUNNER_ENVIRONMENT === 'github-hosted'"), '레거시 설치 E2E는 GitHub 호스팅 일회성 러너에서만 자동 실행되어야 합니다.');
+    assert(legacyClientTest.includes('WHITEBOX_ALLOW_LEGACY_INSTALL_INTEGRATION'), '격리된 로컬 Windows E2E를 위한 명시적 override가 유지되어야 합니다.');
+    for (const [label, integrationSource] of [
+      ['frozen-client', frozenClientTest],
+      ['legacy-bridge', legacyClientTest],
+    ]) {
+      const prepareProfile = integrationSource.indexOf('prepareIsolatedProfileEnvironment();');
+      const integrationMain = integrationSource.indexOf('async function main()');
+      assert(prepareProfile >= 0 && integrationMain > prepareProfile,
+        `${label} E2E는 설치/실행 전에 attempt 전용 Electron 프로필 환경을 준비해야 합니다.`);
+      assert(integrationSource.includes("const isolatedProfileRoot = path.join(testRoot, 'isolated-profile')")
+        && integrationSource.includes("const isolatedAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Roaming')")
+        && integrationSource.includes("const isolatedLocalAppDataRoot = path.join(isolatedProfileRoot, 'AppData', 'Local')")
+        && integrationSource.includes("const inheritedUserDataDir = path.join(isolatedAppDataRoot, 'Whitebox')"),
+      `${label} E2E의 APPDATA·LOCALAPPDATA는 같은 fresh testRoot 아래에 고정되어야 합니다.`);
+      assert(integrationSource.includes('process.env.APPDATA = isolatedAppDataRoot')
+        && integrationSource.includes('process.env.LOCALAPPDATA = isolatedLocalAppDataRoot'),
+      `${label} E2E는 immutable helper가 물려받는 기본 Electron 프로필 환경을 격리해야 합니다.`);
+      assert(integrationSource.includes("assert.equal(fs.existsSync(inheritedUserDataDir), false")
+        && integrationSource.includes("assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile')"),
+      `${label} E2E는 NSIS의 APPDATA 부수효과가 아닌 정확한 fresh %APPDATA%\\Whitebox 생성·사용을 입증해야 합니다.`);
+      assert(integrationSource.includes("const isolatedBridgeHome = path.join(testRoot, 'isolated-bridge-home')")
+        && integrationSource.includes('process.env.WHITEBOX_BRIDGE_HOME = isolatedBridgeHome')
+        && integrationSource.includes('process.env.LOADTOAGENT_BRIDGE_HOME = isolatedBridgeHome')
+        && integrationSource.includes('bridgeHomeState.isDirectory() && !bridgeHomeState.isSymbolicLink()'),
+      `${label} E2E는 양쪽 bridge home 변수를 같은 fresh real testRoot 디렉터리로 격리해야 합니다.`);
+      assert(integrationSource.includes('assertPathWithin(testRoot, candidate, label)')
+        && integrationSource.includes('assertInstalledAppProfileIsolation')
+        && integrationSource.includes('userDataReferences(record.commandLine)'),
+      `${label} E2E는 프로필 경로 이탈과 실행 중 앱의 외부 --user-data-dir 참조를 fail-closed 검증해야 합니다.`);
+      assert(integrationSource.includes("assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile')")
+        && integrationSource.includes("assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile')"),
+      `${label} E2E는 direct 프로필과 helper 상속 기본 프로필이 실제 생성·사용됐음을 입증해야 합니다.`);
+      for (const profilePath of [
+        'isolatedProfileRoot',
+        'isolatedAppDataRoot',
+        'isolatedLocalAppDataRoot',
+        'inheritedUserDataDir',
+        'directUserDataDir',
+        'isolatedBridgeHome',
+      ]) {
+        assert(integrationSource.includes(`assert.equal(fs.existsSync(${profilePath}), false`),
+          `${label} E2E cleanup은 ${profilePath}가 testRoot와 함께 제거됐음을 검증해야 합니다.`);
+      }
+    }
+    assert.equal((frozenClientTest.match(/spawn\(installedExecutable, \[directUserDataArgument\]/g) || []).length, 1,
+      'frozen-client E2E의 direct installed-app 실행은 fresh --user-data-dir를 정확히 한 곳에서 사용해야 합니다.');
+    assert.equal((legacyClientTest.match(/spawn\(executable, \[directUserDataArgument\]/g) || []).length, 2,
+      'legacy E2E의 parent 및 renderer-ready fallback/manual 실행은 모두 fresh --user-data-dir를 사용해야 합니다.');
+    assert(!frozenClientTest.includes('spawn(installedExecutable, [],') && !legacyClientTest.includes('spawn(executable, [],'),
+      '패키지 Windows E2E에 격리되지 않은 direct installed-app 실행을 남기면 안 됩니다.');
+    assert(legacyClientTest.includes('async function waitForProfileDirectoryUsed')
+      && legacyClientTest.includes("await waitForProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile', child)")
+      && !legacyClientTest.includes('await new Promise(resolve => setTimeout(resolve, 1_000))'),
+    'legacy 초기 앱은 고정 1초 지연 대신 child 조기 종료를 감시하는 bounded profile polling을 사용해야 합니다.');
+    const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
+    const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
+    const fallbackArtifactCleanup = legacyFallback.indexOf('await waitForUpdateArtifactCleanup(launched)');
+    const fallbackFinalLogCheck = legacyFallback.indexOf('assertCleanLegacyInstallBeforeRestartFallback', fallbackArtifactCleanup);
+    const fallbackRendererReady = legacyFallback.indexOf('await startInstalledAppWithRendererReady', fallbackFinalLogCheck);
+    const fallbackPostRelaunchLogCheck = legacyFallback.indexOf('assertCleanLegacyInstallBeforeRestartFallback', fallbackRendererReady);
+    assert(fallbackProcessCleanup >= 0
+      && fallbackArtifactCleanup > fallbackProcessCleanup
+      && fallbackFinalLogCheck > fallbackArtifactCleanup
+      && fallbackRendererReady > fallbackFinalLogCheck
+      && fallbackPostRelaunchLogCheck > fallbackRendererReady,
+    '레거시 ready-file 예외는 helper·artifact 정리, 최종 로그, 인증된 renderer-ready, 안정 로그 순으로 검증해야 합니다.');
+    const candidateReinstall = legacyClientTest.slice(legacyClientTest.indexOf('async function reinstallCandidateWithPackagedUpdater'), legacyClientTest.indexOf('function stopProcessTree'));
+    assert(candidateReinstall.includes('await downloadWithPackagedUpdater')
+      && candidateReinstall.includes('releaseDecoys: selectionDecoys(CURRENT_VERSION)')
+      && !candidateReinstall.includes('copyFileSync'),
+    '설치된 후보 updater의 same-candidate 검증은 전체 release fixture에서 check·download를 실제 실행해야 합니다.');
+    assert(legacyClientTest.includes('if (uninstallerAttemptCount !== 1)')
+      && legacyClientTest.includes('if (validUninstallerRunCount !== 1)'),
+    '레거시 전체 경로도 설치가 시작되면 정확히 한 번의 유효한 uninstaller 실행을 입증해야 합니다.');
+    assert(legacyClientTest.includes('runningProcessesUnderDirectory(installDir)')
+      && legacyClientTest.includes('perUserUninstallRegistryEntries()')
+      && legacyClientTest.includes('await capture(\'wait for installed product cleanup\', async () => waitForInstallCleanup())'),
+    '레거시 전체 경로는 설치 하위 프로세스·디렉터리·HKCU uninstall registry 정리를 검증해야 합니다.');
+    assert(legacyClientTest.includes('cleanup was not fully verified; retaining ${testRoot} for inspection'),
+      '레거시 cleanup 증거가 누락되면 검사 루트를 지우지 말고 fail-closed 보존해야 합니다.');
     for (const cohort of cohortList(readCohortManifest())) {
       assert(!workflow.includes(cohort.sha256), 'PR/main workflow에 cohort pin이 중복되었습니다.');
       assert(!releaseWorkflow.includes(cohort.sha256), 'tag workflow에 cohort pin이 중복되었습니다.');
@@ -681,7 +791,12 @@ function registerCliAndUpdateTests(context) {
       'D\tscripts/package-content-check.js\n',
       'M\tscripts/check-update-compatibility-cohorts.js\n',
       'M\tscripts/legacy-update-bridge.config.js\n',
+      'M\tscripts/release-asset-contract.js\n',
       'M\tscripts/update-compatibility-cohorts.json\n',
+      'M\t.github/workflows/legacy-update-bridge.yml\n',
+      'M\t.github/CODEOWNERS\n',
+      'M\tdocs/LEGACY-UPDATE-BRIDGE.md\n',
+      'A\tdocs/UPDATE-COMPATIBILITY-AUDIT-2026-08-24.md\n',
       'R100\tdocs/notes.md\tsrc/updateRelaunch.js\n',
       'R100\tsrc/macUpdateHelper.js\tdocs/removed-helper.md\n',
     ]) {
@@ -694,23 +809,14 @@ function registerCliAndUpdateTests(context) {
 
   test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {
     const digest = `sha256:${'a'.repeat(64)}`;
-    const canonicalAsset = {
-      name: 'Whitebox-Setup-1.7.4.exe',
-      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe',
-      digest,
-      size: 1024,
-      state: 'uploaded',
-    };
-    const manualBridgeAsset = {
-      ...canonicalAsset,
-      name: 'Whitebox-Manual-Setup-1.7.4-x64.exe',
-      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Manual-Setup-1.7.4-x64.exe',
-    };
+    const currentAssets = fixtureReleaseAssets('1.7.4').map(asset => ({ ...asset, size: 1024, digest }));
+    const canonicalAsset = currentAssets.find(asset => asset.name === 'Whitebox-Setup-1.7.4.exe');
+    const manualBridgeAsset = currentAssets.find(asset => asset.name === 'Whitebox-Manual-Setup-1.7.4-x64.exe');
     const currentRelease = {
       tag_name: 'v1.7.4',
       draft: false,
       prerelease: false,
-      assets: [canonicalAsset, manualBridgeAsset],
+      assets: currentAssets,
     };
     assert.equal(compareVersions('1.7.4', '1.6.3'), 1);
     assert.equal(legacyV163TrustedDownloadUrl(canonicalAsset.browser_download_url), false);
@@ -864,35 +970,12 @@ function registerCliAndUpdateTests(context) {
   });
 
   test('운영체제와 CPU에 맞는 신뢰된 GitHub Release 파일을 고른다', () => {
-    const base = 'https://github.com/minjund/Whitebox/releases/download/v3.1.0/';
-    const assets = [
-      { name: 'Whitebox-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-portable.exe', browser_download_url: `${base}Whitebox-3.1.0-portable.exe`, state: 'uploaded' },
-      { name: 'Whitebox-Setup-3.1.0.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0.exe`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-arm64.dmg', browser_download_url: `${base}Whitebox-3.1.0-arm64.dmg`, state: 'uploaded' },
-      { name: 'Whitebox-3.1.0-x64.dmg', browser_download_url: `${base}Whitebox-3.1.0-x64.dmg`, state: 'uploaded' },
-      { name: 'Whitebox-Setup-9.9.9.exe', browser_download_url: 'https://example.com/fake.exe', state: 'uploaded' },
-    ];
-    assert.equal(selectReleaseAsset(assets, { platform: 'win32', arch: 'x64', version: '3.1.0' }).name, 'Whitebox-Setup-3.1.0.exe');
-    for (const nearMatch of [
-      { name: 'LoadToAgent-Manual-Setup-3.1.0-x64.exe', browser_download_url: `${base}LoadToAgent-Manual-Setup-3.1.0-x64.exe`, state: 'uploaded' },
-      { name: 'Whitebox-Manual-Setup-3.1.0-amd64.exe', browser_download_url: `${base}Whitebox-Manual-Setup-3.1.0-amd64.exe`, state: 'uploaded' },
-    ]) {
-      assert.equal(selectReleaseAsset([nearMatch], { platform: 'win32', arch: 'x64', version: '3.1.0' }), nearMatch);
-    }
-    assert.equal(selectReleaseAsset(assets, { platform: 'darwin', arch: 'arm64', version: '3.1.0' }).name, 'Whitebox-3.1.0-arm64.dmg');
-    assert.equal(selectReleaseAsset(assets, { platform: 'linux', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([assets[4]], { platform: 'darwin', arch: 'arm64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([assets[2]], { platform: 'darwin', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-2.9.0.exe', browser_download_url: `${base}Whitebox-Setup-2.9.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-13.1.0.exe', browser_download_url: `${base}Whitebox-Setup-13.1.0.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    assert.equal(selectReleaseAsset([{ ...assets[2], name: 'Whitebox-Setup-3.1.0-ia32.exe', browser_download_url: `${base}Whitebox-Setup-3.1.0-ia32.exe` }], { platform: 'win32', arch: 'x64', version: '3.1.0' }), null);
-    const legacyBase = 'https://github.com/minjund/LodeToAgent/releases/download/v3.1.0/';
-    assert.equal(selectReleaseAsset([{
-      name: 'LoadToAgent-Setup-3.1.0.exe',
-      browser_download_url: `${legacyBase}LoadToAgent-Setup-3.1.0.exe`,
-      state: 'uploaded',
-    }], { platform: 'win32', arch: 'x64', version: '3.1.0' }).name, 'LoadToAgent-Setup-3.1.0.exe');
+    const assets = fixtureReleaseAssets('3.1.0');
+    assert.equal(assets.length, 7);
+    assert(selectionDecoys('3.1.0').length >= 10);
+    assertReleaseAssetSelections(assets, '3.1.0');
+    assert.throws(() => fixtureReleaseAssets('3.1.0-beta.1'), /Stable release version is invalid/);
+    assert.throws(() => fixtureReleaseAssets('3.1.0+build.1'), /Stable release version is invalid/);
     assert.equal(safeFileName('..'), '');
     assert.equal(safeFileName('.'), '');
   });
@@ -978,15 +1061,16 @@ function registerCliAndUpdateTests(context) {
       fetch: async () => new Response(JSON.stringify({ ...release, assets: [{ ...asset, size: 'Infinity' }] }), { status: 200 }),
     });
     const malformedSize = await malformedSizeManager.check();
-    assert.equal(malformedSize.asset.size, 0);
+    assert.equal(malformedSize.asset, null);
     assert.equal(malformedSize.totalBytes, 0);
+    assert.match(malformedSize.error, /SHA-256 정보가 올바르지 않아/);
     const missingDigestManager = new UpdateManager({
       currentVersion: '3.0.0', platform: 'win32', arch: 'x64', downloadsDir: downloadDir,
       fetch: async () => new Response(JSON.stringify({ ...release, assets: [{ ...asset, digest: '' }] }), { status: 200 }),
     });
     const missingDigest = await missingDigestManager.check();
     assert.equal(missingDigest.asset, null);
-    assert.match(missingDigest.error, /원본인지 확인할 안전 정보/);
+    assert.match(missingDigest.error, /SHA-256 정보가 올바르지 않아/);
     const downloaded = await manager.download();
     assert.equal(downloaded.status, 'downloaded');
     assert.equal(fs.readFileSync(downloaded.downloadedPath, 'utf8'), payload.toString());

@@ -37,11 +37,12 @@ release workflows.
 
 Published clients must be reviewed as immutable binaries. Build a matrix of all
 supported installed cohorts and the proposed target. The current known cohorts
-are LoadToAgent 1.6.3-1.6.22 through the immutable 1.6.23 bridge, frozen
-Whitebox 1.7.3/1.7.4 through the manual installer alias, and fixed Whitebox
-1.7.5+ through the canonical automatic installer. If two versions are treated
-as equivalent, compare the updater files extracted from each official packaged
-`app.asar` byte for byte and retain that evidence.
+are published LoadToAgent 1.6.3-1.6.14 and 1.6.16-1.6.22 through the immutable
+1.6.23 bridge, frozen Whitebox 1.7.3/1.7.4 through the manual installer alias,
+and fixed Whitebox 1.7.5+ through the canonical automatic installer. Version
+1.6.15 was never published and therefore is not an installed cohort. If two
+versions are treated as equivalent, compare the updater files extracted from
+each official packaged `app.asar` byte for byte and retain that evidence.
 
 The `Windows Frozen-Client Update Compatibility` workflow creates the stable
 `Updater compatibility gate` check on every pull request and push to `main`.
@@ -49,10 +50,14 @@ It classifies the complete event diff before any path filtering. A non-sensitive
 diff records an explicit N/A success; a sensitive diff builds the exact event
 SHA, downloads the pinned official v1.7.3, v1.7.4, and v1.7.5 installers,
 verifies each filename, size and SHA-256, and runs the packaged scenario once
-from every cohort with fresh state. For an otherwise unmatched release change,
-dispatch it manually with the complete 40-character candidate SHA. Repository
-rules must require the stable final check, and all three cohort attempts must
-run again in the tag release workflow before a draft can be published.
+from every cohort with fresh state. It also verifies and executes the official
+v1.6.3 installer and immutable official v1.6.23 bridge as the representative
+full legacy path; all 19 published LoadToAgent packages were separately proven
+to contain byte-identical channel, trust, selector, and automatic-name logic.
+For an otherwise unmatched release change, dispatch it manually with the
+complete 40-character candidate SHA. Repository rules must require the stable
+final check, and all four packaged attempts must run again in the tag release
+workflow before a draft can be published.
 
 The packaged scenario must prove all parts of the contract:
 

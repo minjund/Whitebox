@@ -1,9 +1,10 @@
 # Legacy update bridge
 
-Whitebox versions 1.6.3 through 1.6.22 only trust release assets whose URL is
-under `minjund/LodeToAgent`. GitHub repository redirects return canonical
-`minjund/Whitebox` asset URLs, so those installed binaries cannot download a
-current release directly.
+Published Whitebox versions 1.6.3-1.6.14 and 1.6.16-1.6.22 only trust release
+assets whose URL is under `minjund/LodeToAgent`. Version 1.6.15 was never
+published. GitHub repository redirects return canonical `minjund/Whitebox`
+asset URLs, so those installed binaries cannot download a current release
+directly.
 
 The recovery channel is intentionally two-step:
 

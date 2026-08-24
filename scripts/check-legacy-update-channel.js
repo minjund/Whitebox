@@ -6,6 +6,7 @@ const {
   LEGACY_UPDATE_BRIDGE_VERSION,
   validateLegacyUpdatePath,
 } = require('./legacy-update-compatibility');
+const { assertReleaseAssetSelections } = require('./release-asset-contract');
 
 const BRIDGE_V1623_MAX_CHECK_BYTES = 2 * 1024 * 1024;
 
@@ -116,14 +117,12 @@ async function checkLegacyUpdateChannel(options = {}) {
     currentRelease,
     expectedCurrentTag,
   });
+  assertReleaseAssetSelections(currentRelease.assets, result.currentVersion);
   if (options.probeAssets !== false) {
     const bridgeAsset = bridgeRelease.assets.find(asset => asset.name === result.bridgeAsset);
-    const currentAsset = currentRelease.assets.find(asset => asset.name === result.currentAsset);
-    const automaticAsset = currentRelease.assets.find(asset => asset.name === result.automaticAsset);
     await Promise.all([
       probePublicAsset(fetchImpl, bridgeAsset),
-      probePublicAsset(fetchImpl, currentAsset),
-      probePublicAsset(fetchImpl, automaticAsset),
+      ...currentRelease.assets.map(asset => probePublicAsset(fetchImpl, asset)),
     ]);
   }
   return result;

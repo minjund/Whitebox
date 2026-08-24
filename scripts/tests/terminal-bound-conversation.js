@@ -1,8 +1,18 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
+const {
+  applyRuntimePresence,
+  forkBridgeBindingGuardSessionIds,
+  forkBridgeProcessProof,
+  inferredBridgeBindings,
+  providerFromPosixProcess,
+  selectAgentProcesses,
+} = require('../../src/processMonitor');
 const {
   TerminalManager,
   normalizeLaunchOptions,
@@ -37,6 +47,66 @@ function boundOptions(root, overrides = {}) {
   };
 }
 
+function codexForkOptions(root, externalId = '019f-desktop-source', overrides = {}) {
+  const sessionId = `codex:${externalId}`;
+  const signaturePayload = JSON.stringify([
+    sessionId,
+    'codex',
+    externalId,
+    'macos',
+    '',
+  ]);
+  const signature = `acs1:${crypto.createHash('sha256').update(signaturePayload, 'utf8').digest('hex')}`;
+  return {
+    type: 'agent',
+    provider: 'codex',
+    cwd: root,
+    args: ['fork', externalId],
+    agentForkSourceSessionId: sessionId,
+    agentForkSourceSignature: signature,
+    creationId: `create:codex-fork:${externalId}`,
+    sessionBackend: 'managed-tmux',
+    transient: false,
+    ...overrides,
+  };
+}
+
+function codexForkChildBinding(forked, forkRequest, childExternalId = '019f-fork-child', overrides = {}) {
+  const forkProcessStartedAt = new Date(Date.parse(forked.createdAt) + 1_000).toISOString();
+  return {
+    sessionId: `codex:${childExternalId}`,
+    externalId: childExternalId,
+    provider: 'codex',
+    environment: 'macos',
+    distro: '',
+    promptFingerprint: '',
+    linkScore: 26_000,
+    forkProofAuthority: 'codex-fork-lineage-v1',
+    forkSourceSessionId: forkRequest.agentForkSourceSessionId,
+    forkHistoryBaseSessionId: forkRequest.agentForkSourceSessionId,
+    forkSourceSignature: forkRequest.agentForkSourceSignature,
+    forkCreationId: forked.creationId,
+    forkTerminalPid: forked.pid,
+    forkTerminalCreatedAt: forked.createdAt,
+    forkChildStartedAt: forkProcessStartedAt,
+    forkChildCwd: forked.cwd,
+    forkClientKind: 'codex-cli',
+    forkHistoryEndOrdinalExclusive: 7111,
+    forkHistoryEndByteOffset: 33758971,
+    forkBindingTerminalCandidateCount: 1,
+    forkBindingSessionCandidateCount: 1,
+    forkProcessProofAuthority: 'codex-fork-process-v1',
+    forkProcessSnapshotAvailable: true,
+    forkProcessProvider: 'codex',
+    forkProcessPid: forked.pid + 1,
+    forkProcessAncestorPids: [forked.pid],
+    forkProcessArgs: ['fork', forkRequest.agentForkSourceSessionId.slice('codex:'.length)],
+    forkProcessStartedAt,
+    forkProcessCandidateCount: 1,
+    ...overrides,
+  };
+}
+
 function managerFixture(root, overrides = {}) {
   const writes = [];
   const spawns = [];
@@ -57,6 +127,21 @@ function managerFixture(root, overrides = {}) {
     ...overrides,
   });
   return { manager, writes, spawns };
+}
+
+function mainBridgePresenceProjector(root) {
+  const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const start = source.indexOf('function bridgePresenceSessionEligible(session)');
+  const end = source.indexOf('function bridgePresence()', start);
+  if (start < 0 || end <= start) throw new Error('main.js bridge presence projector를 찾지 못했습니다.');
+  const sandbox = {
+    process: { platform: 'darwin' },
+    isInternalTerminalProjectionSessionId: () => false,
+  };
+  vm.runInNewContext(`${source.slice(start, end)}\nthis.projectTerminalBridgePresence = projectTerminalBridgePresence;`, sandbox, {
+    filename: 'main-bridge-presence.js',
+  });
+  return sessions => Array.from(sandbox.projectTerminalBridgePresence(sessions, 'darwin'));
 }
 
 function persistedBoundRecord(root, pid) {
@@ -429,7 +514,7 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     assert.equal(blockedCreation.spawns.length, 0, '생성 장부 영속화 실패 시 spawn 전에 fail closed해야 합니다.');
   });
 
-  test('signed conversation PTY는 요청 backend와 무관하게 direct app-owned PTY로 정규화한다', () => {
+  test('signed resume와 Codex fork PTY는 서로 다른 direct 신원·복구 규칙을 유지한다', async () => {
     const normalized = normalizeLaunchOptions(boundOptions(root), 'darwin');
     assert.equal(normalized.sessionBackend, 'direct');
     assert.equal(normalized.tmuxSocket, '');
@@ -443,6 +528,529 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
       () => normalizeLaunchOptions(boundOptions(root, { bridgeId: 'b'.repeat(257) }), 'darwin'),
       /연결 식별자/u,
     );
+
+    const forkRequest = codexForkOptions(root);
+    const forkNormalized = normalizeLaunchOptions(forkRequest, 'darwin');
+    assert.equal(forkNormalized.sessionBackend, 'direct');
+    assert.equal(forkNormalized.tmuxSocket, '');
+    assert.equal(forkNormalized.managedTmuxSession, '');
+    assert.deepStrictEqual(forkNormalized.args, ['fork', '019f-desktop-source']);
+    assert.equal(forkNormalized.bridgeId, '');
+    assert.equal(forkNormalized.agentConnectionSignature, '');
+    assert.equal(forkNormalized.agentForkSourceSessionId, 'codex:019f-desktop-source');
+    assert.equal(forkNormalized.agentForkSourceSignature, forkRequest.agentForkSourceSignature);
+    assert.throws(
+      () => normalizeLaunchOptions({
+        ...forkRequest,
+        agentForkSourceSessionId: '',
+        agentForkSourceSignature: '',
+      }, 'darwin'),
+      /원본 대화 식별자와 서명/u,
+    );
+    assert.throws(
+      () => normalizeLaunchOptions({ ...forkRequest, args: ['fork', '019f-desktop-source', '질문'] }, 'darwin'),
+      /fork와 원본 대화 ID/u,
+    );
+    assert.throws(
+      () => normalizeLaunchOptions({ ...forkRequest, args: ['resume', '019f-desktop-source'] }, 'darwin'),
+      /정확한 fork 인자/u,
+    );
+    assert.throws(
+      () => normalizeLaunchOptions({ ...forkRequest, agentForkSourceSessionId: 'codex:other-source' }, 'darwin'),
+      /실행 인자와 일치/u,
+    );
+    assert.throws(
+      () => normalizeLaunchOptions({ ...forkRequest, agentForkSourceSignature: `acs1:${'f'.repeat(64)}` }, 'darwin'),
+      /서명이 실행 환경과 일치/u,
+    );
+    assert.throws(
+      () => normalizeLaunchOptions({ ...forkRequest, bridgeId: 'codex:019f-desktop-source' }, 'darwin'),
+      /쓰기 연결 정보를 사용할 수 없습니다/u,
+    );
+
+    const storeFile = path.join(temp, 'codex-desktop-fork.json');
+    const forkFixture = managerFixture(root, { storeFile });
+    assert.throws(
+      () => forkFixture.manager.create({ ...forkRequest, creationId: '' }),
+      error => error.code === 'AGENT_FORK_CREATION_ID_REQUIRED' && error.creationState === 'rejected',
+    );
+    assert.throws(
+      () => forkFixture.manager.create({ ...forkRequest, initialCommand: 'fork와 함께 보내면 안 되는 질문' }),
+      error => error.code === 'AGENT_FORK_LAUNCH_PAYLOAD_UNSAFE',
+    );
+    assert.throws(
+      () => forkFixture.manager.create({ ...forkRequest, recoveryArgs: ['resume', '019f-desktop-source'] }),
+      error => error.code === 'AGENT_RECOVERY_IDENTITY_MISMATCH',
+    );
+    assert.equal(forkFixture.spawns.length, 0, '검증 실패한 fork 요청은 provider를 실행하면 안 됩니다.');
+
+    const forked = forkFixture.manager.create(forkRequest);
+    forkFixture.manager.persistNow();
+    const provisionalForkStore = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+    assert.equal(forked.backend, 'direct');
+    assert.equal(forked.conversationBound, false);
+    assert.equal(forked.bridgeId, '');
+    assert.equal(forked.agentConnectionSignature, '');
+    assert.equal(forked.agentResumeSessionId, '');
+    assert.equal(forked.agentLinkedSessionId, '');
+    assert.equal(forked.agentForkSourceSessionId, forkRequest.agentForkSourceSessionId);
+    assert.equal(forked.agentForkSourceSignature, forkRequest.agentForkSourceSignature);
+    assert.deepStrictEqual(forkFixture.spawns, [{ file: 'codex', args: ['fork', '019f-desktop-source'] }]);
+    assert.equal(forkFixture.manager.sessions.get(forked.id).agentBinding, null);
+    assert.deepStrictEqual(forkFixture.manager.sessions.get(forked.id).options.args, ['fork', '019f-desktop-source']);
+
+    const duplicateFork = forkFixture.manager.create({ ...forkRequest, includeReplay: false });
+    assert.equal(duplicateFork.id, forked.id);
+    assert.equal(duplicateFork.creationDuplicate, true);
+    assert.equal(duplicateFork.creationUnavailable, false);
+    assert.equal(forkFixture.spawns.length, 1, '응답 유실 후 같은 creationId 재시도는 다시 fork하면 안 됩니다.');
+    assert.throws(
+      () => forkFixture.manager.create(codexForkOptions(root, '019f-desktop-source', {
+        creationId: 'create:codex-fork:second-gesture',
+      })),
+      error => error.code === 'AGENT_FORK_SOURCE_ALREADY_ACTIVE' && error.creationState === 'rejected',
+      '같은 원본의 실행 중인 provisional fork는 다른 creationId로도 두 번째 child를 만들면 안 됩니다.',
+    );
+    assert.equal(forkFixture.spawns.length, 1);
+    assert.throws(
+      () => forkFixture.manager.create(codexForkOptions(root, '019f-other-source', {
+        creationId: forkRequest.creationId,
+      })),
+      error => error.code === 'CREATION_ID_CONFLICT',
+      '같은 creationId를 다른 fork 원본에 재사용하면 안 됩니다.',
+    );
+    assert.throws(
+      () => forkFixture.manager.bindAgentSession(forked.id, {}),
+      error => error.code === 'AGENT_FORK_BINDING_UNVERIFIED',
+    );
+    assert.throws(
+      () => forkFixture.manager.restart(forked.id),
+      error => error.code === 'AGENT_FORK_RESTART_UNSAFE',
+    );
+    assert.equal(forkFixture.spawns.length, 1, '일반 restart가 one-shot fork argv를 다시 실행하면 안 됩니다.');
+    assert.equal(forkFixture.manager.get(forked.id).status, 'running');
+    assert.throws(
+      () => forkFixture.manager.create(boundOptions(root, {
+        args: ['resume', '019f-unrelated-resume-while-fork-runs'],
+        recoveryArgs: ['resume', '019f-unrelated-resume-while-fork-runs'],
+        bridgeId: 'codex:019f-unrelated-resume-while-fork-runs',
+      })),
+      error => error.code === 'AGENT_FORK_CHILD_IDENTITY_UNRESOLVED',
+      'child ID를 모르는 running provisional fork와 같은 context의 모든 Codex resume을 차단해야 합니다.',
+    );
+    assert.equal(forkFixture.spawns.length, 1);
+
+    const prePidCrashStore = path.join(temp, 'codex-fork-pre-pid-crash.json');
+    const prePidCrashPayload = JSON.parse(JSON.stringify(provisionalForkStore));
+    const prePidCrashRecord = prePidCrashPayload.sessions.find(item => item.id === forked.id);
+    prePidCrashRecord.status = 'starting';
+    prePidCrashRecord.pid = null;
+    prePidCrashRecord.terminationPending = false;
+    prePidCrashRecord.terminationUncertain = false;
+    prePidCrashRecord.terminationErrorCode = '';
+    prePidCrashRecord.terminationErrorMessage = '';
+    fs.writeFileSync(prePidCrashStore, JSON.stringify(prePidCrashPayload), 'utf8');
+    const prePidCrash = managerFixture(root, {
+      storeFile: prePidCrashStore,
+      processKill() {
+        throw new Error('PID 없는 crash-window record를 임의 process로 probe하면 안 됩니다.');
+      },
+    });
+    const uncertainPrePidFork = prePidCrash.manager.get(forked.id);
+    assert.equal(uncertainPrePidFork.status, 'stopping');
+    assert.equal(uncertainPrePidFork.terminationUncertain, true);
+    assert.equal(uncertainPrePidFork.terminationErrorCode, 'AGENT_FORK_ORPHAN_PID_UNCONFIRMED',
+      'pre-spawn ledger와 PID checkpoint 사이 crash는 provider 미실행 증거가 아니라 unknown outcome입니다.');
+    const prePidPresence = mainBridgePresenceProjector(root)(prePidCrash.manager.list());
+    assert.equal(prePidPresence.length, 1);
+    const prePidLineageChild = {
+      id: 'codex:019f-pre-pid-crash-child',
+      externalId: '019f-pre-pid-crash-child',
+      provider: 'codex',
+      parentId: null,
+      environment: { kind: prePidPresence[0].environment, distro: prePidPresence[0].distro || '' },
+      forkHistoryBaseSessionId: forkRequest.agentForkSourceSessionId,
+    };
+    assert.deepStrictEqual(
+      forkBridgeBindingGuardSessionIds([prePidLineageChild], prePidPresence),
+      [prePidLineageChild.id],
+      'PID checkpoint 전 crash여도 signed fork metadata의 child guard를 유지해야 합니다.',
+    );
+    assert.throws(
+      () => prePidCrash.manager.create(codexForkOptions(root, '019f-desktop-source', {
+        creationId: 'create:codex-fork:after-pre-pid-crash',
+      })),
+      error => error.code === 'AGENT_FORK_SOURCE_ALREADY_ACTIVE',
+    );
+    assert.throws(
+      () => prePidCrash.manager.create(boundOptions(root, {
+        args: ['resume', '019f-resume-after-pre-pid-crash'],
+        recoveryArgs: ['resume', '019f-resume-after-pre-pid-crash'],
+        bridgeId: 'codex:019f-resume-after-pre-pid-crash',
+      })),
+      error => error.code === 'AGENT_FORK_CHILD_IDENTITY_UNRESOLVED',
+    );
+    assert.equal(prePidCrash.spawns.length, 0);
+
+    const childBinding = codexForkChildBinding(forked, forkRequest);
+    assert.throws(
+      () => forkFixture.manager.bindAgentSession(forked.id, {
+        ...childBinding,
+        forkHistoryBaseSessionId: '',
+      }),
+      error => error.code === 'AGENT_FORK_BINDING_UNVERIFIED',
+      '두 Codex lineage 필드가 같은 원본을 증명하지 않으면 child를 채택하면 안 됩니다.',
+    );
+    assert.throws(
+      () => forkFixture.manager.bindAgentSession(forked.id, {
+        ...childBinding,
+        forkBindingSessionCandidateCount: 2,
+      }),
+      error => error.code === 'AGENT_FORK_BINDING_UNVERIFIED',
+      'child 후보가 모호하면 채택하면 안 됩니다.',
+    );
+    assert.throws(
+      () => forkFixture.manager.bindAgentSession(forked.id, childBinding),
+      error => error.code === 'AGENT_FORK_BINDING_UNVERIFIED',
+      'PTY process lineage만으로는 동시 외부 fork transcript와 구별할 수 없어 child를 채택하면 안 됩니다.',
+    );
+    const legacyAdoptionStore = path.join(temp, 'codex-fork-legacy-adoption.json');
+    const legacyAdoptionPayload = JSON.parse(JSON.stringify(provisionalForkStore));
+    const legacyAdoptionRecord = legacyAdoptionPayload.sessions.find(item => item.id === forked.id);
+    legacyAdoptionRecord.status = 'running';
+    legacyAdoptionRecord.options.args = ['resume', childBinding.externalId];
+    legacyAdoptionRecord.options.bridgeId = childBinding.sessionId;
+    legacyAdoptionRecord.options.agentConnectionSignature = childBinding.signature;
+    legacyAdoptionRecord.options.agentForkSourceSessionId = '';
+    legacyAdoptionRecord.options.agentForkSourceSignature = '';
+    legacyAdoptionRecord.agentBinding = childBinding;
+    legacyAdoptionRecord.agentForkedFromSessionId = forkRequest.agentForkSourceSessionId;
+    legacyAdoptionRecord.agentForkedFromSignature = forkRequest.agentForkSourceSignature;
+    legacyAdoptionRecord.agentForkProofAuthority = 'codex-fork-lineage-v1';
+    legacyAdoptionRecord.agentForkProofPid = forked.pid;
+    legacyAdoptionRecord.agentForkProofCreatedAt = forked.createdAt;
+    fs.writeFileSync(legacyAdoptionStore, JSON.stringify(legacyAdoptionPayload), 'utf8');
+    const rejectedLegacyAdoption = managerFixture(root, { storeFile: legacyAdoptionStore });
+    const rejectedLegacyRecord = rejectedLegacyAdoption.manager.get(forked.id);
+    assert.equal(rejectedLegacyRecord.conversationBound, false);
+    assert.equal(rejectedLegacyRecord.agentResumeSessionId, '');
+    assert.equal(rejectedLegacyRecord.agentLinkedSessionId, '');
+    assert.equal(rejectedLegacyRecord.agentForkedFromSessionId, '');
+    assert.deepStrictEqual(rejectedLegacyAdoption.manager.sessions.get(forked.id).options.args, [],
+      '과거 inferred fork adoption 저장값은 replay만 남기고 모든 writable resume 신원을 제거해야 합니다.');
+    assert.equal(rejectedLegacyAdoption.spawns.length, 0);
+
+    const stillProvisionalFork = forkFixture.manager.get(forked.id);
+    assert.equal(stillProvisionalFork.conversationBound, false);
+    assert.equal(stillProvisionalFork.agentForkSourceSessionId, forkRequest.agentForkSourceSessionId);
+    assert.equal(stillProvisionalFork.agentForkedFromSessionId, '');
+    assert.deepStrictEqual(forkFixture.manager.sessions.get(forked.id).options.args, ['fork', '019f-desktop-source']);
+    forkFixture.manager.persistNow();
+
+    const restoredForkFixture = managerFixture(root, { storeFile });
+    const restoredFork = restoredForkFixture.manager.get(forked.id);
+    assert.equal(restoredFork.agentForkSourceSessionId, forkRequest.agentForkSourceSessionId);
+    assert.equal(restoredFork.agentForkSourceSignature, forkRequest.agentForkSourceSignature);
+    assert.equal(restoredFork.agentForkedFromSessionId, '');
+    assert.equal(restoredFork.agentResumeSessionId, '');
+    assert.equal(restoredFork.agentLinkedSessionId, '');
+    assert.equal(restoredFork.conversationBound, false);
+    restoredForkFixture.manager.recoverPersistedSessions();
+    assert.equal(restoredForkFixture.spawns.length, 0, '호스트 복구가 원본 fork argv를 다시 실행하면 안 됩니다.');
+    const duplicateAfterRestart = restoredForkFixture.manager.create({ ...forkRequest, includeReplay: false });
+    assert.equal(duplicateAfterRestart.id, forked.id);
+    assert.equal(duplicateAfterRestart.creationDuplicate, true);
+    assert.equal(duplicateAfterRestart.creationUnavailable, true);
+    assert.equal(restoredForkFixture.spawns.length, 0, '호스트 재시작 뒤 creation 재시도도 다시 fork하면 안 됩니다.');
+
+    const duplicateBootstrapStore = path.join(temp, 'codex-desktop-fork-duplicate-bootstrap.json');
+    const bootstrapPayload = JSON.parse(JSON.stringify(provisionalForkStore));
+    const firstPersistedFork = bootstrapPayload.sessions.find(item => item.id === forked.id);
+    firstPersistedFork.status = 'running';
+    firstPersistedFork.pid = 61_001;
+    const secondPersistedFork = JSON.parse(JSON.stringify(firstPersistedFork));
+    secondPersistedFork.id = 'terminal:duplicate-provisional-fork';
+    secondPersistedFork.pid = 61_002;
+    secondPersistedFork.creationId = 'create:codex-fork:duplicate-bootstrap';
+    secondPersistedFork.creationPayloadFingerprint = 'd'.repeat(64);
+    bootstrapPayload.sessions.push(secondPersistedFork);
+    fs.writeFileSync(duplicateBootstrapStore, JSON.stringify(bootstrapPayload), 'utf8');
+    const duplicateBootstrap = managerFixture(root, {
+      storeFile: duplicateBootstrapStore,
+      processKill: () => {},
+    });
+    const ambiguousForks = duplicateBootstrap.manager.list()
+      .filter(item => item.agentForkSourceSessionId === forkRequest.agentForkSourceSessionId);
+    assert.equal(ambiguousForks.length, 2);
+    assert.equal(ambiguousForks.every(item => item.terminationUncertain), true);
+    assert.equal(ambiguousForks.every(item => item.terminationErrorCode === 'AGENT_FORK_DUPLICATE_LIVE_UNCONFIRMED'), true,
+      'bootstrap에서 같은 source의 live 가능 fork가 둘이면 어느 쪽도 임의 survivor로 고르면 안 됩니다.');
+    assert.throws(
+      () => duplicateBootstrap.manager.create(codexForkOptions(root, '019f-desktop-source', {
+        creationId: 'create:codex-fork:after-ambiguous-bootstrap',
+      })),
+      error => error.code === 'AGENT_FORK_SOURCE_ALREADY_ACTIVE',
+    );
+    assert.equal(duplicateBootstrap.spawns.length, 0);
+
+    const projectBridgePresence = mainBridgePresenceProjector(root);
+    const guardedChild = bridge => ({
+      id: 'codex:fork-child-awaiting-proof',
+      externalId: 'fork-child-awaiting-proof',
+      provider: 'codex',
+      clientKind: 'codex-cli',
+      parentId: null,
+      cwd: bridge.cwd,
+      originCwd: bridge.cwd,
+      environment: { kind: bridge.environment, distro: bridge.distro || '' },
+      startedAt: new Date(Date.parse(bridge.startedAt) + 1_000).toISOString(),
+      forkSourceSessionId: bridge.agentForkSourceSessionId || '',
+    });
+    const assertChildGuarded = (presence, message) => {
+      assert.equal(presence.length, 1, message);
+      const child = guardedChild(presence[0]);
+      assert.deepStrictEqual(
+        forkBridgeBindingGuardSessionIds([child], presence),
+        [child.id],
+        message,
+      );
+    };
+
+    const proofBridge = projectBridgePresence(forkFixture.manager.list())[0];
+    const proofProcessStartedAt = new Date(Date.parse(proofBridge.startedAt) + 1_000).toISOString();
+    const proofSourceExternalId = forkRequest.agentForkSourceSessionId.slice('codex:'.length);
+    const detectedProcesses = selectAgentProcesses([
+      {
+        pid: proofBridge.pid,
+        parentPid: 1,
+        name: 'zsh',
+        commandLine: 'zsh -l',
+        startedAt: proofBridge.startedAt,
+      },
+      {
+        pid: proofBridge.pid + 1,
+        parentPid: proofBridge.pid,
+        name: 'node',
+        commandLine: `node /usr/local/lib/node_modules/@openai/codex/bin/codex.js fork ${proofSourceExternalId}`,
+        startedAt: proofProcessStartedAt,
+      },
+      {
+        pid: proofBridge.pid + 2,
+        parentPid: proofBridge.pid + 1,
+        name: 'codex',
+        commandLine: `codex fork ${proofSourceExternalId}`,
+        startedAt: proofProcessStartedAt,
+      },
+    ], { providerResolver: providerFromPosixProcess, environment: 'macos' });
+    assert.equal(detectedProcesses.length, 1);
+    assert.equal(detectedProcesses[0].pid, proofBridge.pid + 2);
+    assert.equal(detectedProcesses[0].ancestorPids.includes(proofBridge.pid), true,
+      'provider leaf는 non-provider shell/npm wrapper를 포함한 PTY 조상 체인을 보존해야 합니다.');
+    assert.deepStrictEqual(detectedProcesses[0].forkArguments, ['fork', proofSourceExternalId]);
+
+    const validProcessSnapshot = { available: true, processes: detectedProcesses };
+    const processProof = forkBridgeProcessProof(proofBridge, validProcessSnapshot);
+    assert.equal(processProof.forkProcessPid, proofBridge.pid + 2);
+    assert.equal(processProof.forkProcessAncestorPids.includes(proofBridge.pid), true);
+    assert.deepStrictEqual(processProof.forkProcessArgs, ['fork', proofSourceExternalId]);
+    assert.equal(forkBridgeProcessProof(proofBridge, { available: true, processes: [] }), null,
+      '빈 process snapshot은 fork 실행 신원 증명이 아닙니다.');
+    assert.equal(forkBridgeProcessProof(proofBridge, { available: false, processes: detectedProcesses }), null,
+      '사용 불가능한 process snapshot은 fail closed해야 합니다.');
+
+    const unrelatedSameSource = {
+      ...detectedProcesses[0],
+      id: 'macos:codex:99001',
+      pid: 99_001,
+      parentPid: 99_000,
+      ancestorPids: [99_000, 1],
+    };
+    const snapshotWithUnrelatedFork = {
+      available: true,
+      processes: [...detectedProcesses, unrelatedSameSource],
+    };
+    assert.ok(forkBridgeProcessProof(proofBridge, snapshotWithUnrelatedFork),
+      'PTY ancestry 밖의 동시 fork는 이 PTY의 process identity로 세면 안 됩니다.');
+    const ambiguousDescendant = {
+      ...detectedProcesses[0],
+      id: `macos:codex:${proofBridge.pid + 3}`,
+      pid: proofBridge.pid + 3,
+      parentPid: proofBridge.pid,
+      ancestorPids: [proofBridge.pid, 1],
+    };
+    assert.equal(forkBridgeProcessProof(proofBridge, {
+      available: true,
+      processes: [...detectedProcesses, ambiguousDescendant],
+    }), null, '같은 PTY 아래 Codex descendant가 둘이면 어느 process도 증명으로 채택하면 안 됩니다.');
+    assert.equal(forkBridgeProcessProof(proofBridge, {
+      available: true,
+      processes: [{ ...detectedProcesses[0], forkArguments: ['resume', proofSourceExternalId] }],
+    }), null, '정확한 codex fork <source> argv가 아니면 증명하면 안 됩니다.');
+    assert.equal(forkBridgeProcessProof(proofBridge, {
+      available: true,
+      processes: [{
+        ...detectedProcesses[0],
+        startedAt: new Date(Date.parse(proofBridge.startedAt) + 61_000).toISOString(),
+      }],
+    }), null, 'PTY launch window 밖의 provider 시작 시각은 증명하면 안 됩니다.');
+    assert.equal(forkBridgeProcessProof({ ...proofBridge, environment: 'wsl', distro: 'Ubuntu' }, {
+      available: true,
+      processes: detectedProcesses,
+    }), null, '기존 로컬 process snapshot으로 WSL 내부 provider 신원을 추측하면 안 됩니다.');
+
+    const proofChild = {
+      ...guardedChild(proofBridge),
+      id: 'codex:019f-fork-proof-child',
+      externalId: '019f-fork-proof-child',
+      updatedAt: proofProcessStartedAt,
+      runtimePresence: [],
+      forkSourceSessionId: forkRequest.agentForkSourceSessionId,
+      forkHistoryBaseSessionId: forkRequest.agentForkSourceSessionId,
+      forkHistoryEndOrdinalExclusive: 7111,
+      forkHistoryEndByteOffset: 33758971,
+    };
+    const proofObserved = applyRuntimePresence(
+      [proofChild],
+      {},
+      snapshotWithUnrelatedFork,
+      Date.parse(proofProcessStartedAt),
+      [proofBridge],
+    );
+    assert.deepStrictEqual(inferredBridgeBindings(proofObserved), [],
+      'process ancestry/argv/start가 맞아도 provider가 반환한 child ID 없이는 transcript를 채택하면 안 됩니다.');
+    assert.equal(proofObserved.some(session => session.id === `bridge:${proofBridge.id}`), false,
+      '채택하지 않는 provisional fork를 영구 synthetic whitebox-bridge 카드로 만들면 안 됩니다.');
+    assert.deepStrictEqual(forkBridgeBindingGuardSessionIds([proofChild], [proofBridge]), [proofChild.id]);
+    const historyOnlyGuardChild = {
+      ...proofChild,
+      cwd: path.join(root, 'canonicalized-elsewhere'),
+      originCwd: path.join(root, 'canonicalized-elsewhere'),
+      startedAt: '',
+      clientKind: 'codex-desktop',
+      forkSourceSessionId: '',
+    };
+    assert.deepStrictEqual(
+      forkBridgeBindingGuardSessionIds([historyOnlyGuardChild], [{ ...proofBridge, pid: null }]),
+      [historyOnlyGuardChild.id],
+      'guard는 PID/cwd/time 없이도 같은 환경의 forked_from 또는 history_base source 계보를 유지해야 합니다.',
+    );
+    const slowExactLineageChild = {
+      ...proofChild,
+      id: 'codex:019f-slow-fork-child',
+      externalId: '019f-slow-fork-child',
+      startedAt: new Date(Date.parse(proofBridge.startedAt) + 5 * 60_000).toISOString(),
+    };
+    assert.deepStrictEqual(
+      forkBridgeBindingGuardSessionIds([slowExactLineageChild], [proofBridge]),
+      [slowExactLineageChild.id],
+      'live provisional fork의 exact-lineage child guard에는 60초 상한을 두면 안 됩니다.',
+    );
+
+    let acknowledgeTermination;
+    const terminatingFixture = managerFixture(root, {
+      killTree: () => new Promise(resolve => { acknowledgeTermination = resolve; }),
+    });
+    const terminating = terminatingFixture.manager.create(codexForkOptions(root, '019f-fork-terminating'));
+    const termination = terminatingFixture.manager.stop(terminating.id);
+    const terminatingRecord = terminatingFixture.manager.get(terminating.id);
+    assert.equal(terminatingRecord.status, 'stopping');
+    assert.equal(terminatingRecord.terminationPending, true);
+    assert.throws(
+      () => terminatingFixture.manager.create(boundOptions(root, {
+        args: ['resume', '019f-resume-during-fork-stop'],
+        recoveryArgs: ['resume', '019f-resume-during-fork-stop'],
+        bridgeId: 'codex:019f-resume-during-fork-stop',
+      })),
+      error => error.code === 'AGENT_FORK_CHILD_IDENTITY_UNRESOLVED',
+      'fork process 종료 확인 중에도 같은 context resume writer를 열면 안 됩니다.',
+    );
+    const terminatingPresence = projectBridgePresence(terminatingFixture.manager.list());
+    assertChildGuarded(terminatingPresence,
+      '프로세스 트리 종료 확인 전 provisional fork bridge와 child-card guard를 해제하면 안 됩니다.');
+    acknowledgeTermination();
+    await termination;
+    const confirmedExitPresence = projectBridgePresence(terminatingFixture.manager.list());
+    assert.deepStrictEqual(confirmedExitPresence, [],
+      '프로세스 트리 종료를 확인한 stopped fork bridge는 해제해야 합니다.');
+    const resumeAfterConfirmedExit = terminatingFixture.manager.create(boundOptions(root, {
+      args: ['resume', '019f-resume-after-fork-stop'],
+      recoveryArgs: ['resume', '019f-resume-after-fork-stop'],
+      bridgeId: 'codex:019f-resume-after-fork-stop',
+    }));
+    assert.equal(resumeAfterConfirmedExit.status, 'running',
+      'fork writer 종료가 확인된 뒤에는 같은 context resume을 허용해야 합니다.');
+
+    const orphanManager = (name, processKill) => {
+      const orphanStore = path.join(temp, `codex-fork-orphan-${name}.json`);
+      fs.writeFileSync(orphanStore, JSON.stringify(provisionalForkStore), 'utf8');
+      return managerFixture(root, { storeFile: orphanStore, processKill }).manager;
+    };
+    const aliveOrphan = orphanManager('alive', () => {});
+    const aliveOrphanRecord = aliveOrphan.list()[0];
+    assert.equal(aliveOrphanRecord.status, 'stopping');
+    assert.equal(aliveOrphanRecord.terminationUncertain, true);
+    assert.equal(aliveOrphanRecord.terminationErrorCode, 'AGENT_FORK_ORPHAN_PID_LIVE');
+    assertChildGuarded(projectBridgePresence(aliveOrphan.list()),
+      'persisted fork PID가 alive이면 provisional bridge와 child-card guard를 유지해야 합니다.');
+
+    const unknownOrphan = orphanManager('unknown', () => {
+      const error = new Error('process state unavailable');
+      error.code = 'EPERM';
+      throw error;
+    });
+    const unknownOrphanRecord = unknownOrphan.list()[0];
+    assert.equal(unknownOrphanRecord.status, 'stopping');
+    assert.equal(unknownOrphanRecord.terminationUncertain, true);
+    assert.equal(unknownOrphanRecord.terminationErrorCode, 'AGENT_FORK_ORPHAN_PID_UNCONFIRMED');
+    assertChildGuarded(projectBridgePresence(unknownOrphan.list()),
+      'persisted fork PID 상태가 unknown이면 provisional bridge와 child-card guard를 유지해야 합니다.');
+    assert.throws(
+      () => unknownOrphan.create(boundOptions(root, {
+        args: ['resume', '019f-resume-during-unknown-orphan'],
+        recoveryArgs: ['resume', '019f-resume-during-unknown-orphan'],
+        bridgeId: 'codex:019f-resume-during-unknown-orphan',
+      })),
+      error => error.code === 'AGENT_FORK_CHILD_IDENTITY_UNRESOLVED',
+      'persisted fork PID가 unknown인 동안 같은 context resume을 차단해야 합니다.',
+    );
+    unknownOrphan.processKill = () => {
+      const error = new Error('orphan exited after the first probe');
+      error.code = 'ESRCH';
+      throw error;
+    };
+    const resumeAfterLaterEsrch = unknownOrphan.create(boundOptions(root, {
+      args: ['resume', '019f-resume-after-later-esrch'],
+      recoveryArgs: ['resume', '019f-resume-after-later-esrch'],
+      bridgeId: 'codex:019f-resume-after-later-esrch',
+    }));
+    assert.equal(resumeAfterLaterEsrch.status, 'running',
+      '이전 unknown orphan이 다음 probe에서 ESRCH이면 영구 차단하지 말아야 합니다.');
+
+    const absentOrphan = orphanManager('absent', () => {
+      const error = new Error('process exited');
+      error.code = 'ESRCH';
+      throw error;
+    });
+    assert.equal(absentOrphan.list()[0].status, 'exited');
+    const absentPresence = projectBridgePresence(absentOrphan.list());
+    assert.deepStrictEqual(absentPresence, [],
+      'ESRCH로 종료를 확인한 persisted fork bridge는 해제해야 합니다.');
+    assert.deepStrictEqual(
+      forkBridgeBindingGuardSessionIds([guardedChild({
+        cwd: root,
+        environment: 'macos',
+        distro: '',
+        startedAt: new Date().toISOString(),
+      })], absentPresence),
+      [],
+      'ESRCH 확인 뒤 child-card guard가 남으면 안 됩니다.',
+    );
+    const resumeAfterEsrch = absentOrphan.create(boundOptions(root, {
+      args: ['resume', '019f-resume-after-esrch'],
+      recoveryArgs: ['resume', '019f-resume-after-esrch'],
+      bridgeId: 'codex:019f-resume-after-esrch',
+    }));
+    assert.equal(resumeAfterEsrch.status, 'running');
   });
 
   test('bound PTY는 xterm의 raw 키 입력과 control signal·전용 승인을 전달한다', () => {
