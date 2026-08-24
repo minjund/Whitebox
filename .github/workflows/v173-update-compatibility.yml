@@ -24,6 +24,7 @@ jobs:
     name: Classify updater-sensitive changes
     runs-on: ubuntu-latest
     outputs:
+      cohort_manifest: ${{ steps.public_latest.outputs.cohort_manifest }}
       sensitive: ${{ steps.changes.outputs.sensitive }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -34,7 +35,16 @@ jobs:
         with:
           node-version: 22
       - name: Verify previousFixed matches the public latest stable release
-        run: npm run check:update:cohorts
+        id: public_latest
+        shell: bash
+        run: |
+          npm run check:update:cohorts
+          cohort_manifest="$(node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")"
+          if [ -z "$cohort_manifest" ]; then
+            echo "Validated cohort manifest attestation was empty."
+            exit 1
+          fi
+          printf 'cohort_manifest=%s\n' "$cohort_manifest" >> "$GITHUB_OUTPUT"
       - name: Classify the complete event diff before path filtering
         id: changes
         shell: bash
@@ -88,8 +98,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Verify the selected commit's compatibility cohort manifest
-        run: npm run check:update:cohorts
+      - name: Bind the selected commit to the unauthenticated public-latest attestation
+        shell: pwsh
+        env:
+          EXPECTED_COHORT_MANIFEST: ${{ needs.classify.outputs.cohort_manifest }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_COHORT_MANIFEST)) {
+            throw 'The unauthenticated public-latest cohort attestation was missing'
+          }
+          $actualManifest = (& node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to validate the selected compatibility cohort manifest' }
+          if ($actualManifest -cne $env:EXPECTED_COHORT_MANIFEST) {
+            throw 'The selected compatibility cohort manifest differs from the public-latest validated manifest'
+          }
+          Write-Host 'Selected cohort manifest matches the unauthenticated public-latest attestation.'
       - run: npm run check:source
       - run: npm test
       - name: Build the exact Windows release candidate

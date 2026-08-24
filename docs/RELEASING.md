@@ -46,7 +46,12 @@ each official packaged `app.asar` byte for byte and retain that evidence.
 
 The `Windows Frozen-Client Update Compatibility` workflow creates the stable
 `Updater compatibility gate` check on every pull request and push to `main`.
-It classifies the complete event diff before any path filtering. A non-sensitive
+Its Ubuntu classification job first validates `previousFixed` against the
+unauthenticated public `latest` API and exports the complete validated cohort
+manifest as a job attestation. The Windows job must byte-for-byte match its
+selected SHA's validated manifest to that attestation instead of making a
+second rate-limit-sensitive public API call. It then classifies the complete
+event diff before any path filtering. A non-sensitive
 diff records an explicit N/A success; a sensitive diff builds the exact event
 SHA, downloads the pinned official v1.7.3, v1.7.4, and v1.7.5 installers,
 verifies each filename, size and SHA-256, and runs the packaged scenario once

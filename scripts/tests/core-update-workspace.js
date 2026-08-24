@@ -871,6 +871,14 @@ function registerCliAndUpdateTests(context) {
     assert(workflow.includes('git diff --name-status --no-renames'), '이동과 삭제를 포함한 event diff 분류가 사라졌습니다.');
     assert(workflow.includes('node scripts/updater-review-scope.js'), '단일 updater 경로 분류기가 CI에 연결되지 않았습니다.');
     assert(workflow.includes('true|false') && workflow.includes('invalid sensitivity value'), '분류기 출력이 누락되거나 잘못된 경우 fail-closed 해야 합니다.');
+    assert.equal((workflow.match(/npm run check:update:cohorts/g) || []).length, 1,
+      'PR/main workflow는 Ubuntu에서 공개 latest를 무인증으로 정확히 한 번 검증해야 합니다.');
+    assert(workflow.includes('id: public_latest')
+      && workflow.includes('cohort_manifest: ${{ steps.public_latest.outputs.cohort_manifest }}')
+      && workflow.includes('EXPECTED_COHORT_MANIFEST: ${{ needs.classify.outputs.cohort_manifest }}')
+      && workflow.includes('$actualManifest -cne $env:EXPECTED_COHORT_MANIFEST')
+      && workflow.includes('differs from the public-latest validated manifest'),
+    'Windows packaged E2E는 중복 공개 API 호출 없이 선택 SHA의 전체 manifest를 선행 무인증 latest 증거에 묶어야 합니다.');
     for (const [label, workflowSource] of [
       ['PR/main', workflow],
       ['tag release', releaseWorkflow],
