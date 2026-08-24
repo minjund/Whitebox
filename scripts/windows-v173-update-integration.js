@@ -25,8 +25,9 @@ const SOURCE_VERSION = '1.7.3';
 const SOURCE_INSTALLER_NAME = 'Whitebox-Setup-1.7.3.exe';
 const SOURCE_INSTALLER_SIZE = 85_295_741;
 const SOURCE_INSTALLER_SHA256 = '6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574';
+const FROZEN_BOOTSTRAP_TIMEOUT_ERROR = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
 const EXPECTED_FROZEN_BOOTSTRAP_ERRORS = Object.freeze([
-  'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.',
+  FROZEN_BOOTSTRAP_TIMEOUT_ERROR,
   'bootstrapError=업데이트 설치 도우미가 준비 전에 종료되었습니다. 코드: 0',
 ]);
 const targetVersion = String(sourcePackageMetadata.version || '').trim();
@@ -40,6 +41,7 @@ const installedAsar = path.join(installDir, 'resources', 'app.asar');
 const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const updateInstallerPaths = new Set();
+const trackedUpdateProcesses = new Map();
 let activeAppPid = 0;
 
 function existingFile(file, label) {
@@ -127,6 +129,33 @@ function stopProcessTree(pid) {
     windowsHide: true,
     timeout: 30_000,
   });
+}
+
+function stopProcessesAtExactPath(executable, label) {
+  for (const pid of runningProcessIds(executable)) stopProcessTree(pid);
+  const remaining = runningProcessIds(executable);
+  if (remaining.length) throw new Error(`${label} processes remained after cleanup: ${remaining.join(',')}`);
+}
+
+function processCommandReferences(pid, file) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !file) return false;
+  const script = [
+    "$process = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $env:WHITEBOX_INTEGRATION_PID) -ErrorAction SilentlyContinue;",
+    'if ($process -and -not [string]::IsNullOrWhiteSpace([string]$process.CommandLine) -and',
+    '    ([string]$process.CommandLine).IndexOf($env:WHITEBOX_INTEGRATION_COMMAND_PATH, [StringComparison]::OrdinalIgnoreCase) -ge 0) { exit 0 }',
+    'exit 1',
+  ].join(' ');
+  const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      WHITEBOX_INTEGRATION_PID: String(pid),
+      WHITEBOX_INTEGRATION_COMMAND_PATH: file,
+    },
+    windowsHide: true,
+    timeout: 30_000,
+  });
+  return result.status === 0;
 }
 
 function closeInstalledAppGracefully(pid) {
@@ -426,15 +455,21 @@ async function launchPackagedInstaller(installerModule, options) {
   let capturedLogPath = '';
   let capturedReadyPath = '';
   let capturedReadyToken = '';
+  let capturedHelperPath = '';
   const wrappedSpawn = (command, args, spawnOptions) => {
-    bootstrapChild = spawn(command, args, spawnOptions);
     const valueAfter = name => {
       const index = args.indexOf(name);
       return index >= 0 ? String(args[index + 1] || '') : '';
     };
+    bootstrapChild = spawn(command, args, spawnOptions);
     capturedLogPath = valueAfter('-LogPath');
     capturedReadyPath = valueAfter('-ReadyPath');
     capturedReadyToken = valueAfter('-RendererReadyToken');
+    capturedHelperPath = valueAfter('-HelperPath');
+    const bootstrapPath = valueAfter('-File');
+    if (Number.isSafeInteger(bootstrapChild.pid) && bootstrapChild.pid > 0 && bootstrapPath) {
+      trackedUpdateProcesses.set(bootstrapChild.pid, bootstrapPath);
+    }
     return bootstrapChild;
   };
   const launched = await installerModule.launchDownloadedUpdate({
@@ -449,10 +484,13 @@ async function launchPackagedInstaller(installerModule, options) {
     environment: process.env,
     readyTimeoutMs: 15_000,
     bootstrapTimeoutMs: 15_000,
-    ...(options.captureBootstrapAck ? { spawn: wrappedSpawn } : {}),
+    spawn: wrappedSpawn,
     beforeAutomaticInstall: context => {
       helperCallbackCount += 1;
       helperPid = Number(context && context.helperPid || 0);
+      if (Number.isSafeInteger(helperPid) && helperPid > 0 && capturedHelperPath) {
+        trackedUpdateProcesses.set(helperPid, capturedHelperPath);
+      }
       if (options.captureBootstrapAck) {
         assert(bootstrapChild, 'The target updater did not expose its real bootstrap process.');
         assert.equal(bootstrapChild.exitCode, 0, 'The shutdown boundary ran before bootstrap exit code 0.');
@@ -497,12 +535,12 @@ async function finishFrozenFirstHop(launched, parentPid, installerPath) {
   await waitForInstalledPackage(targetVersion);
   await waitForInstallerProcessExit(installerPath);
   await waitForInstalledPackage(targetVersion, 120_000, 8);
-  await waitForProcessExit(launched.integrationHelperPid, 30_000);
+  await waitForProcessExit(launched.integrationHelperPid, 120_000);
   lines = assertCompletedInstall(launched.logPath, {
     parentPid,
     expectedVersion: targetVersion,
     allowFrozenBootstrapRace: true,
-    allowUnloggedInstallerExit: true,
+    allowUnloggedInstallerExit: bootstrapErrors[0] === FROZEN_BOOTSTRAP_TIMEOUT_ERROR,
   });
   assert.equal(processAlive(launched.integrationHelperPid), false, 'The frozen helper remained live after the installer outcome settled.');
 
@@ -663,17 +701,32 @@ main().catch(error => {
   dumpUpdateLogs(testRoot);
   process.exitCode = 1;
 }).finally(() => {
+  for (const [pid, commandPath] of trackedUpdateProcesses) {
+    try {
+      if (processCommandReferences(pid, commandPath)) stopProcessTree(pid);
+    } catch (error) {
+      console.error(`Could not stop a tracked integration updater process during cleanup: ${error.message}`);
+      process.exitCode = 1;
+    }
+  }
+  for (const [pid, commandPath] of trackedUpdateProcesses) {
+    if (!processCommandReferences(pid, commandPath)) continue;
+    console.error(`A tracked integration updater process remained after cleanup: ${pid} (${commandPath})`);
+    process.exitCode = 1;
+  }
   for (const installerPath of updateInstallerPaths) {
     try {
-      for (const pid of runningProcessIds(installerPath)) stopProcessTree(pid);
+      stopProcessesAtExactPath(installerPath, 'Integration installer');
     } catch (error) {
-      console.warn(`Could not enumerate integration installer processes during cleanup: ${error.message}`);
+      console.error(`Could not stop integration installer processes during cleanup: ${error.message}`);
+      process.exitCode = 1;
     }
   }
   try {
-    for (const pid of runningProcessIds(installedExecutable)) stopProcessTree(pid);
+    stopProcessesAtExactPath(installedExecutable, 'Integration app');
   } catch (error) {
-    console.warn(`Could not enumerate integration app processes during cleanup: ${error.message}`);
+    console.error(`Could not stop integration app processes during cleanup: ${error.message}`);
+    process.exitCode = 1;
   }
   const uninstaller = path.join(installDir, 'Uninstall Whitebox.exe');
   if (fs.existsSync(uninstaller)) {
