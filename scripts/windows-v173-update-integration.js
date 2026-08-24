@@ -267,6 +267,7 @@ async function waitForUpdateArtifactCleanup(launched, timeoutMs = 20_000) {
   for (const file of [
     launched.bootstrapPath,
     launched.helperPath,
+    launched.helperPidPath,
     launched.readyPath,
     launched.rendererReadyPath,
   ]) {
@@ -424,6 +425,7 @@ async function launchPackagedInstaller(installerModule, options) {
   let helperPid = 0;
   let bootstrapChild = null;
   let capturedLogPath = '';
+  let capturedHelperPidPath = '';
   let capturedReadyPath = '';
   let capturedReadyToken = '';
   let capturedHelperPath = '';
@@ -434,6 +436,7 @@ async function launchPackagedInstaller(installerModule, options) {
     };
     bootstrapChild = spawn(command, args, spawnOptions);
     capturedLogPath = valueAfter('-LogPath');
+    capturedHelperPidPath = valueAfter('-HelperPidPath');
     capturedReadyPath = valueAfter('-ReadyPath');
     capturedReadyToken = valueAfter('-RendererReadyToken');
     capturedHelperPath = valueAfter('-HelperPath');
@@ -453,8 +456,6 @@ async function launchPackagedInstaller(installerModule, options) {
     parentPid: options.parentPid,
     allowUnsignedWindowsUpdates: options.allowUnsignedWindowsUpdates,
     environment: process.env,
-    readyTimeoutMs: 15_000,
-    bootstrapTimeoutMs: 15_000,
     spawn: wrappedSpawn,
     beforeAutomaticInstall: context => {
       helperCallbackCount += 1;
@@ -469,6 +470,8 @@ async function launchPackagedInstaller(installerModule, options) {
         const signal = JSON.parse(fs.readFileSync(capturedReadyPath, 'utf8').replace(/^\uFEFF/, '').trim());
         assert.equal(signal.token, capturedReadyToken);
         assert.equal(Number(signal.helperPid), helperPid);
+        const helperIdentity = JSON.parse(fs.readFileSync(capturedHelperPidPath, 'utf8').replace(/^\uFEFF/, '').trim());
+        assert.deepStrictEqual(helperIdentity, signal, 'The bootstrap helper PID sidecar did not authenticate the acknowledged helper.');
         assert.equal(processAlive(options.parentPid), true, 'The parent exited before bootstrap acknowledgement.');
         assert.equal(processAlive(helperPid), true, 'The helper exited before bootstrap acknowledgement.');
         const boundaryLines = logLines(capturedLogPath);
@@ -482,6 +485,7 @@ async function launchPackagedInstaller(installerModule, options) {
   assert.equal(launched.mode, 'automatic');
   return {
     ...launched,
+    integrationHelperPidPath: capturedHelperPidPath,
     integrationReadyPath: capturedReadyPath,
     integrationHelperPid: helperPid,
   };
@@ -611,6 +615,7 @@ async function main() {
       captureBootstrapAck: true,
     });
     assert.equal(fs.existsSync(reinstallLaunch.bootstrapPath), false, 'The target updater returned before bootstrap acknowledgement.');
+    assert.equal(fs.existsSync(reinstallLaunch.integrationHelperPidPath), false, 'The target updater did not remove the authenticated helper PID sidecar.');
     assert.equal(fs.existsSync(reinstallLaunch.integrationReadyPath), false, 'The target updater did not remove the helper-ready file after both consumers acknowledged it.');
     assert.deepStrictEqual(linesStarting(logLines(reinstallLaunch.logPath), 'bootstrapError='), []);
     assert.equal(processAlive(reinstallParentPid), true, 'The target helper did not wait for its real parent.');
