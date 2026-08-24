@@ -327,7 +327,7 @@ async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, sta
 
 async function startInstalledApp(expectedVersion) {
   const rendererReadyToken = crypto.randomBytes(24).toString('hex');
-  const rendererReadyPath = path.join(testRoot, `started-renderer-ready-${rendererReadyToken}.json`);
+  const rendererReadyPath = path.join(testRoot, `install-renderer-ready-${rendererReadyToken}.json`);
   const child = spawn(installedExecutable, [], {
     env: {
       ...process.env,
