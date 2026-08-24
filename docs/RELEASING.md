@@ -74,6 +74,18 @@ The packaged scenario must prove all parts of the contract:
    its helper, bootstrap, PID-sidecar, and ready-signal files; the harness must
    prove no tracked process remains and remove its isolated download, log, and
    profile state.
+4. The immutable v1.6.3 launcher starts the installed v1.6.23 bridge without a
+   profile argument, so Chromium resolves that one relaunch through the native
+   Windows roaming `Whitebox` directory. This historical exception is valid
+   only on a disposable GitHub-hosted runner after `Whitebox`, `loadtoagent`,
+   and `LoadToAgent` are all proven absent. The harness must re-pin both
+   official installers, create the exact `Whitebox` child with a fresh
+   `.whitebox-integration-owner-<48 lowercase hex>` marker, require an exact
+   canonical `--user-data-dir` reference plus non-marker app data, and then
+   prove the installed process tree and every profile-referencing process have
+   exited before deleting that owned child. The native roaming root and any
+   unowned profile must never be deleted, and all three candidate paths must be
+   absent at the end of the same run.
 
 Do not approve on a source-only simulation, a target-only clean install, or an
 allowed timeout. Missing official artifacts, an untested supported cohort,

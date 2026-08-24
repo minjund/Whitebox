@@ -35,6 +35,7 @@ const V1623_INSTALLER_SHA256 = '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf3
 const V1623_INSTALLER_SIZE = 94506459;
 const V1623_INSTALLER_NAME = 'LoadToAgent-Setup-1.6.23.exe';
 const CANDIDATE_E2E = process.env.WHITEBOX_LEGACY_CANDIDATE_E2E === 'true';
+const IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION = CANDIDATE_E2E && disposableGithubRunner;
 const CURRENT_VERSION = CANDIDATE_E2E ? String(sourcePackageMetadata.version || '').trim() : '1.7.4';
 const CURRENT_INSTALLER_SHA256 = CANDIDATE_E2E
   ? String(process.env.WHITEBOX_CURRENT_INSTALLER_SHA256 || '').trim().toLowerCase().replace(/^sha256:/, '')
@@ -67,6 +68,46 @@ const currentExecutable = path.join(installDir, 'Whitebox.exe');
 const uninstallRegistryKeyName = String(bridgeConfig.nsis?.guid || '').trim();
 const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const capturedNativeAppDataRoot = String(process.env.APPDATA || '').trim();
+
+function windowsKnownRoamingAppData() {
+  const result = spawnSync(powershell, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    '[Console]::Write([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData))',
+  ], {
+    encoding: 'utf8',
+    env: process.env,
+    windowsHide: true,
+    timeout: 30_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error([
+      'Windows roaming AppData Known Folder could not be resolved.',
+      result.error && result.error.stack,
+      result.stdout,
+      result.stderr,
+    ].filter(Boolean).join('\n'));
+  }
+  const value = String(result.stdout || '').trim();
+  if (!path.isAbsolute(value)) throw new Error(`Windows roaming AppData Known Folder was not absolute: ${value}`);
+  return path.resolve(value);
+}
+
+const nativeAppDataRoot = IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION ? windowsKnownRoamingAppData() : '';
+const immutableBridgeNativeUserDataDir = nativeAppDataRoot ? path.join(nativeAppDataRoot, 'Whitebox') : '';
+const immutableBridgeNativeProfileCandidates = nativeAppDataRoot ? [
+  immutableBridgeNativeUserDataDir,
+  path.join(nativeAppDataRoot, 'loadtoagent'),
+  path.join(nativeAppDataRoot, 'LoadToAgent'),
+] : [];
+const immutableBridgeNativeProfileOwnerToken = IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION
+  ? crypto.randomBytes(24).toString('hex')
+  : '';
+const immutableBridgeNativeProfileOwnerMarker = immutableBridgeNativeUserDataDir
+  ? path.join(immutableBridgeNativeUserDataDir, `.whitebox-integration-owner-${immutableBridgeNativeProfileOwnerToken}`)
+  : '';
 const downloadedInstallerPaths = new Set();
 const launchedUpdates = [];
 const installedProcessImageNames = new Set([path.basename(legacyExecutable), path.basename(currentExecutable)]);
@@ -74,6 +115,10 @@ let relaunchedPid = 0;
 let installationStarted = false;
 let uninstallerAttemptCount = 0;
 let validUninstallerRunCount = 0;
+let immutableBridgeNativeProfileOwnershipArmed = false;
+let immutableBridgeNativeProfileOwned = false;
+let immutableBridgeNativeProfileObserved = false;
+let immutableBridgeNativeProfilePolicy = null;
 
 function pathIsWithin(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -100,6 +145,26 @@ function prepareIsolatedProfileEnvironment() {
   assert.equal(fs.existsSync(inheritedUserDataDir), false,
     'The updater-inherited Whitebox profile must begin absent for every legacy attempt.');
   assert.equal(fs.existsSync(directUserDataDir), false, 'The direct Electron profile must begin absent for every legacy attempt.');
+  if (IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION) {
+    assert(path.isAbsolute(capturedNativeAppDataRoot),
+      `The inherited APPDATA was not absolute before isolation: ${capturedNativeAppDataRoot}`);
+    const capturedRootState = fs.lstatSync(capturedNativeAppDataRoot, { throwIfNoEntry: false });
+    assert(capturedRootState && capturedRootState.isDirectory() && !capturedRootState.isSymbolicLink(),
+      `The inherited APPDATA was not a real directory before isolation: ${capturedNativeAppDataRoot}`);
+    const nativeRootState = fs.lstatSync(nativeAppDataRoot, { throwIfNoEntry: false });
+    assert(nativeRootState && nativeRootState.isDirectory() && !nativeRootState.isSymbolicLink(),
+      `The Windows roaming AppData Known Folder must be a real directory: ${nativeAppDataRoot}`);
+    assert.equal(canonicalExistingPath(capturedNativeAppDataRoot), canonicalExistingPath(nativeAppDataRoot),
+      'The inherited APPDATA did not match the Windows roaming AppData Known Folder before isolation.');
+    assert.equal(pathIsWithin(testRoot, nativeAppDataRoot), false,
+      'The immutable bridge historical profile exception must remain outside the attempt roots.');
+    for (const candidate of immutableBridgeNativeProfileCandidates) {
+      assert.equal(fs.existsSync(candidate), false,
+        `An immutable bridge native profile candidate was not fresh: ${candidate}`);
+      assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+        `An immutable bridge native profile entry already existed: ${candidate}`);
+    }
+  }
   fs.mkdirSync(isolatedAppDataRoot, { recursive: true });
   fs.mkdirSync(isolatedLocalAppDataRoot, { recursive: true });
   fs.mkdirSync(isolatedBridgeHome, { recursive: true });
@@ -234,7 +299,13 @@ function runningInstalledAppCommandLines(expectedExecutable) {
   }).filter(record => canonicalExistingPath(record.executablePath) === expectedCanonicalPath) : [];
 }
 
-function assertInstalledAppProfileIsolation(expectedPid, expectedExecutable, label, requireDirectProfile = false) {
+function assertInstalledAppProfileIsolation(
+  expectedPid,
+  expectedExecutable,
+  label,
+  requireDirectProfile = false,
+  allowImmutableBridgeNativeProfile = false,
+) {
   assertIsolatedProfileEnvironment(label);
   const expectedRecord = exactProcessRecord(expectedPid);
   assert.equal(
@@ -246,13 +317,20 @@ function assertInstalledAppProfileIsolation(expectedPid, expectedExecutable, lab
     expectedRecord,
     ...runningInstalledAppCommandLines(expectedExecutable).filter(record => record.pid !== expectedPid),
   ];
+  const immutableBridgeNativeProfile = allowImmutableBridgeNativeProfile
+    ? canonicalExistingPath(immutableBridgeNativeUserDataDir)
+    : '';
+  let immutableBridgeNativeReferenceCount = 0;
   for (const record of records) {
     const references = userDataReferences(record.commandLine);
     for (const reference of references) {
       const canonicalReference = canonicalExistingPath(reference);
       const isExpectedRoot = pathIsWithin(canonicalExistingPath(isolatedAppDataRoot), canonicalReference)
         || pathIsWithin(canonicalExistingPath(isolatedLocalAppDataRoot), canonicalReference);
-      assert.equal(isExpectedRoot, true,
+      const isImmutableBridgeNativeProfile = allowImmutableBridgeNativeProfile
+        && canonicalReference === immutableBridgeNativeProfile;
+      if (isImmutableBridgeNativeProfile) immutableBridgeNativeReferenceCount += 1;
+      assert.equal(isExpectedRoot || isImmutableBridgeNativeProfile, true,
         `${label}: process ${record.pid} references a user-data path outside the attempt roots: ${reference}`);
     }
     if (record.pid === expectedPid && requireDirectProfile) {
@@ -263,6 +341,14 @@ function assertInstalledAppProfileIsolation(expectedPid, expectedExecutable, lab
       );
     }
   }
+  if (allowImmutableBridgeNativeProfile) {
+    assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+      'The native profile exception is only valid for the disposable official candidate compatibility run.');
+    assert.equal(canonicalExistingPath(expectedExecutable), canonicalExistingPath(legacyExecutable),
+      'The native profile exception is only valid for the immutable bridge executable.');
+    assert(immutableBridgeNativeReferenceCount > 0,
+      'The immutable bridge did not expose its exact historical native Whitebox profile.');
+  }
 }
 
 function assertProfileDirectoryUsed(directory, label) {
@@ -271,6 +357,34 @@ function assertProfileDirectoryUsed(directory, label) {
   assertPathWithin(fs.realpathSync(testRoot), fs.realpathSync(directory), `${label} real path`);
   assert(fs.readdirSync(directory).length > 0, `${label} remained unused: ${directory}`);
   assertPathWithin(testRoot, directory, label);
+}
+
+function assertImmutableBridgeNativeProfileUsed() {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable bridge native profile is only valid on a disposable official candidate runner.');
+  assert(immutableBridgeNativeProfileOwnershipArmed,
+    'The immutable bridge native profile was observed before ownership was armed.');
+  const rootState = fs.lstatSync(nativeAppDataRoot, { throwIfNoEntry: false });
+  assert(rootState && rootState.isDirectory() && !rootState.isSymbolicLink(),
+    `The Windows roaming AppData Known Folder changed during the attempt: ${nativeAppDataRoot}`);
+  const profileState = fs.lstatSync(immutableBridgeNativeUserDataDir, { throwIfNoEntry: false });
+  assert(profileState && profileState.isDirectory() && !profileState.isSymbolicLink(),
+    `The immutable bridge native profile is not a real directory: ${immutableBridgeNativeUserDataDir}`);
+  const canonicalNativeRoot = canonicalExistingPath(nativeAppDataRoot);
+  const canonicalNativeProfile = canonicalExistingPath(immutableBridgeNativeUserDataDir);
+  assert.equal(path.dirname(canonicalNativeProfile), canonicalNativeRoot,
+    'The immutable bridge native profile did not resolve to the exact Known Folder child.');
+  assert(fs.readdirSync(immutableBridgeNativeUserDataDir).length > 0,
+    `The immutable bridge native profile remained unused: ${immutableBridgeNativeUserDataDir}`);
+  const applicationEntries = fs.readdirSync(immutableBridgeNativeUserDataDir)
+    .filter(name => name !== path.basename(immutableBridgeNativeProfileOwnerMarker));
+  assert(applicationEntries.length > 0,
+    `The immutable bridge native profile contained only the ownership marker: ${immutableBridgeNativeUserDataDir}`);
+  for (const candidate of immutableBridgeNativeProfileCandidates.slice(1)) {
+    assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+      `The immutable bridge created an unexpected legacy native profile: ${candidate}`);
+  }
+  immutableBridgeNativeProfileObserved = true;
 }
 
 async function waitForProfileDirectoryUsed(directory, label, child, timeoutMs = 30_000) {
@@ -318,6 +432,99 @@ function assertPinnedInstaller(file, expected, label) {
   const stat = existingFile(file, label);
   assert.equal(stat.size, expected.size, `${label} byte size changed.`);
   assert.equal(sha256(file), expected.sha256, `${label} SHA-256 changed.`);
+}
+
+function armImmutableBridgeNativeProfileOwnership(firstHopOptions) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'Refusing to arm the immutable bridge native profile outside disposable official candidate E2E.');
+  assert(firstHopOptions && typeof firstHopOptions === 'object', 'The immutable bridge first-hop policy input was missing.');
+  assert.equal(bridgeVersion, '1.6.23', 'The immutable native profile exception bridge version changed.');
+  assert.equal(firstHopOptions.repository, 'LodeToAgent', 'The immutable native profile exception repository changed.');
+  assert.equal(firstHopOptions.currentVersion, '1.6.3', 'The immutable native profile exception source version changed.');
+  assert.equal(firstHopOptions.expectedVersion, bridgeVersion, 'The immutable native profile exception target version changed.');
+  assert.equal(canonicalExistingPath(firstHopOptions.installer), canonicalExistingPath(bridgeInstaller),
+    'The immutable native profile exception installer changed.');
+  assert.equal(canonicalExistingPath(firstHopOptions.appPath), canonicalExistingPath(legacyExecutable),
+    'The immutable native profile exception source executable changed.');
+  assert.equal(canonicalExistingPath(firstHopOptions.relaunchAppPath), canonicalExistingPath(legacyExecutable),
+    'The immutable native profile exception relaunch executable changed.');
+  assert.equal(firstHopOptions.allowLegacyBootstrapFallback, true,
+    'The immutable native profile exception lost its pinned ready-race contract.');
+  assertPinnedInstaller(sourceInstaller, {
+    name: V163_INSTALLER_NAME,
+    size: V163_INSTALLER_SIZE,
+    sha256: V163_INSTALLER_SHA256,
+  }, 'official v1.6.3 exception source');
+  assertPinnedInstaller(bridgeInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'official immutable v1.6.23 exception target');
+  assert.equal(executableVersion(legacyExecutable), '1.6.3',
+    'The native profile exception was armed outside the exact v1.6.3 first hop.');
+  assert.equal(fs.existsSync(currentExecutable), false,
+    'The Whitebox candidate existed before the immutable bridge first hop.');
+  for (const candidate of immutableBridgeNativeProfileCandidates) {
+    assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+      `Refusing to own a pre-existing immutable bridge native profile: ${candidate}`);
+  }
+  fs.mkdirSync(immutableBridgeNativeUserDataDir, { mode: 0o700 });
+  immutableBridgeNativeProfileOwned = true;
+  immutableBridgeNativeProfileOwnershipArmed = true;
+  try {
+    const profileState = fs.lstatSync(immutableBridgeNativeUserDataDir);
+    assert(profileState.isDirectory() && !profileState.isSymbolicLink(),
+      `The owned immutable bridge native profile is not a real directory: ${immutableBridgeNativeUserDataDir}`);
+    assert.equal(path.dirname(canonicalExistingPath(immutableBridgeNativeUserDataDir)), canonicalExistingPath(nativeAppDataRoot),
+      'The owned immutable bridge native profile escaped the Windows Known Folder.');
+    fs.writeFileSync(immutableBridgeNativeProfileOwnerMarker, immutableBridgeNativeProfileOwnerToken, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    const markerState = fs.lstatSync(immutableBridgeNativeProfileOwnerMarker);
+    assert(markerState.isFile() && !markerState.isSymbolicLink(),
+      `The immutable bridge native profile ownership marker is unsafe: ${immutableBridgeNativeProfileOwnerMarker}`);
+    assert.equal(fs.readFileSync(immutableBridgeNativeProfileOwnerMarker, 'utf8'), immutableBridgeNativeProfileOwnerToken,
+      'The immutable bridge native profile ownership marker token changed.');
+    immutableBridgeNativeProfilePolicy = Object.freeze({
+      kind: 'official-v1.6.3-to-v1.6.23-native-profile',
+      ownerToken: immutableBridgeNativeProfileOwnerToken,
+    });
+    return immutableBridgeNativeProfilePolicy;
+  } catch (error) {
+    try {
+      const rollbackProfileState = fs.lstatSync(immutableBridgeNativeUserDataDir, { throwIfNoEntry: false });
+      if (rollbackProfileState !== undefined) {
+        assert(rollbackProfileState.isDirectory() && !rollbackProfileState.isSymbolicLink(),
+          `Refusing to roll back a changed immutable bridge native profile: ${immutableBridgeNativeUserDataDir}`);
+        assert.equal(path.dirname(canonicalExistingPath(immutableBridgeNativeUserDataDir)), canonicalExistingPath(nativeAppDataRoot),
+          'Refusing to roll back an immutable bridge native profile outside the Windows Known Folder.');
+        const rollbackMarkerState = fs.lstatSync(immutableBridgeNativeProfileOwnerMarker, { throwIfNoEntry: false });
+        if (rollbackMarkerState !== undefined) {
+          assert(rollbackMarkerState.isFile() && !rollbackMarkerState.isSymbolicLink(),
+            `Refusing to roll back a changed immutable bridge ownership marker: ${immutableBridgeNativeProfileOwnerMarker}`);
+          assert.equal(fs.readFileSync(immutableBridgeNativeProfileOwnerMarker, 'utf8'), immutableBridgeNativeProfileOwnerToken,
+            'Refusing to roll back an immutable bridge native profile with a changed ownership token.');
+        }
+        assert.deepStrictEqual(runningProcessIdsReferencing(immutableBridgeNativeUserDataDir), [],
+          'A process referenced the immutable bridge native profile before ownership arming completed.');
+        fs.rmSync(immutableBridgeNativeUserDataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      }
+      for (const candidate of immutableBridgeNativeProfileCandidates) {
+        assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+          `An immutable bridge native profile remained after ownership rollback: ${candidate}`);
+      }
+      immutableBridgeNativeProfileOwnershipArmed = false;
+      immutableBridgeNativeProfileOwned = false;
+      immutableBridgeNativeProfileObserved = false;
+      immutableBridgeNativeProfilePolicy = null;
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError],
+        'Immutable bridge native profile ownership failed and could not be rolled back safely.');
+    }
+    throw error;
+  }
 }
 
 function completeCandidateReleaseAssets() {
@@ -693,7 +900,13 @@ async function waitForUpdateProcessCleanup(launched, timeoutMs = 30_000) {
   await waitForProcessesReferencingPathExit(launched.bootstrapPath, 'Update bootstrap', timeoutMs);
 }
 
-async function waitForRelaunch(logPath, expectedVersion, expectedExecutable, timeoutMs = 120_000) {
+async function waitForRelaunch(
+  logPath,
+  expectedVersion,
+  expectedExecutable,
+  timeoutMs = 120_000,
+  nativeProfilePolicy = null,
+) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const lines = logLines(logPath);
@@ -715,8 +928,29 @@ async function waitForRelaunch(logPath, expectedVersion, expectedExecutable, tim
       assert.equal(linesStarting(lines, 'rendererReady=').length, 1, 'The helper must observe renderer readiness exactly once.');
       assert.equal(linesStarting(lines, 'candidate=').some(line => line.endsWith(`;version=${expectedVersion}`)), true);
       const pid = Number(match[1]);
-      assertInstalledAppProfileIsolation(pid, expectedExecutable, `updater relaunch ${expectedVersion}`);
-      assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
+      const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null;
+      if (immutableBridgeHistoricalRelaunch) {
+        assert.equal(nativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+          'The immutable bridge relaunch received an unknown native profile policy.');
+        assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+          'The immutable bridge relaunch policy escaped the disposable official candidate run.');
+        assert.equal(expectedVersion, bridgeVersion,
+          'The immutable bridge relaunch policy was used for another target version.');
+        assert.equal(canonicalExistingPath(expectedExecutable), canonicalExistingPath(legacyExecutable),
+          'The immutable bridge relaunch policy was used for another executable.');
+      }
+      assertInstalledAppProfileIsolation(
+        pid,
+        expectedExecutable,
+        `updater relaunch ${expectedVersion}`,
+        false,
+        immutableBridgeHistoricalRelaunch,
+      );
+      if (immutableBridgeHistoricalRelaunch) {
+        assertImmutableBridgeNativeProfileUsed();
+      } else {
+        assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
+      }
       return pid;
     }
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -895,7 +1129,13 @@ async function installWithPackagedUpdater(options) {
   assert.equal(processAlive(options.parentPid), false, 'The installed parent app did not exit before replacement.');
   assert.equal(launched.mode, 'automatic');
   try {
-    const pid = await waitForRelaunch(launched.logPath, options.expectedVersion, options.relaunchAppPath);
+    const pid = await waitForRelaunch(
+      launched.logPath,
+      options.expectedVersion,
+      options.relaunchAppPath,
+      120_000,
+      options.immutableBridgeNativeProfilePolicy || null,
+    );
     await waitForInstalledPackage(options.relaunchAppPath, options.expectedVersion);
     await waitForUpdateArtifactCleanup(launched);
     assertCompletedInstall(launched.logPath, options);
@@ -1288,6 +1528,49 @@ async function cleanupIntegration() {
     await capture('verify update artifact cleanup', async () => waitForUpdateArtifactCleanup(launched, 2_000));
   }
 
+  if (IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION) {
+    await capture('remove owned immutable bridge native profile', async () => {
+      const nativeProfileState = fs.lstatSync(immutableBridgeNativeUserDataDir, { throwIfNoEntry: false });
+      if (!immutableBridgeNativeProfileOwned) {
+        assert.equal(nativeProfileState, undefined,
+          `Refusing to remove an unattributed native profile: ${immutableBridgeNativeUserDataDir}`);
+        return;
+      }
+      assert(immutableBridgeNativeProfileOwnershipArmed,
+        'The immutable bridge native profile was owned without an armed first-hop launch.');
+      assert(nativeProfileState && nativeProfileState.isDirectory() && !nativeProfileState.isSymbolicLink(),
+        `The owned immutable bridge native profile changed before cleanup: ${immutableBridgeNativeUserDataDir}`);
+      assert.equal(path.dirname(canonicalExistingPath(immutableBridgeNativeUserDataDir)), canonicalExistingPath(nativeAppDataRoot),
+        'The owned immutable bridge native profile escaped its Known Folder before cleanup.');
+      const markerState = fs.lstatSync(immutableBridgeNativeProfileOwnerMarker, { throwIfNoEntry: false });
+      assert(markerState && markerState.isFile() && !markerState.isSymbolicLink(),
+        `The immutable bridge native profile ownership marker changed: ${immutableBridgeNativeProfileOwnerMarker}`);
+      assert.equal(fs.readFileSync(immutableBridgeNativeProfileOwnerMarker, 'utf8'), immutableBridgeNativeProfileOwnerToken,
+        'The immutable bridge native profile ownership token changed before cleanup.');
+      assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
+        'Installed-path processes remained before immutable bridge native profile cleanup.');
+      await waitForProcessesReferencingPathExit(
+        immutableBridgeNativeUserDataDir,
+        'Immutable bridge native profile',
+        5_000,
+      );
+      fs.rmSync(immutableBridgeNativeUserDataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      for (const candidate of immutableBridgeNativeProfileCandidates) {
+        assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+          `An immutable bridge native profile remained after cleanup: ${candidate}`);
+      }
+    });
+  } else {
+    assert.equal(immutableBridgeNativeProfileOwnershipArmed, false,
+      'A local bridge build armed the immutable official-client profile exception.');
+    assert.equal(immutableBridgeNativeProfileOwned, false,
+      'A local bridge build owned the immutable official-client profile exception.');
+    assert.equal(immutableBridgeNativeProfileObserved, false,
+      'A local bridge build observed the immutable official-client profile exception.');
+    assert.equal(immutableBridgeNativeProfilePolicy, null,
+      'A local bridge build issued the immutable official-client profile policy.');
+  }
+
   asar.uncacheAll();
   const uninstallers = [
     path.join(installDir, 'Uninstall Whitebox.exe'),
@@ -1359,6 +1642,12 @@ async function cleanupIntegration() {
     assert.equal(fs.existsSync(inheritedUserDataDir), false, `Updater-inherited Electron profile remained after cleanup: ${inheritedUserDataDir}`);
     assert.equal(fs.existsSync(directUserDataDir), false, `Explicit Electron profile remained after cleanup: ${directUserDataDir}`);
     assert.equal(fs.existsSync(isolatedBridgeHome), false, `Isolated bridge home remained after cleanup: ${isolatedBridgeHome}`);
+    if (IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION) {
+      for (const candidate of immutableBridgeNativeProfileCandidates) {
+        assert.equal(fs.existsSync(candidate), false,
+          `Immutable bridge native profile remained after cleanup: ${candidate}`);
+      }
+    }
   });
   if (failures.length) {
     console.error(`Legacy bridge integration temporary directory cleanup failed:\n${failures.join('\n')}`);
@@ -1445,7 +1734,7 @@ async function main() {
   const v163InstallerModule = require(path.join(v163ModuleDir, 'updateInstaller.js'));
   const v163UpdaterModule = require(path.join(v163ModuleDir, 'updateManager.js'));
   const v163ParentPid = await startInstalledApp(legacyExecutable);
-  const firstHop = await installWithPackagedUpdater({
+  const firstHopOptions = {
     label: 'first-hop-downloads',
     installerModule: v163InstallerModule,
     updaterModule: v163UpdaterModule,
@@ -1458,8 +1747,16 @@ async function main() {
     relaunchAppPath: legacyExecutable,
     expectedVersion: bridgeVersion,
     allowLegacyBootstrapFallback: true,
-  });
+  };
+  if (IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION) {
+    firstHopOptions.immutableBridgeNativeProfilePolicy = armImmutableBridgeNativeProfileOwnership(firstHopOptions);
+  }
+  const firstHop = await installWithPackagedUpdater(firstHopOptions);
   relaunchedPid = firstHop.pid;
+  if (IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION) {
+    assert.equal(immutableBridgeNativeProfileObserved, !firstHop.legacyFallback,
+      'The immutable bridge first-hop native profile evidence did not match its exact relaunch outcome.');
+  }
   assert.equal(processAlive(relaunchedPid), true, 'The installed bridge was not running after the first hop.');
   existingFile(legacyExecutable, 'upgraded legacy bridge executable');
   assert.equal(executableVersion(legacyExecutable), bridgeVersion);

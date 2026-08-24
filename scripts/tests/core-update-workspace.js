@@ -938,8 +938,11 @@ function registerCliAndUpdateTests(context) {
     'frozen-client E2E는 renderer-ready 신호를 보존한 채 일시적인 CIM/profile 증거 지연을 재시도하고 최종 원인을 노출해야 합니다.');
     assert.equal((legacyClientTest.match(/spawn\(executable, \[directUserDataArgument\]/g) || []).length, 2,
       'legacy E2E의 parent 및 renderer-ready fallback/manual 실행은 모두 fresh --user-data-dir를 사용해야 합니다.');
-    assert(legacyClientTest.includes('waitForRelaunch(launched.logPath, options.expectedVersion, options.relaunchAppPath)')
-      && legacyClientTest.includes('assertInstalledAppProfileIsolation(pid, expectedExecutable,'),
+    assert(legacyClientTest.includes('const pid = await waitForRelaunch(')
+      && legacyClientTest.includes('options.expectedVersion,')
+      && legacyClientTest.includes('options.relaunchAppPath,')
+      && legacyClientTest.includes('assertInstalledAppProfileIsolation(')
+      && legacyClientTest.includes('expectedExecutable,'),
     'legacy E2E의 bridge와 Whitebox 재실행은 각 hop의 정확한 설치 실행 파일 identity를 따로 검증해야 합니다.');
     const legacyRendererReadyStart = legacyClientTest.slice(
       legacyClientTest.indexOf('async function startInstalledAppWithRendererReady'),
@@ -966,6 +969,76 @@ function registerCliAndUpdateTests(context) {
       && legacyClientTest.includes('child.exitCode !== null || child.signalCode !== null')
       && !legacyClientTest.includes('await new Promise(resolve => setTimeout(resolve, 1_000))'),
     'legacy 초기 앱은 고정 1초 지연 대신 child 조기 종료를 감시하는 bounded profile polling을 사용해야 합니다.');
+    assert(legacyClientTest.includes('function windowsKnownRoamingAppData()')
+      && legacyClientTest.includes('[Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)')
+      && legacyClientTest.indexOf('const capturedNativeAppDataRoot = String(process.env.APPDATA')
+        < legacyClientTest.indexOf('process.env.APPDATA = isolatedAppDataRoot')
+      && legacyClientTest.includes('CANDIDATE_E2E && disposableGithubRunner')
+      && legacyClientTest.includes("const immutableBridgeNativeUserDataDir = nativeAppDataRoot ? path.join(nativeAppDataRoot, 'Whitebox') : ''")
+      && legacyClientTest.includes("path.join(nativeAppDataRoot, 'loadtoagent')")
+      && legacyClientTest.includes("path.join(nativeAppDataRoot, 'LoadToAgent')")
+      && legacyClientTest.includes('canonicalExistingPath(capturedNativeAppDataRoot), canonicalExistingPath(nativeAppDataRoot)')
+      && legacyClientTest.includes('for (const candidate of immutableBridgeNativeProfileCandidates)'),
+    '불변 1.6.23의 native 프로필 예외는 disposable runner의 실제 Known Folder와 fresh 브랜드 후보에만 적용해야 합니다.');
+    const immutableBridgeProfileException = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertInstalledAppProfileIsolation'),
+      legacyClientTest.indexOf('async function waitForProfileDirectoryUsed'),
+    );
+    assert(immutableBridgeProfileException.includes('canonicalReference === immutableBridgeNativeProfile')
+      && immutableBridgeProfileException.includes('canonicalExistingPath(expectedExecutable), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeProfileException.includes('immutableBridgeNativeReferenceCount > 0')
+      && immutableBridgeProfileException.includes('profileState.isDirectory() && !profileState.isSymbolicLink()')
+      && immutableBridgeProfileException.includes('path.dirname(canonicalNativeProfile), canonicalNativeRoot')
+      && immutableBridgeProfileException.includes('immutableBridgeNativeProfileObserved = true'),
+    '불변 bridge 예외는 exact 실행 파일·exact native profile 참조·real non-symlink·실제 앱 파일 사용을 입증해야 합니다.');
+    const immutableBridgeOwnership = legacyClientTest.slice(
+      legacyClientTest.indexOf('function armImmutableBridgeNativeProfileOwnership'),
+      legacyClientTest.indexOf('function completeCandidateReleaseAssets'),
+    );
+    assert(immutableBridgeOwnership.includes("firstHopOptions.repository, 'LodeToAgent'")
+      && immutableBridgeOwnership.includes("firstHopOptions.currentVersion, '1.6.3'")
+      && immutableBridgeOwnership.includes('firstHopOptions.expectedVersion, bridgeVersion')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.installer), canonicalExistingPath(bridgeInstaller)')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.appPath), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeOwnership.includes('canonicalExistingPath(firstHopOptions.relaunchAppPath), canonicalExistingPath(legacyExecutable)')
+      && immutableBridgeOwnership.includes('assertPinnedInstaller(sourceInstaller')
+      && immutableBridgeOwnership.includes('assertPinnedInstaller(bridgeInstaller')
+      && immutableBridgeOwnership.includes('flag: \'wx\'')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwned = true')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwnershipArmed = true')
+      && immutableBridgeOwnership.includes('runningProcessIdsReferencing(immutableBridgeNativeUserDataDir), []')
+      && immutableBridgeOwnership.includes('An immutable bridge native profile remained after ownership rollback')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfileOwned = false')
+      && immutableBridgeOwnership.includes('immutableBridgeNativeProfilePolicy = Object.freeze'),
+    'native bridge 프로필 소유권은 exact 공식 first-hop pin과 wx marker 검증 뒤 opaque policy로만 발급하고 부분 실패를 되돌려야 합니다.');
+    const immutableBridgeRelaunch = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function waitForRelaunch'),
+      legacyClientTest.indexOf('function assertCleanLegacyInstallBeforeRestartFallback'),
+    );
+    assert(immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
+      && immutableBridgeRelaunch.includes('nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableBridgeRelaunch.includes('expectedVersion, bridgeVersion')
+      && immutableBridgeRelaunch.includes('assertImmutableBridgeNativeProfileUsed()'),
+    'native 프로필 예외는 첫 hop에서 발급한 동일 opaque policy의 고정 bridge relaunch에만 적용해야 합니다.');
+    const immutableBridgeCleanup = legacyClientTest.slice(
+      legacyClientTest.indexOf("await capture('remove owned immutable bridge native profile'"),
+      legacyClientTest.indexOf('asar.uncacheAll()'),
+    );
+    assert(immutableBridgeCleanup.includes('if (!immutableBridgeNativeProfileOwned)')
+      && immutableBridgeCleanup.includes('Refusing to remove an unattributed native profile')
+      && immutableBridgeCleanup.includes('runningProcessesUnderDirectory(installDir), []')
+      && immutableBridgeCleanup.includes('await waitForProcessesReferencingPathExit(')
+      && immutableBridgeCleanup.includes('immutableBridgeNativeProfileOwnerToken')
+      && immutableBridgeCleanup.includes('fs.rmSync(immutableBridgeNativeUserDataDir')
+      && immutableBridgeCleanup.includes('for (const candidate of immutableBridgeNativeProfileCandidates)')
+      && !legacyClientTest.includes('fs.rmSync(nativeAppDataRoot)'),
+    'native bridge 프로필은 exact 소유 증거와 프로세스 종료 뒤에만 삭제하고 부재를 입증해야 합니다.');
+    assert.equal((legacyClientTest.match(/immutableBridgeNativeProfilePolicy = armImmutableBridgeNativeProfileOwnership\(firstHopOptions\)/g) || []).length, 1,
+      '불변 bridge native profile policy는 exact first-hop에서 한 번만 발급·전달해야 합니다.');
+    assert(releaseGuide.includes('.whitebox-integration-owner-<48 lowercase hex>')
+      && releaseGuide.includes('The native roaming root and any')
+      && releaseGuide.includes('unowned profile must never be deleted'),
+    '릴리스 계약은 불변 1.6.23 native profile marker와 소유·정리 제한을 명시해야 합니다.');
     const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
     const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
     const fallbackArtifactCleanup = legacyFallback.indexOf('await waitForUpdateArtifactCleanup(launched)');
