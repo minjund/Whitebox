@@ -19,6 +19,7 @@ const {
   resolveInstalledDesktopApp,
   terminateWindowsUpdateProcesses,
   verifyDownloadedInstaller,
+  waitForUpdateBootstrapExit,
   waitForUpdateHelperReady,
   WINDOWS_UPDATE_BOOTSTRAP,
 } = require('../../src/updateInstaller');
@@ -799,8 +800,10 @@ function registerCliAndUpdateTests(context) {
     assert.deepStrictEqual(opened, [downloaded.downloadedPath]);
 
     let spawnCall = null;
+    let spawnedAutomaticChild = null;
     let unrefCalled = false;
     let beforeAutomaticInstall = null;
+    const automaticOrder = [];
     const verifiedInstallers = [];
     const verifyInstaller = async options => { verifiedInstallers.push(options); };
     const automatic = await launchDownloadedUpdate({
@@ -814,20 +817,35 @@ function registerCliAndUpdateTests(context) {
         const tokenIndex = spawnCall.args.indexOf('-RendererReadyToken');
         const token = spawnCall.args[tokenIndex + 1];
         assert.equal(path.basename(readyPath), `install-update-ready-${token}.json`);
+        fs.writeFileSync(readyPath, JSON.stringify({ helperPid: 2468, token }), 'utf8');
+        automaticOrder.push('node-ready');
+        setImmediate(() => {
+          assert.equal(fs.existsSync(readyPath), true);
+          automaticOrder.push('bootstrap-ack');
+          spawnedAutomaticChild.exitCode = 0;
+          spawnedAutomaticChild.emit('exit', 0, null);
+        });
         return { helperPid: 2468, token };
       },
-      beforeAutomaticInstall: async context => { beforeAutomaticInstall = context; },
+      beforeAutomaticInstall: async context => {
+        beforeAutomaticInstall = context;
+        automaticOrder.push('shutdown');
+      },
       spawn: (command, args, options) => {
         spawnCall = { command, args, options };
         const child = new EventEmitter();
         child.pid = 9876;
+        child.exitCode = null;
+        child.signalCode = null;
         child.unref = () => { unrefCalled = true; };
+        spawnedAutomaticChild = child;
         setImmediate(() => child.emit('spawn'));
         return child;
       },
     });
     assert.equal(automatic.mode, 'automatic');
     assert.equal(unrefCalled, true);
+    assert.deepStrictEqual(automaticOrder, ['node-ready', 'bootstrap-ack', 'shutdown']);
     assert.deepStrictEqual(beforeAutomaticInstall, { platform: 'win32', helperPid: 2468 });
     assert.equal(verifiedInstallers[0].installerPath, downloaded.downloadedPath);
     assert.equal(verifiedInstallers[0].allowUnsignedWindowsUpdates, true);
@@ -888,6 +906,52 @@ function registerCliAndUpdateTests(context) {
     assert.match(helperSource, /relaunchReady=true/);
     assert.match(helperSource, /\$verifiedUpdatedApp = \$exitCode -eq 0 -and \$installedVersion -eq \$ExpectedVersion/);
     assert.match(helperSource, /recoveryRelaunchStarted=true/);
+
+    const acknowledgedBootstrap = new EventEmitter();
+    acknowledgedBootstrap.exitCode = null;
+    acknowledgedBootstrap.signalCode = null;
+    const acknowledged = waitForUpdateBootstrapExit(acknowledgedBootstrap, 100);
+    setImmediate(() => {
+      acknowledgedBootstrap.exitCode = 0;
+      acknowledgedBootstrap.emit('exit', 0, null);
+    });
+    await acknowledged;
+    const alreadyAcknowledgedBootstrap = new EventEmitter();
+    alreadyAcknowledgedBootstrap.exitCode = 0;
+    alreadyAcknowledgedBootstrap.signalCode = null;
+    await waitForUpdateBootstrapExit(alreadyAcknowledgedBootstrap, 100);
+    const alreadySignaledBootstrap = new EventEmitter();
+    alreadySignaledBootstrap.exitCode = null;
+    alreadySignaledBootstrap.signalCode = 'SIGTERM';
+    await assert.rejects(
+      waitForUpdateBootstrapExit(alreadySignaledBootstrap, 100),
+      /준비 신호를 확인하지 못했습니다.*SIGTERM/,
+    );
+    const failedBootstrap = new EventEmitter();
+    failedBootstrap.exitCode = null;
+    failedBootstrap.signalCode = null;
+    const failedAcknowledgement = waitForUpdateBootstrapExit(failedBootstrap, 100);
+    setImmediate(() => {
+      failedBootstrap.exitCode = 42;
+      failedBootstrap.emit('exit', 42, null);
+    });
+    await assert.rejects(failedAcknowledgement, /준비 신호를 확인하지 못했습니다.*42/);
+    const signaledBootstrap = new EventEmitter();
+    signaledBootstrap.exitCode = null;
+    signaledBootstrap.signalCode = null;
+    const signaledAcknowledgement = waitForUpdateBootstrapExit(signaledBootstrap, 100);
+    setImmediate(() => {
+      signaledBootstrap.signalCode = 'SIGTERM';
+      signaledBootstrap.emit('exit', null, 'SIGTERM');
+    });
+    await assert.rejects(signaledAcknowledgement, /준비 신호를 확인하지 못했습니다.*SIGTERM/);
+    const stalledBootstrap = new EventEmitter();
+    stalledBootstrap.exitCode = null;
+    stalledBootstrap.signalCode = null;
+    await assert.rejects(
+      waitForUpdateBootstrapExit(stalledBootstrap, 5),
+      /준비 신호를 확인하는 데 너무 오래 걸립니다/,
+    );
     assert.match(helperSource, /versionMismatch=true/);
     if (process.platform === 'win32') {
       const parserScript = [
@@ -919,6 +983,23 @@ function registerCliAndUpdateTests(context) {
     setTimeout(() => fs.writeFileSync(readyFixture, 'ready', 'utf8'), 20);
     await waitForUpdateHelperReady(readyFixture, readyChild, 500);
     fs.rmSync(readyFixture, { force: true });
+    const earlyBootstrapToken = '7'.repeat(48);
+    const earlyBootstrapReady = path.join(downloadDir, `early-bootstrap-ready-${earlyBootstrapToken}.json`);
+    fs.writeFileSync(earlyBootstrapReady, JSON.stringify({
+      helperPid: 7_653,
+      token: earlyBootstrapToken,
+    }), 'utf8');
+    const earlyExitedBootstrap = new EventEmitter();
+    earlyExitedBootstrap.exitCode = 0;
+    earlyExitedBootstrap.signalCode = null;
+    assert.deepStrictEqual(
+      await waitForUpdateHelperReady(earlyBootstrapReady, earlyExitedBootstrap, 500, {
+        token: earlyBootstrapToken,
+        acceptCleanExit: true,
+      }),
+      { helperPid: 7_653, token: earlyBootstrapToken },
+    );
+    fs.rmSync(earlyBootstrapReady, { force: true });
     const authenticatedToken = '8'.repeat(48);
     const authenticatedReady = path.join(downloadDir, `helper-ready-${authenticatedToken}.json`);
     const authenticatedChild = new EventEmitter();
@@ -954,6 +1035,7 @@ function registerCliAndUpdateTests(context) {
       installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
       expectedVersion: '3.1.0', environment: { SystemRoot: 'C:\\Windows' }, verifyInstaller,
       waitForReady: async () => ({ helperPid: 3579, token: failedReadyToken }),
+      waitForBootstrapExit: async () => {},
       beforeAutomaticInstall: async () => { throw new Error('fixture terminal shutdown failure'); },
       killProcessTree: async pid => { killedHelpers.push(pid); },
       processExists: () => false,
@@ -967,7 +1049,7 @@ function registerCliAndUpdateTests(context) {
         return child;
       },
     }), /fixture terminal shutdown failure/);
-    assert.deepStrictEqual(killedHelpers, [3579, 3580]);
+    assert.deepStrictEqual(killedHelpers, [3579]);
     assert.equal(fs.existsSync(path.join(downloadDir, `install-update-${failedReadyToken}.ps1`)), false);
     assert.equal(fs.existsSync(path.join(downloadDir, `install-update-bootstrap-${failedReadyToken}.ps1`)), false);
     const killedBootstrapTrees = [];
@@ -1025,6 +1107,7 @@ function registerCliAndUpdateTests(context) {
         installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
         expectedVersion: '3.1.0', environment: { SystemRoot: 'C:\\Windows' }, verifyInstaller,
         waitForReady: async () => ({ helperPid: 3_594, token: unconfirmedReadyToken }),
+        waitForBootstrapExit: async () => {},
         beforeAutomaticInstall: async () => { throw new Error('fixture shutdown rejected'); },
         killProcessTree: async () => {},
         processExists: () => true,

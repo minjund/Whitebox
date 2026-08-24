@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "A local-first desktop control room for seeing and steering Claude, Codex, Gemini, and Grok at work.",
   "main": "main.js",
   "author": "wincube AX",
@@ -93,6 +93,7 @@
     "test:artifacts:win": "node scripts/windows-artifact-check.js",
     "test:artifacts:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-check.js",
     "test:update:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-integration.js",
+    "test:update:win:v173": "node scripts/windows-v173-update-integration.js",
     "check:update:legacy": "node scripts/check-legacy-update-channel.js",
     "demo:readme": "electron scripts/readme-demo.js",
     "dist": "electron-builder",

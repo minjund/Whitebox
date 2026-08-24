@@ -641,6 +641,7 @@ function waitForUpdateHelperReady(readyPath, child, timeoutMs = 5000, expected =
   }
   return new Promise((resolve, reject) => {
     let settled = false;
+    const acceptCleanExit = !expected || expected.acceptCleanExit === true;
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
@@ -653,25 +654,38 @@ function waitForUpdateHelperReady(readyPath, child, timeoutMs = 5000, expected =
       if (error) reject(error);
       else resolve(value);
     };
-    const onError = error => finish(error);
-    const onExit = code => {
-      if (!expected && code === 0 && fs.existsSync(readyPath)) finish();
-      else finish(new Error(`업데이트 설치 도우미가 준비되기 전에 종료되었습니다. (코드 ${code ?? '알 수 없음'})`));
-    };
-    const checkReady = () => {
-      if (child.exitCode != null || child.signalCode != null) {
-        finish(new Error('업데이트 설치 도우미가 준비되기 전에 종료되었습니다.'));
+    const readReady = () => expected
+      ? readUpdateReadySignal(readyPath, expected)
+      : fs.promises.access(readyPath, fs.constants.F_OK);
+    const finishFromExit = (code, signal) => {
+      if (!acceptCleanExit || code !== 0 || signal != null) {
+        finish(new Error(`업데이트 설치 도우미가 준비되기 전에 종료되었습니다. (코드 ${code ?? signal ?? '알 수 없음'})`));
         return;
       }
-      const check = expected
-        ? readUpdateReadySignal(readyPath, expected).then(value => {
+      readReady()
+        .then(value => finish(null, value))
+        .catch(error => finish(error && error.code === 'ENOENT'
+          ? new Error('업데이트 설치 도우미가 준비되기 전에 종료되었습니다. (코드 0)')
+          : error));
+    };
+    const onError = error => finish(error);
+    const onExit = (code, signal) => finishFromExit(code, signal);
+    const checkReady = () => {
+      if (child.exitCode != null || child.signalCode != null) {
+        finishFromExit(child.exitCode, child.signalCode);
+        return;
+      }
+      const check = readReady();
+      const verified = expected
+        ? check.then(value => {
           if (child.exitCode != null || child.signalCode != null) {
+            if (acceptCleanExit && child.exitCode === 0 && child.signalCode == null) return value;
             throw new Error('업데이트 설치 도우미가 준비 신호 직후 종료되었습니다.');
           }
           return value;
         })
-        : fs.promises.access(readyPath, fs.constants.F_OK);
-      check
+        : check;
+      verified
         .then(value => finish(null, value))
         .catch(error => {
           if (error && error.code !== 'ENOENT') finish(error);
@@ -685,6 +699,44 @@ function waitForUpdateHelperReady(readyPath, child, timeoutMs = 5000, expected =
     child.once('error', onError);
     child.once('exit', onExit);
     checkReady();
+  });
+}
+
+function waitForUpdateBootstrapExit(child, timeoutMs = 5000) {
+  if (!child || typeof child.once !== 'function') {
+    return Promise.reject(new Error('업데이트 bootstrap의 준비 확인 상태를 읽지 못했습니다.'));
+  }
+  const completed = child.exitCode != null || child.signalCode != null;
+  if (completed) {
+    return child.exitCode === 0 && child.signalCode == null
+      ? Promise.resolve()
+      : Promise.reject(new Error(`업데이트 bootstrap이 준비 신호를 확인하지 못했습니다. (코드 ${child.exitCode ?? child.signalCode ?? '알 수 없음'})`));
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (typeof child.removeListener === 'function') {
+        child.removeListener('error', onError);
+        child.removeListener('exit', onExit);
+      }
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = error => finish(error);
+    const onExit = (code, signal) => {
+      if (code === 0 && signal == null) finish();
+      else finish(new Error(`업데이트 bootstrap이 준비 신호를 확인하지 못했습니다. (코드 ${code ?? signal ?? '알 수 없음'})`));
+    };
+    const timer = setTimeout(
+      () => finish(new Error('업데이트 bootstrap이 설치 도우미의 준비 신호를 확인하는 데 너무 오래 걸립니다. 앱을 종료하지 않았습니다.')),
+      timeoutMs,
+    );
+    child.once('error', onError);
+    child.once('exit', onExit);
+    if (child.exitCode != null || child.signalCode != null) onExit(child.exitCode, child.signalCode);
   });
 }
 
@@ -889,16 +941,27 @@ async function launchDownloadedUpdate(options = {}) {
     stdio: 'ignore',
   });
   let readySignal = null;
+  let bootstrapAcknowledged = false;
   try {
     await waitForProcessSpawn(child, Number(options.spawnTimeoutMs) || 5000);
     if (!Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error('업데이트 설치 프로그램을 시작하지 못했습니다.');
     const waitForReady = options.waitForReady || waitForUpdateHelperReady;
-    readySignal = await waitForReady(readyPath, child, Number(options.readyTimeoutMs) || 5000);
+    readySignal = await waitForReady(readyPath, child, Number(options.readyTimeoutMs) || 5000, {
+      token: rendererReadyToken,
+      acceptCleanExit: true,
+    });
     if (!readySignal || typeof readySignal !== 'object') {
       readySignal = await readUpdateReadySignal(readyPath, { token: rendererReadyToken });
     } else if (readySignal.token !== rendererReadyToken || !Number.isSafeInteger(Number(readySignal.helperPid)) || Number(readySignal.helperPid) <= 0) {
       throw new Error('업데이트 설치 도우미의 준비 신호가 올바르지 않습니다.');
     }
+    // Node and the bootstrap must both validate the same ready signal. Waiting
+    // for the bootstrap's clean exit before shutdown prevents the faster Node
+    // poller from deleting the signal while the bootstrap is still looking for
+    // it, which previously let the bootstrap kill a healthy helper after 10s.
+    const waitForBootstrapExit = options.waitForBootstrapExit || waitForUpdateBootstrapExit;
+    await waitForBootstrapExit(child, Number(options.bootstrapTimeoutMs) || 5000);
+    bootstrapAcknowledged = true;
     if (typeof options.beforeAutomaticInstall === 'function') {
       await options.beforeAutomaticInstall({
         platform: 'win32',
@@ -914,8 +977,11 @@ async function launchDownloadedUpdate(options = {}) {
       try { readySignal = await readUpdateReadySignal(readyPath, { token: rendererReadyToken }); } catch (_missingReadySignal) {}
     }
     const helperPid = Number(readySignal && readySignal.helperPid || 0);
+    const bootstrapPid = !bootstrapAcknowledged && child?.exitCode == null && child?.signalCode == null
+      ? child?.pid
+      : 0;
     try {
-      await terminateWindowsUpdateProcesses([helperPid, child && child.pid], options);
+      await terminateWindowsUpdateProcesses([helperPid, bootstrapPid], options);
     } catch (cancellationError) {
       throw updateHelperCancellationError(error, cancellationError);
     }
@@ -953,6 +1019,7 @@ module.exports = {
   strictWindowsProcessExists,
   terminateWindowsUpdateProcesses,
   waitForProcessSpawn,
+  waitForUpdateBootstrapExit,
   waitForUpdateHelperReady,
   verifyDownloadedInstaller,
   windowsPowerShell,

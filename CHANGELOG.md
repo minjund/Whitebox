@@ -5,6 +5,14 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.5 - 2026-08-24
+
+- Keep the Windows installer-ready signal until both the app and bootstrap have
+  authenticated it, preventing a successful update from being killed before
+  the updated app can relaunch.
+- Exercise the real packaged 1.7.3 updater against each new Windows installer
+  before publication, including its frozen one-reopen recovery path and the
+  corrected automatic relaunch handshake in the new package.
 - Restore updates for installed 1.6.3-1.6.22 Windows clients through an
   immutable LoadToAgent compatibility bridge, then verify the second hop to
   the latest Whitebox release against the live GitHub channels.
