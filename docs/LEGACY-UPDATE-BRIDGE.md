@@ -41,18 +41,31 @@ that omission is accepted only for this fully pinned path after the parent and
 installer exit, v1.6.23 EXE and `app.asar` stabilize, the native profile is
 proven, and all helper/bootstrap/ready artifacts self-delete.
 
-If the app wins the ready-file race, the bootstrap can time out after the
-silent NSIS child has already started. The helper can be terminated before
-recording the NSIS result, or just after recording `exitCode=0` but before its
-final self-delete. The integration accepts only those two exact raw-log
-variants from the same fresh helper: `helperStarted` followed by the exact
-10-second `bootstrapError`, with either no exit line or exactly one `exitCode=0`
-between them. The BOM, CRLF, order, parent PID, and literal v1.6.23 values must
-match; any other exit code, line, or failure marker remains fatal. It then
-requires both the installed EXE and packaged `app.asar` to report 1.6.23 and
-all related processes to exit before reopening the updated app. In that case
-the user may need to start LoadToAgent once more, but never needs to download
-or run an installer manually. Every other first-hop failure remains fatal.
+If the app wins the ready-file race, the bootstrap can terminate the helper at
+any complete boundary of the eight official helper lines. The only timeout
+grammar is an exact non-empty prefix followed by the literal 10-second
+`bootstrapError`; the only natural-exit race grammar is all eight lines followed
+by the exact code-zero bootstrap error. BOM, CRLF, order, parent PID, path,
+version, relaunch PID, and window handle are exact. Every nonzero, duplicate,
+retry, recovery, stopping, or otherwise extra line remains fatal.
+
+`Start-Process` occurs between the logged `relaunchPath` and `relaunchStarted`,
+so a four-line prefix does not prove that no app was launched. The integration
+allows reopening only after no installed process, final or temporary signal
+exists and the owned native profile is still marker-only. At the four-line gap,
+all four absence conditions must remain stable for at least five seconds;
+otherwise the same-run compact renderer JSON is required to authenticate the
+main PID, exact executable, process ancestry, creation time, exact captured
+helper direct parent, positive live window equal to any helper-recorded handle,
+and native profile. Partial logged
+relaunches require that JSON; a complete `relaunchReady` trace may have already
+self-deleted it, but its exact 48-hex token and direct-child path remain
+mandatory. Exact owned helper or authenticated renderer residue is removed
+one file at a time, while bootstrap, ready, and temporary files must already be
+absent and stay absent. Missing identity, signal, cleanup, or stable package
+evidence is fatal; the 10-second timeout is never success by itself. A verified
+fallback may require the user to start LoadToAgent once more, but never to
+download or run an installer manually.
 
 Run that workflow only from the fully reviewed commit, passing its complete
 40-character commit SHA as `source_sha`. Keep the Actions run summary with the

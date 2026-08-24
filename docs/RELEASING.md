@@ -86,8 +86,8 @@ The packaged scenario must prove all parts of the contract:
    exited before deleting that owned child. The native roaming root and any
    unowned profile must never be deleted, and all three candidate paths must be
    absent at the end of the same run.
-5. The immutable v1.6.3 first hop has one exact bootstrap-ack success grammar
-   and two exact ready-file forced-termination grammars. On normal bootstrap
+5. The immutable v1.6.3 first hop has one exact bootstrap-ack grammar and one
+   finite historical ready-race state machine. On normal bootstrap
    acknowledgement, require the exact eight-line raw log in official helper
    order: `helperStarted`, `exitCode=0`, the exact v1.6.23 `candidate` and
    `relaunchPath`, then attempt-one `relaunchStarted`, `windowRestored`,
@@ -100,25 +100,55 @@ The packaged scenario must prove all parts of the contract:
    bootstrap, and ready artifact to self-delete. No fallback residue deletion
    is allowed on this normal path.
 
-   The ready-file race can instead force-terminate the helper after an installer
-   child has replaced the package, either before the helper records the NSIS
-   exit or after it records success but before final self-delete. Only for that
-   exact official first hop, the harness may accept one of only two exact raw
-   logs: `helperStarted` followed by the 10-second `bootstrapError`, or the same
-   lines with exactly one `exitCode=0` between them. Both variants require the
-   exact BOM, CRLF, order, parent PID, and literal v1.6.23 values, with no
-   relaunch lifecycle or other fatal marker. A nonzero, duplicate, or reordered
-   exit code, or any extra log line, must fail. The harness must first prove the
-   downloaded official v1.6.23 installer and helper/bootstrap processes have
-   exited, no installed app is running, and the installed EXE and `app.asar`
-   remain stably at v1.6.23. It may then unlink only the owned
-   `first-hop-downloads/install-update.ps1` after proving its path is a real
-   non-link direct child of the fresh attempt and its size and SHA-256 match
-   `BOM + official packaged v1.6.3 helper source`. All tracked artifacts must
-   be absent and the exact log bytes must remain unchanged before and after the
-   authenticated fallback relaunch. A timeout, mismatched file, unowned path,
-   extra log line, live process, or any other fallback must remain
-   a release failure.
+   The app and bootstrap race to consume the same unauthenticated helper-ready
+   file. If the app consumes it first, the bootstrap can terminate the helper at
+   any complete boundary of that eight-line sequence. Only for this exact
+   official first hop, the raw race grammar is the BOM plus an exact non-empty
+   prefix of those helper lines followed by the literal 10-second
+   `bootstrapError`, with CRLF after every line. A naturally exited helper is
+   accepted only as the complete eight-line sequence followed by the exact
+   `bootstrapError` ending in `코드: 0`. Nonzero, duplicate, reordered, retry,
+   recovery, timeout, stopping, or any other extra helper line must fail.
+
+   Classify the final raw log only after the tracked helper, bootstrap, and
+   downloaded official v1.6.23 installer reach stable absence and the installed
+   EXE and `app.asar` stabilize at v1.6.23. The official helper calls
+   `Start-Process` after writing `relaunchPath` and before writing
+   `relaunchStarted`, so a four-line helper prefix can already have launched the
+   app. For prefixes through `relaunchPath`, manual fallback is allowed only
+   when no installed process, final or temporary renderer signal exists and the
+   owned native `Whitebox` profile still contains only its exact owner marker.
+   At the four-line `Start-Process` gap those four absence conditions must remain
+   stable for at least five seconds after helper/bootstrap/installer exit. If
+   any evidence appears, that unlogged start must instead be authenticated by
+   the same-run renderer capability file; disappearing evidence is fatal.
+
+   A partial relaunch from `relaunchStarted` through `rendererReady` requires
+   the exact renderer-ready file. Its path must be the canonical real non-link
+   direct child named by the launch's 48-lowercase-hex token, and its raw bytes
+   must be the compact four-key JSON object in official key order with the same
+   token, safe positive PID, version 1.6.23, and canonical same-run ISO time.
+   The JSON PID must match the logged PID when one exists. The exact executable,
+   fresh process creation times, the relaunched main PID's direct parent must
+   equal the exact captured helper PID, transitive installed-process lineage,
+   the positive live main-window handle must equal any helper-recorded handle,
+   and the owned native profile must all agree. A complete
+   `relaunchReady` prefix still requires that process/profile/window evidence,
+   and its 48-hex capability token and exact direct-child path remain mandatory,
+   but its renderer file may already have been removed by the helper.
+
+   A partial forced termination must leave the exact owned
+   `first-hop-downloads/install-update.ps1`; verify its real direct-child path,
+   no process reference, size, and SHA-256 against `BOM + official packaged
+   v1.6.3 helper source` before unlinking that file alone. A remaining renderer
+   file may be unlinked only after the exact authentication above. Bootstrap,
+   helper-ready, and temporary renderer files must be absent; the renderer path
+   must remain absent for a bounded stability window after cleanup. Downloaded
+   installer and log files are not fallback cleanup targets, and the exact log
+   bytes must remain unchanged through cleanup and whichever authenticated
+   relaunch continues. A timeout by itself, missing signal, PID or lineage
+   mismatch, used-but-unattributed native profile, mismatched residue, cleanup
+   timeout, or any other ambiguity is a release failure.
 
 Do not approve on a source-only simulation, a target-only clean install, or an
 allowed timeout. Missing official artifacts, an untested supported cohort,

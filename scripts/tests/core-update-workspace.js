@@ -47,6 +47,11 @@ const afterPack = require('../after-pack');
 const legacyBridgeConfig = require('../legacy-update-bridge.config');
 const { classifyNameStatus, parseNameStatus } = require('../updater-review-scope');
 const {
+  IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR,
+  IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+  parseImmutableV163FirstHopLog,
+} = require('../immutable-v163-first-hop-contract');
+const {
   checkUpdateCompatibilityCohorts,
   cohortList,
   readCohortManifest,
@@ -755,6 +760,84 @@ function registerCliAndUpdateTests(context) {
     assert.equal(liveResult.tagName, `v${previousFixed.version}`);
   });
 
+  test('불변 v1.6.3 first-hop 로그를 공식 유한 상태 문법으로만 분류한다', () => {
+    const parentPid = 321;
+    const executable = 'C:\\fresh-attempt\\installed-v163\\LoadToAgent.exe';
+    const relaunchPid = 654;
+    const windowHandle = '9223372036854775807';
+    const helperLines = [
+      `helperStarted=true;parentPid=${parentPid};expectedVersion=1.6.23`,
+      'exitCode=0',
+      `candidate=${executable};version=1.6.23`,
+      `relaunchPath=${executable};installedVersion=1.6.23;expectedVersion=1.6.23`,
+      `relaunchStarted=true;attempt=1;pid=${relaunchPid}`,
+      `windowRestored=true;pid=${relaunchPid};handle=${windowHandle}`,
+      `rendererReady=true;attempt=1;pid=${relaunchPid}`,
+      `relaunchReady=true;attempt=1;pid=${relaunchPid}`,
+    ];
+    const raw = lines => `\uFEFF${lines.join('\r\n')}\r\n`;
+    const options = { parentPid, executable, version: '1.6.23' };
+    const acknowledged = parseImmutableV163FirstHopLog(raw(helperLines), {
+      ...options,
+      outcome: 'acknowledged',
+    });
+    assert.equal(acknowledged.helperStage, 8);
+    assert.equal(acknowledged.relaunchPid, relaunchPid);
+    assert.equal(acknowledged.windowHandle, windowHandle,
+      '64-bit HWND는 손실 가능한 JS Number가 아니라 exact decimal string으로 유지해야 합니다.');
+    for (let helperStage = 1; helperStage <= 8; helperStage += 1) {
+      const parsed = parseImmutableV163FirstHopLog(raw([
+        ...helperLines.slice(0, helperStage),
+        IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+      ]), { ...options, outcome: 'bootstrap-race' });
+      assert.equal(parsed.helperStage, helperStage);
+      assert.equal(parsed.bootstrapError, IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR);
+      assert.equal(parsed.relaunchPid, helperStage >= 5 ? relaunchPid : 0);
+    }
+    const naturalExit = parseImmutableV163FirstHopLog(raw([
+      ...helperLines,
+      IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR,
+    ]), { ...options, outcome: 'bootstrap-race' });
+    assert.equal(naturalExit.helperStage, 8);
+    assert.equal(naturalExit.bootstrapError, IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR);
+
+    for (const invalid of [
+      raw([IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines.slice(0, 7), IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR]),
+      raw([helperLines[0], 'exitCode=1', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([helperLines[0], helperLines[2], 'exitCode=0', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines, 'unexpected=true', IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR]),
+      raw([...helperLines, 'bootstrapError=unexpected']),
+      raw([
+        ...helperLines.slice(0, 5),
+        `windowRestored=true;pid=${relaunchPid};handle=9223372036854775808`,
+        ...helperLines.slice(6),
+        IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+      ]),
+      `\uFEFF${helperLines.join('\n')}\n`,
+    ]) {
+      assert.throws(
+        () => parseImmutableV163FirstHopLog(invalid, { ...options, outcome: 'bootstrap-race' }),
+        error => error instanceof assert.AssertionError,
+      );
+    }
+    assert.throws(
+      () => parseImmutableV163FirstHopLog({ toString: () => raw(helperLines) }, {
+        ...options,
+        outcome: 'acknowledged',
+      }),
+      /primitive string/,
+    );
+    assert.throws(
+      () => parseImmutableV163FirstHopLog(raw(helperLines), {
+        ...options,
+        executable: { toString: () => executable },
+        outcome: 'acknowledged',
+      }),
+      /primitive string/,
+    );
+  });
+
   test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', () => {
     const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
@@ -1035,8 +1118,8 @@ function registerCliAndUpdateTests(context) {
     'native bridge 프로필은 exact 소유 증거와 프로세스 종료 뒤에만 삭제하고 부재를 입증해야 합니다.');
     assert.equal((legacyClientTest.match(/immutableBridgeNativeProfilePolicy = armImmutableBridgeNativeProfileOwnership\(firstHopOptions\)/g) || []).length, 1,
       '불변 bridge native profile policy는 exact first-hop에서 한 번만 발급·전달해야 합니다.');
-    assert.equal((legacyClientTest.match(/assert\.strictEqual\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/g) || []).length, 4,
-      '불변 bridge opaque policy는 bootstrap-ack·ready-race·residue·relaunch 네 지점에서 strict identity로 검증해야 합니다.');
+    assert.equal((legacyClientTest.match(/assert\.strictEqual\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/g) || []).length, 7,
+      '불변 bridge opaque policy는 ack·race·cleanup·launch·relaunch의 모든 진입점에서 strict identity로 검증해야 합니다.');
     assert.equal(/assert\.equal\((?:options\.immutableBridgeNativeProfilePolicy|nativeProfilePolicy), immutableBridgeNativeProfilePolicy,/.test(legacyClientTest), false,
       '불변 bridge opaque policy에 loose assert.equal을 다시 도입하면 안 됩니다.');
     const issuedOpaquePolicyFixture = Object.freeze({ kind: 'official-v1.6.3-to-v1.6.23-native-profile' });
@@ -1049,6 +1132,15 @@ function registerCliAndUpdateTests(context) {
       && releaseGuide.includes('The native roaming root and any')
       && releaseGuide.includes('unowned profile must never be deleted'),
     '릴리스 계약은 불변 1.6.23 native profile marker와 소유·정리 제한을 명시해야 합니다.');
+    const immutableV163ProcessTree = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function assertImmutableV163AuthenticatedProcessTree'),
+      legacyClientTest.indexOf('function stopProcessesUnderDirectory'),
+    );
+    assert(immutableV163ProcessTree.includes('expectedHelperIdentity')
+      && immutableV163ProcessTree.includes('mainRecord.parentPid, expectedHelperIdentity.pid')
+      && immutableV163ProcessTree.includes('Date.parse(mainRecord.createdAt) >= helperCreatedAtMs')
+      && immutableV163ProcessTree.includes('currentWindowHandle, loggedWindowHandle'),
+    '불변 v1.6.3 재실행은 exact captured helper의 직접 자식과 helper가 기록한 동일 live HWND에 묶여야 합니다.');
     const immutableV163BootstrapAckInstall = legacyClientTest.slice(
       legacyClientTest.indexOf('function assertCompletedImmutableV163BootstrapAckInstall'),
       legacyClientTest.indexOf('async function waitForPathRemoval'),
@@ -1074,28 +1166,22 @@ function registerCliAndUpdateTests(context) {
       && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedHelperPath), []')
       && immutableV163BootstrapAckInstall.includes('runningProcessIdsReferencing(expectedBootstrapPath), []')
       && immutableV163BootstrapAckInstall.includes('fs.lstatSync(file, { throwIfNoEntry: false }), undefined')
-      && immutableV163BootstrapAckInstall.includes('lines.length, 8')
-      && immutableV163BootstrapAckInstall.includes('helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23')
-      && immutableV163BootstrapAckInstall.includes("'exitCode=0'")
-      && immutableV163BootstrapAckInstall.includes('candidate=${legacyExecutable};version=1.6.23')
-      && immutableV163BootstrapAckInstall.includes('relaunchPath=${legacyExecutable};installedVersion=1.6.23;expectedVersion=1.6.23')
-      && immutableV163BootstrapAckInstall.includes('relaunchStarted=true;attempt=1;pid=${relaunchPid}')
-      && immutableV163BootstrapAckInstall.includes('windowRestored=true;pid=${relaunchPid};handle=${windowRestored[2]}')
-      && immutableV163BootstrapAckInstall.includes('rendererReady=true;attempt=1;pid=${relaunchPid}')
-      && immutableV163BootstrapAckInstall.includes('relaunchReady=true;attempt=1;pid=${relaunchPid}')
-      && immutableV163BootstrapAckInstall.includes("const expectedLog = `\\uFEFF${expectedLines.join('\\r\\n')}\\r\\n`")
-      && immutableV163BootstrapAckInstall.includes('assert.equal(log, expectedLog')
-      && immutableV163BootstrapAckInstall.includes('fatalLogLines(lines), []')
+      && immutableV163BootstrapAckInstall.includes('parseImmutableV163FirstHopLog(readLog(expectedLogPath)')
+      && immutableV163BootstrapAckInstall.includes("outcome: 'acknowledged'")
+      && immutableV163BootstrapAckInstall.includes('parsed.helperStage, 8')
+      && immutableV163BootstrapAckInstall.includes("parsed.bootstrapError, ''")
+      && immutableV163BootstrapAckInstall.includes('immutableV163RendererReadyTemporaryArtifacts(launched), []')
+      && immutableV163BootstrapAckInstall.includes('await assertImmutableV163AuthenticatedProcessTree(')
       && !immutableV163BootstrapAckInstall.includes('fs.unlinkSync')
       && !immutableV163BootstrapAckInstall.includes('fs.rmSync'),
     '불변 v1.6.3 bootstrap-ack 정상 경로는 official 8행 raw log와 exact pin·프로세스·artifact 부재를 전용 계약으로 검증해야 합니다.');
     const immutableV163HelperArtifact = legacyClientTest.slice(
-      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
       legacyClientTest.indexOf('async function waitForRelaunch'),
     );
     const immutableV163ReadyRaceLog = legacyClientTest.slice(
       legacyClientTest.indexOf('function assertImmutableV163ReadyRaceLog'),
-      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
     );
     assert(immutableV163ReadyRaceLog.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163ReadyRaceLog.includes("options.label, 'first-hop-downloads'")
@@ -1107,15 +1193,30 @@ function registerCliAndUpdateTests(context) {
       && immutableV163ReadyRaceLog.includes("path.join(expectedDownloadsDir, 'install-update.log')")
       && immutableV163ReadyRaceLog.includes('logState.isFile() && !logState.isSymbolicLink()')
       && immutableV163ReadyRaceLog.includes('path.dirname(canonicalLogPath), canonicalDownloadsDir')
-      && immutableV163ReadyRaceLog.includes('expectedVersion=1.6.23`')
-      && immutableV163ReadyRaceLog.includes('const expectedInterruptedLog = `\\uFEFF${expectedStart}\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
-      && immutableV163ReadyRaceLog.includes('const expectedCompletedInstallerLog = `\\uFEFF${expectedStart}\\r\\nexitCode=0\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
-      && immutableV163ReadyRaceLog.includes('const expectedLogs = [expectedInterruptedLog, expectedCompletedInstallerLog]')
-      && immutableV163ReadyRaceLog.includes('expectedLogs.includes(log)')
-      && immutableV163ReadyRaceLog.includes("log === expectedCompletedInstallerLog ? ['exitCode=0'] : []")
-      && immutableV163ReadyRaceLog.includes("linesStarting(lines, 'exitCode=')")
-      && immutableV163ReadyRaceLog.includes('fatalLogLines(lines), []'),
-    '불변 v1.6.3 ready-race 로그 예외는 공식 first-hop의 두 exact BOM/CRLF 변형만 허용하고 다른 NSIS exit·fatal marker를 거부해야 합니다.');
+      && immutableV163ReadyRaceLog.includes('parseImmutableV163FirstHopLog(log')
+      && immutableV163ReadyRaceLog.includes("outcome: 'bootstrap-race'"),
+    '불변 v1.6.3 ready-race 로그는 별도 공식 BOM/CRLF 유한 상태 parser로만 분류해야 합니다.');
+    const immutableV163RendererScope = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertImmutableV163RendererReadyScope'),
+      legacyClientTest.indexOf('function immutableV163RendererReadyTemporaryArtifacts'),
+    );
+    assert(immutableV163RendererScope.includes("typeof launched.rendererReadyToken, 'string'")
+      && immutableV163RendererScope.includes('/^[0-9a-f]{48}$/')
+      && immutableV163RendererScope.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163RendererScope.includes('launched.rendererReadyPath, expectedPath')
+      && immutableV163RendererScope.includes('path.dirname(canonicalDownloadsDir), canonicalTestRoot'),
+    '불변 v1.6.3 renderer capability scope는 signal 부재에도 exact token과 direct-child path로 고정되어야 합니다.');
+    const immutableV163StageFour = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function classifyImmutableV163StageFourRelaunch'),
+      legacyClientTest.indexOf('async function waitForStableImmutableV163RendererReadyAbsence'),
+    );
+    assert(immutableV163StageFour.includes('stableAbsenceMs = 5_000')
+      && immutableV163StageFour.includes('runningProcessesUnderDirectory(installDir)')
+      && immutableV163StageFour.includes('immutableV163RendererReadyTemporaryArtifacts(launched)')
+      && immutableV163StageFour.includes('immutableBridgeNativeProfileUsagePresent()')
+      && immutableV163StageFour.includes('waitForImmutableV163UnloggedRendererReadySignal')
+      && immutableV163StageFour.includes('assertImmutableBridgeNativeProfileUnused()'),
+    '불변 v1.6.3 stage-four Start-Process gap은 process·signal·temp·native profile의 안정 부재 또는 exact signal 인증으로만 분류해야 합니다.');
     assert(immutableV163HelperArtifact.includes('assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163HelperArtifact.includes("options.currentVersion, '1.6.3'")
       && immutableV163HelperArtifact.includes('options.expectedVersion, bridgeVersion')
@@ -1123,7 +1224,7 @@ function registerCliAndUpdateTests(context) {
       && immutableV163HelperArtifact.includes('assertPinnedInstaller(sourceInstaller')
       && immutableV163HelperArtifact.includes('assertPinnedInstaller(bridgeInstaller')
       && immutableV163HelperArtifact.includes('assertImmutableV163ReadyRaceLog(launched, options)')
-      && immutableV163HelperArtifact.includes('detectedReadyRaceLog, readyRaceLog')
+      && immutableV163HelperArtifact.includes('detectedReadyRaceLog, readyRace.rawLog')
       && immutableV163HelperArtifact.includes("path.join(testRoot, 'first-hop-downloads')")
       && immutableV163HelperArtifact.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
       && immutableV163HelperArtifact.includes("path.join(expectedDownloadsDir, 'install-update.ps1')")
@@ -1133,7 +1234,8 @@ function registerCliAndUpdateTests(context) {
       && immutableV163HelperArtifact.includes('runningProcessIds(downloadedInstaller), []')
       && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(downloadedInstaller), []')
       && immutableV163HelperArtifact.includes('runningProcessesUnderDirectory(installDir), []')
-      && immutableV163HelperArtifact.includes('helperState !== undefined')
+      && immutableV163HelperArtifact.includes('const helperMustRemain = readyRace.helperStage < 8')
+      && immutableV163HelperArtifact.includes('const helperMustSelfDelete = readyRace.bootstrapError === IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR')
       && immutableV163HelperArtifact.includes('helperState.isFile() && !helperState.isSymbolicLink()')
       && immutableV163HelperArtifact.includes('path.dirname(canonicalHelperPath), canonicalDownloadsDir')
       && immutableV163HelperArtifact.includes('Buffer.from(`\\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, \'utf8\')')
@@ -1141,18 +1243,29 @@ function registerCliAndUpdateTests(context) {
       && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(expectedHelperPath), []')
       && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(launched.bootstrapPath), []')
       && immutableV163HelperArtifact.includes('Another immutable v1.6.3 ${label} artifact remained before exact helper cleanup')
+      && immutableV163HelperArtifact.includes('const partialAuthenticatedRelaunch = authenticatedRelaunchPid > 0 && readyRace.helperStage < 8')
+      && immutableV163HelperArtifact.includes('assertImmutableV163RendererReadySignal(')
+      && immutableV163HelperArtifact.includes('fs.unlinkSync(launched.rendererReadyPath)')
       && immutableV163HelperArtifact.includes('fs.unlinkSync(expectedHelperPath)')
+      && immutableV163HelperArtifact.includes('await waitForStableImmutableV163RendererReadyAbsence(launched)')
+      && immutableV163HelperArtifact.includes('ready-race log changed during exact artifact cleanup')
       && !immutableV163HelperArtifact.includes('fs.rmSync'),
-    '불변 v1.6.3 ready-race artifact 예외는 공식 pin·exact owned helper bytes·프로세스 부재 뒤 단일 파일만 제거해야 합니다.');
-    assert(releaseGuide.includes('BOM + official packaged v1.6.3 helper source')
-      && normalizedReleaseGuide.includes('one exact bootstrap-ack success grammar')
+    '불변 v1.6.3 ready-race artifact 예외는 stage별 exact helper·renderer signal만 단일 unlink하고 재생성 부재를 입증해야 합니다.');
+    assert(normalizedReleaseGuide.includes('BOM + official packaged v1.6.3 helper source')
+      && normalizedReleaseGuide.includes('one exact bootstrap-ack grammar and one finite historical ready-race state machine')
       && normalizedReleaseGuide.includes('exact eight-line raw log')
       && normalizedReleaseGuide.includes('cannot emit the newer `allAppProcessesStopped=true` marker')
       && normalizedReleaseGuide.includes('No fallback residue deletion is allowed on this normal path')
-      && normalizedReleaseGuide.includes('one of only two exact raw logs')
-      && normalizedReleaseGuide.includes('or the same lines with exactly one `exitCode=0` between them')
-      && normalizedReleaseGuide.includes('A nonzero, duplicate, or reordered exit code,')
-      && releaseGuide.includes('A timeout, mismatched file, unowned path,')
+      && normalizedReleaseGuide.includes('exact non-empty prefix of those helper lines')
+      && normalizedReleaseGuide.includes('complete eight-line sequence followed by the exact `bootstrapError` ending in `코드: 0`')
+       && normalizedReleaseGuide.includes('`Start-Process` after writing `relaunchPath` and before writing `relaunchStarted`')
+       && normalizedReleaseGuide.includes('absence conditions must remain stable for at least five seconds')
+       && normalizedReleaseGuide.includes("direct parent must equal the exact captured helper PID")
+       && normalizedReleaseGuide.includes('transitive installed-process lineage')
+       && normalizedReleaseGuide.includes('live main-window handle must equal any helper-recorded handle')
+       && normalizedReleaseGuide.includes('48-hex capability token and exact direct-child path remain mandatory')
+      && normalizedReleaseGuide.includes('bounded stability window after cleanup')
+      && normalizedReleaseGuide.includes('A timeout by itself, missing signal, PID or lineage mismatch')
       && releaseGuide.includes('a release failure'),
     '릴리스 계약은 불변 v1.6.3 강제 종료 artifact의 exact cleanup과 fail-closed 제한을 명시해야 합니다.');
     const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
@@ -1162,13 +1275,15 @@ function registerCliAndUpdateTests(context) {
     );
     const successProcessCleanup = automaticInstallSuccess.indexOf('await waitForUpdateProcessCleanup(launched)');
     const successInstallerCleanup = automaticInstallSuccess.indexOf("await waitForExactExecutableProcessExit(downloadedInstaller, 'Packaged installer')");
+    const successFinalRaceClassification = automaticInstallSuccess.indexOf("linesStarting(logLines(launched.logPath), 'bootstrapError=')");
     const successArtifactCleanup = automaticInstallSuccess.indexOf('await waitForUpdateArtifactCleanup(launched)');
-    const successImmutableDispatch = automaticInstallSuccess.indexOf('if (hasImmutableBridgeNativeProfilePolicy)');
+    const successImmutableDispatch = automaticInstallSuccess.indexOf('if (hasImmutableBridgeNativeProfilePolicy)', successArtifactCleanup);
     const successImmutableLogCheck = automaticInstallSuccess.indexOf('assertCompletedImmutableV163BootstrapAckInstall', successImmutableDispatch);
     const successCurrentLogCheck = automaticInstallSuccess.indexOf('assertCompletedInstall(launched.logPath, options)', successImmutableLogCheck);
     assert(successProcessCleanup >= 0
       && successInstallerCleanup > successProcessCleanup
-      && successArtifactCleanup > successInstallerCleanup
+      && successFinalRaceClassification > successInstallerCleanup
+      && successArtifactCleanup > successFinalRaceClassification
       && successImmutableDispatch > successArtifactCleanup
       && successImmutableLogCheck > successImmutableDispatch
       && successCurrentLogCheck > successImmutableLogCheck,
@@ -1176,9 +1291,12 @@ function registerCliAndUpdateTests(context) {
     const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
     const fallbackInstallerCleanup = legacyFallback.indexOf('await waitForExactExecutableProcessExit(downloadedInstaller', fallbackProcessCleanup);
     const fallbackStablePackage = legacyFallback.indexOf('await waitForInstalledPackage(options.appPath, options.expectedVersion)', fallbackInstallerCleanup);
-    const fallbackInstalledProcessCleanup = legacyFallback.indexOf('runningProcessesUnderDirectory(installDir), []', fallbackStablePackage);
-    const fallbackCaughtLog = legacyFallback.indexOf("const readyRaceLog = String(error.updateLog || '')", fallbackInstalledProcessCleanup);
-    const fallbackOwnedArtifactCleanup = legacyFallback.indexOf('removeOwnedImmutableV163ReadyRaceHelperArtifact', fallbackCaughtLog);
+    const fallbackCaughtLog = legacyFallback.indexOf('const readyRaceLog = error.updateLog', fallbackStablePackage);
+    const fallbackParsedLog = legacyFallback.indexOf('const readyRace = assertImmutableV163ReadyRaceLog', fallbackCaughtLog);
+    const fallbackProcessClassification = legacyFallback.indexOf('const installedProcesses = runningProcessesUnderDirectory(installDir)', fallbackParsedLog);
+    const fallbackProfileUnused = legacyFallback.indexOf('assertImmutableBridgeNativeProfileUnused()', fallbackProcessClassification);
+    const fallbackAuthenticatedTree = legacyFallback.indexOf('await assertImmutableV163AuthenticatedProcessTree(', fallbackProcessClassification);
+    const fallbackOwnedArtifactCleanup = legacyFallback.indexOf('removeOwnedImmutableV163ReadyRaceArtifacts', fallbackAuthenticatedTree);
     const fallbackArtifactCleanup = legacyFallback.indexOf('await waitForUpdateArtifactCleanup(launched)');
     const fallbackFinalLogCheck = legacyFallback.indexOf('assertImmutableV163ReadyRaceLog(launched, options)', fallbackArtifactCleanup);
     const fallbackRendererReady = legacyFallback.indexOf('await startInstalledAppWithRendererReady', fallbackFinalLogCheck);
@@ -1186,19 +1304,22 @@ function registerCliAndUpdateTests(context) {
     assert(fallbackProcessCleanup >= 0
       && fallbackInstallerCleanup > fallbackProcessCleanup
       && fallbackStablePackage > fallbackInstallerCleanup
-      && fallbackInstalledProcessCleanup > fallbackStablePackage
-      && fallbackCaughtLog > fallbackInstalledProcessCleanup
-      && fallbackOwnedArtifactCleanup > fallbackCaughtLog
+      && fallbackCaughtLog > fallbackStablePackage
+      && fallbackParsedLog > fallbackCaughtLog
+      && fallbackProcessClassification > fallbackParsedLog
+      && fallbackProfileUnused > fallbackProcessClassification
+      && fallbackAuthenticatedTree > fallbackProcessClassification
+      && fallbackOwnedArtifactCleanup > fallbackAuthenticatedTree
       && fallbackArtifactCleanup > fallbackOwnedArtifactCleanup
       && fallbackFinalLogCheck > fallbackArtifactCleanup
       && fallbackRendererReady > fallbackFinalLogCheck
       && fallbackPostRelaunchLogCheck > fallbackRendererReady,
-    '레거시 ready-file 예외는 helper·installer 종료, 안정 package·exact 로그, owned artifact 정리, 전체 부재, 인증된 renderer-ready 순으로 검증해야 합니다.');
+    '레거시 ready-file 예외는 helper·installer 종료, 안정 package·exact 로그, relaunch/profile 분류, owned artifact 정리, 전체 부재 순으로 검증해야 합니다.');
     const immutableV163ReadyRaceUses = legacyClientTest.slice(
-      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceArtifacts'),
     );
-    assert.equal((immutableV163ReadyRaceUses.match(/assertImmutableV163ReadyRaceLog\(launched, options\)/g) || []).length, 3,
-      '불변 v1.6.3 exact log assertion은 owned residue 제거 전과 두 안정성 재검증에서만 실행해야 합니다.');
+    assert.equal((immutableV163ReadyRaceUses.match(/assertImmutableV163ReadyRaceLog\(launched, options\)/g) || []).length, 6,
+      '불변 v1.6.3 exact log assertion은 최종 분류와 cleanup·return 안정성 재검증 지점에 고정되어야 합니다.');
     const candidateReinstall = legacyClientTest.slice(legacyClientTest.indexOf('async function reinstallCandidateWithPackagedUpdater'), legacyClientTest.indexOf('function stopProcessTree'));
     assert(candidateReinstall.includes('await downloadWithPackagedUpdater')
       && candidateReinstall.includes('releaseDecoys: selectionDecoys(CURRENT_VERSION)')

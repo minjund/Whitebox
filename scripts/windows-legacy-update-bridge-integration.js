@@ -11,6 +11,11 @@ const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const bridgeConfig = require('./legacy-update-bridge.config');
 const {
+  IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR,
+  IMMUTABLE_V163_BOOTSTRAP_TIMEOUT_ERROR,
+  parseImmutableV163FirstHopLog,
+} = require('./immutable-v163-first-hop-contract');
+const {
   assertCompleteReleaseAssetSet,
   assertReleaseAssetSelections,
   fixtureReleaseAssets,
@@ -36,7 +41,6 @@ const V1623_INSTALLER_SIZE = 94506459;
 const V1623_INSTALLER_NAME = 'LoadToAgent-Setup-1.6.23.exe';
 const CANDIDATE_E2E = process.env.WHITEBOX_LEGACY_CANDIDATE_E2E === 'true';
 const IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION = CANDIDATE_E2E && disposableGithubRunner;
-const IMMUTABLE_V163_READY_RACE_ERROR = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
 const CURRENT_VERSION = CANDIDATE_E2E ? String(sourcePackageMetadata.version || '').trim() : '1.7.4';
 const CURRENT_INSTALLER_SHA256 = CANDIDATE_E2E
   ? String(process.env.WHITEBOX_CURRENT_INSTALLER_SHA256 || '').trim().toLowerCase().replace(/^sha256:/, '')
@@ -243,25 +247,77 @@ function exactProcessRecord(expectedPid) {
     '$process = Get-Process -Id $processId -ErrorAction Stop',
     '$imagePath = [string]$process.Path',
     '$commandLine = [string]$cim[0].CommandLine',
+    '$parentPid = [int]$cim[0].ParentProcessId',
+    "$createdAt = ([DateTime]$cim[0].CreationDate).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)",
     "if ([string]::IsNullOrWhiteSpace($imagePath)) { throw ('Process image path was unavailable for PID ' + $processId) }",
     "if ([string]::IsNullOrWhiteSpace($commandLine)) { throw ('Process command line was unavailable for PID ' + $processId) }",
+    "if ($parentPid -le 0) { throw ('Parent PID was unavailable for PID ' + $processId) }",
+    "if ([string]::IsNullOrWhiteSpace($createdAt)) { throw ('Creation time was unavailable for PID ' + $processId) }",
     '$encodedImagePath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($imagePath))',
     '$encodedCommandLine = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandLine))',
-    '[Console]::Write(([string]$processId) + "|" + $encodedImagePath + "|" + $encodedCommandLine)',
+    '[Console]::Write(([string]$processId) + "|" + ([string]$parentPid) + "|" + $createdAt + "|" + $encodedImagePath + "|" + $encodedCommandLine)',
   ].join('\n');
   const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(expectedPid) },
     timeout: 30_000,
   }).stdout.trim();
   const fields = output.split('|');
-  assert.equal(fields.length, 3, `Unexpected exact installed-app process record: ${output}`);
+  assert.equal(fields.length, 5, `Unexpected exact installed-app process record: ${output}`);
   const pid = Number(fields[0]);
   assert.equal(pid, expectedPid, `Exact installed-app process lookup returned PID ${pid}, expected ${expectedPid}.`);
-  const executablePath = Buffer.from(fields[1], 'base64').toString('utf8');
-  const commandLine = Buffer.from(fields[2], 'base64').toString('utf8');
+  const parentPid = Number(fields[1]);
+  assert(Number.isSafeInteger(parentPid) && parentPid > 0, `Exact installed-app parent PID was invalid for PID ${expectedPid}.`);
+  const createdAt = String(fields[2] || '');
+  assert(Number.isFinite(Date.parse(createdAt)), `Exact installed-app creation time was invalid for PID ${expectedPid}: ${createdAt}`);
+  const executablePath = Buffer.from(fields[3], 'base64').toString('utf8');
+  const commandLine = Buffer.from(fields[4], 'base64').toString('utf8');
   assert(executablePath.trim(), `Exact installed-app executable path was empty for PID ${expectedPid}.`);
   assert(commandLine.trim(), `Exact installed-app command line was empty for PID ${expectedPid}.`);
-  return { pid, executablePath, commandLine };
+  return { pid, parentPid, createdAt, executablePath, commandLine };
+}
+
+function exactChildProcessRecord(parentPid, commandPath) {
+  assert(Number.isSafeInteger(parentPid) && parentPid > 0, `Invalid parent PID for child lookup: ${parentPid}`);
+  assert(path.isAbsolute(commandPath), `Child command path was not absolute: ${commandPath}`);
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$parentPid = [int]$env:WHITEBOX_INTEGRATION_PARENT_PID',
+    '$commandPath = $env:WHITEBOX_INTEGRATION_COMMAND_PATH',
+    '$records = @(Get-CimInstance Win32_Process -Filter (\'ParentProcessId = \' + $parentPid) -ErrorAction Stop | Where-Object {',
+    '  -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and',
+    '  ([string]$_.CommandLine).IndexOf($commandPath, [StringComparison]::OrdinalIgnoreCase) -ge 0',
+    '})',
+    "if ($records.Count -ne 1) { throw ('Expected exactly one child of ' + $parentPid + ' referencing ' + $commandPath + ', found ' + $records.Count) }",
+    '$record = $records[0]',
+    '$process = Get-Process -Id ([int]$record.ProcessId) -ErrorAction Stop',
+    '$imagePath = [string]$process.Path',
+    '$commandLine = [string]$record.CommandLine',
+    "$createdAt = ([DateTime]$record.CreationDate).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)",
+    "if ([string]::IsNullOrWhiteSpace($imagePath) -or [string]::IsNullOrWhiteSpace($commandLine) -or [string]::IsNullOrWhiteSpace($createdAt)) { throw 'Child process identity was incomplete' }",
+    '$encodedImagePath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($imagePath))',
+    '$encodedCommandLine = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandLine))',
+    '[Console]::Write(([string]$record.ProcessId) + "|" + ([string]$record.ParentProcessId) + "|" + $createdAt + "|" + $encodedImagePath + "|" + $encodedCommandLine)',
+  ].join('\n');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: {
+      ...process.env,
+      WHITEBOX_INTEGRATION_PARENT_PID: String(parentPid),
+      WHITEBOX_INTEGRATION_COMMAND_PATH: commandPath,
+    },
+    timeout: 30_000,
+  }).stdout.trim();
+  const fields = output.split('|');
+  assert.equal(fields.length, 5, `Unexpected exact child process record: ${output}`);
+  const pid = Number(fields[0]);
+  const observedParentPid = Number(fields[1]);
+  const createdAt = String(fields[2] || '');
+  const executablePath = Buffer.from(fields[3], 'base64').toString('utf8');
+  const commandLine = Buffer.from(fields[4], 'base64').toString('utf8');
+  assert(Number.isSafeInteger(pid) && pid > 0, `Exact child PID was invalid: ${fields[0]}`);
+  assert.equal(observedParentPid, parentPid, `Exact child parent PID changed for PID ${pid}.`);
+  assert(Number.isFinite(Date.parse(createdAt)), `Exact child creation time was invalid for PID ${pid}: ${createdAt}`);
+  assert(executablePath.trim() && commandLine.trim(), `Exact child process identity was empty for PID ${pid}.`);
+  return { pid, parentPid: observedParentPid, createdAt, executablePath, commandLine };
 }
 
 function runningInstalledAppCommandLines(expectedExecutable) {
@@ -358,6 +414,35 @@ function assertProfileDirectoryUsed(directory, label) {
   assertPathWithin(fs.realpathSync(testRoot), fs.realpathSync(directory), `${label} real path`);
   assert(fs.readdirSync(directory).length > 0, `${label} remained unused: ${directory}`);
   assertPathWithin(testRoot, directory, label);
+}
+
+function immutableBridgeNativeProfileUsagePresent() {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable bridge native profile usage check escaped the disposable official candidate run.');
+  assert(immutableBridgeNativeProfileOwnershipArmed && immutableBridgeNativeProfileOwned,
+    'The immutable bridge native profile usage check ran without exact ownership.');
+  const profileState = fs.lstatSync(immutableBridgeNativeUserDataDir, { throwIfNoEntry: false });
+  assert(profileState && profileState.isDirectory() && !profileState.isSymbolicLink(),
+    `The owned immutable bridge native profile changed during relaunch classification: ${immutableBridgeNativeUserDataDir}`);
+  assert.equal(path.dirname(canonicalExistingPath(immutableBridgeNativeUserDataDir)), canonicalExistingPath(nativeAppDataRoot),
+    'The immutable bridge native profile escaped its exact Known Folder child.');
+  const markerState = fs.lstatSync(immutableBridgeNativeProfileOwnerMarker, { throwIfNoEntry: false });
+  assert(markerState && markerState.isFile() && !markerState.isSymbolicLink(),
+    `The immutable bridge ownership marker changed: ${immutableBridgeNativeProfileOwnerMarker}`);
+  assert.equal(fs.readFileSync(immutableBridgeNativeProfileOwnerMarker, 'utf8'), immutableBridgeNativeProfileOwnerToken,
+    'The immutable bridge ownership token changed.');
+  for (const candidate of immutableBridgeNativeProfileCandidates.slice(1)) {
+    assert.equal(fs.lstatSync(candidate, { throwIfNoEntry: false }), undefined,
+      `An unauthenticated immutable bridge profile appeared: ${candidate}`);
+  }
+  const applicationEntries = fs.readdirSync(immutableBridgeNativeUserDataDir)
+    .filter(name => name !== path.basename(immutableBridgeNativeProfileOwnerMarker));
+  return applicationEntries.length > 0 || immutableBridgeNativeProfileObserved;
+}
+
+function assertImmutableBridgeNativeProfileUnused() {
+  assert.equal(immutableBridgeNativeProfileUsagePresent(), false,
+    'The immutable bridge native profile was already attributed before the no-relaunch fallback.');
 }
 
 function assertImmutableBridgeNativeProfileUsed() {
@@ -593,6 +678,34 @@ function processAlive(pid) {
   return result.status === 0;
 }
 
+function exactMainWindowHandle(pid) {
+  assert(Number.isSafeInteger(pid) && pid > 0, `Invalid app PID for window lookup: ${pid}`);
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$process = Get-Process -Id ([int]$env:WHITEBOX_INTEGRATION_PID) -ErrorAction Stop',
+    '$process.Refresh()',
+    '[Console]::Write(([Int64]$process.MainWindowHandle).ToString([Globalization.CultureInfo]::InvariantCulture))',
+  ].join('\n');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(pid) },
+    timeout: 30_000,
+  }).stdout.trim();
+  assert.match(output, /^\d+$/, `Invalid main-window handle for PID ${pid}: ${output}`);
+  return output;
+}
+
+async function waitForPositiveMainWindowHandle(pid, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  let lastHandle = '0';
+  while (Date.now() - startedAt < timeoutMs) {
+    assert.equal(processAlive(pid), true, `Installed app PID ${pid} exited before exposing its main window.`);
+    lastHandle = exactMainWindowHandle(pid);
+    if (lastHandle !== '0') return lastHandle;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Installed app PID ${pid} did not expose a positive main-window handle (${lastHandle}).`);
+}
+
 async function waitForProcessExit(pid, timeoutMs = 30_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -707,8 +820,11 @@ function runningProcessesUnderDirectory(directory) {
     '    $executablePath = [string]$_.ExecutablePath',
     "    if ([string]::IsNullOrWhiteSpace($executablePath)) { throw ('Executable path was unavailable for guarded PID ' + [string]$_.ProcessId) }",
     '    else {',
+    '      $parentPid = [int]$_.ParentProcessId',
+    "      $createdAt = ([DateTime]$_.CreationDate).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)",
+    "      if ($parentPid -le 0 -or [string]::IsNullOrWhiteSpace($createdAt)) { throw ('Process identity was unavailable for guarded PID ' + [string]$_.ProcessId) }",
     '      $encodedPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($executablePath))',
-    '      ([string]$_.ProcessId) + "|" + $encodedPath',
+    '      ([string]$_.ProcessId) + "|" + ([string]$parentPid) + "|" + $createdAt + "|" + $encodedPath',
     '    }',
     '  }',
     '})',
@@ -720,15 +836,89 @@ function runningProcessesUnderDirectory(directory) {
   }).stdout.trim();
   const canonicalDirectory = canonicalPath(directory);
   return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
-    const separator = record.indexOf('|');
-    const pid = Number(separator >= 0 ? record.slice(0, separator) : '');
-    if (!Number.isSafeInteger(pid) || pid <= 0 || separator < 0) {
+    const fields = record.split('|');
+    const pid = Number(fields[0]);
+    const parentPid = Number(fields[1]);
+    const createdAt = String(fields[2] || '');
+    if (fields.length !== 4 || !Number.isSafeInteger(pid) || pid <= 0
+      || !Number.isSafeInteger(parentPid) || parentPid <= 0 || !Number.isFinite(Date.parse(createdAt))) {
       throw new Error(`Unexpected installed-path process record: ${record}`);
     }
-    const executablePath = Buffer.from(record.slice(separator + 1), 'base64').toString('utf8');
+    const executablePath = Buffer.from(fields[3], 'base64').toString('utf8');
     assert(executablePath.trim(), `Installed-path process executable was empty for PID ${pid}.`);
-    return { pid, executablePath };
+    return { pid, parentPid, createdAt, executablePath };
   }).filter(record => pathIsWithin(canonicalDirectory, canonicalExistingPath(record.executablePath))) : [];
+}
+
+async function assertImmutableV163AuthenticatedProcessTree(
+  mainPid,
+  attemptStartedAtMs,
+  expectedHelperIdentity,
+  loggedWindowHandle = '',
+) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable v1.6.3 process-tree exception escaped the disposable official candidate run.');
+  assert(Number.isSafeInteger(attemptStartedAtMs) && attemptStartedAtMs > 0,
+    'The immutable v1.6.3 attempt start time was invalid.');
+  assert(expectedHelperIdentity && typeof expectedHelperIdentity === 'object',
+    'The immutable v1.6.3 exact helper identity was unavailable.');
+  assert(Number.isSafeInteger(expectedHelperIdentity.pid) && expectedHelperIdentity.pid > 0,
+    'The immutable v1.6.3 exact helper PID was invalid.');
+  const helperCreatedAtMs = Date.parse(expectedHelperIdentity.createdAt);
+  assert(Number.isFinite(helperCreatedAtMs)
+    && helperCreatedAtMs >= attemptStartedAtMs - 2_000
+    && helperCreatedAtMs <= Date.now() + 5_000,
+    `The immutable v1.6.3 exact helper was not created by this fresh attempt: ${expectedHelperIdentity.createdAt}`);
+  const records = runningProcessesUnderDirectory(installDir);
+  assert(records.length > 0, 'The authenticated immutable v1.6.3 relaunch had no live installed process tree.');
+  const byPid = new Map();
+  const canonicalLegacyExecutable = canonicalExistingPath(legacyExecutable);
+  for (const record of records) {
+    assert.equal(canonicalExistingPath(record.executablePath), canonicalLegacyExecutable,
+      `Unexpected executable joined the immutable v1.6.3 relaunch tree: ${record.executablePath}`);
+    assert.equal(byPid.has(record.pid), false, `Duplicate immutable v1.6.3 process record: ${record.pid}`);
+    const createdAtMs = Date.parse(record.createdAt);
+    assert(createdAtMs >= attemptStartedAtMs - 2_000 && createdAtMs <= Date.now() + 5_000,
+      `Immutable v1.6.3 process ${record.pid} was not created by this fresh attempt: ${record.createdAt}`);
+    byPid.set(record.pid, record);
+  }
+  assert.equal(byPid.has(mainPid), true, `The renderer-ready immutable v1.6.3 main PID was not live: ${mainPid}`);
+  for (const record of records) {
+    if (record.pid === mainPid) continue;
+    const seen = new Set([record.pid]);
+    let cursor = record;
+    while (cursor.pid !== mainPid) {
+      assert.equal(seen.has(cursor.parentPid), false,
+        `A cycle appeared in the immutable v1.6.3 process tree at PID ${cursor.pid}.`);
+      const parent = byPid.get(cursor.parentPid);
+      assert(parent,
+        `Installed PID ${record.pid} was not a transitive child of authenticated main PID ${mainPid}.`);
+      seen.add(parent.pid);
+      cursor = parent;
+    }
+  }
+  const mainRecord = exactProcessRecord(mainPid);
+  assert.equal(canonicalExistingPath(mainRecord.executablePath), canonicalLegacyExecutable,
+    'The authenticated immutable v1.6.3 main PID changed executable identity.');
+  assert.equal(mainRecord.parentPid, expectedHelperIdentity.pid,
+    'The authenticated immutable v1.6.3 main PID was not the exact captured helper child.');
+  assert(Date.parse(mainRecord.createdAt) >= helperCreatedAtMs,
+    'The authenticated immutable v1.6.3 main PID predates its exact captured helper.');
+  const currentWindowHandle = await waitForPositiveMainWindowHandle(mainPid);
+  if (loggedWindowHandle) {
+    assert.match(loggedWindowHandle, /^[1-9]\d*$/, 'The immutable v1.6.3 logged window handle was invalid.');
+    assert.equal(currentWindowHandle, loggedWindowHandle,
+      'The immutable v1.6.3 live main-window handle differed from the exact helper record.');
+  }
+  assertInstalledAppProfileIsolation(
+    mainPid,
+    legacyExecutable,
+    'authenticated immutable v1.6.3 updater relaunch',
+    false,
+    true,
+  );
+  assertImmutableBridgeNativeProfileUsed();
+  return { records, mainRecord, currentWindowHandle };
 }
 
 function stopProcessesUnderDirectory(directory, label) {
@@ -861,7 +1051,7 @@ function assertCompletedInstall(logPath, options) {
   assert.deepStrictEqual(fatalLogLines(lines), [], `Updater helper logged a fatal marker:\n${readLog(logPath)}`);
 }
 
-function assertCompletedImmutableV163BootstrapAckInstall(
+async function assertCompletedImmutableV163BootstrapAckInstall(
   launched,
   options,
   downloadedInstaller,
@@ -911,13 +1101,8 @@ function assertCompletedImmutableV163BootstrapAckInstall(
     'The immutable bootstrap-ack log path changed.');
   assert.equal(path.resolve(launched.readyPath), expectedReadyPath,
     'The immutable bootstrap-ack ready path changed.');
-  assert.match(String(launched.rendererReadyToken || ''), /^[0-9a-f]{48}$/,
-    'The immutable bootstrap-ack renderer-ready token changed.');
-  assert.equal(
-    path.resolve(launched.rendererReadyPath),
-    path.join(expectedDownloadsDir, `install-renderer-ready-${launched.rendererReadyToken}.json`),
-    'The immutable bootstrap-ack renderer-ready path changed.',
-  );
+  assert.equal(assertImmutableV163RendererReadyScope(launched), launched.rendererReadyPath,
+    'The immutable bootstrap-ack renderer-ready scope changed.');
   const downloadedState = fs.lstatSync(expectedDownloadedInstaller, { throwIfNoEntry: false });
   assert(downloadedState && downloadedState.isFile() && !downloadedState.isSymbolicLink(),
     `The immutable bootstrap-ack downloaded installer was missing or changed: ${expectedDownloadedInstaller}`);
@@ -979,40 +1164,28 @@ function assertCompletedImmutableV163BootstrapAckInstall(
   assert.equal(path.dirname(canonicalLogPath), canonicalDownloadsDir,
     'The immutable bootstrap-ack log escaped its exact first-hop directory.');
 
-  assert(Number.isSafeInteger(options.parentPid) && options.parentPid > 0,
-    'The immutable bootstrap-ack parent PID was invalid.');
-  const lines = logLines(expectedLogPath);
-  assert.equal(lines.length, 8, `The immutable bootstrap-ack log changed length:\n${readLog(expectedLogPath)}`);
-  const relaunchStarted = String(lines[4] || '').match(/^relaunchStarted=true;attempt=1;pid=(\d+)$/);
-  assert(relaunchStarted, `The immutable bootstrap-ack relaunch-start record changed: ${lines[4] || '(missing)'}`);
-  const loggedRelaunchPid = Number(relaunchStarted[1]);
-  assert(Number.isSafeInteger(loggedRelaunchPid) && loggedRelaunchPid > 0,
-    `The immutable bootstrap-ack relaunch PID was invalid: ${relaunchStarted[1]}`);
-  assert.equal(loggedRelaunchPid, relaunchPid,
+  const parsed = parseImmutableV163FirstHopLog(readLog(expectedLogPath), {
+    parentPid: options.parentPid,
+    executable: legacyExecutable,
+    version: bridgeVersion,
+    outcome: 'acknowledged',
+  });
+  assert.equal(parsed.relaunchPid, relaunchPid,
     'The immutable bootstrap-ack log did not identify the authenticated relaunched process.');
-  const windowRestored = String(lines[5] || '').match(/^windowRestored=true;pid=(\d+);handle=([1-9]\d*)$/);
-  assert(windowRestored, `The immutable bootstrap-ack window-restored record changed: ${lines[5] || '(missing)'}`);
-  assert.equal(windowRestored[1], String(relaunchPid),
-    'The immutable bootstrap-ack window record identified another process.');
-  const expectedLines = [
-    `helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23`,
-    'exitCode=0',
-    `candidate=${legacyExecutable};version=1.6.23`,
-    `relaunchPath=${legacyExecutable};installedVersion=1.6.23;expectedVersion=1.6.23`,
-    `relaunchStarted=true;attempt=1;pid=${relaunchPid}`,
-    `windowRestored=true;pid=${relaunchPid};handle=${windowRestored[2]}`,
-    `rendererReady=true;attempt=1;pid=${relaunchPid}`,
-    `relaunchReady=true;attempt=1;pid=${relaunchPid}`,
-  ];
-  const expectedLog = `\uFEFF${expectedLines.join('\r\n')}\r\n`;
-  const log = readLog(expectedLogPath);
-  assert.equal(log, expectedLog, [
-    'Refusing the immutable v1.6.3 bootstrap-ack success without its exact official eight-line log.',
-    log || '(no update log)',
-  ].join('\n'));
-  assert.deepStrictEqual(fatalLogLines(lines), [],
-    'The immutable v1.6.3 bootstrap-ack log contained a fatal marker.');
-  return log;
+  assert.equal(parsed.helperStage, 8,
+    'The immutable bootstrap-ack helper did not complete its exact eight-line sequence.');
+  assert.equal(parsed.bootstrapError, '',
+    'The immutable bootstrap-ack success contained a bootstrap error.');
+  launched.integrationRendererReadyTemporaryPath = `${launched.rendererReadyPath}.${relaunchPid}.tmp`;
+  assert.deepStrictEqual(immutableV163RendererReadyTemporaryArtifacts(launched), [],
+    'The immutable bootstrap-ack left a renderer-ready temporary artifact.');
+  await assertImmutableV163AuthenticatedProcessTree(
+    relaunchPid,
+    launched.integrationAttemptStartedAtMs,
+    launched.integrationHelperIdentity,
+    parsed.windowHandle,
+  );
+  return parsed.rawLog;
 }
 
 async function waitForPathRemoval(file, timeoutMs = 20_000) {
@@ -1034,8 +1207,197 @@ async function waitForUpdateArtifactCleanup(launched, timeoutMs = 20_000) {
     launched.rendererReadyPath,
     launched.integrationHelperPidPath,
     launched.integrationReadyPath,
+    launched.integrationRendererReadyTemporaryPath,
   ].filter(Boolean))];
   await Promise.all(files.map(file => waitForPathRemoval(file, timeoutMs)));
+}
+
+function assertImmutableV163RendererReadyScope(launched) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable v1.6.3 renderer-ready scope escaped the disposable official candidate run.');
+  assert(launched && typeof launched === 'object',
+    'The immutable v1.6.3 renderer-ready launch record was unavailable.');
+  assert.equal(typeof launched.rendererReadyToken, 'string',
+    'The immutable v1.6.3 renderer-ready token was not a primitive string.');
+  assert.match(launched.rendererReadyToken, /^[0-9a-f]{48}$/,
+    'The immutable v1.6.3 renderer-ready token changed.');
+  assert.equal(typeof launched.rendererReadyPath, 'string',
+    'The immutable v1.6.3 renderer-ready path was not a primitive string.');
+  const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
+  const expectedPath = path.join(
+    expectedDownloadsDir,
+    `install-renderer-ready-${launched.rendererReadyToken}.json`,
+  );
+  assert.equal(launched.rendererReadyPath, expectedPath,
+    'The immutable v1.6.3 renderer-ready path changed.');
+  const directoryState = fs.lstatSync(expectedDownloadsDir, { throwIfNoEntry: false });
+  assert(directoryState && directoryState.isDirectory() && !directoryState.isSymbolicLink(),
+    `The immutable v1.6.3 renderer-ready directory changed: ${expectedDownloadsDir}`);
+  const canonicalTestRoot = canonicalExistingPath(testRoot);
+  const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
+  assert.equal(path.dirname(canonicalDownloadsDir), canonicalTestRoot,
+    'The immutable v1.6.3 renderer-ready directory escaped the fresh integration root.');
+  assertPathWithin(canonicalTestRoot, canonicalDownloadsDir,
+    'immutable v1.6.3 renderer-ready directory real path');
+  return expectedPath;
+}
+
+function immutableV163RendererReadyTemporaryArtifacts(launched) {
+  const rendererReadyPath = assertImmutableV163RendererReadyScope(launched);
+  const directory = path.dirname(rendererReadyPath);
+  const prefix = `${path.basename(rendererReadyPath)}.`;
+  return fs.readdirSync(directory)
+    .filter(name => name.startsWith(prefix) && name.endsWith('.tmp'))
+    .map(name => path.join(directory, name));
+}
+
+function assertImmutableV163RendererReadySignal(launched, expectedPid, attemptStartedAtMs) {
+  assert(Number.isSafeInteger(expectedPid) && expectedPid > 0,
+    `The immutable v1.6.3 renderer-ready PID was invalid: ${expectedPid}`);
+  assert(Number.isSafeInteger(attemptStartedAtMs) && attemptStartedAtMs > 0,
+    'The immutable v1.6.3 renderer-ready attempt time was invalid.');
+  const expectedPath = assertImmutableV163RendererReadyScope(launched);
+  const expectedDownloadsDir = path.dirname(expectedPath);
+  const state = fs.lstatSync(expectedPath, { throwIfNoEntry: false });
+  assert(state && state.isFile() && !state.isSymbolicLink(),
+    `The immutable v1.6.3 renderer-ready signal was missing or unsafe: ${expectedPath}`);
+  const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
+  const canonicalSignalPath = canonicalExistingPath(expectedPath);
+  assert.equal(path.dirname(canonicalSignalPath), canonicalDownloadsDir,
+    'The immutable v1.6.3 renderer-ready signal escaped its exact direct-child path.');
+  assertPathWithin(canonicalExistingPath(testRoot), canonicalSignalPath,
+    'immutable v1.6.3 renderer-ready real path');
+  assert(state.mtimeMs >= attemptStartedAtMs - 2_000 && state.mtimeMs <= Date.now() + 5_000,
+    `The immutable v1.6.3 renderer-ready signal was not written by this attempt: ${state.mtime.toISOString()}`);
+  const raw = fs.readFileSync(expectedPath, 'utf8');
+  assert(raw && !raw.startsWith('\uFEFF') && !/[\r\n]/.test(raw),
+    'The immutable v1.6.3 renderer-ready signal was not exact compact UTF-8 JSON.');
+  const signal = JSON.parse(raw);
+  assert(signal && typeof signal === 'object' && !Array.isArray(signal),
+    'The immutable v1.6.3 renderer-ready payload was not an object.');
+  assert.deepStrictEqual(Object.keys(signal), ['token', 'pid', 'version', 'rendererReadyAt'],
+    'The immutable v1.6.3 renderer-ready payload keys or order changed.');
+  assert.equal(signal.token, launched.rendererReadyToken,
+    'The immutable v1.6.3 renderer-ready token did not match this launch.');
+  assert.equal(signal.pid, expectedPid,
+    'The immutable v1.6.3 renderer-ready signal identified another process.');
+  assert.equal(signal.version, bridgeVersion,
+    'The immutable v1.6.3 renderer-ready signal reported another version.');
+  assert.match(String(signal.rendererReadyAt || ''), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    'The immutable v1.6.3 renderer-ready timestamp was not canonical ISO UTC.');
+  const rendererReadyAtMs = Date.parse(signal.rendererReadyAt);
+  assert.equal(new Date(rendererReadyAtMs).toISOString(), signal.rendererReadyAt,
+    'The immutable v1.6.3 renderer-ready timestamp did not round-trip exactly.');
+  assert(rendererReadyAtMs >= attemptStartedAtMs - 2_000 && rendererReadyAtMs <= Date.now() + 5_000,
+    `The immutable v1.6.3 renderer-ready timestamp escaped this fresh attempt: ${signal.rendererReadyAt}`);
+  assert.equal(raw, JSON.stringify({
+    token: launched.rendererReadyToken,
+    pid: expectedPid,
+    version: bridgeVersion,
+    rendererReadyAt: signal.rendererReadyAt,
+  }), 'The immutable v1.6.3 renderer-ready raw bytes changed.');
+  assert.deepStrictEqual(immutableV163RendererReadyTemporaryArtifacts(launched), [],
+    'An immutable v1.6.3 renderer-ready temporary artifact remained.');
+  const processRecord = exactProcessRecord(expectedPid);
+  const processCreatedAtMs = Date.parse(processRecord.createdAt);
+  assert(processCreatedAtMs >= attemptStartedAtMs - 2_000 && processCreatedAtMs <= rendererReadyAtMs + 1_000,
+    `The immutable v1.6.3 renderer-ready PID creation time was not bound to the signal: ${processRecord.createdAt}`);
+  launched.integrationRendererReadyTemporaryPath = `${expectedPath}.${expectedPid}.tmp`;
+  return Object.freeze({ raw, signal, state, processRecord });
+}
+
+async function waitForImmutableV163RendererReadySignal(launched, expectedPid, attemptStartedAtMs, timeoutMs = 60_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    assert.equal(processAlive(expectedPid), true,
+      `Immutable v1.6.3 relaunch PID ${expectedPid} exited before renderer readiness.`);
+    if (fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }) !== undefined) {
+      return assertImmutableV163RendererReadySignal(launched, expectedPid, attemptStartedAtMs);
+    }
+    const temporaryArtifacts = immutableV163RendererReadyTemporaryArtifacts(launched);
+    if (temporaryArtifacts.length) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      continue;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Immutable v1.6.3 relaunch PID ${expectedPid} did not produce its exact renderer-ready signal.`);
+}
+
+async function waitForImmutableV163UnloggedRendererReadySignal(launched, attemptStartedAtMs, timeoutMs = 60_000) {
+  assertImmutableV163RendererReadyScope(launched);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }) !== undefined) {
+      const raw = fs.readFileSync(launched.rendererReadyPath, 'utf8');
+      const candidate = JSON.parse(raw);
+      assert(candidate && typeof candidate === 'object' && !Array.isArray(candidate),
+        'The unlogged immutable v1.6.3 renderer-ready candidate was not an object.');
+      assert(Number.isSafeInteger(candidate.pid) && candidate.pid > 0,
+        'The unlogged immutable v1.6.3 renderer-ready PID was invalid.');
+      return assertImmutableV163RendererReadySignal(launched, candidate.pid, attemptStartedAtMs);
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('The unlogged immutable v1.6.3 relaunch did not produce an exact renderer-ready signal.');
+}
+
+async function classifyImmutableV163StageFourRelaunch(
+  launched,
+  attemptStartedAtMs,
+  initialEvidencePresent = false,
+  timeoutMs = 15_000,
+  stableAbsenceMs = 5_000,
+) {
+  assertImmutableV163RendererReadyScope(launched);
+  assert.equal(typeof initialEvidencePresent, 'boolean',
+    'The immutable v1.6.3 stage-four initial evidence flag was invalid.');
+  if (initialEvidencePresent) {
+    const evidence = await waitForImmutableV163UnloggedRendererReadySignal(launched, attemptStartedAtMs);
+    return Object.freeze({ pid: evidence.signal.pid, evidence });
+  }
+  const startedAt = Date.now();
+  let absentSince = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    const rendererReadyExists = fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }) !== undefined;
+    const temporaryArtifacts = immutableV163RendererReadyTemporaryArtifacts(launched);
+    const installedProcesses = runningProcessesUnderDirectory(installDir);
+    const nativeProfileUsagePresent = immutableBridgeNativeProfileUsagePresent();
+    if (rendererReadyExists || temporaryArtifacts.length || installedProcesses.length || nativeProfileUsagePresent) {
+      const evidence = await waitForImmutableV163UnloggedRendererReadySignal(launched, attemptStartedAtMs);
+      return Object.freeze({ pid: evidence.signal.pid, evidence });
+    }
+    if (!absentSince) absentSince = Date.now();
+    if (Date.now() - absentSince >= stableAbsenceMs) {
+      assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
+        'An immutable v1.6.3 stage-four relaunch appeared after the stable-absence window.');
+      assert.equal(fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }), undefined,
+        'An immutable v1.6.3 stage-four renderer-ready signal appeared after the stable-absence window.');
+      assert.deepStrictEqual(immutableV163RendererReadyTemporaryArtifacts(launched), [],
+        'An immutable v1.6.3 stage-four renderer temporary artifact appeared after the stable-absence window.');
+      assertImmutableBridgeNativeProfileUnused();
+      return null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('Immutable v1.6.3 stage-four relaunch evidence did not reach a stable authenticated outcome.');
+}
+
+async function waitForStableImmutableV163RendererReadyAbsence(launched, timeoutMs = 5_000, stableMs = 1_500) {
+  const startedAt = Date.now();
+  let absentSince = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    const signalAbsent = fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }) === undefined;
+    const temporaryArtifacts = immutableV163RendererReadyTemporaryArtifacts(launched);
+    if (signalAbsent && temporaryArtifacts.length === 0) {
+      if (!absentSince) absentSince = Date.now();
+      if (Date.now() - absentSince >= stableMs) return;
+    } else {
+      absentSince = 0;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Immutable v1.6.3 renderer-ready artifacts did not remain absent: ${launched.rendererReadyPath}`);
 }
 
 async function waitForProcessesReferencingPathExit(file, label, timeoutMs = 30_000) {
@@ -1050,7 +1412,26 @@ async function waitForProcessesReferencingPathExit(file, label, timeoutMs = 30_0
   throw new Error(`${label} processes remained after the updater completed: ${remaining.join(',')}`);
 }
 
+async function waitForStableExactProcessExit(pid, label, timeoutMs = 30_000) {
+  if (!pid) return;
+  assert(Number.isSafeInteger(pid) && pid > 0, `${label} tracked PID was invalid: ${pid}`);
+  const startedAt = Date.now();
+  let absentChecks = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (processAlive(pid)) {
+      absentChecks = 0;
+    } else {
+      absentChecks += 1;
+      if (absentChecks >= 3) return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`${label} tracked PID remained or did not reach stable absence: ${pid}`);
+}
+
 async function waitForUpdateProcessCleanup(launched, timeoutMs = 30_000) {
+  await waitForStableExactProcessExit(launched.integrationHelperPid, 'Update helper', timeoutMs);
+  await waitForStableExactProcessExit(launched.integrationBootstrapPid, 'Update bootstrap', timeoutMs);
   await waitForProcessesReferencingPathExit(launched.helperPath, 'Update helper', timeoutMs);
   await waitForProcessesReferencingPathExit(launched.bootstrapPath, 'Update bootstrap', timeoutMs);
 }
@@ -1115,32 +1496,23 @@ function assertImmutableV163ReadyRaceLog(launched, options) {
 
   assert(Number.isSafeInteger(options.parentPid) && options.parentPid > 0,
     'The immutable ready-race parent PID was invalid.');
-  const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23`;
-  const expectedInterruptedLog = `\uFEFF${expectedStart}\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
-  const expectedCompletedInstallerLog = `\uFEFF${expectedStart}\r\nexitCode=0\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
-  const expectedLogs = [expectedInterruptedLog, expectedCompletedInstallerLog];
   const log = readLog(expectedLogPath);
-  assert(expectedLogs.includes(log), [
-    'Refusing the historical v1.6.3 restart fallback without one of its two exact forced-termination logs.',
-    `Expected helper start: ${expectedStart}`,
-    'Only an absent NSIS exit or one exact exitCode=0 between helper start and bootstrap error is valid.',
-    `Expected bootstrap error: ${IMMUTABLE_V163_READY_RACE_ERROR}`,
-    log || '(no update log)',
-  ].join('\n'));
-  const lines = logLines(expectedLogPath);
-  const expectedInstallerExits = log === expectedCompletedInstallerLog ? ['exitCode=0'] : [];
-  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), expectedInstallerExits,
-    'The immutable v1.6.3 forced-termination log recorded an unexpected NSIS exit.');
-  assert.deepStrictEqual(fatalLogLines(lines), [],
-    'The immutable v1.6.3 forced-termination log contained another fatal marker.');
-  return log;
+  return parseImmutableV163FirstHopLog(log, {
+    parentPid: options.parentPid,
+    executable: legacyExecutable,
+    version: bridgeVersion,
+    outcome: 'bootstrap-race',
+  });
 }
 
-function removeOwnedImmutableV163ReadyRaceHelperArtifact(
+async function removeOwnedImmutableV163ReadyRaceArtifacts(
   launched,
   options,
   downloadedInstaller,
   detectedReadyRaceLog,
+  parsedReadyRace,
+  authenticatedRelaunchPid = 0,
+  rendererReadyEvidence = null,
 ) {
   assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
     'The immutable v1.6.3 helper artifact exception is only valid on a disposable official candidate runner.');
@@ -1171,8 +1543,10 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
     'The immutable helper artifact exception ran before the bridge executable was installed.');
   assert.equal(packagedMetadata(path.join(installDir, 'resources', 'app.asar')).version, bridgeVersion,
     'The immutable helper artifact exception ran before the bridge app.asar was installed.');
-  const readyRaceLog = assertImmutableV163ReadyRaceLog(launched, options);
-  assert.equal(detectedReadyRaceLog, readyRaceLog,
+  const readyRace = assertImmutableV163ReadyRaceLog(launched, options);
+  assert.deepStrictEqual(readyRace, parsedReadyRace,
+    'The parsed v1.6.3 ready-race state changed before exact artifact cleanup.');
+  assert.equal(detectedReadyRaceLog, readyRace.rawLog,
     'The caught v1.6.3 ready-race log did not match the exact same-run fallback log.');
 
   const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
@@ -1198,8 +1572,15 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
     'The immutable v1.6.23 installer process was still running before helper artifact cleanup.');
   assert.deepStrictEqual(runningProcessIdsReferencing(downloadedInstaller), [],
     'A process still referenced the immutable v1.6.23 installer before helper artifact cleanup.');
-  assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
-    'An installed app process was running before the authenticated legacy fallback relaunch.');
+  if (authenticatedRelaunchPid) {
+    assert.equal(processAlive(authenticatedRelaunchPid), true,
+      'The authenticated immutable v1.6.3 relaunch exited before artifact cleanup.');
+    assert(runningProcessesUnderDirectory(installDir).some(record => record.pid === authenticatedRelaunchPid),
+      'The authenticated immutable v1.6.3 relaunch was absent from the installed process tree.');
+  } else {
+    assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
+      'An installed app process was running before the authenticated legacy fallback relaunch.');
+  }
   assertPathWithin(testRoot, expectedHelperPath, 'immutable v1.6.3 helper artifact');
   const downloadsState = fs.lstatSync(expectedDownloadsDir, { throwIfNoEntry: false });
   assert(downloadsState && downloadsState.isDirectory() && !downloadsState.isSymbolicLink(),
@@ -1215,22 +1596,32 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
   assert.equal(path.dirname(canonicalDownloadedInstaller), canonicalDownloadsDir,
     'The immutable helper artifact downloaded installer escaped its exact first-hop directory.');
   const helperState = fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false });
-  assert(helperState !== undefined,
-    `The immutable v1.6.3 forced-termination helper residue was unexpectedly absent: ${expectedHelperPath}`);
-  assert(helperState.isFile() && !helperState.isSymbolicLink(),
-    `Refusing to remove a changed immutable v1.6.3 helper artifact: ${expectedHelperPath}`);
-  const canonicalHelperPath = canonicalExistingPath(expectedHelperPath);
-  assert.equal(path.dirname(canonicalHelperPath), canonicalDownloadsDir,
-    'The immutable v1.6.3 helper artifact escaped its exact first-hop directory.');
-  assertPathWithin(canonicalTestRoot, canonicalHelperPath,
-    'immutable v1.6.3 helper artifact real path');
-  assert.equal(typeof options.installerModule.WINDOWS_UPDATE_HELPER, 'string',
-    'The official v1.6.3 packaged helper source was unavailable.');
-  const expectedBytes = Buffer.from(`\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, 'utf8');
-  assert(expectedBytes.length > 3, 'The official v1.6.3 packaged helper source was empty.');
-  assert.equal(helperState.size, expectedBytes.length, 'The immutable v1.6.3 helper artifact size changed.');
-  const expectedDigest = crypto.createHash('sha256').update(expectedBytes).digest('hex');
-  assert.equal(sha256(expectedHelperPath), expectedDigest, 'The immutable v1.6.3 helper artifact bytes changed.');
+  const helperMustRemain = readyRace.helperStage < 8;
+  const helperMustSelfDelete = readyRace.bootstrapError === IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR;
+  if (helperMustRemain) {
+    assert(helperState !== undefined,
+      `The partial immutable v1.6.3 forced-termination helper residue was absent: ${expectedHelperPath}`);
+  }
+  if (helperMustSelfDelete) {
+    assert.equal(helperState, undefined,
+      'A naturally exited immutable v1.6.3 helper failed to self-delete.');
+  }
+  if (helperState !== undefined) {
+    assert(helperState.isFile() && !helperState.isSymbolicLink(),
+      `Refusing to remove a changed immutable v1.6.3 helper artifact: ${expectedHelperPath}`);
+    const canonicalHelperPath = canonicalExistingPath(expectedHelperPath);
+    assert.equal(path.dirname(canonicalHelperPath), canonicalDownloadsDir,
+      'The immutable v1.6.3 helper artifact escaped its exact first-hop directory.');
+    assertPathWithin(canonicalTestRoot, canonicalHelperPath,
+      'immutable v1.6.3 helper artifact real path');
+    assert.equal(typeof options.installerModule.WINDOWS_UPDATE_HELPER, 'string',
+      'The official v1.6.3 packaged helper source was unavailable.');
+    const expectedBytes = Buffer.from(`\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, 'utf8');
+    assert(expectedBytes.length > 3, 'The official v1.6.3 packaged helper source was empty.');
+    assert.equal(helperState.size, expectedBytes.length, 'The immutable v1.6.3 helper artifact size changed.');
+    const expectedDigest = crypto.createHash('sha256').update(expectedBytes).digest('hex');
+    assert.equal(sha256(expectedHelperPath), expectedDigest, 'The immutable v1.6.3 helper artifact bytes changed.');
+  }
   assert.deepStrictEqual(runningProcessIdsReferencing(expectedHelperPath), [],
     'A process still referenced the immutable v1.6.3 helper artifact.');
   assert.deepStrictEqual(runningProcessIdsReferencing(launched.bootstrapPath), [],
@@ -1238,7 +1629,6 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
   for (const [label, file] of [
     ['bootstrap', launched.bootstrapPath],
     ['ready signal', launched.readyPath],
-    ['renderer-ready signal', launched.rendererReadyPath],
     ['helper PID sidecar', launched.helperPidPath],
     ['integration ready signal', launched.integrationReadyPath],
     ['integration helper PID sidecar', launched.integrationHelperPidPath],
@@ -1247,11 +1637,46 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(
     assert.equal(fs.lstatSync(file, { throwIfNoEntry: false }), undefined,
       `Another immutable v1.6.3 ${label} artifact remained before exact helper cleanup: ${file}`);
   }
-  fs.unlinkSync(expectedHelperPath);
+  assertImmutableV163RendererReadyScope(launched);
+  const rendererReadyState = fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false });
+  const partialAuthenticatedRelaunch = authenticatedRelaunchPid > 0 && readyRace.helperStage < 8;
+  if (partialAuthenticatedRelaunch) {
+    assert(rendererReadyState !== undefined,
+      'A partial immutable v1.6.3 relaunch lacked its exact renderer-ready signal.');
+  }
+  if (!authenticatedRelaunchPid || readyRace.bootstrapError === IMMUTABLE_V163_BOOTSTRAP_EXIT_ZERO_ERROR) {
+    assert.equal(rendererReadyState, undefined,
+      'An immutable v1.6.3 no-relaunch or naturally completed state retained a renderer-ready signal.');
+  }
+  if (rendererReadyState !== undefined) {
+    const verifiedSignal = assertImmutableV163RendererReadySignal(
+      launched,
+      authenticatedRelaunchPid,
+      launched.integrationAttemptStartedAtMs,
+    );
+    if (rendererReadyEvidence) {
+      assert.equal(verifiedSignal.raw, rendererReadyEvidence.raw,
+        'The immutable v1.6.3 renderer-ready bytes changed before exact cleanup.');
+    }
+    fs.unlinkSync(launched.rendererReadyPath);
+  }
+  assert.deepStrictEqual(immutableV163RendererReadyTemporaryArtifacts(launched), [],
+    'An immutable v1.6.3 renderer-ready temporary artifact remained before exact cleanup.');
+  if (helperState !== undefined) fs.unlinkSync(expectedHelperPath);
   assert.equal(fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false }), undefined,
     'The owned immutable v1.6.3 helper artifact remained after exact removal.');
-  console.log('✓ Removed the exact owned v1.6.3 helper residue after the verified ready-file forced termination.');
-  return readyRaceLog;
+  await waitForStableImmutableV163RendererReadyAbsence(launched);
+  assert.equal(assertImmutableV163ReadyRaceLog(launched, options).rawLog, readyRace.rawLog,
+    'The immutable v1.6.3 ready-race log changed during exact artifact cleanup.');
+  console.log('✓ Verified and removed only exact owned v1.6.3 ready-race residues.');
+  return readyRace.rawLog;
+}
+
+function immutableV163BootstrapRaceError(logPath) {
+  const error = new Error(`The frozen legacy bootstrap raced its packaged helper:\n${readLog(logPath)}`);
+  error.code = 'LEGACY_BOOTSTRAP_READY_RACE';
+  error.updateLog = readLog(logPath);
+  return error;
 }
 
 async function waitForRelaunch(
@@ -1265,11 +1690,12 @@ async function waitForRelaunch(
   while (Date.now() - startedAt < timeoutMs) {
     const lines = logLines(logPath);
     const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
-    if (bootstrapErrors.some(line => line === IMMUTABLE_V163_READY_RACE_ERROR)) {
-      const error = new Error(`The frozen legacy bootstrap lost its ready-file race:\n${readLog(logPath)}`);
-      error.code = 'LEGACY_BOOTSTRAP_READY_RACE';
-      error.updateLog = readLog(logPath);
-      throw error;
+    if (bootstrapErrors.length) {
+      if (nativeProfilePolicy !== null) {
+        assert.strictEqual(nativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+          'The immutable bridge bootstrap error received an unknown native profile policy.');
+      }
+      throw immutableV163BootstrapRaceError(logPath);
     }
     const fatal = fatalLogLines(lines);
     if (fatal.length) throw new Error(`Updater helper failed before relaunch: ${fatal.join(', ')}\n${readLog(logPath)}`);
@@ -1421,8 +1847,10 @@ async function installWithPackagedUpdater(options) {
     'immutableBridgeNativeProfilePolicy',
   );
   let launched = null;
+  let immutableBootstrapChild = null;
+  const attemptStartedAtMs = Date.now();
   try {
-    launched = await options.installerModule.launchDownloadedUpdate({
+    const launchOptions = {
       installerPath: downloadedInstaller,
       downloadsDir,
       platform: 'win32',
@@ -1437,8 +1865,36 @@ async function installWithPackagedUpdater(options) {
       // the helper-ready signal. Keep the signal visible long enough for its
       // bootstrap process when exercising the packaged current updater here.
       beforeAutomaticInstall: async () => new Promise(resolve => setTimeout(resolve, 500)),
-    });
+    };
+    if (hasImmutableBridgeNativeProfilePolicy) {
+      assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+        'The immutable v1.6.3 launch received an unknown first-hop policy.');
+      launchOptions.spawn = (command, args, spawnOptions) => {
+        assert.equal(immutableBootstrapChild, null,
+          'The immutable v1.6.3 updater spawned more than one bootstrap process.');
+        immutableBootstrapChild = spawn(command, args, spawnOptions);
+        return immutableBootstrapChild;
+      };
+    }
+    launched = await options.installerModule.launchDownloadedUpdate(launchOptions);
     launchedUpdates.push(launched);
+    if (hasImmutableBridgeNativeProfilePolicy) {
+      assert(immutableBootstrapChild && Number.isSafeInteger(immutableBootstrapChild.pid) && immutableBootstrapChild.pid > 0,
+        'The immutable v1.6.3 bootstrap PID was unavailable.');
+      launched.integrationAttemptStartedAtMs = attemptStartedAtMs;
+      launched.integrationBootstrapPid = immutableBootstrapChild.pid;
+      const helperRecord = exactChildProcessRecord(immutableBootstrapChild.pid, launched.helperPath);
+      assert.equal(canonicalExistingPath(helperRecord.executablePath), canonicalExistingPath(powershell),
+        'The immutable v1.6.3 helper did not run under the exact Windows PowerShell executable.');
+      assert(helperRecord.commandLine.toLowerCase().includes(launched.helperPath.toLowerCase()),
+        'The immutable v1.6.3 helper command line lost its exact script path.');
+      assert(helperRecord.commandLine.toLowerCase().includes(downloadedInstaller.toLowerCase()),
+        'The immutable v1.6.3 helper command line lost its exact downloaded installer path.');
+      assert(Date.parse(helperRecord.createdAt) >= attemptStartedAtMs - 2_000,
+        `The immutable v1.6.3 helper was not created by this fresh attempt: ${helperRecord.createdAt}`);
+      launched.integrationHelperPid = helperRecord.pid;
+      launched.integrationHelperIdentity = helperRecord;
+    }
     assert.equal(processAlive(options.parentPid), true, 'The packaged helper did not wait for its real parent process.');
     assert.equal(executableVersion(options.appPath), options.currentVersion, 'The installer ran before the parent process exited.');
   } finally {
@@ -1460,40 +1916,116 @@ async function installWithPackagedUpdater(options) {
     await waitForInstalledPackage(options.relaunchAppPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
     await waitForExactExecutableProcessExit(downloadedInstaller, 'Packaged installer');
+    if (hasImmutableBridgeNativeProfilePolicy
+      && linesStarting(logLines(launched.logPath), 'bootstrapError=').length) {
+      throw immutableV163BootstrapRaceError(launched.logPath);
+    }
     await waitForUpdateArtifactCleanup(launched);
     if (hasImmutableBridgeNativeProfilePolicy) {
-      assertCompletedImmutableV163BootstrapAckInstall(launched, options, downloadedInstaller, pid);
+      await assertCompletedImmutableV163BootstrapAckInstall(launched, options, downloadedInstaller, pid);
     } else {
       assertCompletedInstall(launched.logPath, options);
     }
     return { pid, launched, parentPid: options.parentPid, legacyFallback: false };
   } catch (error) {
     if (!options.allowLegacyBootstrapFallback || error.code !== 'LEGACY_BOOTSTRAP_READY_RACE') throw error;
-    // v1.6.3 has two consumers racing to remove the same helper-ready file.
-    // Release metadata cannot change that already-installed bootstrap. Its
-    // bootstrap can force-terminate the helper while the NSIS child runs or
-    // just after it records exitCode=0 but before final self-delete. Accept
-    // only those two exact historical logs after the downloaded installer has
-    // exited and both the EXE and app.asar remain stably at 1.6.23. Then model
-    // the only required user fallback: reopen the updated app.
+    assert.strictEqual(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+      'The immutable v1.6.3 bootstrap-race handler received an unknown first-hop policy.');
+    // The frozen app and bootstrap both consume one non-authenticated ready
+    // file. If the app wins, the bootstrap can terminate the helper at any
+    // complete official log boundary, including the gap immediately after
+    // Start-Process but before relaunchStarted is appended. Classify only the
+    // final raw log after the exact tracked helper/bootstrap and installer are
+    // gone, then bind any surviving relaunch to its capability JSON, process
+    // tree, native profile, creation time, and live main window.
     await waitForInstalledPackage(options.appPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
     await waitForExactExecutableProcessExit(downloadedInstaller, 'Immutable v1.6.23 installer');
     await waitForInstalledPackage(options.appPath, options.expectedVersion);
-    assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
-      'An installed app process was running before the authenticated legacy fallback relaunch.');
-    const readyRaceLog = String(error.updateLog || '');
-    removeOwnedImmutableV163ReadyRaceHelperArtifact(
+    assert.equal(typeof error.updateLog, 'string', 'The caught immutable v1.6.3 raw log was not a primitive string.');
+    const readyRaceLog = error.updateLog;
+    assert.equal(readLog(launched.logPath), readyRaceLog,
+      'The immutable v1.6.3 ready-race log changed before tracked process cleanup completed.');
+    const readyRace = assertImmutableV163ReadyRaceLog(launched, options);
+    assert.equal(readyRace.rawLog, readyRaceLog,
+      'The immutable v1.6.3 ready-race parser did not classify the caught same-run log.');
+
+    assertImmutableV163RendererReadyScope(launched);
+    const installedProcesses = runningProcessesUnderDirectory(installDir);
+    const rendererReadyExists = fs.lstatSync(launched.rendererReadyPath, { throwIfNoEntry: false }) !== undefined;
+    let authenticatedRelaunchPid = 0;
+    let rendererReadyEvidence = null;
+    if (readyRace.helperStage >= 5) {
+      authenticatedRelaunchPid = readyRace.relaunchPid;
+      if (readyRace.helperStage < 8) {
+        rendererReadyEvidence = await waitForImmutableV163RendererReadySignal(
+          launched,
+          authenticatedRelaunchPid,
+          launched.integrationAttemptStartedAtMs,
+        );
+      } else if (rendererReadyExists) {
+        rendererReadyEvidence = assertImmutableV163RendererReadySignal(
+          launched,
+          authenticatedRelaunchPid,
+          launched.integrationAttemptStartedAtMs,
+        );
+      }
+    } else if (readyRace.helperStage === 4) {
+      const initialStageFourEvidence = Boolean(
+        installedProcesses.length
+        || rendererReadyExists
+        || immutableV163RendererReadyTemporaryArtifacts(launched).length
+        || immutableBridgeNativeProfileUsagePresent()
+      );
+      const stageFourRelaunch = await classifyImmutableV163StageFourRelaunch(
+        launched,
+        launched.integrationAttemptStartedAtMs,
+        initialStageFourEvidence,
+      );
+      if (stageFourRelaunch) {
+        rendererReadyEvidence = stageFourRelaunch.evidence;
+        authenticatedRelaunchPid = stageFourRelaunch.pid;
+      }
+    } else {
+      assert.deepStrictEqual(installedProcesses, [],
+        'An unauthenticated installed app process existed before the legacy fallback relaunch.');
+      assert.equal(rendererReadyExists, false,
+        'An unauthenticated renderer-ready signal existed before the legacy fallback relaunch.');
+      assert.deepStrictEqual(immutableV163RendererReadyTemporaryArtifacts(launched), [],
+        'An unauthenticated renderer-ready temporary artifact existed before the legacy fallback relaunch.');
+      assertImmutableBridgeNativeProfileUnused();
+    }
+    if (authenticatedRelaunchPid) {
+      await assertImmutableV163AuthenticatedProcessTree(
+        authenticatedRelaunchPid,
+        launched.integrationAttemptStartedAtMs,
+        launched.integrationHelperIdentity,
+        readyRace.windowHandle,
+      );
+    }
+
+    await removeOwnedImmutableV163ReadyRaceArtifacts(
       launched,
       options,
       downloadedInstaller,
       readyRaceLog,
+      readyRace,
+      authenticatedRelaunchPid,
+      rendererReadyEvidence,
     );
     await waitForUpdateArtifactCleanup(launched);
-    assert.equal(assertImmutableV163ReadyRaceLog(launched, options), readyRaceLog,
+    assert.equal(assertImmutableV163ReadyRaceLog(launched, options).rawLog, readyRaceLog,
       'The immutable v1.6.3 ready-race log changed during exact artifact cleanup.');
+    if (authenticatedRelaunchPid) {
+      assert.equal(processAlive(authenticatedRelaunchPid), true,
+        'The authenticated immutable v1.6.3 relaunch exited after exact artifact cleanup.');
+      assert.equal(assertImmutableV163ReadyRaceLog(launched, options).rawLog, readyRaceLog,
+        'The immutable v1.6.3 ready-race log changed before continuing the authenticated relaunch.');
+      console.log(`✓ Preserved authenticated immutable ${options.expectedVersion} relaunch PID ${authenticatedRelaunchPid}.`);
+      return { pid: authenticatedRelaunchPid, launched, parentPid: options.parentPid, legacyFallback: false };
+    }
     const fallbackPid = await startInstalledAppWithRendererReady(options.appPath, options.expectedVersion);
-    assert.equal(assertImmutableV163ReadyRaceLog(launched, options), readyRaceLog,
+    assert.equal(assertImmutableV163ReadyRaceLog(launched, options).rawLog, readyRaceLog,
       'The immutable v1.6.3 ready-race log changed during the authenticated fallback relaunch.');
     console.log(`✓ Legacy bootstrap relaunch fallback reopened installed ${options.expectedVersion}.`);
     return { pid: fallbackPid, launched, parentPid: options.parentPid, legacyFallback: true };
