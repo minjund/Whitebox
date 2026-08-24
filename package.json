@@ -91,9 +91,13 @@
     "test:update:mac": "node scripts/mac-update-integration-test.js",
     "test:artifacts:mac": "node scripts/mac-artifact-check.js",
     "test:artifacts:win": "node scripts/windows-artifact-check.js",
+    "test:artifacts:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-check.js",
+    "test:update:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-integration.js",
+    "check:update:legacy": "node scripts/check-legacy-update-channel.js",
     "demo:readme": "electron scripts/readme-demo.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win --publish never",
+    "dist:win:legacy-bridge": "electron-builder --win --publish never --config scripts/legacy-update-bridge.config.js",
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package"

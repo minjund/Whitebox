@@ -5,6 +5,10 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+- Restore updates for installed 1.6.3-1.6.22 Windows clients through an
+  immutable LoadToAgent compatibility bridge, then verify the second hop to
+  the latest Whitebox release against the live GitHub channels.
+
 ## 1.7.0 - 2026-08-13
 
 - Rename the product to Whitebox across the desktop app, CLI, packages,
