@@ -92,6 +92,10 @@ function processAlive(pid) {
 }
 
 function extractModuleTree(asarPath, targetDir, files) {
+  // The installer replaces app.asar in place between hops. @electron/asar
+  // caches archive offsets by path, so invalidate them before reading the
+  // newly installed archive at that same path.
+  asar.uncache(asarPath);
   fs.mkdirSync(targetDir, { recursive: true });
   for (const relative of files) {
     fs.writeFileSync(path.join(targetDir, relative), asar.extractFile(asarPath, `src/${relative}`));
@@ -99,6 +103,7 @@ function extractModuleTree(asarPath, targetDir, files) {
 }
 
 function packagedMetadata(asarPath) {
+  asar.uncache(asarPath);
   return JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8'));
 }
 
