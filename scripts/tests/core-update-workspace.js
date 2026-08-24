@@ -752,6 +752,12 @@ function registerCliAndUpdateTests(context) {
       assert(!integrationSource.includes('$executablePath.StartsWith($directory')
         && !integrationSource.includes('[string]$_.ExecutablePath -ieq $env:WHITEBOX_INTEGRATION_EXECUTABLE'),
       `${label} E2E는 raw WMI 경로 prefix/equality로 프로세스 증거를 먼저 버리면 안 됩니다.`);
+      const exactPathProcessEvidence = integrationSource.slice(
+        integrationSource.indexOf('function runningProcessIds(executable)'),
+        integrationSource.indexOf('function stopProcessTree'),
+      );
+      assert(exactPathProcessEvidence.includes("].join('\\n')"),
+        `${label} E2E의 PowerShell exact-path process query는 각 statement 경계를 보존해야 합니다.`);
       const cleanupEvidence = integrationSource.slice(
         integrationSource.indexOf('function rememberInstalledProcessImageNames'),
         integrationSource.indexOf('function stopProcessesUnderDirectory'),

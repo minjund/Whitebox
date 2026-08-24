@@ -427,7 +427,7 @@ function runningProcessIds(executable) {
     '    ([string]$_.ProcessId) + "|" + $encodedPath',
     '  });',
     '[Console]::Write(($records -join "`n"))',
-  ].join(' ');
+  ].join('\n');
   const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE_NAME: path.basename(executable) },
     timeout: 30_000,
