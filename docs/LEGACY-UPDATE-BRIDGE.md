@@ -29,6 +29,16 @@ package, requires the bridge's legacy relaunch handshake, then executes the
 helper extracted from the installed bridge and requires the current Whitebox
 relaunch handshake before exposing the bridge artifact for download.
 
+The frozen v1.6.3 bootstrap and app process both watch and remove the same
+helper-ready file. If the app wins that race, the bootstrap can time out after
+the silent NSIS child has already started. The integration accepts only that
+exact historical timeout from the same fresh helper log, requires exactly one
+successful installer exit (`exitCode=0`) with no install, version, or relaunch
+failure marker, then requires both the installed EXE and packaged `app.asar` to
+report 1.6.23 before reopening the updated app. In that case the user may need
+to start LoadToAgent once more, but never needs to download or run an installer
+manually. Every other first-hop failure remains fatal.
+
 Run that workflow only from the fully reviewed commit, passing its complete
 40-character commit SHA as `source_sha`. Keep the Actions run summary with the
 artifact: it records both that source commit and the exact installer SHA-256.

@@ -121,6 +121,12 @@ async function waitForRelaunch(logPath, expectedVersion, timeoutMs = 120_000) {
       await new Promise(resolve => setTimeout(resolve, 500));
       return Number(ready[1]);
     }
+    if (/bootstrapError=.*10초 안에 준비되지 않았습니다/.test(log)) {
+      const error = new Error(`The frozen legacy bootstrap lost its ready-file race:\n${log}`);
+      error.code = 'LEGACY_BOOTSTRAP_READY_RACE';
+      error.updateLog = log;
+      throw error;
+    }
     if (/relaunchError=renderer did not become ready after three attempts/.test(log)) {
       throw new Error(`Updater helper could not relaunch ${expectedVersion}:\n${log}`);
     }
@@ -128,6 +134,73 @@ async function waitForRelaunch(logPath, expectedVersion, timeoutMs = 120_000) {
   }
   const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '(no update log)';
   throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${log}`);
+}
+
+function assertCleanLegacyInstallBeforeRestartFallback(logPath, options) {
+  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+  const lines = log
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\uFEFF/, '').trim())
+    .filter(Boolean);
+  const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=${options.expectedVersion}`;
+  const helperStarts = lines.filter(line => line.startsWith('helperStarted='));
+  const installerExits = lines.filter(line => line.startsWith('exitCode='));
+  const bootstrapErrors = lines.filter(line => line.startsWith('bootstrapError='));
+  const expectedBootstrapError = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
+  const failureLines = lines.filter(line => (
+    line.startsWith('installError=')
+    || line === 'updateFailed=true'
+    || line === 'versionMismatch=true'
+    || line.startsWith('relaunchError=')
+    || line.startsWith('recoveryRelaunchError=')
+    || line.startsWith('rendererReadyTimeout=true')
+    || line.startsWith('relaunchExited=true')
+  ));
+  const clean = helperStarts.length === 1
+    && helperStarts[0] === expectedStart
+    && installerExits.length === 1
+    && installerExits[0] === 'exitCode=0'
+    && bootstrapErrors.length === 1
+    && bootstrapErrors[0] === expectedBootstrapError
+    && failureLines.length === 0;
+  if (!clean) {
+    throw new Error([
+      'Refusing the legacy restart fallback without one clean, completed bridge installation.',
+      `Expected helper start: ${expectedStart}`,
+      `Observed fatal markers: ${failureLines.join(', ') || '(none)'}`,
+      log || '(no update log)',
+    ].join('\n'));
+  }
+}
+
+async function waitForInstalledPackage(appPath, expectedVersion, timeoutMs = 120_000) {
+  const appAsar = path.join(path.dirname(appPath), 'resources', 'app.asar');
+  const startedAt = Date.now();
+  let stableChecks = 0;
+  let lastVersion = '';
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastVersion = executableVersion(appPath);
+      const metadata = packagedMetadata(appAsar);
+      if (lastVersion === expectedVersion && metadata.version === expectedVersion) {
+        stableChecks += 1;
+        if (stableChecks >= 3) return;
+      } else {
+        stableChecks = 0;
+      }
+      lastError = null;
+    } catch (error) {
+      stableChecks = 0;
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error([
+    `Timed out waiting for the installed package ${expectedVersion}.`,
+    `Last executable version: ${lastVersion || '(unavailable)'}`,
+    lastError && (lastError.stack || lastError.message),
+  ].filter(Boolean).join('\n'));
 }
 
 async function downloadWithPackagedUpdater(options, downloadsDir) {
@@ -205,6 +278,10 @@ async function installWithPackagedUpdater(options) {
       allowUnsignedWindowsUpdates: options.allowUnsignedWindowsUpdates,
       environment: process.env,
       readyTimeoutMs: 15_000,
+      // Current Whitebox performs real shutdown preparation before deleting
+      // the helper-ready signal. Keep the signal visible long enough for its
+      // bootstrap process when exercising the packaged current updater here.
+      beforeAutomaticInstall: async () => new Promise(resolve => setTimeout(resolve, 500)),
     });
     assert.equal(processAlive(options.parentPid), true, 'The packaged helper did not wait for its real parent process.');
     assert.equal(executableVersion(options.appPath), options.currentVersion, 'The installer ran before the parent process exited.');
@@ -216,7 +293,22 @@ async function installWithPackagedUpdater(options) {
   }
   assert.equal(processAlive(options.parentPid), false, 'The installed parent app did not exit before replacement.');
   assert.equal(launched.mode, 'automatic');
-  return waitForRelaunch(launched.logPath, options.expectedVersion);
+  try {
+    return await waitForRelaunch(launched.logPath, options.expectedVersion);
+  } catch (error) {
+    if (!options.allowLegacyBootstrapFallback || error.code !== 'LEGACY_BOOTSTRAP_READY_RACE') throw error;
+    // v1.6.3 has two consumers racing to remove the same helper-ready file.
+    // Release metadata cannot change that already-installed bootstrap. Accept
+    // the fallback only after the same fresh helper logged one successful NSIS
+    // exit with no fatal marker. Then prove both the EXE and app.asar reached
+    // 1.6.23 and model the only required user fallback: reopen the updated app.
+    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+    await waitForInstalledPackage(options.appPath, options.expectedVersion);
+    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+    const fallbackPid = await startInstalledApp(options.appPath);
+    console.log(`✓ Legacy bootstrap relaunch fallback reopened installed ${options.expectedVersion}.`);
+    return fallbackPid;
+  }
 }
 
 function stopProcessTree(pid) {
@@ -288,6 +380,7 @@ async function main() {
     allowUnsignedWindowsUpdates: v163AllowsUnsigned,
     appPath: legacyExecutable,
     expectedVersion: bridgeVersion,
+    allowLegacyBootstrapFallback: true,
   });
   existingFile(legacyExecutable, 'upgraded legacy bridge executable');
   assert.equal(executableVersion(legacyExecutable), bridgeVersion);
