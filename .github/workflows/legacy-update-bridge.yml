@@ -1,0 +1,171 @@
+name: Legacy Update Bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full audited Whitebox commit SHA to package as the immutable 1.6.23 bridge
+        required: true
+        type: string
+      publish_bridge:
+        description: Publish this exact verified artifact to minjund/LodeToAgent
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build_windows_bridge:
+    runs-on: windows-latest
+    outputs:
+      bridge_digest: ${{ steps.bridge_metadata.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - name: Verify the explicitly pinned source commit
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full 40-character commit SHA' }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw "Checked out $actual instead of $env:EXPECTED_SOURCE_SHA" }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:source
+      - run: npm test
+      - run: npm run dist:win:legacy-bridge
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - run: npm run test:artifacts:win:legacy-bridge
+        env:
+          WHITEBOX_ALLOW_UNSIGNED: "true"
+      - name: Download the immutable v1.6.3 Windows installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-v163-source'
+          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+          gh release download v1.6.3 --repo minjund/Whitebox --pattern LoadToAgent-Setup-1.6.3.exe --dir $sourceDir
+          "WHITEBOX_V163_INSTALLER=$(Join-Path $sourceDir 'LoadToAgent-Setup-1.6.3.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download the pinned Whitebox second-hop installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $targetDir = Join-Path $env:RUNNER_TEMP 'whitebox-v174-target'
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          gh release download v1.7.4 --repo minjund/Whitebox --pattern Whitebox-Setup-1.7.4.exe --dir $targetDir
+          "WHITEBOX_CURRENT_INSTALLER=$(Join-Path $targetDir 'Whitebox-Setup-1.7.4.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Verify both real installer hops and relaunch handshakes
+        timeout-minutes: 8
+        run: npm run test:update:win:legacy-bridge
+      - name: Record the exact bridge digest and source commit
+        id: bridge_metadata
+        shell: pwsh
+        run: |
+          $installer = 'release-legacy-update-bridge/LoadToAgent-Setup-1.6.23.exe'
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          "digest=sha256:$digest" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "Bridge source: ${{ inputs.source_sha }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Bridge SHA-256: $digest" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: LoadToAgent-legacy-update-bridge-${{ inputs.source_sha }}
+          path: release-legacy-update-bridge/LoadToAgent-Setup-1.6.23.exe
+          if-no-files-found: error
+
+  publish_immutable_bridge:
+    if: ${{ inputs.publish_bridge }}
+    needs: build_windows_bridge
+    runs-on: windows-latest
+    environment: legacy-update-bridge
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: LoadToAgent-legacy-update-bridge-${{ inputs.source_sha }}
+          path: release-legacy-update-bridge
+      - name: Verify the artifact crossing the isolated runner boundary
+        shell: pwsh
+        env:
+          EXPECTED_BRIDGE_DIGEST: ${{ needs.build_windows_bridge.outputs.bridge_digest }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = 'release-legacy-update-bridge/LoadToAgent-Setup-1.6.23.exe'
+          $files = @(Get-ChildItem -LiteralPath 'release-legacy-update-bridge' -File -Recurse)
+          if ($files.Count -ne 1 -or $files[0].FullName -ne (Resolve-Path -LiteralPath $installer).Path) { throw 'The transferred artifact must contain exactly the expected bridge installer' }
+          $actualDigest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($actualDigest -cne $env:EXPECTED_BRIDGE_DIGEST) { throw 'The transferred bridge differs from the E2E-tested artifact' }
+      - name: Publish only this verified artifact to the immutable compatibility release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.LEGACY_RELEASE_TOKEN }}
+          EXPECTED_BRIDGE_DIGEST: ${{ needs.build_windows_bridge.outputs.bridge_digest }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'LEGACY_RELEASE_TOKEN is required to publish the bridge' }
+          $repo = 'minjund/LodeToAgent'
+          $installer = 'release-legacy-update-bridge/LoadToAgent-Setup-1.6.23.exe'
+          $localDigest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($localDigest -cne $env:EXPECTED_BRIDGE_DIGEST) { throw 'The bridge changed before publication' }
+
+          $repository = gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$repo" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $repository.full_name -cne $repo -or $repository.visibility -ne 'public') { throw 'The exact public compatibility repository is not ready' }
+          $immutability = gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$repo/immutable-releases" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $immutability.enabled -ne $true) { throw 'Release immutability must be enabled before creating v1.6.23' }
+
+          gh release view v1.6.23 --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'v1.6.23 already exists; refusing to replace or supersede the bridge' }
+          gh release create v1.6.23 $installer --draft --title 'v1.6.23' --notes 'Immutable compatibility bridge for installed LoadToAgent 1.6.3-1.6.22 clients. Source and current releases remain at https://github.com/minjund/Whitebox.' --repo $repo
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the compatibility draft release' }
+
+          $draft = $null
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            $draft = gh release view v1.6.23 --repo $repo --json isDraft,assets | ConvertFrom-Json
+            if ($LASTEXITCODE -eq 0 -and $draft.isDraft -eq $true -and $draft.assets.Count -eq 1 -and $draft.assets[0].digest -eq $localDigest) { break }
+            Start-Sleep -Seconds 5
+          }
+          if ($draft.isDraft -ne $true -or $draft.assets.Count -ne 1) { throw 'Compatibility draft shape is invalid' }
+          if ($draft.assets[0].name -ne 'LoadToAgent-Setup-1.6.23.exe' -or $draft.assets[0].digest -ne $localDigest) { throw 'Published draft asset is not the exact verified bridge artifact' }
+
+          gh release edit v1.6.23 --draft=false --latest --repo $repo
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the compatibility release' }
+          $published = $null
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            $published = gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$repo/releases/tags/v1.6.23" | ConvertFrom-Json
+            if ($LASTEXITCODE -eq 0 -and $published.immutable -eq $true) { break }
+            Start-Sleep -Seconds 5
+          }
+          if ($published.immutable -ne $true -or $published.assets.Count -ne 1) { throw 'Published bridge release did not become immutable' }
+          if ($published.assets[0].name -ne 'LoadToAgent-Setup-1.6.23.exe' -or $published.assets[0].digest -ne $localDigest) { throw 'Immutable bridge asset differs from the verified artifact' }
+
+  verify_public_channel:
+    if: ${{ inputs.publish_bridge }}
+    needs:
+      - build_windows_bridge
+      - publish_immutable_bridge
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Verify the newly published public two-hop channel
+        env:
+          WAIT_FOR_LEGACY_BRIDGE: "true"
+        run: node scripts/check-legacy-update-channel.js

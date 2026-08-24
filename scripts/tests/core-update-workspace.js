@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { EventEmitter } = require('events');
+const packageMetadata = require('../../package.json');
 const { parseCliArguments, desktopLaunchSpec, readCodexEndpoint } = require('../../bin/whitebox');
 const { providerList, normalizeProvider, modelContextWindow } = require('../../src/providerRegistry');
 const { UpdateManager, compareVersions, normalizeVersion, safeFileName, selectReleaseAsset } = require('../../src/updateManager');
@@ -33,6 +34,20 @@ const { macPathEntries, preferredNvmBin } = require('../../src/platformPath');
 const { ensureMacNodePtyRuntime, unpackedAsarPath } = require('../../src/nodePtyRuntime');
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('../../src/windowsShellIdentity');
 const afterPack = require('../after-pack');
+const legacyBridgeConfig = require('../legacy-update-bridge.config');
+const {
+  BRIDGE_V1623_MAX_CHECK_BYTES,
+  checkLegacyUpdateChannel,
+  fetchRelease,
+} = require('../check-legacy-update-channel');
+const {
+  LEGACY_UPDATE_BRIDGE_ASSET,
+  LEGACY_UPDATE_BRIDGE_VERSION,
+  legacyV163AutomaticInstallPlatform,
+  legacyV163TrustedDownloadUrl,
+  selectLegacyV163ReleaseAsset,
+  validateLegacyUpdatePath,
+} = require('../legacy-update-compatibility');
 
 function macHelperReadyPath(root, token) {
   return path.join(root, `install-update-macos-ready-${token}.json`);
@@ -509,6 +524,155 @@ function registerCliAndUpdateTests(context) {
     assert.equal(compareVersions('9007199254740993.0.0', '9007199254740992.0.0'), 1);
     assert.equal(compareVersions('3.1.0-beta.9007199254740993', '3.1.0-beta.9007199254740992'), 1);
     assert.throws(() => compareVersions('latest', '3.0.0'), /버전 형식/);
+  });
+
+  test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const canonicalAsset = {
+      name: 'Whitebox-Setup-1.7.4.exe',
+      browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe',
+      digest,
+      size: 1024,
+      state: 'uploaded',
+    };
+    const currentRelease = {
+      tag_name: 'v1.7.4',
+      draft: false,
+      prerelease: false,
+      assets: [canonicalAsset],
+    };
+    assert.equal(compareVersions('1.7.4', '1.6.3'), 1);
+    assert.equal(legacyV163TrustedDownloadUrl(canonicalAsset.browser_download_url), false);
+    assert.equal(selectLegacyV163ReleaseAsset(currentRelease.assets, {
+      platform: 'win32', arch: 'x64', version: '1.7.4',
+    }), null, '새 저장소 URL은 이미 배포된 v1.6.3 신뢰 규칙을 통과하면 안 됩니다.');
+
+    const bridgeAsset = {
+      name: LEGACY_UPDATE_BRIDGE_ASSET,
+      browser_download_url: `https://github.com/minjund/LodeToAgent/releases/download/v${LEGACY_UPDATE_BRIDGE_VERSION}/${LEGACY_UPDATE_BRIDGE_ASSET}`,
+      digest,
+      size: 1024,
+      state: 'uploaded',
+    };
+    const bridgeRelease = {
+      tag_name: `v${LEGACY_UPDATE_BRIDGE_VERSION}`,
+      draft: false,
+      prerelease: false,
+      immutable: true,
+      assets: [bridgeAsset],
+    };
+    assert.equal(selectLegacyV163ReleaseAsset(bridgeRelease.assets, {
+      platform: 'win32', arch: 'x64', version: LEGACY_UPDATE_BRIDGE_VERSION,
+    }), bridgeAsset);
+    assert.equal(legacyV163AutomaticInstallPlatform({
+      platform: 'win32', installType: 'desktop', fileName: bridgeAsset.name,
+    }), 'win32');
+    assert.deepStrictEqual(validateLegacyUpdatePath({ bridgeRelease, currentRelease }), {
+      bridgeVersion: LEGACY_UPDATE_BRIDGE_VERSION,
+      bridgeAsset: LEGACY_UPDATE_BRIDGE_ASSET,
+      currentVersion: '1.7.4',
+      currentAsset: canonicalAsset.name,
+    });
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease,
+      currentRelease: {
+        ...currentRelease,
+        assets: [{
+          ...canonicalAsset,
+          name: 'Whitebox-1.7.4-portable.exe',
+          browser_download_url: 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-1.7.4-portable.exe',
+        }],
+      },
+    }), /canonical Whitebox Setup/);
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease,
+      currentRelease: {
+        ...currentRelease,
+        assets: [{ ...canonicalAsset, size: (2 * 1024 * 1024 * 1024) + 1 }],
+      },
+    }), /canonical Whitebox Setup/);
+    assert.equal(selectLegacyV163ReleaseAsset([bridgeAsset], null), null);
+    for (const decoyName of ['Other-Setup-1.7.4.exe', 'Other-Setup-1.7.4-x64.exe']) {
+      const decoy = {
+        ...canonicalAsset,
+        name: decoyName,
+        browser_download_url: `https://github.com/minjund/Whitebox/releases/download/v1.7.4/${decoyName}`,
+      };
+      assert.throws(() => validateLegacyUpdatePath({
+        bridgeRelease,
+        currentRelease: { ...currentRelease, assets: [decoy, canonicalAsset] },
+      }), /canonical Whitebox Setup/);
+    }
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease,
+      currentRelease,
+      expectedCurrentTag: 'v1.7.5',
+    }), /방금 게시한 태그/);
+    assert.equal(legacyBridgeConfig.appId, 'com.wincube.loadtoagent');
+    assert.equal(legacyBridgeConfig.productName, 'LoadToAgent');
+    assert.equal(legacyBridgeConfig.executableName, 'LoadToAgent');
+    assert.equal(legacyBridgeConfig.nsis.guid, 'c5e80817-3fef-5203-be10-660aa7355425');
+    assert.equal(legacyBridgeConfig.nsis.guid, packageMetadata.build.nsis.guid);
+    assert.equal(legacyBridgeConfig.nsis.artifactName, 'LoadToAgent-Setup-${version}.exe');
+    assert.equal(legacyBridgeConfig.nsis.oneClick, false);
+    assert.equal(legacyBridgeConfig.nsis.perMachine, false);
+    assert.equal(legacyBridgeConfig.nsis.allowToChangeInstallationDirectory, true);
+    assert.equal(legacyBridgeConfig.nsis.runAfterFinish, false);
+    assert.equal(legacyBridgeConfig.extraMetadata.version, LEGACY_UPDATE_BRIDGE_VERSION);
+    assert.deepStrictEqual(legacyBridgeConfig.win.target, [{ target: 'nsis', arch: ['x64'] }]);
+
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease: {
+        ...bridgeRelease,
+        assets: [{ ...bridgeAsset, browser_download_url: canonicalAsset.browser_download_url }],
+      },
+      currentRelease,
+    }), /v1\.6\.3이 선택할 수 있는/);
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease: { ...bridgeRelease, immutable: false },
+      currentRelease,
+    }), /immutable release/);
+    assert.throws(() => validateLegacyUpdatePath({
+      bridgeRelease: { ...bridgeRelease, assets: [bridgeAsset, { ...bridgeAsset, name: 'extra.exe' }] },
+      currentRelease,
+    }), /자산 하나/);
+
+    const requests = [];
+    let legacyAttempts = 0;
+    let currentAttempts = 0;
+    const checkedLiveShape = await checkLegacyUpdateChannel({
+      legacyApiUrl: 'https://legacy.test/releases/latest',
+      currentApiUrl: 'https://current.test/releases/latest',
+      expectedCurrentTag: 'v1.7.4',
+      waitForBridge: true,
+      retryDelayMs: 1,
+      fetch: async (url, init) => {
+        requests.push({ url: String(url), authorization: init.headers.Authorization || '' });
+        if (init.method === 'HEAD') {
+          return new Response(null, { status: 200, headers: { 'content-length': '1024' } });
+        }
+        if (String(url).startsWith('https://legacy.test/')) {
+          legacyAttempts += 1;
+          const release = legacyAttempts === 1
+            ? { ...bridgeRelease, tag_name: 'v1.7.4' }
+            : bridgeRelease;
+          return new Response(JSON.stringify(release), { status: 200 });
+        }
+        currentAttempts += 1;
+        const release = currentAttempts === 1
+          ? { ...currentRelease, tag_name: 'v1.7.3' }
+          : currentRelease;
+        return new Response(JSON.stringify(release), { status: 200 });
+      },
+    });
+    assert.equal(checkedLiveShape.currentVersion, '1.7.4');
+    assert.equal(legacyAttempts, 2, '호환 저장소 생성 직후에는 브리지 latest 전파를 제한된 횟수로 다시 확인해야 합니다.');
+    assert.equal(currentAttempts, 2, 'latest 전파가 늦으면 게시 태그를 제한된 횟수로 다시 확인해야 합니다.');
+    assert(requests.every(item => item.authorization === ''), '설치 클라이언트처럼 API와 asset을 모두 무인증으로 확인해야 합니다.');
+    await assert.rejects(fetchRelease(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-length': String(BRIDGE_V1623_MAX_CHECK_BYTES + 1) },
+    }), 'https://oversized.test/releases/latest', ''), /exceeds the bridge limit/);
   });
 
   test('운영체제와 CPU에 맞는 신뢰된 GitHub Release 파일을 고른다', () => {
