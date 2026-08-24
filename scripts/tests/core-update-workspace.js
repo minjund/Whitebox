@@ -101,7 +101,7 @@ function registerProviderAndWorkspaceTests(context) {
 }
 
 function registerCliAndUpdateTests(context) {
-  const { test, temp } = context;
+  const { test, temp, root } = context;
   test('npm 전역 명령으로 앱 열기와 브리지 실행을 구분한다', () => {
     assert.deepStrictEqual(parseCliArguments([]), { action: 'open' });
     assert.deepStrictEqual(parseCliArguments(['open']), { action: 'open' });
@@ -527,6 +527,31 @@ function registerCliAndUpdateTests(context) {
     assert.equal(compareVersions('9007199254740993.0.0', '9007199254740992.0.0'), 1);
     assert.equal(compareVersions('3.1.0-beta.9007199254740993', '3.1.0-beta.9007199254740992'), 1);
     assert.throws(() => compareVersions('latest', '3.0.0'), /버전 형식/);
+  });
+
+  test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', () => {
+    const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
+    const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
+    const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
+    const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
+    for (const requiredEvidence of [
+      'official published installers',
+      'installed `app.asar`',
+      'Reinstall the same candidate',
+      'Run the race-sensitive packaged Windows test twice',
+      'cannot by themselves justify approval',
+    ]) {
+      assert(normalizedAgentInstructions.includes(requiredEvidence), `검수 지침에서 필수 증거가 사라졌습니다: ${requiredEvidence}`);
+    }
+    assert(normalizedReleaseGuide.includes('official packaged `app.asar` byte for byte'), '공식 구버전 패키지의 동등성 입증 계약이 사라졌습니다.');
+    assert(releaseGuide.includes('npm run check:update:legacy'), '공개 업데이트 채널 검증 명령이 사라졌습니다.');
+    assert.match(workflow, /\n  pull_request:\r?\n/, '구버전 Windows 검증은 updater PR에서 자동 실행되어야 합니다.');
+    assert.match(workflow, /\n  push:\r?\n/, '구버전 Windows 검증은 최종 main 커밋에서 다시 실행되어야 합니다.');
+    for (const sensitivePath of ['src/updateManager.js', 'src/updateInstaller.js', 'src/updateRelaunch.js', 'package.json', '.github/workflows/release.yml']) {
+      assert(workflow.includes(`- "${sensitivePath}"`), `자동 구버전 검증 경로에서 ${sensitivePath}이 빠졌습니다.`);
+    }
+    assert.equal((workflow.match(/run: npm run test:update:win:v173/g) || []).length, 2, '경합 검증은 동일 후보에서 두 번 실행되어야 합니다.');
   });
 
   test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {
