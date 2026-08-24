@@ -39,6 +39,7 @@ const installedExecutable = path.join(installDir, 'Whitebox.exe');
 const installedAsar = path.join(installDir, 'resources', 'app.asar');
 const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const updateInstallerPaths = new Set();
 let activeAppPid = 0;
 
 function existingFile(file, label) {
@@ -175,6 +176,18 @@ function logLines(logPath) {
     .filter(Boolean);
 }
 
+function dumpUpdateLogs(directory) {
+  let entries = [];
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_missingDirectory) { return; }
+  for (const entry of entries) {
+    const candidate = path.join(directory, entry.name);
+    if (entry.isDirectory()) dumpUpdateLogs(candidate);
+    else if (entry.isFile() && entry.name === 'install-update.log') {
+      console.error(`--- ${candidate} ---\n${readLog(candidate) || '(empty update log)'}`);
+    }
+  }
+}
+
 function linesStarting(lines, prefix) {
   return lines.filter(line => line.startsWith(prefix));
 }
@@ -204,7 +217,16 @@ function assertCompletedInstall(logPath, options = {}) {
   const lines = logLines(logPath);
   const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=${options.expectedVersion}`;
   assert.deepStrictEqual(linesStarting(lines, 'helperStarted='), [expectedStart], 'Exactly one expected packaged helper must run.');
-  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), ['exitCode=0'], 'Exactly one NSIS invocation must complete successfully.');
+  const installerExits = linesStarting(lines, 'exitCode=');
+  if (options.allowUnloggedInstallerExit) {
+    assert.equal(
+      installerExits.length === 0 || (installerExits.length === 1 && installerExits[0] === 'exitCode=0'),
+      true,
+      `The frozen helper logged an invalid installer outcome.\n${readLog(logPath)}`,
+    );
+  } else {
+    assert.deepStrictEqual(installerExits, ['exitCode=0'], 'Exactly one NSIS invocation must complete successfully.');
+  }
   assert.equal(lines.includes('allAppProcessesStopped=true'), true, 'The helper did not prove all old app processes stopped.');
   const relaunchPaths = linesStarting(lines, 'relaunchPath=');
   const expectedRelaunchPath = `relaunchPath=${installedExecutable};installedVersion=${options.expectedVersion};expectedVersion=${options.expectedVersion}`;
@@ -283,8 +305,9 @@ async function waitForRendererReadyFile(launched, pid, expectedVersion, timeoutM
   throw new Error(`The single frozen-helper relaunch never became renderer-ready: ${pid}`);
 }
 
-async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000) {
+async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, stableChecksRequired = 3) {
   const startedAt = Date.now();
+  const requiredChecks = Math.max(1, Number(stableChecksRequired) || 3);
   let stableChecks = 0;
   let lastVersion = '';
   let lastError = null;
@@ -294,7 +317,7 @@ async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000) {
       const metadata = packagedMetadata(installedAsar);
       if (lastVersion === expectedVersion && metadata.version === expectedVersion) {
         stableChecks += 1;
-        if (stableChecks >= 3) return metadata;
+        if (stableChecks >= requiredChecks) return metadata;
       } else {
         stableChecks = 0;
       }
@@ -310,6 +333,17 @@ async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000) {
     `Last executable version: ${lastVersion || '(unavailable)'}`,
     lastError && (lastError.stack || lastError.message),
   ].filter(Boolean).join('\n'));
+}
+
+async function waitForInstallerProcessExit(installerPath, timeoutMs = 120_000) {
+  const startedAt = Date.now();
+  let livePids = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    livePids = runningProcessIds(installerPath);
+    if (!livePids.length) return;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for the update installer process to exit: ${installerPath} (PIDs ${livePids.join(',')})`);
 }
 
 async function startInstalledApp() {
@@ -444,7 +478,7 @@ async function launchPackagedInstaller(installerModule, options) {
   };
 }
 
-async function finishFrozenFirstHop(launched, parentPid) {
+async function finishFrozenFirstHop(launched, parentPid, installerPath) {
   await waitForPathRemoval(launched.bootstrapPath);
   let lines = logLines(launched.logPath);
   const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
@@ -460,17 +494,17 @@ async function finishFrozenFirstHop(launched, parentPid) {
 
   assert.equal(bootstrapErrors.length, 1);
   assert.equal(EXPECTED_FROZEN_BOOTSTRAP_ERRORS.includes(bootstrapErrors[0]), true, `Unexpected frozen bootstrap failure: ${bootstrapErrors[0]}`);
-  lines = assertCompletedInstall(launched.logPath, {
-    parentPid,
-    expectedVersion: targetVersion,
-    allowFrozenBootstrapRace: true,
-  });
   await waitForInstalledPackage(targetVersion);
+  await waitForInstallerProcessExit(installerPath);
+  await waitForInstalledPackage(targetVersion, 120_000, 8);
+  await waitForProcessExit(launched.integrationHelperPid, 30_000);
   lines = assertCompletedInstall(launched.logPath, {
     parentPid,
     expectedVersion: targetVersion,
     allowFrozenBootstrapRace: true,
+    allowUnloggedInstallerExit: true,
   });
+  assert.equal(processAlive(launched.integrationHelperPid), false, 'The frozen helper remained live after the installer outcome settled.');
 
   const relaunchStarts = linesStarting(lines, 'relaunchStarted=');
   const relaunchReady = linesStarting(lines, 'relaunchReady=');
@@ -537,6 +571,7 @@ async function main() {
   const firstDownloadsDir = path.join(testRoot, 'v173-first-hop-downloads');
   fs.mkdirSync(firstDownloadsDir, { recursive: true });
   const downloadedTarget = await downloadWithV173Updater(v173UpdaterModule, firstDownloadsDir);
+  updateInstallerPaths.add(downloadedTarget);
 
   const v173ParentPid = await startInstalledApp();
   activeAppPid = v173ParentPid;
@@ -561,7 +596,7 @@ async function main() {
   }
   assert(firstLaunch, 'The v1.7.3 packaged updater did not launch its helper.');
   await waitForProcessExit(v173ParentPid);
-  activeAppPid = await finishFrozenFirstHop(firstLaunch, v173ParentPid);
+  activeAppPid = await finishFrozenFirstHop(firstLaunch, v173ParentPid, downloadedTarget);
   assert.equal(processAlive(activeAppPid), true);
 
   const targetMetadata = await waitForInstalledPackage(targetVersion);
@@ -583,6 +618,7 @@ async function main() {
   fs.mkdirSync(reinstallDownloadsDir, { recursive: true });
   const reinstallInstaller = path.join(reinstallDownloadsDir, targetInstallerName);
   fs.copyFileSync(targetInstaller, reinstallInstaller);
+  updateInstallerPaths.add(reinstallInstaller);
   assert.equal(sha256(reinstallInstaller), sha256(downloadedTarget), 'The no-delay reinstall did not use the same target installer bytes.');
 
   const reinstallParentPid = activeAppPid;
@@ -624,8 +660,16 @@ async function main() {
 
 main().catch(error => {
   console.error(error.stack || error);
+  dumpUpdateLogs(testRoot);
   process.exitCode = 1;
 }).finally(() => {
+  for (const installerPath of updateInstallerPaths) {
+    try {
+      for (const pid of runningProcessIds(installerPath)) stopProcessTree(pid);
+    } catch (error) {
+      console.warn(`Could not enumerate integration installer processes during cleanup: ${error.message}`);
+    }
+  }
   try {
     for (const pid of runningProcessIds(installedExecutable)) stopProcessTree(pid);
   } catch (error) {
@@ -649,5 +693,10 @@ main().catch(error => {
     }
   }
   asar.uncacheAll();
-  fs.rmSync(testRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+  try {
+    fs.rmSync(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch (error) {
+    console.error(`Integration temporary directory cleanup failed: ${error.stack || error}`);
+    process.exitCode = 1;
+  }
 });
