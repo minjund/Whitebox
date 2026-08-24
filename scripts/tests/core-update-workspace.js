@@ -1058,10 +1058,14 @@ function registerCliAndUpdateTests(context) {
       && immutableV163ReadyRaceLog.includes('logState.isFile() && !logState.isSymbolicLink()')
       && immutableV163ReadyRaceLog.includes('path.dirname(canonicalLogPath), canonicalDownloadsDir')
       && immutableV163ReadyRaceLog.includes('expectedVersion=1.6.23`')
-      && immutableV163ReadyRaceLog.includes('const expectedLog = `\\uFEFF${expectedStart}\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
+      && immutableV163ReadyRaceLog.includes('const expectedInterruptedLog = `\\uFEFF${expectedStart}\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
+      && immutableV163ReadyRaceLog.includes('const expectedCompletedInstallerLog = `\\uFEFF${expectedStart}\\r\\nexitCode=0\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
+      && immutableV163ReadyRaceLog.includes('const expectedLogs = [expectedInterruptedLog, expectedCompletedInstallerLog]')
+      && immutableV163ReadyRaceLog.includes('expectedLogs.includes(log)')
+      && immutableV163ReadyRaceLog.includes("log === expectedCompletedInstallerLog ? ['exitCode=0'] : []")
       && immutableV163ReadyRaceLog.includes("linesStarting(lines, 'exitCode=')")
       && immutableV163ReadyRaceLog.includes('fatalLogLines(lines), []'),
-    '불변 v1.6.3 ready-race 로그 예외는 exact 공식 first-hop의 두 줄 BOM/CRLF 로그만 허용하고 NSIS exit·다른 fatal marker를 거부해야 합니다.');
+    '불변 v1.6.3 ready-race 로그 예외는 공식 first-hop의 두 exact BOM/CRLF 변형만 허용하고 다른 NSIS exit·fatal marker를 거부해야 합니다.');
     assert(immutableV163HelperArtifact.includes('options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163HelperArtifact.includes("options.currentVersion, '1.6.3'")
       && immutableV163HelperArtifact.includes('options.expectedVersion, bridgeVersion')
@@ -1089,8 +1093,9 @@ function registerCliAndUpdateTests(context) {
       && !immutableV163HelperArtifact.includes('fs.rmSync'),
     '불변 v1.6.3 ready-race artifact 예외는 공식 pin·exact owned helper bytes·프로세스 부재 뒤 단일 파일만 제거해야 합니다.');
     assert(releaseGuide.includes('BOM + official packaged v1.6.3 helper source')
-      && releaseGuide.includes('the exact two-line `helperStarted` plus')
-      && releaseGuide.includes('with no `exitCode`, relaunch lifecycle, or')
+      && normalizedReleaseGuide.includes('one of only two exact raw logs')
+      && normalizedReleaseGuide.includes('or the same lines with exactly one `exitCode=0` between them')
+      && normalizedReleaseGuide.includes('A nonzero, duplicate, or reordered exit code,')
       && releaseGuide.includes('A timeout, mismatched file, unowned path,')
       && releaseGuide.includes('a release failure'),
     '릴리스 계약은 불변 v1.6.3 강제 종료 artifact의 exact cleanup과 fail-closed 제한을 명시해야 합니다.');

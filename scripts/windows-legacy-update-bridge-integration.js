@@ -962,17 +962,21 @@ function assertImmutableV163ReadyRaceLog(launched, options) {
   assert(Number.isSafeInteger(options.parentPid) && options.parentPid > 0,
     'The immutable ready-race parent PID was invalid.');
   const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23`;
-  const expectedLog = `\uFEFF${expectedStart}\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
+  const expectedInterruptedLog = `\uFEFF${expectedStart}\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
+  const expectedCompletedInstallerLog = `\uFEFF${expectedStart}\r\nexitCode=0\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
+  const expectedLogs = [expectedInterruptedLog, expectedCompletedInstallerLog];
   const log = readLog(expectedLogPath);
-  assert.equal(log, expectedLog, [
-    'Refusing the historical v1.6.3 restart fallback without its exact two-line forced-termination log.',
+  assert(expectedLogs.includes(log), [
+    'Refusing the historical v1.6.3 restart fallback without one of its two exact forced-termination logs.',
     `Expected helper start: ${expectedStart}`,
+    'Only an absent NSIS exit or one exact exitCode=0 between helper start and bootstrap error is valid.',
     `Expected bootstrap error: ${IMMUTABLE_V163_READY_RACE_ERROR}`,
     log || '(no update log)',
   ].join('\n'));
   const lines = logLines(expectedLogPath);
-  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), [],
-    'The immutable v1.6.3 forced-termination log unexpectedly recorded an NSIS exit.');
+  const expectedInstallerExits = log === expectedCompletedInstallerLog ? ['exitCode=0'] : [];
+  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), expectedInstallerExits,
+    'The immutable v1.6.3 forced-termination log recorded an unexpected NSIS exit.');
   assert.deepStrictEqual(fatalLogLines(lines), [],
     'The immutable v1.6.3 forced-termination log contained another fatal marker.');
   return log;
@@ -1298,11 +1302,11 @@ async function installWithPackagedUpdater(options) {
     if (!options.allowLegacyBootstrapFallback || error.code !== 'LEGACY_BOOTSTRAP_READY_RACE') throw error;
     // v1.6.3 has two consumers racing to remove the same helper-ready file.
     // Release metadata cannot change that already-installed bootstrap. Its
-    // bootstrap force-terminates the helper while the NSIS child can finish,
-    // so the frozen log intentionally has no exitCode. Accept that exact
-    // historical outcome only after the downloaded installer has exited and
-    // both the EXE and app.asar remain stably at 1.6.23. Then model the only
-    // required user fallback: reopen the updated app.
+    // bootstrap can force-terminate the helper while the NSIS child runs or
+    // just after it records exitCode=0 but before final self-delete. Accept
+    // only those two exact historical logs after the downloaded installer has
+    // exited and both the EXE and app.asar remain stably at 1.6.23. Then model
+    // the only required user fallback: reopen the updated app.
     await waitForInstalledPackage(options.appPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
     await waitForExactExecutableProcessExit(downloadedInstaller, 'Immutable v1.6.23 installer');

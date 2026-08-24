@@ -32,13 +32,17 @@ relaunch handshake before exposing the bridge artifact for download.
 
 The frozen v1.6.3 bootstrap and app process both watch and remove the same
 helper-ready file. If the app wins that race, the bootstrap can time out after
-the silent NSIS child has already started. The integration accepts only that
-exact historical timeout from the same fresh helper log, requires exactly one
-successful installer exit (`exitCode=0`) with no install, version, or relaunch
-failure marker, then requires both the installed EXE and packaged `app.asar` to
-report 1.6.23 before reopening the updated app. In that case the user may need
-to start LoadToAgent once more, but never needs to download or run an installer
-manually. Every other first-hop failure remains fatal.
+the silent NSIS child has already started. The helper can be terminated before
+recording the NSIS result, or just after recording `exitCode=0` but before its
+final self-delete. The integration accepts only those two exact raw-log
+variants from the same fresh helper: `helperStarted` followed by the exact
+10-second `bootstrapError`, with either no exit line or exactly one `exitCode=0`
+between them. The BOM, CRLF, order, parent PID, and literal v1.6.23 values must
+match; any other exit code, line, or failure marker remains fatal. It then
+requires both the installed EXE and packaged `app.asar` to report 1.6.23 and
+all related processes to exit before reopening the updated app. In that case
+the user may need to start LoadToAgent once more, but never needs to download
+or run an installer manually. Every other first-hop failure remains fatal.
 
 Run that workflow only from the fully reviewed commit, passing its complete
 40-character commit SHA as `source_sha`. Keep the Actions run summary with the

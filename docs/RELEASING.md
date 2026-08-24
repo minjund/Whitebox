@@ -87,14 +87,17 @@ The packaged scenario must prove all parts of the contract:
    unowned profile must never be deleted, and all three candidate paths must be
    absent at the end of the same run.
 5. The immutable v1.6.3 ready-file race can force-terminate its helper after an
-   installer child has replaced the package but before the helper can record
-   the NSIS exit or run its final self-delete. Only for that exact official
-   first hop, the harness may accept the exact two-line `helperStarted` plus
-   10-second `bootstrapError` log with no `exitCode`, relaunch lifecycle, or
-   other fatal marker. It must first prove the downloaded official v1.6.23
-   installer and helper/bootstrap processes have exited, no installed app is
-   running, and the installed EXE and `app.asar` remain stably at v1.6.23. The
-   harness may then unlink only the owned
+   installer child has replaced the package, either before the helper records
+   the NSIS exit or after it records success but before final self-delete. Only
+   for that exact official first hop, the harness may accept one of only two
+   exact raw logs: `helperStarted` followed by the 10-second `bootstrapError`,
+   or the same lines with exactly one `exitCode=0` between them. Both variants
+   require the exact BOM, CRLF, order, parent PID, and literal v1.6.23 values,
+   with no relaunch lifecycle or other fatal marker. A nonzero, duplicate, or
+   reordered exit code, or any extra log line, must fail. The harness must first
+   prove the downloaded official v1.6.23 installer and helper/bootstrap
+   processes have exited, no installed app is running, and the installed EXE
+   and `app.asar` remain stably at v1.6.23. It may then unlink only the owned
    `first-hop-downloads/install-update.ps1` after proving its path is a real
    non-link direct child of the fresh attempt and its size and SHA-256 match
    `BOM + official packaged v1.6.3 helper source`. All tracked artifacts must
