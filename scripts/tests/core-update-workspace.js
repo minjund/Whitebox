@@ -1013,7 +1013,7 @@ function registerCliAndUpdateTests(context) {
     'native bridge 프로필 소유권은 exact 공식 first-hop pin과 wx marker 검증 뒤 opaque policy로만 발급하고 부분 실패를 되돌려야 합니다.');
     const immutableBridgeRelaunch = legacyClientTest.slice(
       legacyClientTest.indexOf('async function waitForRelaunch'),
-      legacyClientTest.indexOf('function assertCleanLegacyInstallBeforeRestartFallback'),
+      legacyClientTest.indexOf('async function waitForInstalledPackage'),
     );
     assert(immutableBridgeRelaunch.includes('const immutableBridgeHistoricalRelaunch = nativeProfilePolicy !== null')
       && immutableBridgeRelaunch.includes('nativeProfilePolicy, immutableBridgeNativeProfilePolicy')
@@ -1043,15 +1043,41 @@ function registerCliAndUpdateTests(context) {
       legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
       legacyClientTest.indexOf('async function waitForRelaunch'),
     );
+    const immutableV163ReadyRaceLog = legacyClientTest.slice(
+      legacyClientTest.indexOf('function assertImmutableV163ReadyRaceLog'),
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
+    );
+    assert(immutableV163ReadyRaceLog.includes('options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
+      && immutableV163ReadyRaceLog.includes("options.label, 'first-hop-downloads'")
+      && immutableV163ReadyRaceLog.includes("options.currentVersion, '1.6.3'")
+      && immutableV163ReadyRaceLog.includes("bridgeVersion, '1.6.23'")
+      && immutableV163ReadyRaceLog.includes("options.expectedVersion, '1.6.23'")
+      && immutableV163ReadyRaceLog.includes("launched && launched.mode, 'automatic'")
+      && immutableV163ReadyRaceLog.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163ReadyRaceLog.includes("path.join(expectedDownloadsDir, 'install-update.log')")
+      && immutableV163ReadyRaceLog.includes('logState.isFile() && !logState.isSymbolicLink()')
+      && immutableV163ReadyRaceLog.includes('path.dirname(canonicalLogPath), canonicalDownloadsDir')
+      && immutableV163ReadyRaceLog.includes('expectedVersion=1.6.23`')
+      && immutableV163ReadyRaceLog.includes('const expectedLog = `\\uFEFF${expectedStart}\\r\\n${IMMUTABLE_V163_READY_RACE_ERROR}\\r\\n`')
+      && immutableV163ReadyRaceLog.includes("linesStarting(lines, 'exitCode=')")
+      && immutableV163ReadyRaceLog.includes('fatalLogLines(lines), []'),
+    '불변 v1.6.3 ready-race 로그 예외는 exact 공식 first-hop의 두 줄 BOM/CRLF 로그만 허용하고 NSIS exit·다른 fatal marker를 거부해야 합니다.');
     assert(immutableV163HelperArtifact.includes('options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy')
       && immutableV163HelperArtifact.includes("options.currentVersion, '1.6.3'")
       && immutableV163HelperArtifact.includes('options.expectedVersion, bridgeVersion')
       && immutableV163HelperArtifact.includes("launched && launched.mode, 'automatic'")
       && immutableV163HelperArtifact.includes('assertPinnedInstaller(sourceInstaller')
       && immutableV163HelperArtifact.includes('assertPinnedInstaller(bridgeInstaller')
-      && immutableV163HelperArtifact.includes('assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options)')
+      && immutableV163HelperArtifact.includes('assertImmutableV163ReadyRaceLog(launched, options)')
+      && immutableV163HelperArtifact.includes('detectedReadyRaceLog, readyRaceLog')
       && immutableV163HelperArtifact.includes("path.join(testRoot, 'first-hop-downloads')")
+      && immutableV163HelperArtifact.includes('path.join(expectedDownloadsDir, V1623_INSTALLER_NAME)')
       && immutableV163HelperArtifact.includes("path.join(expectedDownloadsDir, 'install-update.ps1')")
+      && immutableV163HelperArtifact.includes('assertPinnedInstaller(downloadedInstaller')
+      && immutableV163HelperArtifact.includes('runningProcessIds(downloadedInstaller), []')
+      && immutableV163HelperArtifact.includes('runningProcessIdsReferencing(downloadedInstaller), []')
+      && immutableV163HelperArtifact.includes('runningProcessesUnderDirectory(installDir), []')
+      && immutableV163HelperArtifact.includes('helperState !== undefined')
       && immutableV163HelperArtifact.includes('helperState.isFile() && !helperState.isSymbolicLink()')
       && immutableV163HelperArtifact.includes('path.dirname(canonicalHelperPath), canonicalDownloadsDir')
       && immutableV163HelperArtifact.includes('Buffer.from(`\\uFEFF${options.installerModule.WINDOWS_UPDATE_HELPER}`, \'utf8\')')
@@ -1063,7 +1089,9 @@ function registerCliAndUpdateTests(context) {
       && !immutableV163HelperArtifact.includes('fs.rmSync'),
     '불변 v1.6.3 ready-race artifact 예외는 공식 pin·exact owned helper bytes·프로세스 부재 뒤 단일 파일만 제거해야 합니다.');
     assert(releaseGuide.includes('BOM + official packaged v1.6.3 helper source')
-      && releaseGuide.includes('A timeout, mismatched file, unowned path, or any other fallback must remain')
+      && releaseGuide.includes('the exact two-line `helperStarted` plus')
+      && releaseGuide.includes('with no `exitCode`, relaunch lifecycle, or')
+      && releaseGuide.includes('A timeout, mismatched file, unowned path,')
       && releaseGuide.includes('a release failure'),
     '릴리스 계약은 불변 v1.6.3 강제 종료 artifact의 exact cleanup과 fail-closed 제한을 명시해야 합니다.');
     const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
@@ -1079,20 +1107,31 @@ function registerCliAndUpdateTests(context) {
       && successFinalLogCheck > successArtifactCleanup,
     '정상 updater relaunch도 helper 프로세스 종료 뒤 artifact 부재와 최종 로그를 순서대로 입증해야 합니다.');
     const fallbackProcessCleanup = legacyFallback.indexOf('await waitForUpdateProcessCleanup(launched)');
-    const fallbackStableLogBeforeArtifact = legacyFallback.indexOf('assertCleanLegacyInstallBeforeRestartFallback', fallbackProcessCleanup);
-    const fallbackOwnedArtifactCleanup = legacyFallback.indexOf('removeOwnedImmutableV163ReadyRaceHelperArtifact', fallbackStableLogBeforeArtifact);
+    const fallbackInstallerCleanup = legacyFallback.indexOf('await waitForExactExecutableProcessExit(downloadedInstaller', fallbackProcessCleanup);
+    const fallbackStablePackage = legacyFallback.indexOf('await waitForInstalledPackage(options.appPath, options.expectedVersion)', fallbackInstallerCleanup);
+    const fallbackInstalledProcessCleanup = legacyFallback.indexOf('runningProcessesUnderDirectory(installDir), []', fallbackStablePackage);
+    const fallbackCaughtLog = legacyFallback.indexOf("const readyRaceLog = String(error.updateLog || '')", fallbackInstalledProcessCleanup);
+    const fallbackOwnedArtifactCleanup = legacyFallback.indexOf('removeOwnedImmutableV163ReadyRaceHelperArtifact', fallbackCaughtLog);
     const fallbackArtifactCleanup = legacyFallback.indexOf('await waitForUpdateArtifactCleanup(launched)');
-    const fallbackFinalLogCheck = legacyFallback.indexOf('assertCleanLegacyInstallBeforeRestartFallback', fallbackArtifactCleanup);
+    const fallbackFinalLogCheck = legacyFallback.indexOf('assertImmutableV163ReadyRaceLog(launched, options)', fallbackArtifactCleanup);
     const fallbackRendererReady = legacyFallback.indexOf('await startInstalledAppWithRendererReady', fallbackFinalLogCheck);
-    const fallbackPostRelaunchLogCheck = legacyFallback.indexOf('assertCleanLegacyInstallBeforeRestartFallback', fallbackRendererReady);
+    const fallbackPostRelaunchLogCheck = legacyFallback.indexOf('assertImmutableV163ReadyRaceLog(launched, options)', fallbackRendererReady);
     assert(fallbackProcessCleanup >= 0
-      && fallbackStableLogBeforeArtifact > fallbackProcessCleanup
-      && fallbackOwnedArtifactCleanup > fallbackStableLogBeforeArtifact
+      && fallbackInstallerCleanup > fallbackProcessCleanup
+      && fallbackStablePackage > fallbackInstallerCleanup
+      && fallbackInstalledProcessCleanup > fallbackStablePackage
+      && fallbackCaughtLog > fallbackInstalledProcessCleanup
+      && fallbackOwnedArtifactCleanup > fallbackCaughtLog
       && fallbackArtifactCleanup > fallbackOwnedArtifactCleanup
       && fallbackFinalLogCheck > fallbackArtifactCleanup
       && fallbackRendererReady > fallbackFinalLogCheck
       && fallbackPostRelaunchLogCheck > fallbackRendererReady,
-    '레거시 ready-file 예외는 helper 종료·안정 로그·exact owned artifact 정리·전체 부재·인증된 renderer-ready 순으로 검증해야 합니다.');
+    '레거시 ready-file 예외는 helper·installer 종료, 안정 package·exact 로그, owned artifact 정리, 전체 부재, 인증된 renderer-ready 순으로 검증해야 합니다.');
+    const immutableV163ReadyRaceUses = legacyClientTest.slice(
+      legacyClientTest.indexOf('function removeOwnedImmutableV163ReadyRaceHelperArtifact'),
+    );
+    assert.equal((immutableV163ReadyRaceUses.match(/assertImmutableV163ReadyRaceLog\(launched, options\)/g) || []).length, 3,
+      '불변 v1.6.3 exact log assertion은 owned residue 제거 전과 두 안정성 재검증에서만 실행해야 합니다.');
     const candidateReinstall = legacyClientTest.slice(legacyClientTest.indexOf('async function reinstallCandidateWithPackagedUpdater'), legacyClientTest.indexOf('function stopProcessTree'));
     assert(candidateReinstall.includes('await downloadWithPackagedUpdater')
       && candidateReinstall.includes('releaseDecoys: selectionDecoys(CURRENT_VERSION)')

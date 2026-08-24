@@ -36,6 +36,7 @@ const V1623_INSTALLER_SIZE = 94506459;
 const V1623_INSTALLER_NAME = 'LoadToAgent-Setup-1.6.23.exe';
 const CANDIDATE_E2E = process.env.WHITEBOX_LEGACY_CANDIDATE_E2E === 'true';
 const IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION = CANDIDATE_E2E && disposableGithubRunner;
+const IMMUTABLE_V163_READY_RACE_ERROR = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
 const CURRENT_VERSION = CANDIDATE_E2E ? String(sourcePackageMetadata.version || '').trim() : '1.7.4';
 const CURRENT_INSTALLER_SHA256 = CANDIDATE_E2E
   ? String(process.env.WHITEBOX_CURRENT_INSTALLER_SHA256 || '').trim().toLowerCase().replace(/^sha256:/, '')
@@ -900,7 +901,89 @@ async function waitForUpdateProcessCleanup(launched, timeoutMs = 30_000) {
   await waitForProcessesReferencingPathExit(launched.bootstrapPath, 'Update bootstrap', timeoutMs);
 }
 
-function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
+async function waitForExactExecutableProcessExit(executable, label, timeoutMs = 120_000) {
+  const startedAt = Date.now();
+  let remaining = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    remaining = runningProcessIds(executable);
+    if (!remaining.length) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`${label} processes remained after the immutable helper was terminated: ${remaining.join(',')}`);
+}
+
+function assertImmutableV163ReadyRaceLog(launched, options) {
+  assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
+    'The immutable v1.6.3 ready-race log is only valid on a disposable official candidate runner.');
+  assert.equal(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
+    'The immutable v1.6.3 ready-race log received an unknown first-hop policy.');
+  assert.equal(options.label, 'first-hop-downloads', 'The immutable ready-race attempt label changed.');
+  assert.equal(options.repository, 'LodeToAgent', 'The immutable ready-race repository changed.');
+  assert.equal(options.currentVersion, '1.6.3', 'The immutable ready-race source version changed.');
+  assert.equal(bridgeVersion, '1.6.23', 'The immutable ready-race bridge version changed.');
+  assert.equal(options.expectedVersion, '1.6.23', 'The immutable ready-race target version changed.');
+  assert.equal(options.allowLegacyBootstrapFallback, true, 'The immutable ready-race fallback contract changed.');
+  assert.equal(launched && launched.mode, 'automatic', 'The immutable ready-race did not come from an automatic launch.');
+  assert.equal(canonicalExistingPath(options.installer), canonicalExistingPath(bridgeInstaller),
+    'The immutable ready-race target installer changed.');
+  assert.equal(canonicalExistingPath(options.appPath), canonicalExistingPath(legacyExecutable),
+    'The immutable ready-race installed executable changed.');
+  assert.equal(canonicalExistingPath(options.relaunchAppPath), canonicalExistingPath(legacyExecutable),
+    'The immutable ready-race relaunch executable changed.');
+  assertPinnedInstaller(sourceInstaller, {
+    name: V163_INSTALLER_NAME,
+    size: V163_INSTALLER_SIZE,
+    sha256: V163_INSTALLER_SHA256,
+  }, 'official v1.6.3 ready-race source');
+  assertPinnedInstaller(bridgeInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'official immutable v1.6.23 ready-race target');
+  assert.equal(executableVersion(legacyExecutable), bridgeVersion,
+    'The immutable ready-race log was accepted before the bridge executable was installed.');
+  assert.equal(packagedMetadata(path.join(installDir, 'resources', 'app.asar')).version, bridgeVersion,
+    'The immutable ready-race log was accepted before the bridge app.asar was installed.');
+
+  const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
+  const expectedLogPath = path.join(expectedDownloadsDir, 'install-update.log');
+  assert.equal(path.resolve(launched.logPath), expectedLogPath,
+    'The immutable ready-race log was not the exact fresh first-hop log.');
+  const logState = fs.lstatSync(expectedLogPath, { throwIfNoEntry: false });
+  assert(logState && logState.isFile() && !logState.isSymbolicLink(),
+    `The immutable ready-race log was missing or changed: ${expectedLogPath}`);
+  const canonicalDownloadsDir = canonicalExistingPath(expectedDownloadsDir);
+  const canonicalLogPath = canonicalExistingPath(expectedLogPath);
+  assert.equal(path.dirname(canonicalDownloadsDir), canonicalExistingPath(testRoot),
+    'The immutable ready-race directory escaped the fresh integration root.');
+  assert.equal(path.dirname(canonicalLogPath), canonicalDownloadsDir,
+    'The immutable ready-race log escaped its exact first-hop directory.');
+
+  assert(Number.isSafeInteger(options.parentPid) && options.parentPid > 0,
+    'The immutable ready-race parent PID was invalid.');
+  const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=1.6.23`;
+  const expectedLog = `\uFEFF${expectedStart}\r\n${IMMUTABLE_V163_READY_RACE_ERROR}\r\n`;
+  const log = readLog(expectedLogPath);
+  assert.equal(log, expectedLog, [
+    'Refusing the historical v1.6.3 restart fallback without its exact two-line forced-termination log.',
+    `Expected helper start: ${expectedStart}`,
+    `Expected bootstrap error: ${IMMUTABLE_V163_READY_RACE_ERROR}`,
+    log || '(no update log)',
+  ].join('\n'));
+  const lines = logLines(expectedLogPath);
+  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), [],
+    'The immutable v1.6.3 forced-termination log unexpectedly recorded an NSIS exit.');
+  assert.deepStrictEqual(fatalLogLines(lines), [],
+    'The immutable v1.6.3 forced-termination log contained another fatal marker.');
+  return log;
+}
+
+function removeOwnedImmutableV163ReadyRaceHelperArtifact(
+  launched,
+  options,
+  downloadedInstaller,
+  detectedReadyRaceLog,
+) {
   assert(IMMUTABLE_BRIDGE_NATIVE_PROFILE_EXCEPTION,
     'The immutable v1.6.3 helper artifact exception is only valid on a disposable official candidate runner.');
   assert.equal(options.immutableBridgeNativeProfilePolicy, immutableBridgeNativeProfilePolicy,
@@ -930,9 +1013,12 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
     'The immutable helper artifact exception ran before the bridge executable was installed.');
   assert.equal(packagedMetadata(path.join(installDir, 'resources', 'app.asar')).version, bridgeVersion,
     'The immutable helper artifact exception ran before the bridge app.asar was installed.');
-  assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+  const readyRaceLog = assertImmutableV163ReadyRaceLog(launched, options);
+  assert.equal(detectedReadyRaceLog, readyRaceLog,
+    'The caught v1.6.3 ready-race log did not match the exact same-run fallback log.');
 
   const expectedDownloadsDir = path.join(testRoot, 'first-hop-downloads');
+  const expectedDownloadedInstaller = path.join(expectedDownloadsDir, V1623_INSTALLER_NAME);
   const expectedHelperPath = path.join(expectedDownloadsDir, 'install-update.ps1');
   assert(launched && typeof launched === 'object', 'The immutable helper artifact launch record was missing.');
   assert.equal(path.resolve(launched.helperPath), expectedHelperPath,
@@ -943,6 +1029,19 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
     'The immutable helper artifact log path changed.');
   assert.equal(path.resolve(launched.readyPath), path.join(expectedDownloadsDir, 'install-update.ready'),
     'The immutable helper artifact ready path changed.');
+  assert.equal(path.resolve(downloadedInstaller), expectedDownloadedInstaller,
+    'The immutable helper artifact did not install the exact fresh first-hop download.');
+  assertPinnedInstaller(downloadedInstaller, {
+    name: V1623_INSTALLER_NAME,
+    size: V1623_INSTALLER_SIZE,
+    sha256: V1623_INSTALLER_SHA256,
+  }, 'downloaded immutable v1.6.23 helper artifact target');
+  assert.deepStrictEqual(runningProcessIds(downloadedInstaller), [],
+    'The immutable v1.6.23 installer process was still running before helper artifact cleanup.');
+  assert.deepStrictEqual(runningProcessIdsReferencing(downloadedInstaller), [],
+    'A process still referenced the immutable v1.6.23 installer before helper artifact cleanup.');
+  assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
+    'An installed app process was running before the authenticated legacy fallback relaunch.');
   assertPathWithin(testRoot, expectedHelperPath, 'immutable v1.6.3 helper artifact');
   const downloadsState = fs.lstatSync(expectedDownloadsDir, { throwIfNoEntry: false });
   assert(downloadsState && downloadsState.isDirectory() && !downloadsState.isSymbolicLink(),
@@ -952,7 +1051,8 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
   assert.equal(path.dirname(canonicalDownloadsDir), canonicalTestRoot,
     'The immutable helper artifact directory escaped the fresh integration root.');
   const helperState = fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false });
-  if (helperState === undefined) return false;
+  assert(helperState !== undefined,
+    `The immutable v1.6.3 forced-termination helper residue was unexpectedly absent: ${expectedHelperPath}`);
   assert(helperState.isFile() && !helperState.isSymbolicLink(),
     `Refusing to remove a changed immutable v1.6.3 helper artifact: ${expectedHelperPath}`);
   const canonicalHelperPath = canonicalExistingPath(expectedHelperPath);
@@ -987,7 +1087,7 @@ function removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options) {
   assert.equal(fs.lstatSync(expectedHelperPath, { throwIfNoEntry: false }), undefined,
     'The owned immutable v1.6.3 helper artifact remained after exact removal.');
   console.log('✓ Removed the exact owned v1.6.3 helper residue after the verified ready-file forced termination.');
-  return true;
+  return readyRaceLog;
 }
 
 async function waitForRelaunch(
@@ -1001,7 +1101,7 @@ async function waitForRelaunch(
   while (Date.now() - startedAt < timeoutMs) {
     const lines = logLines(logPath);
     const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
-    if (bootstrapErrors.some(line => line === 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.')) {
+    if (bootstrapErrors.some(line => line === IMMUTABLE_V163_READY_RACE_ERROR)) {
       const error = new Error(`The frozen legacy bootstrap lost its ready-file race:\n${readLog(logPath)}`);
       error.code = 'LEGACY_BOOTSTRAP_READY_RACE';
       error.updateLog = readLog(logPath);
@@ -1046,43 +1146,6 @@ async function waitForRelaunch(
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${readLog(logPath) || '(no update log)'}`);
-}
-
-function assertCleanLegacyInstallBeforeRestartFallback(logPath, options) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-  const lines = log
-    .split(/\r?\n/)
-    .map(line => line.replace(/^\uFEFF/, '').trim())
-    .filter(Boolean);
-  const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=${options.expectedVersion}`;
-  const helperStarts = lines.filter(line => line.startsWith('helperStarted='));
-  const installerExits = lines.filter(line => line.startsWith('exitCode='));
-  const bootstrapErrors = lines.filter(line => line.startsWith('bootstrapError='));
-  const expectedBootstrapError = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
-  const failureLines = fatalLogLines(lines);
-  const relaunchLifecycle = lines.filter(line => (
-    line.startsWith('relaunchStarted=')
-    || line.startsWith('rendererReady=')
-    || line.startsWith('relaunchReady=')
-    || line.startsWith('recoveryRelaunchStarted=')
-  ));
-  const clean = helperStarts.length === 1
-    && helperStarts[0] === expectedStart
-    && installerExits.length === 1
-    && installerExits[0] === 'exitCode=0'
-    && bootstrapErrors.length === 1
-    && bootstrapErrors[0] === expectedBootstrapError
-    && failureLines.length === 0
-    && relaunchLifecycle.length === 0;
-  if (!clean) {
-    throw new Error([
-      'Refusing the legacy restart fallback without one clean, completed bridge installation.',
-      `Expected helper start: ${expectedStart}`,
-      `Observed fatal markers: ${failureLines.join(', ') || '(none)'}`,
-      `Observed relaunch lifecycle: ${relaunchLifecycle.join(', ') || '(none)'}`,
-      log || '(no update log)',
-    ].join('\n'));
-  }
 }
 
 async function waitForInstalledPackage(appPath, expectedVersion, timeoutMs = 120_000) {
@@ -1234,18 +1297,31 @@ async function installWithPackagedUpdater(options) {
   } catch (error) {
     if (!options.allowLegacyBootstrapFallback || error.code !== 'LEGACY_BOOTSTRAP_READY_RACE') throw error;
     // v1.6.3 has two consumers racing to remove the same helper-ready file.
-    // Release metadata cannot change that already-installed bootstrap. Accept
-    // the fallback only after the same fresh helper logged one successful NSIS
-    // exit with no fatal marker. Then prove both the EXE and app.asar reached
-    // 1.6.23 and model the only required user fallback: reopen the updated app.
+    // Release metadata cannot change that already-installed bootstrap. Its
+    // bootstrap force-terminates the helper while the NSIS child can finish,
+    // so the frozen log intentionally has no exitCode. Accept that exact
+    // historical outcome only after the downloaded installer has exited and
+    // both the EXE and app.asar remain stably at 1.6.23. Then model the only
+    // required user fallback: reopen the updated app.
     await waitForInstalledPackage(options.appPath, options.expectedVersion);
     await waitForUpdateProcessCleanup(launched);
-    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
-    removeOwnedImmutableV163ReadyRaceHelperArtifact(launched, options);
+    await waitForExactExecutableProcessExit(downloadedInstaller, 'Immutable v1.6.23 installer');
+    await waitForInstalledPackage(options.appPath, options.expectedVersion);
+    assert.deepStrictEqual(runningProcessesUnderDirectory(installDir), [],
+      'An installed app process was running before the authenticated legacy fallback relaunch.');
+    const readyRaceLog = String(error.updateLog || '');
+    removeOwnedImmutableV163ReadyRaceHelperArtifact(
+      launched,
+      options,
+      downloadedInstaller,
+      readyRaceLog,
+    );
     await waitForUpdateArtifactCleanup(launched);
-    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+    assert.equal(assertImmutableV163ReadyRaceLog(launched, options), readyRaceLog,
+      'The immutable v1.6.3 ready-race log changed during exact artifact cleanup.');
     const fallbackPid = await startInstalledAppWithRendererReady(options.appPath, options.expectedVersion);
-    assertCleanLegacyInstallBeforeRestartFallback(launched.logPath, options);
+    assert.equal(assertImmutableV163ReadyRaceLog(launched, options), readyRaceLog,
+      'The immutable v1.6.3 ready-race log changed during the authenticated fallback relaunch.');
     console.log(`✓ Legacy bootstrap relaunch fallback reopened installed ${options.expectedVersion}.`);
     return { pid: fallbackPid, launched, parentPid: options.parentPid, legacyFallback: true };
   }

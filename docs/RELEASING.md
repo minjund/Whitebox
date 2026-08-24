@@ -86,16 +86,21 @@ The packaged scenario must prove all parts of the contract:
    exited before deleting that owned child. The native roaming root and any
    unowned profile must never be deleted, and all three candidate paths must be
    absent at the end of the same run.
-5. The immutable v1.6.3 ready-file race can force-terminate its helper after a
-   verified successful bridge installation and thereby bypass that helper's
-   final self-delete. Only for that exact official first hop, the harness may
-   unlink the owned `first-hop-downloads/install-update.ps1` after proving the
-   installed EXE and `app.asar` are v1.6.23, helper and bootstrap process
-   references are zero, the frozen bootstrap-race log is exact and stable, the
-   path is a real non-link direct child of the fresh attempt, and its size and
-   SHA-256 match `BOM + official packaged v1.6.3 helper source`. All tracked
-   artifacts must then be absent before the authenticated fallback relaunch.
-   A timeout, mismatched file, unowned path, or any other fallback must remain
+5. The immutable v1.6.3 ready-file race can force-terminate its helper after an
+   installer child has replaced the package but before the helper can record
+   the NSIS exit or run its final self-delete. Only for that exact official
+   first hop, the harness may accept the exact two-line `helperStarted` plus
+   10-second `bootstrapError` log with no `exitCode`, relaunch lifecycle, or
+   other fatal marker. It must first prove the downloaded official v1.6.23
+   installer and helper/bootstrap processes have exited, no installed app is
+   running, and the installed EXE and `app.asar` remain stably at v1.6.23. The
+   harness may then unlink only the owned
+   `first-hop-downloads/install-update.ps1` after proving its path is a real
+   non-link direct child of the fresh attempt and its size and SHA-256 match
+   `BOM + official packaged v1.6.3 helper source`. All tracked artifacts must
+   be absent and the exact log bytes must remain unchanged before and after the
+   authenticated fallback relaunch. A timeout, mismatched file, unowned path,
+   extra log line, live process, or any other fallback must remain
    a release failure.
 
 Do not approve on a source-only simulation, a target-only clean install, or an
