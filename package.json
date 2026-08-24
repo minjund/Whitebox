@@ -94,6 +94,7 @@
     "test:artifacts:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-check.js",
     "test:update:win:legacy-bridge": "node scripts/windows-legacy-update-bridge-integration.js",
     "test:update:win:v173": "node scripts/windows-v173-update-integration.js",
+    "test:update:win:frozen": "node scripts/windows-v173-update-integration.js",
     "check:update:legacy": "node scripts/check-legacy-update-channel.js",
     "demo:readme": "electron scripts/readme-demo.js",
     "dist": "electron-builder",

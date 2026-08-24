@@ -36,6 +36,7 @@ const { ensureMacNodePtyRuntime, unpackedAsarPath } = require('../../src/nodePty
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('../../src/windowsShellIdentity');
 const afterPack = require('../after-pack');
 const legacyBridgeConfig = require('../legacy-update-bridge.config');
+const { classifyNameStatus, parseNameStatus } = require('../updater-review-scope');
 const {
   BRIDGE_V1623_MAX_CHECK_BYTES,
   checkLegacyUpdateChannel,
@@ -533,13 +534,17 @@ function registerCliAndUpdateTests(context) {
     const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
+    const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+    const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
     const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
     const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
     for (const requiredEvidence of [
       'official published installers',
       'installed `app.asar`',
       'Reinstall the same candidate',
-      'Run the race-sensitive packaged Windows test twice',
+      'pinned official v1.7.3 and v1.7.4',
+      'pinned official fixed v1.7.5 installer',
+      'Updater compatibility gate',
       'cannot by themselves justify approval',
     ]) {
       assert(normalizedAgentInstructions.includes(requiredEvidence), `검수 지침에서 필수 증거가 사라졌습니다: ${requiredEvidence}`);
@@ -548,10 +553,42 @@ function registerCliAndUpdateTests(context) {
     assert(releaseGuide.includes('npm run check:update:legacy'), '공개 업데이트 채널 검증 명령이 사라졌습니다.');
     assert.match(workflow, /\n  pull_request:\r?\n/, '구버전 Windows 검증은 updater PR에서 자동 실행되어야 합니다.');
     assert.match(workflow, /\n  push:\r?\n/, '구버전 Windows 검증은 최종 main 커밋에서 다시 실행되어야 합니다.');
-    for (const sensitivePath of ['src/updateManager.js', 'src/updateInstaller.js', 'src/updateRelaunch.js', 'package.json', '.github/workflows/release.yml']) {
-      assert(workflow.includes(`- "${sensitivePath}"`), `자동 구버전 검증 경로에서 ${sensitivePath}이 빠졌습니다.`);
+    assert(!workflow.split(/\npermissions:\r?\n/, 1)[0].includes('paths:'), '필수 최종 check가 사라지므로 workflow-level paths 필터를 두면 안 됩니다.');
+    assert(workflow.includes('name: Updater compatibility gate'), '모든 PR에 생성되는 안정적인 최종 게이트가 사라졌습니다.');
+    assert(workflow.includes('Whitebox-Setup-1.7.4.exe') && workflow.includes('Whitebox-Setup-1.7.5.exe'), '공식 v1.7.4/v1.7.5 설치본 cohort가 자동 검증에서 빠졌습니다.');
+    assert(
+      workflow.includes('WHITEBOX_FROZEN_VERSION: 1.7.3')
+        && workflow.includes('WHITEBOX_FROZEN_VERSION: 1.7.4')
+        && workflow.includes('WHITEBOX_FROZEN_VERSION: 1.7.5'),
+      'v1.7.3, v1.7.4, v1.7.5를 각각 실행해야 합니다.',
+    );
+    assert(workflow.includes('git diff --name-status --no-renames'), '이동과 삭제를 포함한 event diff 분류가 사라졌습니다.');
+    assert(workflow.includes('node scripts/updater-review-scope.js'), '단일 updater 경로 분류기가 CI에 연결되지 않았습니다.');
+    assert(workflow.includes('true|false') && workflow.includes('invalid sensitivity value'), '분류기 출력이 누락되거나 잘못된 경우 fail-closed 해야 합니다.');
+    assert.equal((workflow.match(/run: npm run test:update:win:frozen/g) || []).length, 3, '세 installed cohort에서 후보 경로를 실행해야 합니다.');
+    assert.equal((releaseWorkflow.match(/run: npm run test:update:win:frozen/g) || []).length, 3, '태그 릴리스도 세 cohort 검증을 다시 실행해야 합니다.');
+    assert(!releaseWorkflow.includes('--clobber'), '기존 릴리스 자산을 덮어쓰면 안 됩니다.');
+    assert(releaseWorkflow.includes('Draft asset bytes differ from the verified build artifact'), '공개 전 draft 자산 byte 검증이 사라졌습니다.');
+    assert(frozenClientTest.includes('85_296_425') && frozenClientTest.includes('4d940cf16425436922a37746417b419c7671c47642c0f24b8c79197af99c2135'), '공식 v1.7.4 설치본 pin이 사라졌습니다.');
+    assert(frozenClientTest.includes('85_297_926') && frozenClientTest.includes('3455b7c9aa9e7c520774995694dbcdb71678a0280a0fde2040693a00d38f2e68'), '공식 v1.7.5 설치본 pin이 사라졌습니다.');
+
+    for (const record of [
+      'A\tsrc/macUpdateHelper.js\n',
+      'M\tsrc/updateManager.js\n',
+      'D\tsrc/updateInstaller.js\n',
+      'M\tpackage-lock.json\n',
+      'M\trenderer/app-events-navigation.js\n',
+      'M\tscripts/mac-update-integration-test.js\n',
+      'D\tscripts/package-content-check.js\n',
+      'M\tscripts/legacy-update-bridge.config.js\n',
+      'R100\tdocs/notes.md\tsrc/updateRelaunch.js\n',
+      'R100\tsrc/macUpdateHelper.js\tdocs/removed-helper.md\n',
+    ]) {
+      assert.equal(classifyNameStatus(record).sensitive, true, `민감 변경을 놓쳤습니다: ${record.trim()}`);
     }
-    assert.equal((workflow.match(/run: npm run test:update:win:v173/g) || []).length, 2, '경합 검증은 동일 후보에서 두 번 실행되어야 합니다.');
+    assert.equal(classifyNameStatus('M\tREADME.md\n').sensitive, false);
+    assert.deepStrictEqual(parseNameStatus('R090\tsrc/old.js\tsrc/updateManager.js\r\n')[0].paths, ['src/old.js', 'src/updateManager.js']);
+    assert.throws(() => parseNameStatus('unexpected output\n'), /Unsupported git name-status/);
   });
 
   test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {

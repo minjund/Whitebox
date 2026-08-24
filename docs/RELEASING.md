@@ -23,7 +23,10 @@ The tag must exactly match `package.json`, for example `v1.4.0`. The workflow
 performs source checks, regression and accuracy tests, production dependency
 audit, and desktop integration tests. Artifacts are first attached to a draft
 GitHub release. npm is then published and verified when enabled; the GitHub
-release becomes public only after those gates succeed.
+release becomes public only after those gates succeed. The draft must contain
+exactly the expected platform artifacts; every downloaded draft asset must be
+byte-identical to its verified build artifact, and the canonical Windows Setup
+and frozen-client manual alias must be byte-identical before npm publication.
 
 ## Updater compatibility review contract
 
@@ -40,30 +43,40 @@ Whitebox 1.7.3/1.7.4 through the manual installer alias, and fixed Whitebox
 as equivalent, compare the updater files extracted from each official packaged
 `app.asar` byte for byte and retain that evidence.
 
-The `Windows v1.7.3 Update Compatibility` workflow automatically runs for
-updater-sensitive pull requests and pushes to `main`. It builds the exact event
-SHA, downloads the pinned official installer, verifies its filename, size and
-SHA-256, and runs the packaged two-hop scenario twice with fresh state. For an
-otherwise unmatched release change, dispatch it manually with the complete
-40-character candidate SHA. Both attempts must pass on the reviewed candidate,
-and the workflow must pass again on the final `main` commit before tagging.
+The `Windows Frozen-Client Update Compatibility` workflow creates the stable
+`Updater compatibility gate` check on every pull request and push to `main`.
+It classifies the complete event diff before any path filtering. A non-sensitive
+diff records an explicit N/A success; a sensitive diff builds the exact event
+SHA, downloads the pinned official v1.7.3, v1.7.4, and v1.7.5 installers,
+verifies each filename, size and SHA-256, and runs the packaged scenario once
+from every cohort with fresh state. For an otherwise unmatched release change,
+dispatch it manually with the complete 40-character candidate SHA. Repository
+rules must require the stable final check, and all three cohort attempts must
+run again in the tag release workflow before a draft can be published.
 
 The packaged scenario must prove both halves of the contract:
 
-1. The official frozen client selects and opens the verified compatibility
-   alias without entering its racy automatic bootstrap, then installs the
-   candidate with the expected version in both the EXE and `app.asar`.
-2. The updater extracted from that installed candidate uses the canonical Setup
-   asset, acknowledges its bootstrap before shutdown, reinstalls the same
-   candidate, restores a renderer-ready window exactly once, and removes its
-   helper, bootstrap, PID sidecar, ready, download, and log artifacts.
+1. Each official frozen client selects the verified compatibility alias without
+   entering its racy automatic bootstrap. CI stubs the OS installer-open call
+   to prove the packaged updater chose that exact alias, closes the old client,
+   then silently invokes the same verified bytes and checks the installed EXE
+   and `app.asar` version.
+2. The updater extracted from official fixed v1.7.5 selects canonical Setup and
+   completes the authenticated automatic helper/bootstrap path to the candidate.
+3. The updater extracted from the installed candidate selects canonical Setup,
+   acknowledges its bootstrap before shutdown, reinstalls the same candidate,
+   and restores a renderer-ready window exactly once. The helper must remove
+   its helper, bootstrap, PID-sidecar, and ready-signal files; the harness must
+   prove no tracked process remains and remove its isolated download, log, and
+   profile state.
 
 Do not approve on a source-only simulation, a target-only clean install, or an
 allowed timeout. Missing official artifacts, an untested supported cohort,
-ambiguous process cleanup, or either failed/retried packaged attempt blocks the
-release. Any exception for an immutable historical client must name the exact
-accepted marker and still require installer success, installed-version,
-relaunch, and cleanup evidence from the same fresh run.
+ambiguous process cleanup, a missing/skipped stable merge check, or any
+failed/retried packaged attempt blocks the release. Any exception for an
+immutable historical client must name the exact accepted marker and still
+require installer success, installed-version, relaunch, and cleanup evidence
+from the same fresh run.
 
 After the release becomes public, run:
 

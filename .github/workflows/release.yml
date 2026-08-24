@@ -101,15 +101,24 @@ jobs:
         run: npm run test:artifacts:win
         env:
           WHITEBOX_ALLOW_UNSIGNED: "true"
-      - name: Download the pinned Whitebox v1.7.3 Windows installer
+      - name: Download the pinned Whitebox v1.7.3, v1.7.4, and v1.7.5 Windows installers
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-v173-source'
+          $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-frozen-source'
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-          gh release download v1.7.3 --repo minjund/Whitebox --pattern Whitebox-Setup-1.7.3.exe --dir $sourceDir
+          Invoke-WebRequest -Uri 'https://github.com/minjund/Whitebox/releases/download/v1.7.3/Whitebox-Setup-1.7.3.exe' -OutFile (Join-Path $sourceDir 'Whitebox-Setup-1.7.3.exe')
+          Invoke-WebRequest -Uri 'https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe' -OutFile (Join-Path $sourceDir 'Whitebox-Setup-1.7.4.exe')
+          Invoke-WebRequest -Uri 'https://github.com/minjund/Whitebox/releases/download/v1.7.5/Whitebox-Setup-1.7.5.exe' -OutFile (Join-Path $sourceDir 'Whitebox-Setup-1.7.5.exe')
+          function Assert-PinnedInstaller([string]$Path, [long]$ExpectedSize, [string]$ExpectedSha256) {
+            $item = Get-Item -LiteralPath $Path
+            if ($item.Length -ne $ExpectedSize) { throw "Pinned installer size mismatch for $Path`: $($item.Length)" }
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+            if ($actualSha256 -cne $ExpectedSha256) { throw "Pinned installer SHA-256 mismatch for $Path`: $actualSha256" }
+          }
+          Assert-PinnedInstaller (Join-Path $sourceDir 'Whitebox-Setup-1.7.3.exe') 85295741 '6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574'
+          Assert-PinnedInstaller (Join-Path $sourceDir 'Whitebox-Setup-1.7.4.exe') 85296425 '4d940cf16425436922a37746417b419c7671c47642c0f24b8c79197af99c2135'
+          Assert-PinnedInstaller (Join-Path $sourceDir 'Whitebox-Setup-1.7.5.exe') 85297926 '3455b7c9aa9e7c520774995694dbcdb71678a0280a0fde2040693a00d38f2e68'
           $targetVersion = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
           $targetInstaller = (Resolve-Path -LiteralPath "release/Whitebox-Setup-$targetVersion.exe").Path
           $manualInstaller = Join-Path (Split-Path -Parent $targetInstaller) "Whitebox-Manual-Setup-$targetVersion-x64.exe"
@@ -117,12 +126,28 @@ jobs:
           if ((Get-Item -LiteralPath $targetInstaller).Length -ne (Get-Item -LiteralPath $manualInstaller).Length) { throw 'Manual bridge installer size differs from canonical Setup' }
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $manualInstaller).Hash) { throw 'Manual bridge installer digest differs from canonical Setup' }
           "WHITEBOX_V173_INSTALLER=$(Join-Path $sourceDir 'Whitebox-Setup-1.7.3.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_V174_INSTALLER=$(Join-Path $sourceDir 'Whitebox-Setup-1.7.4.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_V175_INSTALLER=$(Join-Path $sourceDir 'Whitebox-Setup-1.7.5.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_CURRENT_INSTALLER=$targetInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_MANUAL_INSTALLER=$manualInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Verify packaged v1.7.3 update and target bootstrap acknowledgement
+      - name: Verify packaged v1.7.3 update and target bootstrap acknowledgement (attempt 1)
         if: runner.os == 'Windows'
         timeout-minutes: 10
-        run: npm run test:update:win:v173
+        run: npm run test:update:win:frozen
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.3
+      - name: Verify packaged v1.7.4 update and target bootstrap acknowledgement (attempt 2)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: npm run test:update:win:frozen
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.4
+      - name: Verify packaged v1.7.5 update and target bootstrap acknowledgement (attempt 3)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: npm run test:update:win:frozen
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.5
       - if: runner.os == 'macOS'
         run: npm run test:artifacts:mac
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -148,12 +173,77 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          export RELEASE_VERSION="$release_version"
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.RELEASE_VERSION;
+          const expected = [
+            `Whitebox-Setup-${version}.exe`,
+            `Whitebox-Manual-Setup-${version}-x64.exe`,
+            `Whitebox-${version}-portable.exe`,
+            `Whitebox-${version}-arm64.dmg`,
+            `Whitebox-${version}-x64.dmg`,
+            `Whitebox-${version}-arm64.zip`,
+            `Whitebox-${version}-x64.zip`,
+          ].sort();
+          const actual = fs.readdirSync('release-assets')
+            .filter(name => fs.statSync(`release-assets/${name}`).isFile())
+            .sort();
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error(`Release artifact set mismatch.\nExpected: ${expected.join(', ')}\nActual: ${actual.join(', ')}`);
+          }
+          for (const name of actual) {
+            if (fs.statSync(`release-assets/${name}`).size <= 0) throw new Error(`Empty release artifact: ${name}`);
+          }
+          NODE
+
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --draft=true --repo "$GITHUB_REPOSITORY"
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+            metadata="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease)"
+            METADATA="$metadata" node -e 'const release=JSON.parse(process.env.METADATA);if(release.tagName!==process.env.RELEASE_TAG||release.isDraft!==true||release.isPrerelease!==false)throw new Error("Refusing to reuse a non-matching or already-public release: "+JSON.stringify(release));'
+            echo "Reusing the existing draft without overwriting any asset; byte validation follows."
           else
             gh release create "$RELEASE_TAG" release-assets/* --draft --verify-tag --generate-notes --title "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           fi
+
+          metadata="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease)"
+          METADATA="$metadata" node <<'NODE'
+          const release = JSON.parse(process.env.METADATA);
+          if (release.tagName !== process.env.RELEASE_TAG || release.isDraft !== true || release.isPrerelease !== false) {
+            throw new Error(`Draft release state mismatch: ${JSON.stringify(release)}`);
+          }
+          NODE
+          download_dir="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$download_dir"
+          DRAFT_DOWNLOAD_DIR="$download_dir" node <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const localDir = path.resolve('release-assets');
+          const draftDir = process.env.DRAFT_DOWNLOAD_DIR;
+          const localNames = fs.readdirSync(localDir).filter(name => fs.statSync(path.join(localDir, name)).isFile()).sort();
+          const draftNames = fs.readdirSync(draftDir).filter(name => fs.statSync(path.join(draftDir, name)).isFile()).sort();
+          if (JSON.stringify(localNames) !== JSON.stringify(draftNames)) {
+            throw new Error(`Draft asset set mismatch.\nLocal: ${localNames.join(', ')}\nDraft: ${draftNames.join(', ')}`);
+          }
+          const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          for (const name of localNames) {
+            const local = path.join(localDir, name);
+            const draft = path.join(draftDir, name);
+            const localStat = fs.statSync(local);
+            const draftStat = fs.statSync(draft);
+            if (localStat.size !== draftStat.size || digest(local) !== digest(draft)) {
+              throw new Error(`Draft asset bytes differ from the verified build artifact: ${name}`);
+            }
+          }
+          const version = process.env.RELEASE_VERSION;
+          const canonical = path.join(draftDir, `Whitebox-Setup-${version}.exe`);
+          const manual = path.join(draftDir, `Whitebox-Manual-Setup-${version}-x64.exe`);
+          if (fs.statSync(canonical).size !== fs.statSync(manual).size || digest(canonical) !== digest(manual)) {
+            throw new Error('Canonical Setup and frozen-client manual alias are not byte-identical.');
+          }
+          NODE
 
   publish-npm:
     needs: draft-release
