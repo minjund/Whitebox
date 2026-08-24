@@ -140,22 +140,22 @@ function stopProcessesAtExactPath(executable, label) {
 function processCommandReferences(pid, file) {
   if (!Number.isSafeInteger(pid) || pid <= 0 || !file) return false;
   const script = [
-    "$process = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $env:WHITEBOX_INTEGRATION_PID) -ErrorAction SilentlyContinue;",
+    "$ErrorActionPreference = 'Stop';",
+    "$process = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $env:WHITEBOX_INTEGRATION_PID) -ErrorAction Stop;",
     'if ($process -and -not [string]::IsNullOrWhiteSpace([string]$process.CommandLine) -and',
-    '    ([string]$process.CommandLine).IndexOf($env:WHITEBOX_INTEGRATION_COMMAND_PATH, [StringComparison]::OrdinalIgnoreCase) -ge 0) { exit 0 }',
-    'exit 1',
+    "    ([string]$process.CommandLine).IndexOf($env:WHITEBOX_INTEGRATION_COMMAND_PATH, [StringComparison]::OrdinalIgnoreCase) -ge 0) { [Console]::Write('match') }",
+    "else { [Console]::Write('no-match') }",
   ].join(' ');
-  const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: {
       ...process.env,
       WHITEBOX_INTEGRATION_PID: String(pid),
       WHITEBOX_INTEGRATION_COMMAND_PATH: file,
     },
-    windowsHide: true,
     timeout: 30_000,
-  });
-  return result.status === 0;
+  }).stdout.trim();
+  if (output !== 'match' && output !== 'no-match') throw new Error(`Unexpected updater process lookup result: ${output}`);
+  return output === 'match';
 }
 
 function closeInstalledAppGracefully(pid) {
