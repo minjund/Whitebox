@@ -6,7 +6,12 @@ const path = require('path');
 const COHORT_MANIFEST_PATH = path.join(__dirname, 'update-compatibility-cohorts.json');
 const LATEST_STABLE_RELEASE_API = 'https://api.github.com/repos/minjund/Whitebox/releases/latest';
 const MAX_RELEASE_RESPONSE_BYTES = 2 * 1024 * 1024;
-const FROZEN_VERSIONS = Object.freeze(['1.7.3', '1.7.4']);
+const FROZEN_COHORTS = Object.freeze([
+  Object.freeze({ version: '1.7.3', installMode: 'manual' }),
+  Object.freeze({ version: '1.7.4', installMode: 'manual' }),
+  Object.freeze({ version: '1.7.5', installMode: 'automatic' }),
+]);
+const FROZEN_VERSIONS = Object.freeze(FROZEN_COHORTS.map(cohort => cohort.version));
 const COHORT_KEYS = Object.freeze(['env', 'installMode', 'sha256', 'size', 'url', 'version']);
 
 function isPlainObject(value) {
@@ -68,11 +73,14 @@ function validateCohortManifest(value) {
   if (!Array.isArray(value.frozen) || value.frozen.length !== FROZEN_VERSIONS.length) {
     throw new Error(`Compatibility cohort manifest must contain exactly ${FROZEN_VERSIONS.length} frozen cohorts`);
   }
-  const frozen = value.frozen.map((cohort, index) => validateCohort(cohort, {
-    expectedInstallMode: 'manual',
-    expectedVersion: FROZEN_VERSIONS[index],
-    label: `frozen[${index}]`,
-  }));
+  const frozen = value.frozen.map((cohort, index) => {
+    const expected = FROZEN_COHORTS[index];
+    return validateCohort(cohort, {
+      expectedInstallMode: expected.installMode,
+      expectedVersion: expected.version,
+      label: `frozen[${index}]`,
+    });
+  });
   const previousFixed = validateCohort(value.previousFixed, {
     expectedInstallMode: 'automatic',
     label: 'previousFixed',
@@ -101,7 +109,7 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
-  return [...validated.frozen, validated.previousFixed];
+  return [...validated.frozen];
 }
 
 function validateLatestStableRelease(manifest, release) {

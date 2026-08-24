@@ -142,10 +142,10 @@ jobs:
         shell: pwsh
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          if (@($manifest.frozen).Count -ne 2 -or $null -eq $manifest.previousFixed) {
-            throw 'Compatibility cohort manifest must contain two frozen cohorts and one previousFixed cohort'
+          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
+            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
           }
-          $cohorts = @($manifest.frozen) + @($manifest.previousFixed)
+          $cohorts = @($manifest.frozen)
           if ($cohorts.Count -ne 3) { throw "Expected exactly three compatibility cohorts, found $($cohorts.Count)" }
           $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-frozen-source'
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
@@ -241,7 +241,10 @@ jobs:
         timeout-minutes: 30
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          $cohorts = @($manifest.frozen) + @($manifest.previousFixed)
+          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
+            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
+          }
+          $cohorts = @($manifest.frozen)
           if ($cohorts.Count -ne 3) { throw "Expected exactly three compatibility cohorts, found $($cohorts.Count)" }
           $attempt = 0
           foreach ($cohort in $cohorts) {
@@ -321,15 +324,20 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* --draft --verify-tag --generate-notes --title "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           fi
 
-          metadata="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease)"
-          METADATA="$metadata" node <<'NODE'
+          metadata="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId,tagName,isDraft,isPrerelease)"
+          release_id="$(METADATA="$metadata" node <<'NODE'
           const release = JSON.parse(process.env.METADATA);
           if (release.tagName !== process.env.RELEASE_TAG || release.isDraft !== true || release.isPrerelease !== false) {
             throw new Error(`Draft release state mismatch: ${JSON.stringify(release)}`);
           }
+          if (!Number.isSafeInteger(release.databaseId) || release.databaseId <= 0) {
+            throw new Error(`Draft release database ID was invalid: ${JSON.stringify(release)}`);
+          }
+          process.stdout.write(String(release.databaseId));
           NODE
+          )"
           gh api -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/whitebox-draft-release.json"
+            "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/whitebox-draft-release.json"
           WHITEBOX_RELEASE_VERSION="$release_version" \
             WHITEBOX_RELEASE_ASSET_DIR="release-assets" \
             WHITEBOX_RELEASE_JSON="$RUNNER_TEMP/whitebox-draft-release.json" \
