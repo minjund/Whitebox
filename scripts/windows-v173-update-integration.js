@@ -69,6 +69,7 @@ const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const updateInstallerPaths = new Set();
 const trackedUpdateProcesses = new Map();
+const installedProcessImageNames = new Set([path.basename(installedExecutable)]);
 let activeAppPid = 0;
 let installationStarted = false;
 let uninstallerAttemptCount = 0;
@@ -147,53 +148,117 @@ function userDataReferences(commandLine) {
   return references;
 }
 
-function runningInstalledAppCommandLines() {
+function canonicalExistingPath(candidate) {
+  const canonical = fs.realpathSync.native(path.resolve(candidate));
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+function canonicalPath(candidate) {
+  const resolved = path.resolve(candidate);
+  const missingSegments = [];
+  let existingAncestor = resolved;
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    assert.notEqual(parent, existingAncestor, `No existing ancestor was available for canonical path: ${candidate}`);
+    missingSegments.unshift(path.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  const canonical = path.join(fs.realpathSync.native(existingAncestor), ...missingSegments);
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+function exactProcessRecord(expectedPid) {
+  assert(Number.isSafeInteger(expectedPid) && expectedPid > 0, `Invalid installed-app PID: ${expectedPid}`);
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    '$directory = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_INSTALL_DIR).TrimEnd([char]92) + [char]92',
+    '$processId = [int]$env:WHITEBOX_INTEGRATION_PID',
+    "$cim = @(Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $processId) -ErrorAction Stop)",
+    "if ($cim.Count -ne 1) { throw ('Expected exactly one Win32_Process record for PID ' + $processId + ', found ' + $cim.Count) }",
+    '$process = Get-Process -Id $processId -ErrorAction Stop',
+    '$imagePath = [string]$process.Path',
+    '$commandLine = [string]$cim[0].CommandLine',
+    "if ([string]::IsNullOrWhiteSpace($imagePath)) { throw ('Process image path was unavailable for PID ' + $processId) }",
+    "if ([string]::IsNullOrWhiteSpace($commandLine)) { throw ('Process command line was unavailable for PID ' + $processId) }",
+    '$encodedImagePath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($imagePath))',
+    '$encodedCommandLine = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandLine))',
+    '[Console]::Write(([string]$processId) + "|" + $encodedImagePath + "|" + $encodedCommandLine)',
+  ].join('\n');
+  const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(expectedPid) },
+    timeout: 30_000,
+  }).stdout.trim();
+  const fields = output.split('|');
+  assert.equal(fields.length, 3, `Unexpected exact installed-app process record: ${output}`);
+  const pid = Number(fields[0]);
+  assert.equal(pid, expectedPid, `Exact installed-app process lookup returned PID ${pid}, expected ${expectedPid}.`);
+  const executablePath = Buffer.from(fields[1], 'base64').toString('utf8');
+  const commandLine = Buffer.from(fields[2], 'base64').toString('utf8');
+  assert(executablePath.trim(), `Exact installed-app executable path was empty for PID ${expectedPid}.`);
+  assert(commandLine.trim(), `Exact installed-app command line was empty for PID ${expectedPid}.`);
+  return { pid, executablePath, commandLine };
+}
+
+function runningInstalledAppCommandLines(expectedExecutable) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$executableName = $env:WHITEBOX_INTEGRATION_EXECUTABLE_NAME',
     '$records = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {',
     '  $executablePath = [string]$_.ExecutablePath',
-    '  if (-not [string]::IsNullOrWhiteSpace($executablePath) -and',
-    '      $executablePath.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase)) {',
-    '    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))',
-    '    ([string]$_.ProcessId) + "|" + $encoded',
+    '  if ([string]$_.Name -ieq $executableName) {',
+    '    $encodedPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($executablePath))',
+    '    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))',
+    '    ([string]$_.ProcessId) + "|" + $encodedPath + "|" + $encodedCommand',
     '  }',
     '})',
     '[Console]::Write((@($records | Sort-Object -Unique) -join "`n"))',
   ].join('\n');
   const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, WHITEBOX_INTEGRATION_INSTALL_DIR: installDir },
+    env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE_NAME: path.basename(expectedExecutable) },
     timeout: 30_000,
   }).stdout.trim();
+  const expectedCanonicalPath = canonicalExistingPath(expectedExecutable);
   return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
-    const separator = record.indexOf('|');
-    assert(separator > 0, `Unexpected installed-app command-line record: ${record}`);
-    const pid = Number(record.slice(0, separator));
+    const fields = record.split('|');
+    assert.equal(fields.length, 3, `Unexpected installed-app command-line record: ${record}`);
+    const pid = Number(fields[0]);
     assert(Number.isSafeInteger(pid) && pid > 0, `Unexpected installed-app PID record: ${record}`);
+    const executablePath = Buffer.from(fields[1], 'base64').toString('utf8');
+    const commandLine = Buffer.from(fields[2], 'base64').toString('utf8');
+    assert(executablePath.trim(), `Installed-app executable path was empty for PID ${pid}.`);
+    assert(commandLine.trim(), `Installed-app command line was empty for PID ${pid}.`);
     return {
       pid,
-      commandLine: Buffer.from(record.slice(separator + 1), 'base64').toString('utf8'),
+      executablePath,
+      commandLine,
     };
-  }) : [];
+  }).filter(record => canonicalExistingPath(record.executablePath) === expectedCanonicalPath) : [];
 }
 
-function assertInstalledAppProfileIsolation(expectedPid, label, requireDirectProfile = false) {
+function assertInstalledAppProfileIsolation(expectedPid, expectedExecutable, label, requireDirectProfile = false) {
   assertIsolatedProfileEnvironment(label);
-  const records = runningInstalledAppCommandLines();
-  const expectedRecord = records.find(record => record.pid === expectedPid);
-  assert(expectedRecord, `${label}: installed app process ${expectedPid} was not observable for profile verification.`);
+  const expectedRecord = exactProcessRecord(expectedPid);
+  assert.equal(
+    canonicalExistingPath(expectedRecord.executablePath),
+    canonicalExistingPath(expectedExecutable),
+    `${label}: PID ${expectedPid} did not resolve to the exact expected installed executable.`,
+  );
+  const records = [
+    expectedRecord,
+    ...runningInstalledAppCommandLines(expectedExecutable).filter(record => record.pid !== expectedPid),
+  ];
   for (const record of records) {
     const references = userDataReferences(record.commandLine);
     for (const reference of references) {
-      const isExpectedRoot = pathIsWithin(isolatedAppDataRoot, reference)
-        || pathIsWithin(isolatedLocalAppDataRoot, reference);
+      const canonicalReference = canonicalExistingPath(reference);
+      const isExpectedRoot = pathIsWithin(canonicalExistingPath(isolatedAppDataRoot), canonicalReference)
+        || pathIsWithin(canonicalExistingPath(isolatedLocalAppDataRoot), canonicalReference);
       assert.equal(isExpectedRoot, true,
         `${label}: process ${record.pid} references a user-data path outside the attempt roots: ${reference}`);
     }
     if (record.pid === expectedPid && requireDirectProfile) {
       assert.deepStrictEqual(
-        references.map(reference => path.resolve(reference).toLowerCase()),
-        [path.resolve(directUserDataDir).toLowerCase()],
+        references.map(canonicalExistingPath),
+        [canonicalExistingPath(directUserDataDir)],
         `${label}: directly spawned app did not use exactly the fresh explicit Electron profile.`,
       );
     }
@@ -277,15 +342,28 @@ async function waitForProcessExit(pid, timeoutMs = 30_000) {
 function runningProcessIds(executable) {
   const script = [
     "$ErrorActionPreference = 'Stop';",
-    '$ids = @(Get-CimInstance Win32_Process -ErrorAction Stop |',
-    '  Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and [string]$_.ExecutablePath -ieq $env:WHITEBOX_INTEGRATION_EXECUTABLE } |',
-    '  ForEach-Object { [string]$_.ProcessId });',
-    '[Console]::Write(($ids -join ","))',
+    '$records = @(Get-CimInstance Win32_Process -ErrorAction Stop |',
+    '  Where-Object { [string]$_.Name -ieq $env:WHITEBOX_INTEGRATION_EXECUTABLE_NAME } |',
+    '  ForEach-Object {',
+    '    $encodedPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.ExecutablePath))',
+    '    ([string]$_.ProcessId) + "|" + $encodedPath',
+    '  });',
+    '[Console]::Write(($records -join "`n"))',
   ].join(' ');
   const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE: executable },
+    env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE_NAME: path.basename(executable) },
   }).stdout.trim();
-  return output ? output.split(',').map(value => Number(value)).filter(Number.isSafeInteger) : [];
+  const expectedCanonicalPath = canonicalExistingPath(executable);
+  return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
+    const fields = record.split('|');
+    assert.equal(fields.length, 2, `Unexpected exact-path process record: ${record}`);
+    const pid = Number(fields[0]);
+    assert(Number.isSafeInteger(pid) && pid > 0, `Unexpected exact-path process PID: ${record}`);
+    const executablePath = Buffer.from(fields[1], 'base64').toString('utf8');
+    assert(executablePath.trim(), `Executable path was unavailable for ${path.basename(executable)} PID ${pid}.`);
+    return { pid, executablePath };
+  }).filter(record => canonicalExistingPath(record.executablePath) === expectedCanonicalPath)
+    .map(record => record.pid) : [];
 }
 
 function stopProcessTree(pid) {
@@ -303,31 +381,63 @@ function stopProcessesAtExactPath(executable, label) {
   if (remaining.length) throw new Error(`${label} processes remained after cleanup: ${remaining.join(',')}`);
 }
 
+function rememberInstalledProcessImageNames(directory) {
+  const resolvedDirectory = path.resolve(directory);
+  if (!fs.existsSync(resolvedDirectory)) return [...installedProcessImageNames].sort();
+  const rootState = fs.lstatSync(resolvedDirectory);
+  assert(rootState.isDirectory() && !rootState.isSymbolicLink(),
+    `Installed process image scan root must be a real directory: ${resolvedDirectory}`);
+  const pendingDirectories = [resolvedDirectory];
+  while (pendingDirectories.length) {
+    const currentDirectory = pendingDirectories.pop();
+    for (const entry of fs.readdirSync(currentDirectory, { withFileTypes: true })) {
+      const entryPath = path.join(currentDirectory, entry.name);
+      assert.equal(entry.isSymbolicLink(), false,
+        `Installed process image scan does not follow links or reparse points: ${entryPath}`);
+      if (entry.isDirectory()) {
+        pendingDirectories.push(entryPath);
+      } else if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.exe') {
+        installedProcessImageNames.add(entry.name);
+      }
+    }
+  }
+  return [...installedProcessImageNames].sort();
+}
+
 function runningProcessesUnderDirectory(directory) {
+  const guardedNames = rememberInstalledProcessImageNames(directory);
+  assert(guardedNames.length > 0 && guardedNames.every(name => name && !name.includes('|')),
+    `Installed process image names were invalid: ${guardedNames.join(', ')}`);
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    '$directory = [IO.Path]::GetFullPath($env:WHITEBOX_INTEGRATION_INSTALL_DIR).TrimEnd([char]92) + [char]92',
+    '$guardedNames = @($env:WHITEBOX_INTEGRATION_EXECUTABLE_NAMES -split "\\|")',
     '$records = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {',
-    '  $executablePath = [string]$_.ExecutablePath',
-    '  if (-not [string]::IsNullOrWhiteSpace($executablePath) -and',
-    '      $executablePath.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase)) {',
-    '    ([string]$_.ProcessId) + "|" + $executablePath',
+    '  if ($guardedNames -icontains [string]$_.Name) {',
+    '    $executablePath = [string]$_.ExecutablePath',
+    "    if ([string]::IsNullOrWhiteSpace($executablePath)) { throw ('Executable path was unavailable for guarded PID ' + [string]$_.ProcessId) }",
+    '    else {',
+    '      $encodedPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($executablePath))',
+    '      ([string]$_.ProcessId) + "|" + $encodedPath',
+    '    }',
     '  }',
     '})',
     '[Console]::Write((@($records | Sort-Object -Unique) -join "`n"))',
   ].join('\n');
   const output = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, WHITEBOX_INTEGRATION_INSTALL_DIR: directory },
+    env: { ...process.env, WHITEBOX_INTEGRATION_EXECUTABLE_NAMES: guardedNames.join('|') },
     timeout: 30_000,
   }).stdout.trim();
+  const canonicalDirectory = canonicalPath(directory);
   return output ? output.split(/\r?\n/).filter(Boolean).map(record => {
     const separator = record.indexOf('|');
     const pid = Number(separator >= 0 ? record.slice(0, separator) : '');
     if (!Number.isSafeInteger(pid) || pid <= 0 || separator < 0) {
       throw new Error(`Unexpected installed-path process record: ${record}`);
     }
-    return { pid, executablePath: record.slice(separator + 1) };
-  }) : [];
+    const executablePath = Buffer.from(record.slice(separator + 1), 'base64').toString('utf8');
+    assert(executablePath.trim(), `Installed-path process executable was empty for PID ${pid}.`);
+    return { pid, executablePath };
+  }).filter(record => pathIsWithin(canonicalDirectory, canonicalExistingPath(record.executablePath))) : [];
 }
 
 function stopProcessesUnderDirectory(directory, label) {
@@ -584,7 +694,7 @@ async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000)
       assert.equal(linesStarting(lines, 'rendererReady=').length, 1, 'The helper must observe one renderer-ready handshake.');
       assert.equal(linesStarting(lines, 'candidate=').some(line => line.endsWith(`;version=${expectedVersion}`)), true);
       const pid = Number(match[1]);
-      assertInstalledAppProfileIsolation(pid, `updater relaunch ${expectedVersion}`);
+      assertInstalledAppProfileIsolation(pid, installedExecutable, `updater relaunch ${expectedVersion}`);
       assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
       return pid;
     }
@@ -635,6 +745,10 @@ async function startInstalledApp(expectedVersion) {
     },
     stdio: 'ignore',
   });
+  let exitObservation = null;
+  child.once('exit', (code, signal) => {
+    exitObservation = { code, signal, observedAt: new Date().toISOString() };
+  });
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
@@ -668,7 +782,7 @@ async function startInstalledApp(expectedVersion) {
     }
     if (observedSignal) {
       try {
-        assertInstalledAppProfileIsolation(child.pid, `direct app start ${expectedVersion}`, true);
+        assertInstalledAppProfileIsolation(child.pid, installedExecutable, `direct app start ${expectedVersion}`, true);
         assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
         fs.rmSync(rendererReadyPath, { force: true });
         return child.pid;
@@ -676,12 +790,23 @@ async function startInstalledApp(expectedVersion) {
         lastProfileEvidenceError = error;
       }
     }
-    if (child.exitCode !== null) throw new Error(`Installed app exited before renderer readiness (${child.exitCode}).`);
+    if (exitObservation || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Installed app exited before profile verification: ${JSON.stringify({
+        pid: child.pid,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+        exitObservation,
+      })}`);
+    }
+    if (observedSignal && !processAlive(child.pid)) {
+      throw new Error(`Installed app PID ${child.pid} disappeared after writing renderer readiness.`);
+    }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error([
     `Installed app did not complete renderer readiness and profile verification for ${expectedVersion}: ${child.pid}`,
     observedSignal && `Renderer-ready signal: ${JSON.stringify(observedSignal)}`,
+    `Child state: ${JSON.stringify({ exitCode: child.exitCode, signalCode: child.signalCode, exitObservation })}`,
     lastProfileEvidenceError && `Last profile evidence error: ${lastProfileEvidenceError.stack || lastProfileEvidenceError.message}`,
   ].filter(Boolean).join('\n'));
 }
@@ -1022,7 +1147,7 @@ async function main() {
   assert.equal(processAlive(activeAppPid), true);
   assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
   assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
-  assertInstalledAppProfileIsolation(activeAppPid, 'completed frozen-client attempt');
+  assertInstalledAppProfileIsolation(activeAppPid, installedExecutable, 'completed frozen-client attempt');
 
   console.log(`✓ Official Whitebox ${SOURCE_VERSION} reached ${targetVersion} through its packaged ${sourceCohort.installMode} path; the candidate updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }

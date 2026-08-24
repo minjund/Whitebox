@@ -727,6 +727,46 @@ function registerCliAndUpdateTests(context) {
       assert(integrationSource.includes("assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile')")
         && integrationSource.includes("assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile')"),
       `${label} E2E는 direct 프로필과 helper 상속 기본 프로필이 실제 생성·사용됐음을 입증해야 합니다.`);
+      const exactProcessEvidence = integrationSource.slice(
+        integrationSource.indexOf('function exactProcessRecord'),
+        integrationSource.indexOf('function runningInstalledAppCommandLines'),
+      );
+      assert(exactProcessEvidence.includes("Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $processId)")
+        && exactProcessEvidence.includes('Get-Process -Id $processId')
+        && exactProcessEvidence.includes('$imagePath = [string]$process.Path')
+        && exactProcessEvidence.includes('$commandLine = [string]$cim[0].CommandLine')
+        && exactProcessEvidence.includes('IsNullOrWhiteSpace($imagePath)')
+        && exactProcessEvidence.includes('IsNullOrWhiteSpace($commandLine)'),
+      `${label} E2E는 expected PID의 실제 image path와 CIM command line을 경로 선필터 없이 각각 fail-closed 조회해야 합니다.`);
+      const profileEvidence = integrationSource.slice(
+        integrationSource.indexOf('function runningInstalledAppCommandLines'),
+        integrationSource.indexOf('function assertProfileDirectoryUsed'),
+      );
+      assert(integrationSource.includes('fs.realpathSync.native(path.resolve(candidate))')
+        && profileEvidence.includes('canonicalExistingPath(expectedRecord.executablePath)')
+        && profileEvidence.includes('canonicalExistingPath(expectedExecutable)')
+        && profileEvidence.includes('runningInstalledAppCommandLines(expectedExecutable).filter(record => record.pid !== expectedPid)')
+        && profileEvidence.includes("[string]$_.Name -ieq $executableName")
+        && profileEvidence.includes('canonicalReference = canonicalExistingPath(reference)'),
+      `${label} E2E는 8.3·long·junction 표기를 canonical exact executable/profile 증거로 통합해야 합니다.`);
+      assert(!integrationSource.includes('$executablePath.StartsWith($directory')
+        && !integrationSource.includes('[string]$_.ExecutablePath -ieq $env:WHITEBOX_INTEGRATION_EXECUTABLE'),
+      `${label} E2E는 raw WMI 경로 prefix/equality로 프로세스 증거를 먼저 버리면 안 됩니다.`);
+      const cleanupEvidence = integrationSource.slice(
+        integrationSource.indexOf('function rememberInstalledProcessImageNames'),
+        integrationSource.indexOf('function stopProcessesUnderDirectory'),
+      );
+      assert(integrationSource.includes('const installedProcessImageNames = new Set(')
+        && cleanupEvidence.includes("fs.readdirSync(currentDirectory, { withFileTypes: true })")
+        && cleanupEvidence.includes('entry.isSymbolicLink()')
+        && cleanupEvidence.includes("path.extname(entry.name).toLowerCase() === '.exe'")
+        && cleanupEvidence.includes('installedProcessImageNames.add(entry.name)')
+        && cleanupEvidence.includes("WHITEBOX_INTEGRATION_EXECUTABLE_NAMES: guardedNames.join('|')")
+        && cleanupEvidence.includes('Get-CimInstance Win32_Process -ErrorAction Stop')
+        && cleanupEvidence.includes('canonicalDirectory = canonicalPath(directory)')
+        && cleanupEvidence.includes('pathIsWithin(canonicalDirectory, canonicalExistingPath(record.executablePath))')
+        && cleanupEvidence.includes('Executable path was unavailable for guarded PID'),
+      `${label} E2E cleanup은 설치 트리의 모든 executable 이름을 보존하고 canonical 경로로 short/long 표기를 통합해야 합니다.`);
       for (const profilePath of [
         'isolatedProfileRoot',
         'isolatedAppDataRoot',
@@ -751,16 +791,40 @@ function registerCliAndUpdateTests(context) {
     assert(frozenDirectStart.includes('let lastProfileEvidenceError = null')
       && frozenDirectStart.includes('lastProfileEvidenceError = error')
       && frozenDirectStart.includes('Last profile evidence error:')
+      && frozenDirectStart.includes('child.signalCode !== null')
+      && frozenDirectStart.includes('observedSignal && !processAlive(child.pid)')
       && directProfileProcessCheck >= 0
       && directProfileDirectoryCheck > directProfileProcessCheck
       && directReadySignalCleanup > directProfileDirectoryCheck,
     'frozen-client E2E는 renderer-ready 신호를 보존한 채 일시적인 CIM/profile 증거 지연을 재시도하고 최종 원인을 노출해야 합니다.');
     assert.equal((legacyClientTest.match(/spawn\(executable, \[directUserDataArgument\]/g) || []).length, 2,
       'legacy E2E의 parent 및 renderer-ready fallback/manual 실행은 모두 fresh --user-data-dir를 사용해야 합니다.');
+    assert(legacyClientTest.includes('waitForRelaunch(launched.logPath, options.expectedVersion, options.relaunchAppPath)')
+      && legacyClientTest.includes('assertInstalledAppProfileIsolation(pid, expectedExecutable,'),
+    'legacy E2E의 bridge와 Whitebox 재실행은 각 hop의 정확한 설치 실행 파일 identity를 따로 검증해야 합니다.');
+    const legacyRendererReadyStart = legacyClientTest.slice(
+      legacyClientTest.indexOf('async function startInstalledAppWithRendererReady'),
+      legacyClientTest.indexOf('async function waitForInstallCleanup'),
+    );
+    const legacyProfileProcessCheck = legacyRendererReadyStart.indexOf('assertInstalledAppProfileIsolation');
+    const legacyProfileDirectoryCheck = legacyRendererReadyStart.indexOf('assertProfileDirectoryUsed');
+    const legacyReadySignalCleanup = legacyRendererReadyStart.indexOf('fs.rmSync(rendererReadyPath');
+    assert(legacyRendererReadyStart.includes('`install-renderer-ready-${rendererReadyToken}.json`')
+      && !legacyRendererReadyStart.includes('manual-install-renderer-ready-')
+      && legacyRendererReadyStart.includes('let lastProfileEvidenceError = null')
+      && legacyRendererReadyStart.includes('lastProfileEvidenceError = error')
+      && legacyRendererReadyStart.includes('Last profile evidence error:')
+      && legacyRendererReadyStart.includes('child.signalCode !== null')
+      && legacyRendererReadyStart.includes('observedSignal && !processAlive(child.pid)')
+      && legacyProfileProcessCheck >= 0
+      && legacyProfileDirectoryCheck > legacyProfileProcessCheck
+      && legacyReadySignalCleanup > legacyProfileDirectoryCheck,
+    'legacy manual/fallback 실행도 인증 가능한 파일명으로 renderer-ready 신호를 보존하고 exact process/profile 증거 뒤에만 삭제해야 합니다.');
     assert(!frozenClientTest.includes('spawn(installedExecutable, [],') && !legacyClientTest.includes('spawn(executable, [],'),
       '패키지 Windows E2E에 격리되지 않은 direct installed-app 실행을 남기면 안 됩니다.');
     assert(legacyClientTest.includes('async function waitForProfileDirectoryUsed')
       && legacyClientTest.includes("await waitForProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile', child)")
+      && legacyClientTest.includes('child.exitCode !== null || child.signalCode !== null')
       && !legacyClientTest.includes('await new Promise(resolve => setTimeout(resolve, 1_000))'),
     'legacy 초기 앱은 고정 1초 지연 대신 child 조기 종료를 감시하는 bounded profile polling을 사용해야 합니다.');
     const legacyFallback = legacyClientTest.slice(legacyClientTest.indexOf("if (!options.allowLegacyBootstrapFallback"), legacyClientTest.indexOf('async function installCandidateWithManualBridge'));
