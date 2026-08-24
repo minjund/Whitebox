@@ -31,6 +31,7 @@ const {
   LEGACY_READY_TOKEN_ENV,
   READY_PATH_ENV,
   READY_TOKEN_ENV,
+  applyWindowsUpdateRelaunchProfile,
   readUpdateRelaunchRequest,
   signalRendererReady,
 } = require('./src/updateRelaunch');
@@ -81,6 +82,13 @@ const ALLOW_UNSIGNED_MAC_UPDATES = packageMetadata.whitebox?.distributionChannel
 app.setName(PRODUCT_NAME);
 process.title = PRODUCT_NAME;
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+applyWindowsUpdateRelaunchProfile({
+  app,
+  environment: process.env,
+  platform: process.platform,
+  productName: PRODUCT_NAME,
+  request: pendingUpdateRelaunch,
+});
 const brandUserData = selectBrandUserData({ userDataPath: app.getPath('userData') });
 for (const selectionError of brandUserData.errors) {
   reportRecoverableError(`brand-user-data:${selectionError.operation}:${selectionError.path}`, new Error(selectionError.message));

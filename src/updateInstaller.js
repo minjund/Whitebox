@@ -1004,6 +1004,7 @@ async function launchDownloadedUpdate(options = {}) {
     detached: false,
     windowsHide: true,
     stdio: 'ignore',
+    env: { ...process.env, ...(options.environment || {}) },
   });
   let readySignal = null;
   let bootstrapAcknowledged = false;

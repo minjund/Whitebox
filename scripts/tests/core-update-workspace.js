@@ -34,7 +34,11 @@ const {
   readBundleMetadata,
   terminateApplication,
 } = require('../../src/macUpdateHelper');
-const { readUpdateRelaunchRequest, signalRendererReady } = require('../../src/updateRelaunch');
+const {
+  applyWindowsUpdateRelaunchProfile,
+  readUpdateRelaunchRequest,
+  signalRendererReady,
+} = require('../../src/updateRelaunch');
 const { normalizeWorkspaces, readWorkspaces, removeWorkspace, writeWorkspaces } = require('../../src/workspaceStore');
 const { macPathEntries, preferredNvmBin } = require('../../src/platformPath');
 const { ensureMacNodePtyRuntime, unpackedAsarPath } = require('../../src/nodePtyRuntime');
@@ -529,6 +533,135 @@ function registerCliAndUpdateTests(context) {
       WHITEBOX_UPDATE_READY_TOKEN: token,
     }), null);
     assert.deepStrictEqual(await signalRendererReady({ environment: {} }), { signaled: false, readyPath: '' });
+  });
+
+  test('Windows 업데이트 재실행은 검증된 격리 APPDATA를 Electron 프로필로 적용한다', () => {
+    const appDataPath = 'C:\\attempt\\roaming';
+    const userDataPath = `${appDataPath}\\Whitebox`;
+    const directoryRecords = new Map([
+      [appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: false }],
+    ]);
+    const stateFor = candidate => {
+      const record = directoryRecords.get(String(candidate).toLowerCase());
+      if (!record) throw Object.assign(new Error(`missing: ${candidate}`), { code: 'ENOENT' });
+      return {
+        isDirectory: () => true,
+        isSymbolicLink: () => record.symbolic,
+      };
+    };
+    const realpath = candidate => stateFor(candidate) && directoryRecords.get(String(candidate).toLowerCase()).canonical;
+    realpath.native = realpath;
+    const fileSystem = {
+      lstatSync: stateFor,
+      mkdirSync: (candidate, options) => {
+        assert.deepStrictEqual(options, { mode: 0o700 });
+        directoryRecords.set(String(candidate).toLowerCase(), { canonical: String(candidate), symbolic: false });
+      },
+      realpathSync: realpath,
+    };
+    const setPaths = [];
+    const electronApp = {
+      commandLine: { hasSwitch: () => false },
+      setPath: (name, value) => setPaths.push([name, value]),
+    };
+    const request = {
+      readyPath: `C:\\attempt\\install-renderer-ready-${'a'.repeat(48)}.json`,
+      token: 'a'.repeat(48),
+    };
+
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      productName: 'Whitebox',
+      request,
+    }), { applied: true, appDataPath, userDataPath });
+    assert.deepStrictEqual(setPaths, [
+      ['appData', appDataPath],
+      ['userData', userDataPath],
+    ]);
+
+    let fileSystemTouched = false;
+    const explicitSetPaths = [];
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({
+      app: {
+        commandLine: { hasSwitch: name => name === 'user-data-dir' },
+        setPath: (...values) => explicitSetPaths.push(values),
+      },
+      environment: { APPDATA: 'relative' },
+      fileSystem: {
+        lstatSync: () => { fileSystemTouched = true; throw new Error('unexpected'); },
+      },
+      platform: 'win32',
+      request,
+    }), { applied: false, reason: 'explicit-user-data-dir' });
+    assert.equal(fileSystemTouched, false);
+    assert.deepStrictEqual(explicitSetPaths, []);
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({ platform: 'linux', request }), {
+      applied: false,
+      reason: 'not-windows',
+    });
+    assert.deepStrictEqual(applyWindowsUpdateRelaunchProfile({ platform: 'win32' }), {
+      applied: false,
+      reason: 'not-update-relaunch',
+    });
+
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: 'relative' },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /APPDATA.*절대 경로/);
+    directoryRecords.set(appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: true });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /APPDATA.*실제 디렉터리/);
+    directoryRecords.set(appDataPath.toLowerCase(), { canonical: appDataPath, symbolic: false });
+    directoryRecords.set(userDataPath.toLowerCase(), { canonical: userDataPath, symbolic: true });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /userData.*실제 디렉터리/);
+    directoryRecords.set(userDataPath.toLowerCase(), {
+      canonical: 'C:\\outside\\Whitebox',
+      symbolic: false,
+    });
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request,
+    }), /userData.*APPDATA 밖/);
+    assert.throws(() => applyWindowsUpdateRelaunchProfile({
+      app: electronApp,
+      environment: { APPDATA: appDataPath },
+      fileSystem,
+      pathModule: path.win32,
+      platform: 'win32',
+      request: { readyPath: 'C:\\attempt\\unexpected.json', token: 'a'.repeat(48) },
+    }), /재실행 요청.*올바르지/);
+    assert.equal(setPaths.length, 2, '검증 실패 뒤 Electron 프로필 경로를 부분 적용하면 안 됩니다.');
+
+    const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+    const profileIndex = mainSource.indexOf('applyWindowsUpdateRelaunchProfile({');
+    const brandSelectionIndex = mainSource.indexOf('selectBrandUserData({');
+    assert(profileIndex >= 0 && profileIndex < brandSelectionIndex,
+      '업데이트 재실행 프로필은 브랜드 프로필 선택보다 먼저 적용해야 합니다.');
   });
 
   test('Git 태그 버전을 SemVer 순서로 비교한다', () => {
@@ -1170,11 +1303,14 @@ function registerCliAndUpdateTests(context) {
     const automaticOrder = [];
     const verifiedInstallers = [];
     const verifyInstaller = async options => { verifiedInstallers.push(options); };
+    const inheritedEnvironmentKey = Object.keys(process.env)
+      .find(key => key !== 'APPDATA' && key !== 'SystemRoot');
+    assert(inheritedEnvironmentKey, 'Updater spawn environment fixture requires one inherited process variable.');
     const automatic = await launchDownloadedUpdate({
       platform: 'win32', installType: 'desktop', downloadsDir: downloadDir,
       installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
       expectedVersion: '3.1.0',
-      environment: { SystemRoot: 'C:\\Windows' },
+      environment: { APPDATA: 'C:\\attempt\\roaming', SystemRoot: 'C:\\Windows' },
       allowUnsignedWindowsUpdates: true,
       verifyInstaller,
       waitForReady: async (readyPath, _child, timeoutMs) => {
@@ -1223,6 +1359,9 @@ function registerCliAndUpdateTests(context) {
     assert.equal(spawnCall.command, path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
     assert.equal(spawnCall.options.detached, false);
     assert.equal(spawnCall.options.windowsHide, true);
+    assert.equal(spawnCall.options.env.APPDATA, 'C:\\attempt\\roaming');
+    assert.equal(spawnCall.options.env.SystemRoot, 'C:\\Windows');
+    assert.equal(spawnCall.options.env[inheritedEnvironmentKey], process.env[inheritedEnvironmentKey]);
     assert(spawnCall.args.includes(downloaded.downloadedPath));
     assert(spawnCall.args.includes('3.1.0'));
     assert(spawnCall.args.includes('-HelperPath'));
