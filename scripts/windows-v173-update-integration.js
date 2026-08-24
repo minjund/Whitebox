@@ -10,6 +10,7 @@ const { Readable } = require('stream');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
+const { cohortList, readCohortManifest } = require('./check-update-compatibility-cohorts');
 
 if (process.platform !== 'win32') {
   console.log('Windows frozen-client update integration skipped: win32 only.');
@@ -23,30 +24,20 @@ if (!disposableGithubRunner
   throw new Error('Refusing to modify the real per-user installer registry outside a disposable GitHub-hosted runner. Set WHITEBOX_ALLOW_FROZEN_UPDATE_INTEGRATION=true only in an isolated Windows environment.');
 }
 
-const SOURCE_COHORTS = Object.freeze({
-  '1.7.3': Object.freeze({
-    installerName: 'Whitebox-Setup-1.7.3.exe',
-    installerSize: 85_295_741,
-    installerSha256: '6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574',
-    installerEnv: 'WHITEBOX_V173_INSTALLER',
-    installMode: 'manual',
-  }),
-  '1.7.4': Object.freeze({
-    installerName: 'Whitebox-Setup-1.7.4.exe',
-    installerSize: 85_296_425,
-    installerSha256: '4d940cf16425436922a37746417b419c7671c47642c0f24b8c79197af99c2135',
-    installerEnv: 'WHITEBOX_V174_INSTALLER',
-    installMode: 'manual',
-  }),
-  '1.7.5': Object.freeze({
-    installerName: 'Whitebox-Setup-1.7.5.exe',
-    installerSize: 85_297_926,
-    installerSha256: '3455b7c9aa9e7c520774995694dbcdb71678a0280a0fde2040693a00d38f2e68',
-    installerEnv: 'WHITEBOX_V175_INSTALLER',
-    installMode: 'automatic',
-  }),
-});
-const SOURCE_VERSION = String(process.env.WHITEBOX_FROZEN_VERSION || '1.7.3').trim();
+const SOURCE_COHORT_LIST = Object.freeze(cohortList(readCohortManifest()));
+const SOURCE_COHORTS = Object.freeze(Object.fromEntries(
+  SOURCE_COHORT_LIST.map(cohort => [
+    cohort.version,
+    Object.freeze({
+      installerName: path.posix.basename(new URL(cohort.url).pathname),
+      installerSize: cohort.size,
+      installerSha256: cohort.sha256,
+      installerEnv: cohort.env,
+      installMode: cohort.installMode,
+    }),
+  ]),
+));
+const SOURCE_VERSION = String(process.env.WHITEBOX_FROZEN_VERSION || SOURCE_COHORT_LIST[0].version).trim();
 const sourceCohort = SOURCE_COHORTS[SOURCE_VERSION];
 if (!sourceCohort) throw new Error(`Unsupported frozen Whitebox cohort: ${SOURCE_VERSION}`);
 const SOURCE_INSTALLER_NAME = sourceCohort.installerName;

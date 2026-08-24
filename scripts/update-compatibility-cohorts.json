@@ -1,0 +1,28 @@
+{
+  "frozen": [
+    {
+      "version": "1.7.3",
+      "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.3/Whitebox-Setup-1.7.3.exe",
+      "size": 85295741,
+      "sha256": "6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574",
+      "env": "WHITEBOX_V173_INSTALLER",
+      "installMode": "manual"
+    },
+    {
+      "version": "1.7.4",
+      "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe",
+      "size": 85296425,
+      "sha256": "4d940cf16425436922a37746417b419c7671c47642c0f24b8c79197af99c2135",
+      "env": "WHITEBOX_V174_INSTALLER",
+      "installMode": "manual"
+    }
+  ],
+  "previousFixed": {
+    "version": "1.7.5",
+    "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.5/Whitebox-Setup-1.7.5.exe",
+    "size": 85297926,
+    "sha256": "3455b7c9aa9e7c520774995694dbcdb71678a0280a0fde2040693a00d38f2e68",
+    "env": "WHITEBOX_V175_INSTALLER",
+    "installMode": "automatic"
+  }
+}

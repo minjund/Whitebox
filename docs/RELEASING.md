@@ -54,7 +54,7 @@ dispatch it manually with the complete 40-character candidate SHA. Repository
 rules must require the stable final check, and all three cohort attempts must
 run again in the tag release workflow before a draft can be published.
 
-The packaged scenario must prove both halves of the contract:
+The packaged scenario must prove all parts of the contract:
 
 1. Each official frozen client selects the verified compatibility alias without
    entering its racy automatic bootstrap. CI stubs the OS installer-open call

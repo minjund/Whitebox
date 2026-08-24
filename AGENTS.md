@@ -68,7 +68,7 @@ cleanup invariants still pass. Never make a timeout or generic fallback count
 as success.
 
 An approval must include the reviewed commit SHA, compatibility matrix, exact
-commands or Actions run URLs, both packaged Windows E2E results, and live-channel
+commands or Actions run URLs, all three packaged Windows E2E results, and live-channel
 result when a release was published. Unit tests, a successful build, or a clean
 install of only the target version cannot by themselves justify approval.
 
