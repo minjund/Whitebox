@@ -11,6 +11,9 @@ const { terminateApplication: terminateMacUpdateApplication } = require('./macUp
 const execFileProcess = promisify(execFileCallback);
 
 const MAC_UPDATE_HELPER_SOURCE = path.join(__dirname, 'macUpdateHelper.js');
+const WINDOWS_UPDATE_BOOTSTRAP_READY_TIMEOUT_MS = 60_000;
+const WINDOWS_UPDATE_HELPER_READY_TIMEOUT_MS = 75_000;
+const WINDOWS_UPDATE_BOOTSTRAP_ACK_TIMEOUT_MS = 15_000;
 
 const WINDOWS_UPDATE_HELPER = `param(
   [Parameter(Mandatory = $true)][string]$InstallerPath,
@@ -287,12 +290,15 @@ const WINDOWS_UPDATE_BOOTSTRAP = `param(
   [Parameter(Mandatory = $true)][string]$AppPath,
   [Parameter(Mandatory = $true)][string]$ExpectedVersion,
   [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$HelperPidPath,
   [Parameter(Mandatory = $true)][string]$ReadyPath,
   [Parameter(Mandatory = $true)][string]$RendererReadyPath,
   [Parameter(Mandatory = $true)][string]$RendererReadyToken
 )
 
 $ErrorActionPreference = 'Stop'
+$helperProcess = $null
+$helperPidTemporary = ''
 
 function Write-BootstrapLog([string]$Message) {
   try { $Message | Add-Content -LiteralPath $LogPath -Encoding UTF8 } catch {}
@@ -300,6 +306,44 @@ function Write-BootstrapLog([string]$Message) {
 
 function Quote-ProcessArgument([string]$Value) {
   return '"' + $Value.Replace('"', '\\"') + '"'
+}
+
+function Confirm-HelperReady {
+  if (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf)) { return $false }
+  $readySignal = Get-Content -LiteralPath $ReadyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ([int]$readySignal.helperPid -ne $helperProcess.Id -or [string]$readySignal.token -ne $RendererReadyToken) {
+    throw '업데이트 설치 도우미의 준비 신호가 올바르지 않습니다.'
+  }
+  return $true
+}
+
+function Confirm-HelperExited {
+  if ($null -eq $helperProcess) { return $true }
+  try {
+    $helperProcess.Refresh()
+    return $helperProcess.HasExited
+  } catch {
+    Write-BootstrapLog ('helperExitProbeError=' + $_.Exception.Message)
+    return $false
+  }
+}
+
+function Stop-HelperTree {
+  if (Confirm-HelperExited) { return $true }
+  try {
+    $taskkillPath = Join-Path $env:SystemRoot 'System32\\taskkill.exe'
+    $treeStop = Start-Process -FilePath $taskkillPath -ArgumentList @('/PID', [string]$helperProcess.Id, '/T', '/F') -WindowStyle Hidden -PassThru -Wait
+    Write-BootstrapLog ('helperTreeStopExitCode=' + $treeStop.ExitCode + ';helperPid=' + $helperProcess.Id)
+  } catch {
+    Write-BootstrapLog ('helperTreeStopError=' + $_.Exception.Message)
+  }
+  try { [void]$helperProcess.WaitForExit(5000) } catch {}
+  if (Confirm-HelperExited) { return $true }
+  try { Stop-Process -Id $helperProcess.Id -Force -ErrorAction Stop } catch {
+    Write-BootstrapLog ('helperStopFallbackError=' + $_.Exception.Message)
+  }
+  try { [void]$helperProcess.WaitForExit(5000) } catch {}
+  return (Confirm-HelperExited)
 }
 
 try {
@@ -320,12 +364,15 @@ try {
     '-RendererReadyToken', $RendererReadyToken
   )
   $helperProcess = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $helperArguments -WindowStyle Hidden -PassThru
-  for ($attempt = 0; $attempt -lt 100; $attempt++) {
-    if (Test-Path -LiteralPath $ReadyPath -PathType Leaf) {
-      $readySignal = Get-Content -LiteralPath $ReadyPath -Raw -Encoding UTF8 | ConvertFrom-Json
-      if ([int]$readySignal.helperPid -ne $helperProcess.Id -or [string]$readySignal.token -ne $RendererReadyToken) {
-        throw '업데이트 설치 도우미의 준비 신호가 올바르지 않습니다.'
-      }
+  $helperStartedAt = [DateTime]::UtcNow
+  $helperPidTemporary = $HelperPidPath + '.' + $PID + '.tmp'
+  @{ helperPid = $helperProcess.Id; token = $RendererReadyToken } | ConvertTo-Json -Compress | Set-Content -LiteralPath $helperPidTemporary -Encoding UTF8
+  Move-Item -LiteralPath $helperPidTemporary -Destination $HelperPidPath -Force
+  $readyDeadline = $helperStartedAt.AddMilliseconds(${WINDOWS_UPDATE_BOOTSTRAP_READY_TIMEOUT_MS})
+  Write-BootstrapLog ('helperSpawned=true;pid=' + $helperProcess.Id + ';at=' + $helperStartedAt.ToString('o'))
+  while ([DateTime]::UtcNow -lt $readyDeadline) {
+    if (Confirm-HelperReady) {
+      Write-BootstrapLog ('readyObserved=true;elapsedMs=' + [int]([DateTime]::UtcNow - $helperStartedAt).TotalMilliseconds + ';helperPid=' + $helperProcess.Id)
       Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
       exit 0
     }
@@ -335,13 +382,28 @@ try {
     Start-Sleep -Milliseconds 100
     $helperProcess.Refresh()
   }
-  Stop-Process -Id $helperProcess.Id -Force -ErrorAction SilentlyContinue
-  throw '업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.'
-} catch {
-  if ($null -ne $helperProcess -and -not $helperProcess.HasExited) {
-    Stop-Process -Id $helperProcess.Id -Force -ErrorAction SilentlyContinue
+  if (Confirm-HelperReady) {
+    Write-BootstrapLog ('readyObserved=true;elapsedMs=' + [int]([DateTime]::UtcNow - $helperStartedAt).TotalMilliseconds + ';helperPid=' + $helperProcess.Id)
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+    exit 0
   }
+  if ($helperProcess.HasExited) {
+    throw ('업데이트 설치 도우미가 준비 전에 종료되었습니다. 코드: ' + $helperProcess.ExitCode)
+  }
+  Write-BootstrapLog ('bootstrapReadyTimeout=true;timeoutMs=${WINDOWS_UPDATE_BOOTSTRAP_READY_TIMEOUT_MS};helperPid=' + $helperProcess.Id)
+  throw '업데이트 설치 도우미가 60초 안에 준비되지 않았습니다.'
+} catch {
   Write-BootstrapLog ('bootstrapError=' + $_.Exception.Message)
+  if (-not [string]::IsNullOrWhiteSpace($helperPidTemporary)) {
+    Remove-Item -LiteralPath $helperPidTemporary -Force -ErrorAction SilentlyContinue
+  }
+  if (-not (Stop-HelperTree)) {
+    Write-BootstrapLog ('helperCleanupUnconfirmed=true;helperPid=' + $helperProcess.Id)
+    while (-not (Stop-HelperTree)) {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  Remove-Item -LiteralPath $HelperPidPath -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 42
@@ -913,8 +975,10 @@ async function launchDownloadedUpdate(options = {}) {
   const helperPath = path.join(downloadsDir, `install-update-${rendererReadyToken}.ps1`);
   const bootstrapPath = path.join(downloadsDir, `install-update-bootstrap-${rendererReadyToken}.ps1`);
   const logPath = path.join(downloadsDir, 'install-update.log');
+  const helperPidPath = path.join(downloadsDir, `install-update-helper-pid-${rendererReadyToken}.json`);
   const readyPath = path.join(downloadsDir, `install-update-ready-${rendererReadyToken}.json`);
   const rendererReadyPath = path.join(downloadsDir, `install-renderer-ready-${rendererReadyToken}.json`);
+  await fs.promises.rm(helperPidPath, { force: true });
   await fs.promises.rm(readyPath, { force: true });
   await fs.promises.rm(rendererReadyPath, { force: true });
   await fs.promises.writeFile(helperPath, `\uFEFF${WINDOWS_UPDATE_HELPER}`, { encoding: 'utf8', mode: 0o600 });
@@ -932,6 +996,7 @@ async function launchDownloadedUpdate(options = {}) {
     '-AppPath', appPath,
     '-ExpectedVersion', expectedVersion,
     '-LogPath', logPath,
+    '-HelperPidPath', helperPidPath,
     '-ReadyPath', readyPath,
     '-RendererReadyPath', rendererReadyPath,
     '-RendererReadyToken', rendererReadyToken,
@@ -946,21 +1011,22 @@ async function launchDownloadedUpdate(options = {}) {
     await waitForProcessSpawn(child, Number(options.spawnTimeoutMs) || 5000);
     if (!Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error('업데이트 설치 프로그램을 시작하지 못했습니다.');
     const waitForReady = options.waitForReady || waitForUpdateHelperReady;
-    readySignal = await waitForReady(readyPath, child, Number(options.readyTimeoutMs) || 5000, {
+    readySignal = await waitForReady(readyPath, child, Number(options.readyTimeoutMs) || WINDOWS_UPDATE_HELPER_READY_TIMEOUT_MS, {
       token: rendererReadyToken,
       acceptCleanExit: true,
     });
     if (!readySignal || typeof readySignal !== 'object') {
       readySignal = await readUpdateReadySignal(readyPath, { token: rendererReadyToken });
     } else if (readySignal.token !== rendererReadyToken || !Number.isSafeInteger(Number(readySignal.helperPid)) || Number(readySignal.helperPid) <= 0) {
+      readySignal = null;
       throw new Error('업데이트 설치 도우미의 준비 신호가 올바르지 않습니다.');
     }
     // Node and the bootstrap must both validate the same ready signal. Waiting
     // for the bootstrap's clean exit before shutdown prevents the faster Node
     // poller from deleting the signal while the bootstrap is still looking for
-    // it, which previously let the bootstrap kill a healthy helper after 10s.
+    // it, which previously let the bootstrap kill a healthy helper at its watchdog.
     const waitForBootstrapExit = options.waitForBootstrapExit || waitForUpdateBootstrapExit;
-    await waitForBootstrapExit(child, Number(options.bootstrapTimeoutMs) || 5000);
+    await waitForBootstrapExit(child, Number(options.bootstrapTimeoutMs) || WINDOWS_UPDATE_BOOTSTRAP_ACK_TIMEOUT_MS);
     bootstrapAcknowledged = true;
     if (typeof options.beforeAutomaticInstall === 'function') {
       await options.beforeAutomaticInstall({
@@ -968,13 +1034,19 @@ async function launchDownloadedUpdate(options = {}) {
         helperPid: Number(readySignal && readySignal.helperPid || 0),
       });
     }
-    await fs.promises.rm(readyPath, { force: true }).catch(cleanupError => {
-      reportRecoverableError('windows-update-helper-ready-remove', cleanupError);
-    });
+    await Promise.all([
+      fs.promises.rm(readyPath, { force: true }),
+      fs.promises.rm(helperPidPath, { force: true }),
+    ]).catch(cleanupError => reportRecoverableError('windows-update-helper-ready-remove', cleanupError));
     child.unref();
   } catch (error) {
-    if (!readySignal) {
+    const bootstrapConfirmedHelperCleanup = child?.exitCode === 42 && child?.signalCode == null;
+    if (bootstrapConfirmedHelperCleanup) readySignal = null;
+    if (!readySignal && !bootstrapConfirmedHelperCleanup) {
       try { readySignal = await readUpdateReadySignal(readyPath, { token: rendererReadyToken }); } catch (_missingReadySignal) {}
+    }
+    if (!readySignal && !bootstrapConfirmedHelperCleanup) {
+      try { readySignal = await readUpdateReadySignal(helperPidPath, { token: rendererReadyToken }); } catch (_missingHelperPidSignal) {}
     }
     const helperPid = Number(readySignal && readySignal.helperPid || 0);
     const bootstrapPid = !bootstrapAcknowledged && child?.exitCode == null && child?.signalCode == null
@@ -985,8 +1057,14 @@ async function launchDownloadedUpdate(options = {}) {
     } catch (cancellationError) {
       throw updateHelperCancellationError(error, cancellationError);
     }
+    if (!helperPid && !bootstrapConfirmedHelperCleanup) {
+      const cancellationError = new Error('업데이트 bootstrap이 설치 도우미 PID를 인증하기 전에 비정상 종료되어 하위 프로세스 정리를 보증할 수 없습니다.');
+      cancellationError.code = 'UPDATE_HELPER_CANCELLATION_UNCONFIRMED';
+      throw updateHelperCancellationError(error, cancellationError);
+    }
     await Promise.all([
       fs.promises.rm(readyPath, { force: true }),
+      fs.promises.rm(helperPidPath, { force: true }),
       fs.promises.rm(rendererReadyPath, { force: true }),
       fs.promises.rm(helperPath, { force: true }),
       fs.promises.rm(bootstrapPath, { force: true }),
@@ -997,6 +1075,7 @@ async function launchDownloadedUpdate(options = {}) {
     mode: 'automatic',
     helperPath,
     bootstrapPath,
+    helperPidPath,
     logPath,
     readyPath,
     rendererReadyPath,

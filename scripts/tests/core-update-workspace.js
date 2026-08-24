@@ -834,6 +834,8 @@ function registerCliAndUpdateTests(context) {
     let spawnedAutomaticChild = null;
     let unrefCalled = false;
     let beforeAutomaticInstall = null;
+    let automaticReadyTimeoutMs = 0;
+    let automaticBootstrapTimeoutMs = 0;
     const automaticOrder = [];
     const verifiedInstallers = [];
     const verifyInstaller = async options => { verifiedInstallers.push(options); };
@@ -844,7 +846,8 @@ function registerCliAndUpdateTests(context) {
       environment: { SystemRoot: 'C:\\Windows' },
       allowUnsignedWindowsUpdates: true,
       verifyInstaller,
-      waitForReady: async readyPath => {
+      waitForReady: async (readyPath, _child, timeoutMs) => {
+        automaticReadyTimeoutMs = timeoutMs;
         const tokenIndex = spawnCall.args.indexOf('-RendererReadyToken');
         const token = spawnCall.args[tokenIndex + 1];
         assert.equal(path.basename(readyPath), `install-update-ready-${token}.json`);
@@ -857,6 +860,10 @@ function registerCliAndUpdateTests(context) {
           spawnedAutomaticChild.emit('exit', 0, null);
         });
         return { helperPid: 2468, token };
+      },
+      waitForBootstrapExit: async (child, timeoutMs) => {
+        automaticBootstrapTimeoutMs = timeoutMs;
+        await waitForUpdateBootstrapExit(child, timeoutMs);
       },
       beforeAutomaticInstall: async context => {
         beforeAutomaticInstall = context;
@@ -876,6 +883,8 @@ function registerCliAndUpdateTests(context) {
     });
     assert.equal(automatic.mode, 'automatic');
     assert.equal(unrefCalled, true);
+    assert.equal(automaticReadyTimeoutMs, 75_000);
+    assert.equal(automaticBootstrapTimeoutMs, 15_000);
     assert.deepStrictEqual(automaticOrder, ['node-ready', 'bootstrap-ack', 'shutdown']);
     assert.deepStrictEqual(beforeAutomaticInstall, { platform: 'win32', helperPid: 2468 });
     assert.equal(verifiedInstallers[0].installerPath, downloaded.downloadedPath);
@@ -888,18 +897,38 @@ function registerCliAndUpdateTests(context) {
     assert(spawnCall.args.includes('-HelperPath'));
     assert(spawnCall.args.includes(automatic.helperPath));
     assert(spawnCall.args.includes(automatic.bootstrapPath));
+    assert(spawnCall.args.includes('-HelperPidPath'));
+    assert(spawnCall.args.includes(automatic.helperPidPath));
     assert(spawnCall.args.includes('-ReadyPath'));
     assert(spawnCall.args.includes(automatic.readyPath));
     assert(spawnCall.args.includes('-RendererReadyPath'));
     assert(spawnCall.args.includes(automatic.rendererReadyPath));
     assert(spawnCall.args.includes('-RendererReadyToken'));
     assert(spawnCall.args.includes(automatic.rendererReadyToken));
+    assert.equal(path.basename(automatic.helperPidPath), `install-update-helper-pid-${automatic.rendererReadyToken}.json`);
     assert.equal(path.basename(automatic.rendererReadyPath), `install-renderer-ready-${automatic.rendererReadyToken}.json`);
     assert.match(automatic.rendererReadyToken, /^[0-9a-f]{48}$/);
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /Start-Process -FilePath \(Join-Path \$PSHOME 'powershell\.exe'\)/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /function Confirm-HelperReady/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /AddMilliseconds\(60000\)/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /helperSpawned=true/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /readyObserved=true;elapsedMs=/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /bootstrapReadyTimeout=true;timeoutMs=60000/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /60초 안에 준비되지 않았습니다/);
+    assert.equal((WINDOWS_UPDATE_BOOTSTRAP.match(/if \(Confirm-HelperReady\)/g) || []).length, 2, 'watchdog 경계에서 helper ready 신호를 마지막으로 다시 검증해야 합니다.');
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /Test-Path -LiteralPath \$ReadyPath/);
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /\$readySignal\.helperPid -ne \$helperProcess\.Id/);
-    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /Stop-Process -Id \$helperProcess\.Id -Force/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /Move-Item -LiteralPath \$helperPidTemporary -Destination \$HelperPidPath -Force/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /'System32\\taskkill\.exe'/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /'\/T', '\/F'/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /WaitForExit\(5000\)/);
+    assert.match(WINDOWS_UPDATE_BOOTSTRAP, /helperCleanupUnconfirmed=true/);
+    const helperCleanupIndex = WINDOWS_UPDATE_BOOTSTRAP.indexOf('if (-not (Stop-HelperTree))');
+    const helperPidDeleteIndex = WINDOWS_UPDATE_BOOTSTRAP.lastIndexOf('Remove-Item -LiteralPath $HelperPidPath');
+    const bootstrapFailureExitIndex = WINDOWS_UPDATE_BOOTSTRAP.lastIndexOf('exit 42');
+    assert(helperCleanupIndex >= 0 && helperCleanupIndex < helperPidDeleteIndex);
+    assert(helperPidDeleteIndex < bootstrapFailureExitIndex, 'bootstrap code 42 must mean helper cleanup was confirmed and its PID sidecar was retired.');
+    assert.equal((WINDOWS_UPDATE_BOOTSTRAP.match(/exit 42/g) || []).length, 1);
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /'-RendererReadyPath'/);
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /'-RendererReadyToken'/);
     assert.match(WINDOWS_UPDATE_BOOTSTRAP, /bootstrapError=/);
@@ -1084,22 +1113,96 @@ function registerCliAndUpdateTests(context) {
     assert.equal(fs.existsSync(path.join(downloadDir, `install-update-${failedReadyToken}.ps1`)), false);
     assert.equal(fs.existsSync(path.join(downloadDir, `install-update-bootstrap-${failedReadyToken}.ps1`)), false);
     const killedBootstrapTrees = [];
+    let missingIdentityToken = '';
+    let missingIdentityError = null;
+    try {
+      await launchDownloadedUpdate({
+        platform: 'win32', installType: 'desktop', downloadsDir: downloadDir,
+        installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
+        expectedVersion: '3.1.0', environment: { SystemRoot: 'C:\\Windows' }, verifyInstaller,
+        waitForReady: async () => { throw new Error('fixture helper readiness timeout'); },
+        killProcessTree: async pid => { killedBootstrapTrees.push(pid); },
+        processExists: () => false,
+        spawn: (_command, args) => {
+          missingIdentityToken = args[args.indexOf('-RendererReadyToken') + 1];
+          const child = new EventEmitter();
+          child.pid = 3581;
+          child.exitCode = null;
+          child.signalCode = null;
+          child.unref = () => {};
+          setImmediate(() => child.emit('spawn'));
+          return child;
+        },
+      });
+    } catch (error) {
+      missingIdentityError = error;
+    }
+    assert(missingIdentityError);
+    assert.equal(missingIdentityError.code, 'UPDATE_HELPER_CANCELLATION_UNCONFIRMED');
+    assert.match(missingIdentityError.message, /fixture helper readiness timeout/);
+    assert.deepStrictEqual(killedBootstrapTrees, [3581]);
+    const missingIdentityHelperPath = path.join(downloadDir, `install-update-${missingIdentityToken}.ps1`);
+    const missingIdentityBootstrapPath = path.join(downloadDir, `install-update-bootstrap-${missingIdentityToken}.ps1`);
+    assert.equal(fs.existsSync(missingIdentityHelperPath), true);
+    assert.equal(fs.existsSync(missingIdentityBootstrapPath), true);
+    fs.rmSync(missingIdentityHelperPath, { force: true });
+    fs.rmSync(missingIdentityBootstrapPath, { force: true });
+
+    const killedPreReadyHelpers = [];
+    let preReadyHelperPidPath = '';
+    let preReadyToken = '';
     await assert.rejects(launchDownloadedUpdate({
       platform: 'win32', installType: 'desktop', downloadsDir: downloadDir,
       installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
       expectedVersion: '3.1.0', environment: { SystemRoot: 'C:\\Windows' }, verifyInstaller,
-      waitForReady: async () => { throw new Error('fixture helper readiness timeout'); },
-      killProcessTree: async pid => { killedBootstrapTrees.push(pid); },
+      waitForReady: async () => {
+        fs.writeFileSync(preReadyHelperPidPath, JSON.stringify({ helperPid: 3_582, token: preReadyToken }), 'utf8');
+        throw new Error('fixture pre-ready bootstrap failure');
+      },
+      killProcessTree: async pid => { killedPreReadyHelpers.push(pid); },
       processExists: () => false,
-      spawn: () => {
+      spawn: (_command, args) => {
+        preReadyToken = args[args.indexOf('-RendererReadyToken') + 1];
+        preReadyHelperPidPath = args[args.indexOf('-HelperPidPath') + 1];
         const child = new EventEmitter();
-        child.pid = 3581;
+        child.pid = 3_583;
+        child.exitCode = 17;
+        child.signalCode = null;
         child.unref = () => {};
         setImmediate(() => child.emit('spawn'));
         return child;
       },
-    }), /fixture helper readiness timeout/);
-    assert.deepStrictEqual(killedBootstrapTrees, [3581]);
+    }), /fixture pre-ready bootstrap failure/);
+    assert.deepStrictEqual(killedPreReadyHelpers, [3_582]);
+    assert.equal(fs.existsSync(preReadyHelperPidPath), false);
+
+    const confirmedCleanupKills = [];
+    let confirmedCleanupHelperPidPath = '';
+    let confirmedCleanupToken = '';
+    await assert.rejects(launchDownloadedUpdate({
+      platform: 'win32', installType: 'desktop', downloadsDir: downloadDir,
+      installerPath: downloaded.downloadedPath, appPath: process.execPath, parentPid: 4321,
+      expectedVersion: '3.1.0', environment: { SystemRoot: 'C:\\Windows' }, verifyInstaller,
+      waitForReady: async () => {
+        fs.writeFileSync(confirmedCleanupHelperPidPath, JSON.stringify({ helperPid: 3_585, token: confirmedCleanupToken }), 'utf8');
+        throw new Error('fixture bootstrap confirmed helper cleanup');
+      },
+      killProcessTree: async pid => { confirmedCleanupKills.push(pid); },
+      processExists: () => false,
+      spawn: (_command, args) => {
+        confirmedCleanupToken = args[args.indexOf('-RendererReadyToken') + 1];
+        confirmedCleanupHelperPidPath = args[args.indexOf('-HelperPidPath') + 1];
+        const child = new EventEmitter();
+        child.pid = 3_584;
+        child.exitCode = 42;
+        child.signalCode = null;
+        child.unref = () => {};
+        setImmediate(() => child.emit('spawn'));
+        return child;
+      },
+    }), /fixture bootstrap confirmed helper cleanup/);
+    assert.deepStrictEqual(confirmedCleanupKills, []);
+    assert.equal(fs.existsSync(confirmedCleanupHelperPidPath), false);
 
     const fallbackSignals = [];
     let fallbackProbe = 0;
