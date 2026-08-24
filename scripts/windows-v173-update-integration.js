@@ -10,25 +10,43 @@ const { Readable } = require('stream');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
+const { cohortList, readCohortManifest } = require('./check-update-compatibility-cohorts');
 
 if (process.platform !== 'win32') {
-  console.log('Windows v1.7.3 update integration skipped: win32 only.');
+  console.log('Windows frozen-client update integration skipped: win32 only.');
   process.exit(0);
 }
 const disposableGithubRunner = process.env.GITHUB_ACTIONS === 'true'
   && process.env.RUNNER_ENVIRONMENT === 'github-hosted';
-if (!disposableGithubRunner && process.env.WHITEBOX_ALLOW_V173_UPDATE_INTEGRATION !== 'true') {
-  throw new Error('Refusing to modify the real per-user installer registry outside a disposable GitHub-hosted runner. Set WHITEBOX_ALLOW_V173_UPDATE_INTEGRATION=true only in an isolated Windows environment.');
+if (!disposableGithubRunner
+  && process.env.WHITEBOX_ALLOW_FROZEN_UPDATE_INTEGRATION !== 'true'
+  && process.env.WHITEBOX_ALLOW_V173_UPDATE_INTEGRATION !== 'true') {
+  throw new Error('Refusing to modify the real per-user installer registry outside a disposable GitHub-hosted runner. Set WHITEBOX_ALLOW_FROZEN_UPDATE_INTEGRATION=true only in an isolated Windows environment.');
 }
 
-const SOURCE_VERSION = '1.7.3';
-const SOURCE_INSTALLER_NAME = 'Whitebox-Setup-1.7.3.exe';
-const SOURCE_INSTALLER_SIZE = 85_295_741;
-const SOURCE_INSTALLER_SHA256 = '6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574';
+const SOURCE_COHORT_LIST = Object.freeze(cohortList(readCohortManifest()));
+const SOURCE_COHORTS = Object.freeze(Object.fromEntries(
+  SOURCE_COHORT_LIST.map(cohort => [
+    cohort.version,
+    Object.freeze({
+      installerName: path.posix.basename(new URL(cohort.url).pathname),
+      installerSize: cohort.size,
+      installerSha256: cohort.sha256,
+      installerEnv: cohort.env,
+      installMode: cohort.installMode,
+    }),
+  ]),
+));
+const SOURCE_VERSION = String(process.env.WHITEBOX_FROZEN_VERSION || SOURCE_COHORT_LIST[0].version).trim();
+const sourceCohort = SOURCE_COHORTS[SOURCE_VERSION];
+if (!sourceCohort) throw new Error(`Unsupported frozen Whitebox cohort: ${SOURCE_VERSION}`);
+const SOURCE_INSTALLER_NAME = sourceCohort.installerName;
+const SOURCE_INSTALLER_SIZE = sourceCohort.installerSize;
+const SOURCE_INSTALLER_SHA256 = sourceCohort.installerSha256;
 const targetVersion = String(sourcePackageMetadata.version || '').trim();
 const targetInstallerName = `Whitebox-Setup-${targetVersion}.exe`;
 const manualBridgeInstallerName = `Whitebox-Manual-Setup-${targetVersion}-x64.exe`;
-const sourceInstaller = path.resolve(String(process.env.WHITEBOX_V173_INSTALLER || ''));
+const sourceInstaller = path.resolve(String(process.env[sourceCohort.installerEnv] || ''));
 const targetInstaller = path.resolve(String(process.env.WHITEBOX_CURRENT_INSTALLER || ''));
 const manualBridgeInstaller = path.resolve(String(process.env.WHITEBOX_MANUAL_INSTALLER || ''));
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-v173-update-integration-'));
@@ -360,9 +378,11 @@ async function startInstalledApp(expectedVersion) {
   throw new Error(`Installed app did not report renderer readiness for ${expectedVersion}: ${child.pid}`);
 }
 
-async function downloadWithV173Updater(updaterModule, downloadsDir) {
-  const digest = `sha256:${sha256(manualBridgeInstaller)}`;
-  const size = fs.statSync(manualBridgeInstaller).size;
+async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
+  const selectedInstaller = sourceCohort.installMode === 'manual' ? manualBridgeInstaller : targetInstaller;
+  const selectedInstallerName = sourceCohort.installMode === 'manual' ? manualBridgeInstallerName : targetInstallerName;
+  const digest = `sha256:${sha256(selectedInstaller)}`;
+  const size = fs.statSync(selectedInstaller).size;
   const releaseAsset = name => ({
     name,
     size,
@@ -379,7 +399,7 @@ async function downloadWithV173Updater(updaterModule, downloadsDir) {
     prerelease: false,
     html_url: `https://github.com/minjund/Whitebox/releases/tag/v${targetVersion}`,
     published_at: '2026-08-24T00:00:00.000Z',
-    body: 'Windows v1.7.3 manual update bridge integration fixture',
+    body: `Windows ${SOURCE_VERSION} packaged update integration fixture`,
     assets: [canonicalAsset, portableAsset, manualBridgeAsset],
   };
   const fetch = async url => {
@@ -390,8 +410,11 @@ async function downloadWithV173Updater(updaterModule, downloadsDir) {
         headers: { 'content-length': String(body.length), 'content-type': 'application/json' },
       });
     }
-    if (String(url) === manualBridgeAsset.browser_download_url) {
-      return new Response(Readable.toWeb(fs.createReadStream(manualBridgeInstaller)), {
+    const selectedUrl = sourceCohort.installMode === 'manual'
+      ? manualBridgeAsset.browser_download_url
+      : canonicalAsset.browser_download_url;
+    if (String(url) === selectedUrl) {
+      return new Response(Readable.toWeb(fs.createReadStream(selectedInstaller)), {
         status: 200,
         headers: { 'content-length': String(size), 'content-type': 'application/octet-stream' },
       });
@@ -410,12 +433,24 @@ async function downloadWithV173Updater(updaterModule, downloadsDir) {
     fetch,
   });
   const checked = await updater.check({ surfaceError: true });
+  if (compareVersions(targetVersion, SOURCE_VERSION) === 0) {
+    assert.equal(checked.status, 'current', 'A fixed cohort must not offer the same public version as an update.');
+    const selected = updaterModule.selectReleaseAsset(release.assets, {
+      platform: 'win32',
+      arch: 'x64',
+      version: targetVersion,
+    });
+    assert.equal(selected && selected.name, selectedInstallerName);
+    const destination = path.join(downloadsDir, selectedInstallerName);
+    fs.copyFileSync(selectedInstaller, destination);
+    return destination;
+  }
   assert.equal(checked.status, 'available');
-  assert.equal(checked.asset && checked.asset.name, manualBridgeInstallerName);
+  assert.equal(checked.asset && checked.asset.name, selectedInstallerName);
   assert.equal(checked.asset && checked.asset.digest, digest);
   const downloaded = await updater.download();
   assert.equal(downloaded.status, 'downloaded');
-  existingFile(downloaded.downloadedPath, 'v1.7.3 updater download');
+  existingFile(downloaded.downloadedPath, `v${SOURCE_VERSION} updater download`);
   assert.equal(sha256(downloaded.downloadedPath), digest.slice('sha256:'.length));
   return downloaded.downloadedPath;
 }
@@ -497,24 +532,24 @@ async function main() {
   assert.equal(path.basename(sourceInstaller), SOURCE_INSTALLER_NAME);
   assert.equal(path.basename(targetInstaller), targetInstallerName);
   assert.equal(path.basename(manualBridgeInstaller), manualBridgeInstallerName);
-  assert.equal(existingFile(sourceInstaller, 'official v1.7.3 installer').size, SOURCE_INSTALLER_SIZE);
+  assert.equal(existingFile(sourceInstaller, `official v${SOURCE_VERSION} installer`).size, SOURCE_INSTALLER_SIZE);
   existingFile(targetInstaller, `freshly built ${targetInstallerName}`);
   existingFile(manualBridgeInstaller, `freshly prepared ${manualBridgeInstallerName}`);
   assert.equal(sha256(manualBridgeInstaller), sha256(targetInstaller), 'The public manual bridge alias must contain the verified NSIS installer bytes.');
-  assert.equal(sha256(sourceInstaller), SOURCE_INSTALLER_SHA256, 'The official v1.7.3 installer digest changed.');
+  assert.equal(sha256(sourceInstaller), SOURCE_INSTALLER_SHA256, `The official v${SOURCE_VERSION} installer digest changed.`);
 
   process.env.WHITEBOX_DEMO_CAPTURE = '1';
   process.env.WHITEBOX_TEST_INSTANCE = '1';
 
-  // This direct installer execution establishes the immutable v1.7.3 baseline.
+  // This direct installer execution establishes the immutable frozen-client baseline.
   run(sourceInstaller, ['/S', '/currentuser', `/D=${installDir}`]);
-  existingFile(installedExecutable, 'installed v1.7.3 executable');
+  existingFile(installedExecutable, `installed v${SOURCE_VERSION} executable`);
   assert.equal(executableVersion(installedExecutable), SOURCE_VERSION);
   const v173Metadata = packagedMetadata(installedAsar);
   assert.equal(v173Metadata.version, SOURCE_VERSION);
   const v173AllowsUnsigned = v173Metadata.whitebox?.distributionChannel === 'internal'
     && v173Metadata.whitebox?.allowUnsignedWindowsUpdates === true;
-  assert.equal(v173AllowsUnsigned, true, 'Packaged v1.7.3 unsigned update policy changed.');
+  assert.equal(v173AllowsUnsigned, true, `Packaged v${SOURCE_VERSION} unsigned update policy changed.`);
 
   const v173ModuleDir = path.join(testRoot, 'v173-packaged-src');
   extractModuleTree(installedAsar, v173ModuleDir, [
@@ -527,54 +562,79 @@ async function main() {
   const v173UpdaterModule = require(path.join(v173ModuleDir, 'updateManager.js'));
   const firstDownloadsDir = path.join(testRoot, 'v173-first-hop-downloads');
   fs.mkdirSync(firstDownloadsDir, { recursive: true });
-  const downloadedTarget = await downloadWithV173Updater(v173UpdaterModule, firstDownloadsDir);
+  const downloadedTarget = await downloadWithFrozenUpdater(v173UpdaterModule, firstDownloadsDir);
   updateInstallerPaths.add(downloadedTarget);
 
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;
-  let openedInstaller = '';
-  try {
-    const firstLaunch = await v173InstallerModule.launchDownloadedUpdate({
-      installerPath: downloadedTarget,
-      downloadsDir: firstDownloadsDir,
-      platform: 'win32',
-      installType: 'desktop',
-      appPath: installedExecutable,
-      expectedVersion: targetVersion,
-      parentPid: v173ParentPid,
-      allowUnsignedWindowsUpdates: v173AllowsUnsigned,
-      environment: process.env,
-      shell: {
-        openPath: async installerPath => {
-          openedInstaller = path.resolve(installerPath);
-          return '';
+  if (sourceCohort.installMode === 'manual') {
+    let openedInstaller = '';
+    try {
+      const firstLaunch = await v173InstallerModule.launchDownloadedUpdate({
+        installerPath: downloadedTarget,
+        downloadsDir: firstDownloadsDir,
+        platform: 'win32',
+        installType: 'desktop',
+        appPath: installedExecutable,
+        expectedVersion: targetVersion,
+        parentPid: v173ParentPid,
+        allowUnsignedWindowsUpdates: v173AllowsUnsigned,
+        environment: process.env,
+        shell: {
+          openPath: async installerPath => {
+            openedInstaller = path.resolve(installerPath);
+            return '';
+          },
         },
-      },
-      beforeAutomaticInstall: () => {
-        throw new Error('The frozen client incorrectly entered its racy automatic installer path.');
-      },
-    });
-    assert.equal(firstLaunch.mode, 'manual', 'The frozen client did not bypass its shared ready-file bootstrap.');
-    assert.equal(openedInstaller, path.resolve(downloadedTarget), 'The frozen client opened an unexpected installer.');
-    assert.equal(processAlive(v173ParentPid), true, 'The manual bridge unexpectedly quit v1.7.3 before the installer UI opened.');
-    assert.equal(executableVersion(installedExecutable), SOURCE_VERSION, 'The manual bridge installed before the user completed its installer UI.');
-    assert.deepStrictEqual(
-      fs.readdirSync(firstDownloadsDir).filter(name => /^install-update.*\.ps1$/i.test(name)),
-      [],
-      'The manual bridge created the frozen automatic bootstrap scripts.',
-    );
-    closeInstalledAppGracefully(v173ParentPid);
-  } finally {
-    if (processAlive(v173ParentPid)) stopProcessTree(v173ParentPid);
-    activeAppPid = 0;
+        beforeAutomaticInstall: () => {
+          throw new Error('The frozen client incorrectly entered its racy automatic installer path.');
+        },
+      });
+      assert.equal(firstLaunch.mode, 'manual', 'The frozen client did not bypass its shared ready-file bootstrap.');
+      assert.equal(openedInstaller, path.resolve(downloadedTarget), 'The frozen client opened an unexpected installer.');
+      assert.equal(processAlive(v173ParentPid), true, `The manual bridge unexpectedly quit v${SOURCE_VERSION} before the installer UI opened.`);
+      assert.equal(executableVersion(installedExecutable), SOURCE_VERSION, 'The manual bridge installed before the user completed its installer UI.');
+      assert.deepStrictEqual(
+        fs.readdirSync(firstDownloadsDir).filter(name => /^install-update.*\.ps1$/i.test(name)),
+        [],
+        'The manual bridge created the frozen automatic bootstrap scripts.',
+      );
+      closeInstalledAppGracefully(v173ParentPid);
+    } finally {
+      if (processAlive(v173ParentPid)) stopProcessTree(v173ParentPid);
+      activeAppPid = 0;
+    }
+    await waitForProcessExit(v173ParentPid);
+    assert.deepStrictEqual(runningProcessIds(installedExecutable), [], `The v${SOURCE_VERSION} app remained live before manual installer completion.`);
+    run(downloadedTarget, ['/S', '/currentuser', `/D=${installDir}`]);
+    await waitForInstalledPackage(targetVersion, 120_000, 8);
+    activeAppPid = await startInstalledApp(targetVersion);
+    assert.equal(processAlive(activeAppPid), true);
+    console.log(`✓ Frozen Whitebox ${SOURCE_VERSION} selected and opened the verified manual installer bridge without creating its racy bootstrap.`);
+  } else {
+    let firstLaunch = null;
+    try {
+      firstLaunch = await launchPackagedInstaller(v173InstallerModule, {
+        installerPath: downloadedTarget,
+        downloadsDir: firstDownloadsDir,
+        parentPid: v173ParentPid,
+        allowUnsignedWindowsUpdates: v173AllowsUnsigned,
+        captureBootstrapAck: true,
+      });
+      assert.equal(processAlive(v173ParentPid), true, 'The fixed source helper did not wait for its parent.');
+      closeInstalledAppGracefully(v173ParentPid);
+    } finally {
+      if (processAlive(v173ParentPid)) stopProcessTree(v173ParentPid);
+      activeAppPid = 0;
+    }
+    assert(firstLaunch, 'The fixed official cohort did not launch the automatic installer helper.');
+    await waitForProcessExit(v173ParentPid);
+    activeAppPid = await waitForRelaunchLog(firstLaunch.logPath, targetVersion);
+    await waitForInstalledPackage(targetVersion, 120_000, 8);
+    await waitForUpdateArtifactCleanup(firstLaunch);
+    assertCompletedInstall(firstLaunch.logPath, { parentPid: v173ParentPid, expectedVersion: targetVersion });
+    console.log(`✓ Fixed Whitebox ${SOURCE_VERSION} selected canonical Setup and completed the authenticated automatic installer handshake.`);
   }
-  await waitForProcessExit(v173ParentPid);
-  assert.deepStrictEqual(runningProcessIds(installedExecutable), [], 'The v1.7.3 app remained live before manual installer completion.');
-  run(downloadedTarget, ['/S', '/currentuser', `/D=${installDir}`]);
-  await waitForInstalledPackage(targetVersion, 120_000, 8);
-  activeAppPid = await startInstalledApp(targetVersion);
-  assert.equal(processAlive(activeAppPid), true);
-  console.log(`✓ Frozen Whitebox ${SOURCE_VERSION} selected and opened the verified manual installer bridge without creating its racy bootstrap.`);
 
   const targetMetadata = await waitForInstalledPackage(targetVersion);
   const targetAllowsUnsigned = targetMetadata.whitebox?.distributionChannel === 'internal'
@@ -602,7 +662,7 @@ async function main() {
   const reinstallInstaller = path.join(reinstallDownloadsDir, targetInstallerName);
   fs.copyFileSync(targetInstaller, reinstallInstaller);
   updateInstallerPaths.add(reinstallInstaller);
-  assert.equal(sha256(reinstallInstaller), sha256(downloadedTarget), 'The no-delay reinstall did not use the same target installer bytes.');
+  assert.equal(sha256(reinstallInstaller), sha256(targetInstaller), 'The no-delay reinstall did not use the same target installer bytes.');
 
   const reinstallParentPid = activeAppPid;
   let reinstallLaunch = null;
@@ -639,7 +699,7 @@ async function main() {
   assert.equal(linesStarting(reinstallLines, 'relaunchStarted=').length, 1, 'The no-delay reinstall relaunched more than once.');
   assert.equal(processAlive(activeAppPid), true);
 
-  console.log(`✓ Official Whitebox ${SOURCE_VERSION} opened the manual bridge and installed ${targetVersion}; the fixed target updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
+  console.log(`✓ Official Whitebox ${SOURCE_VERSION} reached ${targetVersion} through its packaged ${sourceCohort.installMode} path; the candidate updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }
 
 main().catch(error => {

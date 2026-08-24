@@ -36,6 +36,14 @@ const { ensureMacNodePtyRuntime, unpackedAsarPath } = require('../../src/nodePty
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('../../src/windowsShellIdentity');
 const afterPack = require('../after-pack');
 const legacyBridgeConfig = require('../legacy-update-bridge.config');
+const { classifyNameStatus, parseNameStatus } = require('../updater-review-scope');
+const {
+  checkUpdateCompatibilityCohorts,
+  cohortList,
+  readCohortManifest,
+  validateCohortManifest,
+  validateLatestStableRelease,
+} = require('../check-update-compatibility-cohorts');
 const {
   BRIDGE_V1623_MAX_CHECK_BYTES,
   checkLegacyUpdateChannel,
@@ -101,7 +109,7 @@ function registerProviderAndWorkspaceTests(context) {
 }
 
 function registerCliAndUpdateTests(context) {
-  const { test, temp } = context;
+  const { test, temp, root } = context;
   test('npm 전역 명령으로 앱 열기와 브리지 실행을 구분한다', () => {
     assert.deepStrictEqual(parseCliArguments([]), { action: 'open' });
     assert.deepStrictEqual(parseCliArguments(['open']), { action: 'open' });
@@ -527,6 +535,161 @@ function registerCliAndUpdateTests(context) {
     assert.equal(compareVersions('9007199254740993.0.0', '9007199254740992.0.0'), 1);
     assert.equal(compareVersions('3.1.0-beta.9007199254740993', '3.1.0-beta.9007199254740992'), 1);
     assert.throws(() => compareVersions('latest', '3.0.0'), /버전 형식/);
+  });
+
+  test('업데이트 cohort 매니페스트와 공개 latest 검사는 불일치를 fail-closed 한다', async () => {
+    const manifestPath = path.join(root, 'scripts', 'update-compatibility-cohorts.json');
+    const manifest = readCohortManifest(manifestPath);
+    const cohorts = cohortList(manifest);
+    assert.deepStrictEqual(cohorts.map(cohort => ({
+      version: cohort.version,
+      env: cohort.env,
+      installMode: cohort.installMode,
+    })), [
+      { version: '1.7.3', env: 'WHITEBOX_V173_INSTALLER', installMode: 'manual' },
+      { version: '1.7.4', env: 'WHITEBOX_V174_INSTALLER', installMode: 'manual' },
+      { version: '1.7.5', env: 'WHITEBOX_V175_INSTALLER', installMode: 'automatic' },
+    ]);
+    const previousFixed = manifest.previousFixed;
+    const latestRelease = {
+      tag_name: `v${previousFixed.version}`,
+      draft: false,
+      prerelease: false,
+      assets: [{
+        name: `Whitebox-Setup-${previousFixed.version}.exe`,
+        browser_download_url: previousFixed.url,
+        size: previousFixed.size,
+        digest: `sha256:${previousFixed.sha256}`,
+        state: 'uploaded',
+      }],
+    };
+    assert.deepStrictEqual(validateLatestStableRelease(manifest, latestRelease), {
+      version: previousFixed.version,
+      tagName: `v${previousFixed.version}`,
+      assetName: `Whitebox-Setup-${previousFixed.version}.exe`,
+      url: previousFixed.url,
+      size: previousFixed.size,
+      sha256: previousFixed.sha256,
+    });
+
+    const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
+    const duplicate = cloneManifest();
+    duplicate.previousFixed.env = duplicate.frozen[0].env;
+    assert.throws(() => validateCohortManifest(duplicate), /env values must be unique/);
+    const malformed = cloneManifest();
+    malformed.frozen[0].size = String(malformed.frozen[0].size);
+    assert.throws(() => validateCohortManifest(malformed), /size must be a positive safe integer/);
+    assert.throws(
+      () => validateLatestStableRelease(manifest, { ...latestRelease, tag_name: 'v9.9.9' }),
+      /does not match public latest stable/,
+    );
+    assert.throws(
+      () => validateLatestStableRelease(manifest, {
+        ...latestRelease,
+        assets: [latestRelease.assets[0], { ...latestRelease.assets[0] }],
+      }),
+      /must contain exactly one/,
+    );
+    assert.throws(
+      () => validateLatestStableRelease(manifest, {
+        ...latestRelease,
+        assets: [{ ...latestRelease.assets[0], size: previousFixed.size + 1 }],
+      }),
+      /asset size does not match/,
+    );
+    assert.throws(
+      () => validateLatestStableRelease(manifest, {
+        ...latestRelease,
+        assets: [{ ...latestRelease.assets[0], digest: `sha256:${'0'.repeat(64)}` }],
+      }),
+      /asset digest does not match/,
+    );
+
+    let requestHeaders = null;
+    const liveResult = await checkUpdateCompatibilityCohorts({
+      manifest,
+      fetch: async (_url, options) => {
+        requestHeaders = options.headers;
+        return new Response(JSON.stringify(latestRelease), { status: 200 });
+      },
+    });
+    assert.equal(Object.hasOwn(requestHeaders, 'Authorization'), false, '공개 latest 검사는 기본적으로 인증 헤더 없이 실행해야 합니다.');
+    assert.equal(liveResult.tagName, `v${previousFixed.version}`);
+  });
+
+  test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', () => {
+    const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
+    const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
+    const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+    const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
+    const normalizedAgentInstructions = agentInstructions.replace(/\s+/g, ' ');
+    const normalizedReleaseGuide = releaseGuide.replace(/\s+/g, ' ');
+    for (const requiredEvidence of [
+      'official published installers',
+      'installed `app.asar`',
+      'Reinstall the same candidate',
+      'pinned official v1.7.3 and v1.7.4',
+      'pinned official fixed v1.7.5 installer',
+      'Updater compatibility gate',
+      'cannot by themselves justify approval',
+      'all three packaged Windows E2E results',
+    ]) {
+      assert(normalizedAgentInstructions.includes(requiredEvidence), `검수 지침에서 필수 증거가 사라졌습니다: ${requiredEvidence}`);
+    }
+    assert(normalizedReleaseGuide.includes('official packaged `app.asar` byte for byte'), '공식 구버전 패키지의 동등성 입증 계약이 사라졌습니다.');
+    assert(normalizedReleaseGuide.includes('prove all parts of the contract'), '세 부분으로 구성된 패키지 계약 문구가 사라졌습니다.');
+    assert(releaseGuide.includes('npm run check:update:legacy'), '공개 업데이트 채널 검증 명령이 사라졌습니다.');
+    assert.match(workflow, /\n  pull_request:\r?\n/, '구버전 Windows 검증은 updater PR에서 자동 실행되어야 합니다.');
+    assert.match(workflow, /\n  push:\r?\n/, '구버전 Windows 검증은 최종 main 커밋에서 다시 실행되어야 합니다.');
+    assert(!workflow.split(/\npermissions:\r?\n/, 1)[0].includes('paths:'), '필수 최종 check가 사라지므로 workflow-level paths 필터를 두면 안 됩니다.');
+    assert(workflow.includes('name: Updater compatibility gate'), '모든 PR에 생성되는 안정적인 최종 게이트가 사라졌습니다.');
+    assert(workflow.includes('git diff --name-status --no-renames'), '이동과 삭제를 포함한 event diff 분류가 사라졌습니다.');
+    assert(workflow.includes('node scripts/updater-review-scope.js'), '단일 updater 경로 분류기가 CI에 연결되지 않았습니다.');
+    assert(workflow.includes('true|false') && workflow.includes('invalid sensitivity value'), '분류기 출력이 누락되거나 잘못된 경우 fail-closed 해야 합니다.');
+    for (const [label, workflowSource] of [
+      ['PR/main', workflow],
+      ['tag release', releaseWorkflow],
+    ]) {
+      assert(workflowSource.includes("Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json'"), `${label} workflow가 공용 cohort 매니페스트를 읽어야 합니다.`);
+      assert(workflowSource.includes('foreach ($cohort in $cohorts)'), `${label} workflow가 모든 cohort를 순회해야 합니다.`);
+      assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
+      assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
+      assert(workflowSource.includes('$cohorts.Count -ne 3') && workflowSource.includes('$attempt -ne 3'), `${label} workflow는 정확히 세 번 실행되지 않으면 실패해야 합니다.`);
+      assert(workflowSource.includes('npm run check:update:cohorts'), `${label} workflow가 공개 latest와 previousFixed를 비교해야 합니다.`);
+      assert(!workflowSource.includes('GITHUB_TOKEN:'), `${label} workflow의 공개 latest 증거는 인증 요청을 사용하면 안 됩니다.`);
+    }
+    assert(!releaseWorkflow.includes('--clobber'), '기존 릴리스 자산을 덮어쓰면 안 됩니다.');
+    assert(releaseWorkflow.includes('Draft asset bytes differ from the verified build artifact'), '공개 전 draft 자산 byte 검증이 사라졌습니다.');
+    assert(releaseWorkflow.includes('fetch-depth: 0'), '릴리스 태그 검증에는 전체 Git 계보가 필요합니다.');
+    assert(releaseWorkflow.includes('${GITHUB_REF}^{commit}') && releaseWorkflow.includes('${GITHUB_SHA,,}'), '릴리스는 tag SHA, tag commit, HEAD가 모두 같은지 확인해야 합니다.');
+    assert(releaseWorkflow.includes('git merge-base --is-ancestor "$tag_commit" origin/main'), '릴리스 태그 커밋은 origin/main의 선조여야 합니다.');
+    assert(frozenClientTest.includes("require('./check-update-compatibility-cohorts')"), 'Windows E2E가 공용 cohort 매니페스트 검증기를 읽어야 합니다.');
+    for (const cohort of cohortList(readCohortManifest())) {
+      assert(!workflow.includes(cohort.sha256), 'PR/main workflow에 cohort pin이 중복되었습니다.');
+      assert(!releaseWorkflow.includes(cohort.sha256), 'tag workflow에 cohort pin이 중복되었습니다.');
+      assert(!frozenClientTest.includes(cohort.sha256), 'Windows E2E에 cohort pin이 중복되었습니다.');
+    }
+
+    for (const record of [
+      'A\tsrc/macUpdateHelper.js\n',
+      'M\tsrc/updateManager.js\n',
+      'D\tsrc/updateInstaller.js\n',
+      'M\tpackage-lock.json\n',
+      'M\trenderer/app-events-navigation.js\n',
+      'M\tscripts/mac-update-integration-test.js\n',
+      'D\tscripts/package-content-check.js\n',
+      'M\tscripts/check-update-compatibility-cohorts.js\n',
+      'M\tscripts/legacy-update-bridge.config.js\n',
+      'M\tscripts/update-compatibility-cohorts.json\n',
+      'R100\tdocs/notes.md\tsrc/updateRelaunch.js\n',
+      'R100\tsrc/macUpdateHelper.js\tdocs/removed-helper.md\n',
+    ]) {
+      assert.equal(classifyNameStatus(record).sensitive, true, `민감 변경을 놓쳤습니다: ${record.trim()}`);
+    }
+    assert.equal(classifyNameStatus('M\tREADME.md\n').sensitive, false);
+    assert.deepStrictEqual(parseNameStatus('R090\tsrc/old.js\tsrc/updateManager.js\r\n')[0].paths, ['src/old.js', 'src/updateManager.js']);
+    assert.throws(() => parseNameStatus('unexpected output\n'), /Unsupported git name-status/);
   });
 
   test('v1.6.3은 고정된 LoadToAgent 브리지를 거쳐 최신 Whitebox로 업데이트한다', async () => {

@@ -8,6 +8,9 @@
    `npm run test:terminal`, and `npm run test:bridge` before a pull request.
 4. Add regression coverage for behavior changes and update the security,
    retention, architecture, or provider contract documentation when relevant.
+   Review agents must follow `AGENTS.md`. Updater-sensitive changes require the
+   official installed-client compatibility evidence described there and in
+   `docs/RELEASING.md`; source tests or a clean target install are not enough.
 5. Keep commits focused. Do not commit generated `release/` output, credentials,
    provider logs, or user session data.
 
