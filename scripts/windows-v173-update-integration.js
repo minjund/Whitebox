@@ -25,15 +25,12 @@ const SOURCE_VERSION = '1.7.3';
 const SOURCE_INSTALLER_NAME = 'Whitebox-Setup-1.7.3.exe';
 const SOURCE_INSTALLER_SIZE = 85_295_741;
 const SOURCE_INSTALLER_SHA256 = '6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574';
-const FROZEN_BOOTSTRAP_TIMEOUT_ERROR = 'bootstrapError=업데이트 설치 도우미가 10초 안에 준비되지 않았습니다.';
-const EXPECTED_FROZEN_BOOTSTRAP_ERRORS = Object.freeze([
-  FROZEN_BOOTSTRAP_TIMEOUT_ERROR,
-  'bootstrapError=업데이트 설치 도우미가 준비 전에 종료되었습니다. 코드: 0',
-]);
 const targetVersion = String(sourcePackageMetadata.version || '').trim();
 const targetInstallerName = `Whitebox-Setup-${targetVersion}.exe`;
+const manualBridgeInstallerName = `Whitebox-Manual-Setup-${targetVersion}-x64.exe`;
 const sourceInstaller = path.resolve(String(process.env.WHITEBOX_V173_INSTALLER || ''));
 const targetInstaller = path.resolve(String(process.env.WHITEBOX_CURRENT_INSTALLER || ''));
+const manualBridgeInstaller = path.resolve(String(process.env.WHITEBOX_MANUAL_INSTALLER || ''));
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-v173-update-integration-'));
 const installDir = path.join(testRoot, 'installed-whitebox');
 const installedExecutable = path.join(installDir, 'Whitebox.exe');
@@ -246,33 +243,13 @@ function assertCompletedInstall(logPath, options = {}) {
   const lines = logLines(logPath);
   const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=${options.expectedVersion}`;
   assert.deepStrictEqual(linesStarting(lines, 'helperStarted='), [expectedStart], 'Exactly one expected packaged helper must run.');
-  const installerExits = linesStarting(lines, 'exitCode=');
-  if (options.allowUnloggedInstallerExit) {
-    assert.equal(
-      installerExits.length === 0 || (installerExits.length === 1 && installerExits[0] === 'exitCode=0'),
-      true,
-      `The frozen helper logged an invalid installer outcome.\n${readLog(logPath)}`,
-    );
-  } else {
-    assert.deepStrictEqual(installerExits, ['exitCode=0'], 'Exactly one NSIS invocation must complete successfully.');
-  }
+  assert.deepStrictEqual(linesStarting(lines, 'exitCode='), ['exitCode=0'], 'Exactly one NSIS invocation must complete successfully.');
   assert.equal(lines.includes('allAppProcessesStopped=true'), true, 'The helper did not prove all old app processes stopped.');
   const relaunchPaths = linesStarting(lines, 'relaunchPath=');
   const expectedRelaunchPath = `relaunchPath=${installedExecutable};installedVersion=${options.expectedVersion};expectedVersion=${options.expectedVersion}`;
-  if (options.allowFrozenBootstrapRace) {
-    assert(relaunchPaths.length <= 1, 'The frozen helper resolved more than one installed executable.');
-    if (relaunchPaths.length) assert.equal(relaunchPaths[0], expectedRelaunchPath, 'The frozen helper resolved an unexpected installed executable.');
-  } else {
-    assert.deepStrictEqual(relaunchPaths, [expectedRelaunchPath], 'The helper did not resolve the custom-path installed executable.');
-    assert.equal(lines.includes(`candidate=${installedExecutable};version=${options.expectedVersion}`), true, 'The helper never found the expected custom-path candidate.');
-  }
-  const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
-  if (options.allowFrozenBootstrapRace) {
-    assert.equal(bootstrapErrors.length, 1, 'A frozen bootstrap fallback requires exactly one bootstrap error.');
-    assert.equal(EXPECTED_FROZEN_BOOTSTRAP_ERRORS.includes(bootstrapErrors[0]), true, `Unexpected frozen bootstrap failure: ${bootstrapErrors[0]}`);
-  } else {
-    assert.deepStrictEqual(bootstrapErrors, [], 'The bootstrap did not acknowledge the helper-ready signal.');
-  }
+  assert.deepStrictEqual(relaunchPaths, [expectedRelaunchPath], 'The helper did not resolve the custom-path installed executable.');
+  assert.equal(lines.includes(`candidate=${installedExecutable};version=${options.expectedVersion}`), true, 'The helper never found the expected custom-path candidate.');
+  assert.deepStrictEqual(linesStarting(lines, 'bootstrapError='), [], 'The bootstrap did not acknowledge the helper-ready signal.');
   assert.deepStrictEqual(fatalLogLines(lines), [], `Updater helper logged a fatal marker:\n${readLog(logPath)}`);
   return lines;
 }
@@ -318,22 +295,6 @@ async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000)
   throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${readLog(logPath) || '(no update log)'}`);
 }
 
-async function waitForRendererReadyFile(launched, pid, expectedVersion, timeoutMs = 30_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const signal = JSON.parse(fs.readFileSync(launched.rendererReadyPath, 'utf8').replace(/^\uFEFF/, '').trim());
-      if (signal.token === launched.rendererReadyToken
-        && Number(signal.pid) === pid
-        && signal.version === expectedVersion
-        && String(signal.rendererReadyAt || '').trim()) return;
-    } catch (_notReady) {}
-    if (!processAlive(pid)) throw new Error(`The single frozen-helper relaunch exited before renderer readiness: ${pid}`);
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-  throw new Error(`The single frozen-helper relaunch never became renderer-ready: ${pid}`);
-}
-
 async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, stableChecksRequired = 3) {
   const startedAt = Date.now();
   const requiredChecks = Math.max(1, Number(stableChecksRequired) || 3);
@@ -364,51 +325,61 @@ async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, sta
   ].filter(Boolean).join('\n'));
 }
 
-async function waitForInstallerProcessExit(installerPath, timeoutMs = 120_000) {
-  const startedAt = Date.now();
-  let livePids = [];
-  while (Date.now() - startedAt < timeoutMs) {
-    livePids = runningProcessIds(installerPath);
-    if (!livePids.length) return;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for the update installer process to exit: ${installerPath} (PIDs ${livePids.join(',')})`);
-}
-
-async function startInstalledApp() {
+async function startInstalledApp(expectedVersion) {
+  const rendererReadyToken = crypto.randomBytes(24).toString('hex');
+  const rendererReadyPath = path.join(testRoot, `install-renderer-ready-${rendererReadyToken}.json`);
   const child = spawn(installedExecutable, [], {
-    env: process.env,
+    env: {
+      ...process.env,
+      WHITEBOX_UPDATE_READY_PATH: rendererReadyPath,
+      WHITEBOX_UPDATE_READY_TOKEN: rendererReadyToken,
+    },
     stdio: 'ignore',
-    windowsHide: true,
   });
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
   });
   child.unref();
-  await new Promise(resolve => setTimeout(resolve, 1_000));
-  if (child.exitCode !== null) throw new Error(`Installed app exited early (${child.exitCode}).`);
-  return child.pid;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 60_000) {
+    try {
+      const signal = JSON.parse(fs.readFileSync(rendererReadyPath, 'utf8').replace(/^\uFEFF/, '').trim());
+      if (signal.token === rendererReadyToken
+        && Number(signal.pid) === child.pid
+        && signal.version === expectedVersion
+        && String(signal.rendererReadyAt || '').trim()) {
+        fs.rmSync(rendererReadyPath, { force: true });
+        return child.pid;
+      }
+    } catch (_notReady) {}
+    if (child.exitCode !== null) throw new Error(`Installed app exited before renderer readiness (${child.exitCode}).`);
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error(`Installed app did not report renderer readiness for ${expectedVersion}: ${child.pid}`);
 }
 
 async function downloadWithV173Updater(updaterModule, downloadsDir) {
-  const assetUrl = `https://github.com/minjund/Whitebox/releases/download/v${targetVersion}/${targetInstallerName}`;
-  const digest = `sha256:${sha256(targetInstaller)}`;
-  const size = fs.statSync(targetInstaller).size;
+  const digest = `sha256:${sha256(manualBridgeInstaller)}`;
+  const size = fs.statSync(manualBridgeInstaller).size;
+  const releaseAsset = name => ({
+    name,
+    size,
+    state: 'uploaded',
+    digest,
+    browser_download_url: `https://github.com/minjund/Whitebox/releases/download/v${targetVersion}/${name}`,
+  });
+  const canonicalAsset = releaseAsset(targetInstallerName);
+  const portableAsset = releaseAsset(`Whitebox-${targetVersion}-portable.exe`);
+  const manualBridgeAsset = releaseAsset(manualBridgeInstallerName);
   const release = {
     tag_name: `v${targetVersion}`,
     draft: false,
     prerelease: false,
     html_url: `https://github.com/minjund/Whitebox/releases/tag/v${targetVersion}`,
     published_at: '2026-08-24T00:00:00.000Z',
-    body: 'Windows v1.7.3 update integration fixture',
-    assets: [{
-      name: targetInstallerName,
-      size,
-      state: 'uploaded',
-      digest,
-      browser_download_url: assetUrl,
-    }],
+    body: 'Windows v1.7.3 manual update bridge integration fixture',
+    assets: [canonicalAsset, portableAsset, manualBridgeAsset],
   };
   const fetch = async url => {
     if (String(url) === updaterModule.RELEASE_API) {
@@ -418,8 +389,8 @@ async function downloadWithV173Updater(updaterModule, downloadsDir) {
         headers: { 'content-length': String(body.length), 'content-type': 'application/json' },
       });
     }
-    if (String(url) === assetUrl) {
-      return new Response(Readable.toWeb(fs.createReadStream(targetInstaller)), {
+    if (String(url) === manualBridgeAsset.browser_download_url) {
+      return new Response(Readable.toWeb(fs.createReadStream(manualBridgeInstaller)), {
         status: 200,
         headers: { 'content-length': String(size), 'content-type': 'application/octet-stream' },
       });
@@ -439,7 +410,7 @@ async function downloadWithV173Updater(updaterModule, downloadsDir) {
   });
   const checked = await updater.check({ surfaceError: true });
   assert.equal(checked.status, 'available');
-  assert.equal(checked.asset && checked.asset.name, targetInstallerName);
+  assert.equal(checked.asset && checked.asset.name, manualBridgeInstallerName);
   assert.equal(checked.asset && checked.asset.digest, digest);
   const downloaded = await updater.download();
   assert.equal(downloaded.status, 'downloaded');
@@ -516,78 +487,22 @@ async function launchPackagedInstaller(installerModule, options) {
   };
 }
 
-async function finishFrozenFirstHop(launched, parentPid, installerPath) {
-  await waitForPathRemoval(launched.bootstrapPath);
-  let lines = logLines(launched.logPath);
-  const bootstrapErrors = linesStarting(lines, 'bootstrapError=');
-  if (!bootstrapErrors.length) {
-    const pid = await waitForRelaunchLog(launched.logPath, targetVersion);
-    await waitForInstalledPackage(targetVersion);
-    await waitForUpdateArtifactCleanup(launched);
-    lines = assertCompletedInstall(launched.logPath, { parentPid, expectedVersion: targetVersion });
-    assert.equal(linesStarting(lines, 'relaunchStarted=').length, 1);
-    assert.equal(processAlive(pid), true, 'The v1.7.3 helper relaunch did not survive.');
-    return pid;
-  }
-
-  assert.equal(bootstrapErrors.length, 1);
-  assert.equal(EXPECTED_FROZEN_BOOTSTRAP_ERRORS.includes(bootstrapErrors[0]), true, `Unexpected frozen bootstrap failure: ${bootstrapErrors[0]}`);
-  await waitForInstalledPackage(targetVersion);
-  await waitForInstallerProcessExit(installerPath);
-  await waitForInstalledPackage(targetVersion, 120_000, 8);
-  await waitForProcessExit(launched.integrationHelperPid, 120_000);
-  lines = assertCompletedInstall(launched.logPath, {
-    parentPid,
-    expectedVersion: targetVersion,
-    allowFrozenBootstrapRace: true,
-    allowUnloggedInstallerExit: bootstrapErrors[0] === FROZEN_BOOTSTRAP_TIMEOUT_ERROR,
-  });
-  assert.equal(processAlive(launched.integrationHelperPid), false, 'The frozen helper remained live after the installer outcome settled.');
-
-  const relaunchStarts = linesStarting(lines, 'relaunchStarted=');
-  const relaunchReady = linesStarting(lines, 'relaunchReady=');
-  const recoveryStarts = linesStarting(lines, 'recoveryRelaunchStarted=');
-  assert.deepStrictEqual(recoveryStarts, [], 'The frozen helper used an unverified recovery relaunch.');
-  assert(relaunchStarts.length <= 1, 'The frozen helper started the updated app more than once.');
-  assert(relaunchReady.length <= 1, 'The frozen helper completed more than one relaunch.');
-
-  if (relaunchReady.length === 1) {
-    assert.equal(relaunchStarts.length, 1);
-    const pid = Number(relaunchReady[0].match(/pid=(\d+)$/)?.[1] || 0);
-    await waitForUpdateArtifactCleanup(launched);
-    assert.equal(processAlive(pid), true, 'The single frozen-helper relaunch did not survive.');
-    return pid;
-  }
-  if (relaunchStarts.length === 1) {
-    const pid = Number(relaunchStarts[0].match(/pid=(\d+)$/)?.[1] || 0);
-    assert.equal(Number.isSafeInteger(pid) && pid > 0, true);
-    await waitForRendererReadyFile(launched, pid, targetVersion);
-    assert.equal(processAlive(pid), true);
-    return pid;
-  }
-
-  assert.deepStrictEqual(runningProcessIds(installedExecutable), [], 'Refusing a second restart while an updated app process already exists.');
-  const fallbackPid = await startInstalledApp();
-  assert.equal(processAlive(fallbackPid), true);
-  console.log(`✓ Frozen v${SOURCE_VERSION} ready-file race required exactly one verified fallback restart.`);
-  return fallbackPid;
-}
-
 async function main() {
   assert.match(targetVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   assert.equal(compareVersions(targetVersion, '1.7.4') > 0, true, 'The handshake fix must ship at a SemVer version newer than the already-published v1.7.4.');
   assert.equal(path.basename(sourceInstaller), SOURCE_INSTALLER_NAME);
   assert.equal(path.basename(targetInstaller), targetInstallerName);
+  assert.equal(path.basename(manualBridgeInstaller), manualBridgeInstallerName);
   assert.equal(existingFile(sourceInstaller, 'official v1.7.3 installer').size, SOURCE_INSTALLER_SIZE);
   existingFile(targetInstaller, `freshly built ${targetInstallerName}`);
+  existingFile(manualBridgeInstaller, `freshly prepared ${manualBridgeInstallerName}`);
+  assert.equal(sha256(manualBridgeInstaller), sha256(targetInstaller), 'The public manual bridge alias must contain the verified NSIS installer bytes.');
   assert.equal(sha256(sourceInstaller), SOURCE_INSTALLER_SHA256, 'The official v1.7.3 installer digest changed.');
 
   process.env.WHITEBOX_DEMO_CAPTURE = '1';
   process.env.WHITEBOX_TEST_INSTANCE = '1';
 
-  // This is the only direct installer execution: it establishes the immutable
-  // v1.7.3 baseline. Both target installations below must go through packaged
-  // updateInstaller helpers.
+  // This direct installer execution establishes the immutable v1.7.3 baseline.
   run(sourceInstaller, ['/S', '/currentuser', `/D=${installDir}`]);
   existingFile(installedExecutable, 'installed v1.7.3 executable');
   assert.equal(executableVersion(installedExecutable), SOURCE_VERSION);
@@ -611,31 +526,51 @@ async function main() {
   const downloadedTarget = await downloadWithV173Updater(v173UpdaterModule, firstDownloadsDir);
   updateInstallerPaths.add(downloadedTarget);
 
-  const v173ParentPid = await startInstalledApp();
+  const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;
-  let firstLaunch = null;
+  let openedInstaller = '';
   try {
-    firstLaunch = await launchPackagedInstaller(v173InstallerModule, {
+    const firstLaunch = await v173InstallerModule.launchDownloadedUpdate({
       installerPath: downloadedTarget,
       downloadsDir: firstDownloadsDir,
+      platform: 'win32',
+      installType: 'desktop',
+      appPath: installedExecutable,
+      expectedVersion: targetVersion,
       parentPid: v173ParentPid,
       allowUnsignedWindowsUpdates: v173AllowsUnsigned,
+      environment: process.env,
+      shell: {
+        openPath: async installerPath => {
+          openedInstaller = path.resolve(installerPath);
+          return '';
+        },
+      },
+      beforeAutomaticInstall: () => {
+        throw new Error('The frozen client incorrectly entered its racy automatic installer path.');
+      },
     });
-    assert.equal(processAlive(v173ParentPid), true, 'The frozen helper did not wait for its real v1.7.3 parent.');
-    assert.equal(executableVersion(installedExecutable), SOURCE_VERSION, 'The target installer ran before v1.7.3 exited.');
-    // Close the real packaged window so v1.7.3 runs window-all-closed and its
-    // asynchronous Electron before-quit cleanup. A forced taskkill here would
-    // hide field failures where the frozen bootstrap's 10-second deadline
-    // collides with application shutdown.
+    assert.equal(firstLaunch.mode, 'manual', 'The frozen client did not bypass its shared ready-file bootstrap.');
+    assert.equal(openedInstaller, path.resolve(downloadedTarget), 'The frozen client opened an unexpected installer.');
+    assert.equal(processAlive(v173ParentPid), true, 'The manual bridge unexpectedly quit v1.7.3 before the installer UI opened.');
+    assert.equal(executableVersion(installedExecutable), SOURCE_VERSION, 'The manual bridge installed before the user completed its installer UI.');
+    assert.deepStrictEqual(
+      fs.readdirSync(firstDownloadsDir).filter(name => /^install-update.*\.ps1$/i.test(name)),
+      [],
+      'The manual bridge created the frozen automatic bootstrap scripts.',
+    );
     closeInstalledAppGracefully(v173ParentPid);
   } finally {
     if (processAlive(v173ParentPid)) stopProcessTree(v173ParentPid);
     activeAppPid = 0;
   }
-  assert(firstLaunch, 'The v1.7.3 packaged updater did not launch its helper.');
   await waitForProcessExit(v173ParentPid);
-  activeAppPid = await finishFrozenFirstHop(firstLaunch, v173ParentPid, downloadedTarget);
+  assert.deepStrictEqual(runningProcessIds(installedExecutable), [], 'The v1.7.3 app remained live before manual installer completion.');
+  run(downloadedTarget, ['/S', '/currentuser', `/D=${installDir}`]);
+  await waitForInstalledPackage(targetVersion, 120_000, 8);
+  activeAppPid = await startInstalledApp(targetVersion);
   assert.equal(processAlive(activeAppPid), true);
+  console.log(`✓ Frozen Whitebox ${SOURCE_VERSION} selected and opened the verified manual installer bridge without creating its racy bootstrap.`);
 
   const targetMetadata = await waitForInstalledPackage(targetVersion);
   const targetAllowsUnsigned = targetMetadata.whitebox?.distributionChannel === 'internal'
@@ -649,8 +584,14 @@ async function main() {
     'updateManager.js',
   ]);
   const targetInstallerModule = require(path.join(targetModuleDir, 'updateInstaller.js'));
-  require(path.join(targetModuleDir, 'updateManager.js'));
+  const targetUpdaterModule = require(path.join(targetModuleDir, 'updateManager.js'));
   assert.equal(typeof targetInstallerModule.waitForUpdateBootstrapExit, 'function', 'The target package lacks bootstrap acknowledgement support.');
+  const releaseBase = `https://github.com/minjund/Whitebox/releases/download/v${targetVersion}/`;
+  const fixedSelection = targetUpdaterModule.selectReleaseAsset([
+    { name: manualBridgeInstallerName, state: 'uploaded', browser_download_url: `${releaseBase}${manualBridgeInstallerName}` },
+    { name: targetInstallerName, state: 'uploaded', browser_download_url: `${releaseBase}${targetInstallerName}` },
+  ], { platform: 'win32', arch: 'x64', version: targetVersion });
+  assert.equal(fixedSelection && fixedSelection.name, targetInstallerName, 'The fixed updater selected the frozen-client manual bridge instead of canonical automatic Setup.');
 
   const reinstallDownloadsDir = path.join(testRoot, 'target-reinstall-downloads');
   fs.mkdirSync(reinstallDownloadsDir, { recursive: true });
@@ -693,7 +634,7 @@ async function main() {
   assert.equal(linesStarting(reinstallLines, 'relaunchStarted=').length, 1, 'The no-delay reinstall relaunched more than once.');
   assert.equal(processAlive(activeAppPid), true);
 
-  console.log(`✓ Official Whitebox ${SOURCE_VERSION} updated to ${targetVersion}; the packaged target updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once without delay.`);
+  console.log(`✓ Official Whitebox ${SOURCE_VERSION} opened the manual bridge and installed ${targetVersion}; the fixed target updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }
 
 main().catch(error => {

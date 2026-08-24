@@ -145,12 +145,17 @@ function assetScore(asset, options) {
   const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const hasExactVersion = new RegExp(`(?:^|[-_.])${escapedVersion}(?:[-_.]|$)`).test(lower);
   if (!version || !hasExactVersion) return -1;
+  const frozenWindowsManualBridge = new RegExp(`^Whitebox-Manual-Setup-${escapedVersion}-x64\\.exe$`, 'i').test(name);
   const hasArm64 = /(?:^|[-_.])arm64(?:[-_.]|$)/.test(lower);
   const hasX64 = /(?:^|[-_.])(?:x64|amd64)(?:[-_.]|$)/.test(lower);
   const hasIa32 = /(?:^|[-_.])(?:ia32|x86)(?:[-_.]|$)/.test(lower);
   let score = 12;
   if (options.platform === 'win32') {
     if (!lower.endsWith('.exe')) return -1;
+    // v1.7.3/v1.7.4 intentionally select this higher-scoring alias so their
+    // immutable ready-file race falls back to shell.openPath. Fixed clients
+    // must keep selecting the canonical Setup asset and automatic handshake.
+    if (frozenWindowsManualBridge) return -1;
     if (options.arch === 'arm64' && !hasArm64) return -1;
     if (options.arch === 'x64' && (hasArm64 || hasIa32)) return -1;
     if (options.arch === 'ia32' && !hasIa32) return -1;
@@ -205,6 +210,7 @@ function managedUpdateArtifact(value) {
   const partial = name.endsWith('.download');
   const finalName = partial ? name.slice(0, -'.download'.length) : name;
   const patterns = [
+    new RegExp(`^${TRUSTED_ARTIFACT_BRANDS}-Manual-Setup-(.+)-(?:x64|amd64)\\.exe$`),
     new RegExp(`^${TRUSTED_ARTIFACT_BRANDS}-Setup-(.+)\\.exe$`),
     new RegExp(`^${TRUSTED_ARTIFACT_BRANDS}-(.+)-portable\\.exe$`),
     new RegExp(`^${TRUSTED_ARTIFACT_BRANDS}-(.+)-(?:arm64|x64)\\.dmg$`),

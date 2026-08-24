@@ -112,8 +112,13 @@ jobs:
           gh release download v1.7.3 --repo minjund/Whitebox --pattern Whitebox-Setup-1.7.3.exe --dir $sourceDir
           $targetVersion = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
           $targetInstaller = (Resolve-Path -LiteralPath "release/Whitebox-Setup-$targetVersion.exe").Path
+          $manualInstaller = Join-Path (Split-Path -Parent $targetInstaller) "Whitebox-Manual-Setup-$targetVersion-x64.exe"
+          Copy-Item -LiteralPath $targetInstaller -Destination $manualInstaller -Force
+          if ((Get-Item -LiteralPath $targetInstaller).Length -ne (Get-Item -LiteralPath $manualInstaller).Length) { throw 'Manual bridge installer size differs from canonical Setup' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $manualInstaller).Hash) { throw 'Manual bridge installer digest differs from canonical Setup' }
           "WHITEBOX_V173_INSTALLER=$(Join-Path $sourceDir 'Whitebox-Setup-1.7.3.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_CURRENT_INSTALLER=$targetInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WHITEBOX_MANUAL_INSTALLER=$manualInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Verify packaged v1.7.3 update and target bootstrap acknowledgement
         if: runner.os == 'Windows'
         timeout-minutes: 10
