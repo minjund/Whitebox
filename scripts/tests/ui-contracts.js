@@ -3271,12 +3271,20 @@ function registerUiContractTests(context) {
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const themeStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-theme.css'), 'utf8');
     const settingsStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-settings.css'), 'utf8');
+    const noviceStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-novice.css'), 'utf8');
     const popupSettingsSource = fs.readFileSync(path.join(root, 'renderer', 'app-attention-popup-settings.js'), 'utf8');
     const i18nSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const settings = html.slice(html.indexOf('id="settingsSection"'), html.indexOf('id="terminalSection"'));
     assert.equal(settings.includes('settings-meta-grid'), false, '설정과 무관한 설치 진단 정보가 다시 노출되면 안 됩니다.');
     assert.equal(settings.includes('settings-emblem'), false, '설정 제목에 의미 없는 장식이 다시 추가되면 안 됩니다.');
+    assert.ok(settings.includes('id="currentVersion"'), '설정 화면에 현재 프로그램 버전 값이 없습니다.');
+    const hiddenNoviceSelectors = Array.from(noviceStyles.matchAll(/([^{}]+)\{[^{}]*display:\s*none;[^{}]*\}/g), match => match[1]);
+    assert.equal(
+      hiddenNoviceSelectors.some(selectors => selectors.includes('body[data-current-view="settings"] .version-route')),
+      false,
+      '일반 설정 화면에서 현재 프로그램 버전 비교 영역을 숨기면 안 됩니다.',
+    );
     assert.equal(dashboard.includes('provider-visibility-name"><b>${esc(provider.label)}</b><small>'), false, 'AI 표시 설정에 제공사 부가 정보가 다시 노출되면 안 됩니다.');
     assert.ok(dashboard.includes('update.installMode === "automatic"'), '업데이트 안내가 자동 설치와 수동 설치를 구분해야 합니다.');
     assert.ok(dashboard.includes('ui.open_the_installer_and_follow_its_instructions_to_finish_updating'), '수동 업데이트에는 설치 파일 안내가 표시되어야 합니다.');

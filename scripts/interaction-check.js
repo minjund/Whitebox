@@ -1147,7 +1147,14 @@ async function exerciseGuideAndMobileTools(win, round) {
 async function exerciseUpdates(win, round) {
   await win.webContents.executeJavaScript('window.interactionTest.restoreCurrentUpdate()');
   await click(win, '[data-view="settings"]', 'nav:settings');
-  await waitFor(win, `window.WhiteboxApp.state.update.status === 'current' && document.querySelector('#currentVersion').textContent === '1.5.1' && document.querySelector('#sidebarAppVersion').textContent === '1.5.1' && document.querySelector('#updateStateTitle').textContent === '현재 최신 버전입니다.' && document.querySelector('#checkUpdateBtn').textContent.includes('업데이트 다시 확인')`, '현재 버전과 최신 상태가 설정 화면에 명확히 표시되지 않았습니다.');
+  await waitFor(win, `window.WhiteboxApp.state.update.status === 'current'
+    && document.querySelector('#currentVersion').textContent === '1.5.1'
+    && document.querySelector('#sidebarAppVersion').textContent === '1.5.1'
+    && document.querySelector('.version-route').getClientRects().length > 0
+    && getComputedStyle(document.querySelector('.version-route')).display !== 'none'
+    && getComputedStyle(document.querySelector('.version-route')).visibility === 'visible'
+    && document.querySelector('#updateStateTitle').textContent === '현재 최신 버전입니다.'
+    && document.querySelector('#checkUpdateBtn').textContent.includes('업데이트 다시 확인')`, '현재 버전과 최신 상태가 설정 화면에 명확히 표시되지 않았습니다.');
   await clearCalls(win);
   await win.webContents.executeJavaScript(`window.interactionTest.configure({ delays: { checkForUpdate: 160 } })`);
   await click(win, '#checkUpdateBtn', 'update:check');

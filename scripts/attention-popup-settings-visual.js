@@ -48,6 +48,39 @@ async function run() {
   await waitFor(() => win.webContents.executeJavaScript('Boolean(window.WhiteboxApp?.initialized)', true), 'renderer initialization');
   await win.webContents.executeJavaScript("document.querySelector('#sidebarSettingsBtn').click()", true);
   await waitFor(() => win.webContents.executeJavaScript("!document.querySelector('#settingsSection').classList.contains('hidden')", true), 'settings view');
+  const versionState = await win.webContents.executeJavaScript(`(() => {
+    const route = document.querySelector('.version-route');
+    const bounds = route.getBoundingClientRect();
+    const style = getComputedStyle(route);
+    return {
+      currentVersion: document.querySelector('#currentVersion').textContent,
+      display: style.display,
+      visibility: style.visibility,
+      width: Math.round(bounds.width),
+      height: Math.round(bounds.height),
+    };
+  })()`, true);
+  assert.equal(versionState.currentVersion, '1.5.1');
+  assert.notEqual(versionState.display, 'none');
+  assert.equal(versionState.visibility, 'visible');
+  assert.ok(versionState.width > 0 && versionState.height > 0, `Settings version route was not laid out: ${JSON.stringify(versionState)}`);
+  win.setContentSize(420, 780);
+  await waitFor(() => win.webContents.executeJavaScript('window.innerWidth === 420', true), 'compact settings width');
+  const compactVersionState = await win.webContents.executeJavaScript(`(() => {
+    const route = document.querySelector('.version-route');
+    const bounds = route.getBoundingClientRect();
+    return {
+      visible: route.getClientRects().length > 0 && getComputedStyle(route).display !== 'none',
+      left: Math.round(bounds.left),
+      right: Math.round(bounds.right),
+      viewportWidth: window.innerWidth,
+    };
+  })()`, true);
+  assert.equal(compactVersionState.visible, true);
+  assert.ok(compactVersionState.left >= 0 && compactVersionState.right <= compactVersionState.viewportWidth,
+    `Compact settings version route overflowed the viewport: ${JSON.stringify(compactVersionState)}`);
+  win.setContentSize(1280, 920);
+  await waitFor(() => win.webContents.executeJavaScript('window.innerWidth === 1280', true), 'desktop settings width');
   assert.equal(await win.webContents.executeJavaScript("document.querySelector('#attentionPopupEnabled').checked", true), true);
   await win.webContents.executeJavaScript("document.querySelector('#attentionPopupEnabled').click()", true);
   await waitFor(() => win.webContents.executeJavaScript("!document.querySelector('#attentionPopupEnabled').checked && !document.querySelector('#attentionPopupEnabled').disabled", true), 'disable preference');

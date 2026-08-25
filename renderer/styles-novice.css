@@ -3587,7 +3587,6 @@ body[data-current-view="settings"] .settings-meta-grid {
   order: 5;
 }
 
-body[data-current-view="settings"] .version-route,
 body[data-current-view="settings"] .provider-visibility-name small,
 body[data-current-view="settings"] .settings-meta-grid {
   display: none;
