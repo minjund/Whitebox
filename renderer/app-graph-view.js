@@ -25,7 +25,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     isControlRoomSession = isLiveSession,
     controlRoomStatus = session => session?.status,
     pendingConversationDelivery = () => null,
-    sessionRetentionMinutes = () => 0,
+    sessionRetentionDeadline = () => 0,
     subagentWorkState,
     subagentWorkLabel,
     latestWorkCopy,
@@ -41,6 +41,19 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     ensureProjectOrder = projectKeys => projectKeys,
   } = context;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
+  const clockTime = value => {
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return "";
+    const localeTag = window.WhiteboxI18n.getLocaleTag();
+    return window.WhiteboxRendererUtils.dateTimeFormat(localeTag, {
+      hour: "2-digit",
+      minute: "2-digit",
+      ...(localeTag.startsWith("ko") ? { hourCycle: "h23" } : {}),
+    }).format(date);
+  };
+  const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
   const statusLabel = (status, session) => session ? sessionStatusLabel(session, status) : ({
     starting: t("ui.preparing"), running: t("ui.working"), waiting: t("ui.waiting_for_review"), idle: t("ui.idle"),
     completed: t("ui.completed"), failed: t("ui.problem"), cancelled: t("ui.stopped"),
@@ -95,16 +108,22 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
           role: session.agentRole ? ` / ${agentRoleLabel(session.agentRole)}` : "",
         })
       : t("graph.assigned_ai");
-    const transcriptSurface = session.presentation?.conversationSurface === "transcript" || session.controlCapabilities?.pty === false;
-    const inlinePtyAttributes = session.parentId
+    const completedMainPty = presentationStatus === "completed"
+      && canForkCodexDesktopSession(session);
+    const transcriptSurface = (session.presentation?.conversationSurface === "transcript" || session.controlCapabilities?.pty === false)
+      && !completedMainPty;
+    const inlinePtyAttributes = session.parentId || session.sourcePluginId
       ? ""
       : ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
     const conversationAttributes = transcriptSurface ? ` data-open-session="${esc(session.id)}"` : inlinePtyAttributes;
+    const conversationLabel = completedMainPty
+      ? t("drawer.terminal_fork_action")
+      : t("graph.focus_relationships", { role });
     return `<article class="agent-node ${running ? "running" : ""} ${session.parentId ? "child-agent" : "root-agent"} ${options.focus ? "is-focus" : ""}"
       data-motion-key="agent:${esc(session.id)}"
       data-motion-value="${esc(session.updatedAt || "")}:${usage.total || 0}:${esc(session.status || "")}"
       style="${providerStyle(session.provider)}">
-      <button class="agent-node-main" type="button" data-graph-focus="${esc(session.id)}"${conversationAttributes} aria-label="${esc(t("graph.focus_relationships", { role }))}">
+      <button class="agent-node-main" type="button" data-graph-focus="${esc(session.id)}"${conversationAttributes} aria-label="${esc(conversationLabel)}">
         <span class="agent-node-top">
           <span class="provider-mark">${esc(provider.mark)}</span>
           <span class="agent-identity"><b>${esc(role)}</b><small>${esc(provider.label)}${session.model && session.model !== provider.label ? ` · ${esc(session.model)}` : ""}</small></span>
@@ -551,6 +570,15 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     return controlRoomSummary(source, maxCharacters);
   }
 
+  function workflowChatTitle(session, maxCharacters = 48) {
+    const title = String(session?.title || "").replace(/\s+/g, " ").trim();
+    const genericTitle = /^(?:새\s*대화|새\s*채팅|이름\s*없는\s*작업|new\s*chat|untitled(?:\s+(?:chat|task))?)$/i.test(title);
+    if (title && !genericTitle) return readablePreview(title, maxCharacters);
+    const latestUser = [...(session?.messages || [])].reverse()
+      .find(message => message?.role === "user" && String(message.text || "").trim());
+    return controlRoomSummary(latestUser?.text || session?.taskName || t("graph.user_request"), maxCharacters);
+  }
+
   function looksLikeExecutionCommand(value) {
     const text = String(value || "").trim();
     return /(?:^|[;&|]\s*)(?:npm|pnpm|yarn|bun|npx|node|git|rg|grep|findstr|python|pytest|gradle|mvn|docker|curl|pwsh|powershell|cmd|start-process|get-content|select-string)\b/i.test(text)
@@ -684,12 +712,15 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const current = controlRoomSummary(delivery ? t(deliverySummaryKey(delivery.phase)) : latestWorkCopy(root) || root.statusDetail || root.title, 74);
     const title = controlRoomAgentGoal(root, 64);
     const unitCount = activeUnits.length;
-    const transcriptSurface = root.presentation?.conversationSurface === "transcript" || root.controlCapabilities?.pty === false;
-    const controlRoomPtyAttributes = root.parentId
+    const completedMainPty = presentationStatus === "completed"
+      && canForkCodexDesktopSession(root);
+    const transcriptSurface = (root.presentation?.conversationSurface === "transcript" || root.controlCapabilities?.pty === false)
+      && !completedMainPty;
+    const controlRoomPtyAttributes = root.parentId || root.sourcePluginId || transcriptSurface
       ? ""
       : ` data-inline-pty-trigger="${esc(root.id)}" aria-expanded="${state.inlineTerminalSessionId === root.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
-    const controlRoomConversationAttributes = transcriptSurface ? ` data-open-session="${esc(root.id)}"` : controlRoomPtyAttributes;
     const main = `<button type="button" class="control-room-main"${controlRoomPtyAttributes}
+      ${completedMainPty ? `aria-label="${esc(t("drawer.terminal_fork_action"))}" title="${esc(t("agent.codex_desktop_fork_help"))}"` : ""}
       ${transcriptSurface ? `data-open-session="${esc(root.id)}" data-transcript-source="true"` : ""}
       data-control-summary="${esc(title.text)}"
       data-motion-key="control-main:${esc(root.id)}" data-motion-value="${esc(root.updatedAt || "")}:${esc(root.status || "")}"
@@ -698,7 +729,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ${sessionBadgesHtml(root, { compact: true })}
       <strong title="${esc(title.full)}">${esc(title.text)}</strong>
       <span class="control-main-now"><small>${esc(t("graph.current_work"))}</small><b title="${esc(current.full)}">${esc(current.text)}</b></span>
-      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>PTY ${state.inlineTerminalSessionId === root.id ? "↑" : "↓"}</b></span>
+      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : `PTY ${state.inlineTerminalSessionId === root.id ? "↑" : "↓"}`}</b></span>
     </button>`;
     const shownActiveUnits = activeUnits.slice(0, 6);
     const hiddenActiveUnits = Math.max(0, activeUnits.length - shownActiveUnits.length);
@@ -714,7 +745,8 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : waitingWithBackground
         ? "control.waiting_background_session"
         : (waiting ? "control.waiting_session" : (retained ? "control.recently_completed" : "control.live_session"));
-    const retention = retained ? `<small class="control-session-retention">${esc(t("control.auto_history_in_minutes", { minutes: sessionRetentionMinutes(root) }))}</small>` : "";
+    const retentionTime = retained ? clockTime(sessionRetentionDeadline(root)) : "";
+    const retention = retentionTime ? `<small class="control-session-retention">${esc(t("control.auto_history_after_time", { time: retentionTime }))}</small>` : "";
     const archive = retained ? `<button type="button" class="control-session-archive" data-session-archive="${esc(root.id)}">${esc(t("control.move_to_history"))}</button>` : "";
     const review = terminalReviewSources.length
       ? controlRoomTerminalPromptHtml(terminalReviewSources[0].session, terminalReviewSources[0].prompt, Math.max(0, attentionCount - 1))
@@ -1145,6 +1177,9 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ? `${t("graph.execution_handle")} · ${activity.backgroundId}`
       : "";
     const runtime = executionRuntimeLabel(activity.runtime || activity.tool);
+    // A background task's runtime resolves to the same copy as its kind label;
+    // repeating it truncated next to the label only adds noise.
+    const runtimeKicker = runtime === label ? "" : runtime;
     const statusDetail = executionStatusDetail(activity);
     return `<details class="execution-activity-card ${esc(activity.kind || "background")} ${esc(activity.mode || "foreground")} ${esc(activity.status || "completed")}"
       data-disclosure-key="${esc(`graph:execution:${ownerId}:${activity.id}`)}"
@@ -1153,7 +1188,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       <summary>
         <span class="execution-activity-icon" aria-hidden="true">${activity.kind === "shell" ? "›_" : "◌"}</span>
         <span class="execution-activity-copy">
-          <span class="execution-activity-kicker"><b>${esc(label)}</b><small>${esc(runtime)}</small></span>
+          <span class="execution-activity-kicker"><b>${esc(label)}</b>${runtimeKicker ? `<small>${esc(runtimeKicker)}</small>` : ""}</span>
           <strong title="${esc(command.full)}">${esc(activity.label || command.text)}</strong>
           ${activity.command ? `<code title="${esc(activity.command)}">${esc(command.text)}</code>` : ""}
           <span class="execution-activity-meta">
@@ -1271,12 +1306,13 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const { ongoing, completed } = splitSubagents(children);
     const completedExpanded = state.expandedCompletedSubagents.has(focus.id);
     const shownChildren = completedExpanded ? [...ongoing, ...completed] : ongoing;
+    const chatTitle = parent ? null : workflowChatTitle(focus, 48);
     const upstream = parent
       ? workflowCompactNode(parent, model, "upstream", parent.parentId ? t("graph.back_to_previous_ai") : t("graph.back_to_main_ai"))
       : `<div class="agent-workflow-origin">
         <span class="workflow-origin-icon">◎</span>
         <span>
-        <b>${esc(t("graph.user_request"))}</b>
+        <b class="workflow-origin-title" data-workflow-chat-title="${esc(focus.id)}" title="${esc(chatTitle.full)}">${esc(chatTitle.text)}</b>
         <small>${esc(t("graph.task_origin"))}</small>
         </span>
         <span class="agent-workflow-port output" data-workflow-port="upstream-output" aria-hidden="true">
@@ -1350,7 +1386,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
 
   return {
     graphNode, compactGraphNode, providerFlowLane, workflowCompactNode, liveTmuxEntries, tmuxEntrySession, filteredLiveTmuxEntries, liveTmuxPaneCard, runtimeSeparatedOverview,
-    controlRoomIntent, controlRoomSummary, controlRoomAgentGoal, inferredExecutionSummary,
+    controlRoomIntent, controlRoomSummary, controlRoomAgentGoal, workflowChatTitle, inferredExecutionSummary,
     workflowMetrics, workflowChildrenSummary, workflowProgressPanel, splitSubagents, completedSubagentDisclosure, agentPathTaskName, communicationEndpoint,
     workflowCommunicationPanel, executionActivityLabel, executionActivityStatus, executionActivityCard, executionActivityPanel, focusedGraph,
   };

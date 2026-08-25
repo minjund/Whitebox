@@ -195,7 +195,7 @@ const BEGINNER_GUIDE_LABELS = [
   '새 AI 작업 시작',
   '처리 중인 작업',
   '에서 함께 볼 새 작업 시작',
-  '설치 버전과 최신 버전 비교',
+  '실행 중인 버전과 최신 버전 비교',
   '최신 버전 다시 확인',
 ];
 
@@ -230,7 +230,7 @@ const SEMANTIC_UI_COPY = [
   'AI가 한 번에 참고할 수 있는 양을 75% 이상 사용',
   '이 일을 맡긴 담당 AI 정보를 찾지 못함',
   '현재 실행 중인 작업',
-  '전체 지난 작업 {total}건 · 작업 완료 {new}건 · 결과 확인 완료 {reviewed}건',
+  '전체 지난 작업 {total}건 · 작업 완료 {new}건 · 기록된 결정 {decisions}건',
   '실행 횟수',
   '컴퓨터 작업과 AI 대화',
   '다른 컴퓨터의 작업',
@@ -913,7 +913,8 @@ const MAIN_PROCESS_CONTRACTS = [
   ": (notificationDetail || session.title || '이름 없는 작업')",
   'title: notificationCopy',
   'function notifyTerminalPrompt',
-  "attentionNotifier.sync(visibleSnapshotSessions(lastSnapshot))",
+  "const snapshot = visibleSnapshotSessions(lastSnapshot)",
+  "attentionNotifier.sync(snapshot)",
   "agents:attention-requested",
   "pendingAttentionSessionId",
   "markRendererReady",
@@ -1524,7 +1525,6 @@ function registerUiContractTests(context) {
       Intl,
     };
     vm.runInNewContext(managementSource, managementSandbox, { filename: 'app-management.js' });
-    let managementResultReviewed = false;
     const managementState = { snapshot: { sessions: [] }, providers: [], availability: {} };
     const management = managementSandbox.window.WhiteboxAppFactories.createManagement({
       state: managementState,
@@ -1532,8 +1532,8 @@ function registerUiContractTests(context) {
       providerInfo: () => ({ label: 'Codex', mark: 'C', accent: '#64cbe5' }),
       timeAgo: () => '방금 전',
       readablePreview: value => ({ text: String(value || ''), full: String(value || '') }),
-      isResultReviewComplete: session => managementResultReviewed && session?.id === 'result-contract',
-      resultReviewTargets: session => session?.pendingResultReview && !managementResultReviewed ? [session] : [],
+      isResultReviewComplete: () => false,
+      resultReviewTargets: () => [],
     });
     const managementNow = Date.parse('2026-08-06T01:00:00.000Z');
     const managementSession = {
@@ -1576,26 +1576,19 @@ function registerUiContractTests(context) {
       evidence: { confidence: 'high' },
     };
     managementState.snapshot.sessions = [managementResultSession];
-    assert.equal(management.needsManagementInbox(managementResultSession, managementNow), true,
-      '답변 요청이 없는 순수 완료 결과도 확인 대기 목록에 들어가야 합니다.');
+    assert.equal(management.needsManagementInbox(managementResultSession, managementNow), false,
+      '답변 요청이 없는 순수 완료 결과에 별도 확인 단계를 만들면 안 됩니다.');
     assert.equal(management.needsUserResponse(managementResultSession), false,
       '순수 완료 결과를 실행 흐름을 가리는 답변 대기로 분류하면 안 됩니다.');
-    assert.equal(management.needsManagementReview(managementResultSession, managementNow), true,
-      '순수 완료 결과가 홈 확인 목록에서 제외되면 안 됩니다.');
-    assert.equal(management.rootManagementReviews([managementResultSession], managementNow).length, 1,
-      '순수 완료 결과가 홈의 실제 렌더링 소스로 그룹화되어야 합니다.');
+    assert.equal(management.needsManagementReview(managementResultSession, managementNow), false,
+      '순수 완료 결과를 홈 확인 목록에 넣으면 안 됩니다.');
+    assert.equal(management.rootManagementReviews([managementResultSession], managementNow).length, 0,
+      '순수 완료 결과가 홈의 답변·승인 요청과 섞이면 안 됩니다.');
     const managementResultHtml = management.attentionCardHtml(managementResultSession);
-    assert.equal((managementResultHtml.match(/data-result-review="true"/g) || []).length, 2,
-      '완료 결과 카드의 기본·상세 열기 모두 확인 저장 동작을 사용해야 합니다.');
-    assert.match(managementResultHtml, /class="attention-primary-action"[^>]*data-result-review="true"/,
-      '완료 결과 기본 버튼은 키보드 클릭에도 동일한 확인 저장 경로를 사용해야 합니다.');
+    assert.equal(managementResultHtml.includes('data-result-review'), false,
+      '완료 결과 카드에 제거된 결과 확인 저장 동작이 남아 있으면 안 됩니다.');
     assert.doesNotMatch(managementResultHtml, /data-attention-quick=/,
       '완료 결과 확인 카드에 답변·승인 빠른 응답을 노출하면 안 됩니다.');
-    managementResultReviewed = true;
-    assert.equal(management.needsManagementInbox(managementResultSession, managementNow), false,
-      '확인 저장을 마친 완료 결과는 확인 대기 목록에서 사라져야 합니다.');
-    assert.equal(management.rootManagementReviews([managementResultSession], managementNow).length, 0,
-      '확인 저장을 마친 완료 결과는 홈 확인 목록에서도 사라져야 합니다.');
     const operationsStart = managementSource.indexOf('function renderOperationsOverview()');
     const operationsEnd = managementSource.indexOf('\n  function outcomeHtml', operationsStart);
     const operationsSource = managementSource.slice(operationsStart, operationsEnd);
@@ -1964,7 +1957,19 @@ function registerUiContractTests(context) {
     assert.equal(core.isControlRoomSession({ ...ended, status: 'running' }, now), true);
     assert.equal(core.isControlRoomSession(ended, now), true);
     assert.equal(core.controlRoomStatus(ended, now), 'completed');
-    assert.equal(core.sessionRetentionMinutes(ended, now), 25);
+    assert.equal(
+      new Date(core.sessionRetentionDeadline(ended)).toISOString(),
+      '2026-07-23T01:25:00.000Z',
+      '최근 완료 안내는 남은 분이 아니라 지난 기록 이동 예정 시각을 계산해야 합니다.',
+    );
+    assert.equal(core.sessionRetentionDeadline({ messages: [{ role: 'assistant' }] }), 0,
+      '응답·완료 시각이 없으면 2000년의 잘못된 보존 시각을 만들면 안 됩니다.');
+    const graphViewSource = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
+    const messageSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
+    assert.ok(graphViewSource.includes('control.auto_history_after_time'));
+    assert.ok(graphViewSource.includes('timestamp <= 0'), '유효한 보존 시각이 없으면 시계 텍스트를 숨겨야 합니다.');
+    assert.equal(graphViewSource.includes('control.auto_history_in_minutes'), false);
+    assert.match(messageSource, /"control\.auto_history_after_time": \{"ko":"\{time\} 이후 지난 기록으로 이동"/);
     assert.equal(core.archiveSession(ended), true);
     assert.equal(core.isControlRoomSession(ended, now), false);
     const resumed = {
@@ -2002,7 +2007,7 @@ function registerUiContractTests(context) {
     assert.ok(values.get(core.SESSION_ARCHIVE_STORAGE_KEY));
   });
 
-  test('결과 확인 완료는 현재 결과만 저장하고 새 결과가 오면 다시 확인 대상으로 돌린다', () => {
+  test('완료 결과는 별도 결과 확인 대상으로 만들지 않는다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
     const values = new Map();
     const sandbox = {
@@ -2040,23 +2045,43 @@ function registerUiContractTests(context) {
       outcome: { status: 'completed', verified: true, completedAt: '2026-07-31T01:00:01.000Z', summary: `${'같은 앞부분'.repeat(160)} · 첫 결과` },
     };
     core.state.snapshot = { sessions: [rootSession, resultSession] };
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession), session => session.id), ['review-result']);
-    assert.equal(core.markResultReviewComplete(rootSession), 1);
-    assert.equal(core.isResultReviewComplete(resultSession), true);
-    assert.ok(values.get(core.RESULT_REVIEW_STORAGE_KEY));
+    assert.ok(source.includes('const RESULT_REVIEW_REQUIRED = false;'));
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession)), []);
+    assert.equal(core.markResultReviewComplete(rootSession), 0);
+    assert.equal(core.isResultReviewComplete(resultSession), false);
+    assert.equal(values.has(core.RESULT_REVIEW_STORAGE_KEY), false,
+      '완료 결과를 자동으로 확인 저장하면 안 됩니다.');
 
     const reloaded = sandbox.window.WhiteboxAppFactories.createCore({});
     reloaded.state.snapshot = core.state.snapshot;
-    assert.equal(reloaded.isResultReviewComplete(resultSession), true);
-    const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
-    const sessionEventSource = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
+    assert.equal(reloaded.isResultReviewComplete(resultSession), false);
     const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
-    assert.match(drawerSource, /options\.resultReview === true \? markResultReviewComplete/,
-      '완료 결과를 열 때 확인 상태를 즉시 저장해야 합니다.');
-    assert.match(sessionEventSource, /tab: "summary", resultReview: true/,
-      '결과 확인 진입점이 자동 확인 옵션을 전달해야 합니다.');
-    assert.match(bootstrapSource, /\{ tab: 'summary', resultReview: true \}/,
-      '완료 알림을 열어 확인한 경우에도 확인 상태를 저장해야 합니다.');
+    const sessionRenderSource = fs.readFileSync(path.join(root, 'renderer', 'app-session-render.js'), 'utf8');
+    const runtimeSource = fs.readFileSync(path.join(root, 'renderer', 'app-runtime-overview.js'), 'utf8');
+    const interactionSource = fs.readFileSync(path.join(root, 'scripts', 'interaction-check.js'), 'utf8');
+    assert.equal(sessionRenderSource.includes('sessionNeedsResultReview'), false,
+      '지난 기록 화면에 제거된 결과 확인 판정이 남아 있으면 안 됩니다.');
+    assert.equal(sessionRenderSource.includes('data-result-review'), false,
+      '지난 기록 카드에 제거된 결과 확인 저장 동작이 남아 있으면 안 됩니다.');
+    assert.ok(sessionRenderSource.includes('t("memory.recorded_decisions")')
+      && sessionRenderSource.includes('t(`memory.stage_decision_${decisionState}`)')
+      && !sessionRenderSource.includes('memory.no_result_to_review'),
+    '지난 기록의 5단계와 지표는 결과 열람 여부가 아니라 실제 사용자 결정을 표시해야 합니다.');
+    assert.equal(runtimeSource.includes("data-result-review=\"true\""), false,
+      '자동 실행 결과 열기가 별도 확인 상태를 저장한다고 표시하면 안 됩니다.');
+    assert.equal(runtimeSource.includes('확인 상태가 저장'), false,
+      '저장하지 않는 결과 확인 상태를 저장한다고 안내하면 안 됩니다.');
+    assert.ok(runtimeSource.includes('const resultPhase = activePhase.key === "observe";')
+      && runtimeSource.includes('selectedActivePhase?.key === "observe"')
+      && !runtimeSource.includes('/결과|확인/'),
+    '반복 작업의 결과 단계 판정은 번역 문구가 아니라 phase key를 사용해야 합니다.');
+    assert.ok(runtimeSource.includes('resultPhase ? "runtime.open_result" : "runtime.open_task"')
+      && runtimeSource.includes('resultPhase ? t("runtime.phase_observe_detail") : activePhase.detail'),
+    '반복 작업 열기 안내는 현재 단계의 실제 의미를 표시해야 합니다.');
+    assert.equal(bootstrapSource.includes("{ tab: 'summary', resultReview: true }"), false,
+      '완료 알림을 열 때 결과 확인 상태를 자동 저장하면 안 됩니다.');
+    assert.equal(interactionSource.includes("selector: '[data-result-review-complete]'"), false,
+      '제거된 결과 확인 완료 버튼을 필수 상호작용으로 요구하면 안 됩니다.');
     assert.ok(bootstrapSource.indexOf('window.whitebox.onUpdateState')
       < bootstrapSource.indexOf('window.WhiteboxRendererUtils.bootstrap()'),
     '시작 중 업데이트 상태 변경을 놓치지 않도록 bootstrap 전에 구독해야 합니다.');
@@ -2066,31 +2091,9 @@ function registerUiContractTests(context) {
     assert.match(mainSource, /if \(updateManager\) sendUpdateState\(updateManager\.getState\(\)\)/,
       'renderer ready 시 최신 업데이트 상태를 한 번 더 보내 이벤트 경합을 닫아야 합니다.');
 
-    resultSession.outcome = { ...resultSession.outcome, summary: `${'같은 앞부분'.repeat(160)} · 뒤에서 바뀐 결과` };
-    assert.equal(core.isResultReviewComplete(resultSession), false,
-      '타임스탬프와 긴 앞부분이 같아도 결과 뒷부분이 바뀌면 다시 확인해야 합니다.');
-    assert.equal(core.markResultReviewComplete(resultSession), 1);
-    assert.equal(core.isResultReviewComplete(resultSession), true);
-
-    resultSession.outcome = { ...resultSession.outcome, completedAt: undefined, summary: '완료 시각이 없는 안정된 결과' };
-    delete resultSession.completedAt;
-    resultSession.updatedAt = '2026-07-31T03:00:00.000Z';
-    assert.equal(core.markResultReviewComplete(resultSession), 1);
-    resultSession.updatedAt = '2026-07-31T03:30:00.000Z';
-    assert.equal(core.isResultReviewComplete(resultSession), true,
-      '재스캔 시각만 바뀐 같은 완료 결과가 다시 나타나면 안 됩니다.');
-    resultSession.outcome = { ...resultSession.outcome, summary: '실제로 달라진 완료 결과' };
-    assert.equal(core.isResultReviewComplete(resultSession), false,
-      '실제 결과 내용이 바뀌면 다시 확인할 수 있어야 합니다.');
-
-    resultSession.outcome = { ...resultSession.outcome, completedAt: '2026-07-31T02:00:00.000Z', summary: '새 결과' };
-    resultSession.updatedAt = '2026-07-31T02:00:00.000Z';
-    assert.equal(core.isResultReviewComplete(resultSession), false);
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession), session => session.id), ['review-result']);
-
-    resultSession.attention = { category: 'required', required: true };
-    assert.equal(core.isResultReviewCandidate(resultSession), false);
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession), session => session.id), []);
+    resultSession.outcome = { ...resultSession.outcome, summary: '새 완료 결과' };
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession)), [],
+      '결과 내용이 바뀌어도 별도 확인 단계가 다시 생기면 안 됩니다.');
   });
 
   test('프로젝트 알림 확인은 현재 신호만 숨기고 새 결과와 새 요청을 다시 표시한다', () => {
@@ -2131,8 +2134,8 @@ function registerUiContractTests(context) {
     assert.equal(core.isProjectNoticeSeen('result', result), false);
     assert.equal(core.markProjectNoticeSeen('result', result), true);
     assert.equal(core.isProjectNoticeSeen('result', result), true);
-    assert.equal(core.isResultReviewComplete(result), false, '프로젝트 알림 열람이 실제 결과 확인 완료로 바뀌면 안 됩니다.');
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(result), session => session.id), ['notice-result']);
+    assert.equal(core.isResultReviewComplete(result), false, '완료 결과에 별도 확인 상태를 만들면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(result)), []);
     assert.ok(values.get(core.PROJECT_NOTICE_ACK_STORAGE_KEY));
 
     const reloaded = sandbox.window.WhiteboxAppFactories.createCore({});
@@ -2540,6 +2543,10 @@ function registerUiContractTests(context) {
     assert.ok(focusedSource.includes('const connectMotion = "motion-connect";'));
     assert.equal(focusedSource.includes('["focus", "focus-back", "view"].includes(motionKind)'), false);
     assert.ok(focusedSource.includes('workflowProgressPanel(focus, children)'), '작업 흐름에 읽기 전용 진행 현황이 없습니다.');
+    assert.ok(focusedSource.includes('const chatTitle = parent ? null : workflowChatTitle(focus, 48);')
+      && focusedSource.includes('data-workflow-chat-title="${esc(focus.id)}"')
+      && focusedSource.includes('${esc(chatTitle.text)}'),
+    '작업 진행 화면의 왼쪽 시작점에 저장된 Claude/GPT 채팅 제목을 표시해야 합니다.');
     assert.equal(focusedSource.includes('context.agentCommandComposer(focus)'), false, '별도 대화창이 있는데 작업 진행 화면에 지시 입력창이 다시 노출되었습니다.');
     assert.ok(source.includes('data-workflow-progress='), '현재 단계와 최근 활동을 식별할 진행 패널 계약이 없습니다.');
     assert.ok(source.includes('graph.progress_basis_note'), '기록된 단계 비율을 전체 계획 진척률로 오해하지 않도록 근거 안내가 필요합니다.');
@@ -2551,9 +2558,11 @@ function registerUiContractTests(context) {
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const filterEvents = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
     const sessionRenderer = fs.readFileSync(path.join(root, 'renderer', 'app-session-render.js'), 'utf8');
+    const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const orchestration = fs.readFileSync(path.join(root, 'renderer', 'app-graph-orchestration.js'), 'utf8');
     const inlineTerminal = fs.readFileSync(path.join(root, 'renderer', 'inline-agent-terminal.js'), 'utf8');
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
+    const sharedSource = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'renderer', 'styles-workflow-map.css'), 'utf8');
     const controlRoomStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-control-room.css'), 'utf8');
@@ -2573,6 +2582,10 @@ function registerUiContractTests(context) {
       '처리 중 화면의 PTY 트리거가 메인 담당 AI로 제한되지 않았습니다.');
     assert.match(controlRoomSource, /class="control-room-main"\$\{controlRoomPtyAttributes\}/,
       '처리 중 화면의 메인 담당 AI에 PTY 토글 속성을 연결하지 않았습니다.');
+    assert.ok(graphNodeSource.includes('const completedMainPty = presentationStatus === "completed"')
+      && graphNodeSource.includes('&& canForkCodexDesktopSession(session);')
+      && graphNodeSource.includes('&& !completedMainPty;'),
+    '완료된 Codex Desktop 담당 AI가 대화 기록형 상세창 대신 새 fork PTY를 우선하지 않습니다.');
     assert.doesNotMatch(helperNodeSource, /data-inline-pty-trigger=/,
       '실행 중 도움 AI 노드가 PTY를 열고 있습니다.');
     assert.ok(helperNodeSource.includes('data-open-subagent-chat='),
@@ -2591,17 +2604,49 @@ function registerUiContractTests(context) {
     assert.ok(events.includes('window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger') && events.includes('focus: !inlineTerminal.closest(".control-room-session")'), 'AI 클릭이 현재 화면의 인라인 PTY 토글로 연결되지 않았습니다.');
     assert.ok(historySource.includes('data-inline-pty-trigger=') && historySource.includes('data-open-session='),
       '지난 기록이 PTY 가능 여부에 따라 인라인 터미널 또는 읽기 전용 상세로 연결되지 않았습니다.');
-    assert.ok(historySource.includes('session.presentation?.conversationSurface === "transcript"')
-      && historySource.includes('session.controlCapabilities?.pty === false'),
-    'PTY가 없는 지난 기록을 쓰기 가능한 화면으로 잘못 열 수 있습니다.');
+    assert.ok(historySource.includes('const completedMainPty = String(session.status || "") === "completed"')
+      && historySource.includes('&& canForkCodexDesktopSession(session);')
+      && historySource.includes('session.presentation?.conversationSurface === "transcript"')
+      && historySource.includes('session.controlCapabilities?.pty === false')
+      && historySource.includes('&& !completedMainPty'),
+    '완료된 Codex Desktop 최상위 기록만 새 fork PTY를 우선하고 그 외 읽기 전용 기록은 상세창을 유지해야 합니다.');
+    const sharedSandbox = { window: {}, document: {} };
+    vm.runInNewContext(sharedSource, sharedSandbox, { filename: 'shared.js' });
+    const canFork = sharedSandbox.window.WhiteboxRendererUtils.canForkCodexDesktopSession;
+    const forkable = {
+      id: 'codex:desktop-history', externalId: 'desktop-history', provider: 'codex', clientKind: 'codex-desktop',
+      parentId: null, sourcePluginId: '', runId: '',
+    };
+    assert.equal(canFork(forkable), true);
+    for (const invalid of [
+      { ...forkable, id: 'codex:other' },
+      { ...forkable, externalId: 'bad id', id: 'codex:bad id' },
+      { ...forkable, externalId: 'terminal:owned', id: 'codex:terminal:owned' },
+      { ...forkable, runId: 'desktop-history' },
+      { ...forkable, parentId: 'parent' },
+      { ...forkable, sourcePluginId: 'builtin.opencode' },
+      { ...forkable, sourcePlugin: { id: 'builtin.omo' } },
+      { ...forkable, sourcePlugin: 'builtin.omo' },
+      { ...forkable, sourcePlugin: {} },
+      { ...forkable, readOnly: true },
+      { ...forkable, controlAuthority: 'read-only-import' },
+      { ...forkable, importMode: 'local-history' },
+    ]) assert.equal(canFork(invalid), false, `fork 불가 기록을 PTY로 표시했습니다: ${JSON.stringify(invalid)}`);
+    assert.match(drawerSource, /const forkableCompletedDesktop = String\(session\.status \|\| ""\) === "completed"[\s\S]*canForkCodexDesktopSession[\s\S]*const conversationSurface = forkableCompletedDesktop\s*\? "pty"/,
+      '지난 작업 카드나 왼쪽 트리에서 연 canonical Codex Desktop 기록도 중앙 drawer에서 새 fork PTY로 승격해야 합니다.');
+    assert.ok(graphNodeSource.includes('const conversationLabel = completedMainPty')
+      && graphNodeSource.includes('t("drawer.terminal_fork_action")')
+      && graphNodeSource.includes('aria-label="${esc(conversationLabel)}"'),
+    '완료된 Codex Desktop 노드는 관계 보기 대신 새 fork 세션 동작을 접근 가능한 이름으로 알려야 합니다.');
     assert.ok(historyEvents.indexOf('[data-inline-pty-trigger]') >= 0
       && historyEvents.indexOf('[data-inline-pty-trigger]') < historyEvents.indexOf('[data-open-session]')
       && historyEvents.includes('window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger)'),
     '지난 기록 클릭이 팝업보다 먼저 인라인 PTY 경로로 연결되지 않았습니다.');
     assert.ok(historyEvents.includes('openDrawer(open.dataset.openSession, {')
-      && historyEvents.includes('context: true,')
-      && historyEvents.includes('resultReview: true'),
+      && historyEvents.includes('context: true,'),
       'PTY가 없는 지난 기록도 진행 중 AI와 같은 컨텍스트 상세 UX로 열려야 합니다.');
+    assert.equal(historySource.includes('data-result-review="true"'), false,
+      '완료된 지난 기록을 열 때 결과 확인 상태를 만들면 안 됩니다.');
     assert.ok(graphFilterSource.includes('state.graphFocusId || state.inlineTerminalSessionId')
       && graphFilterSource.includes('const selectedGraphSession = allById.get(selectedGraphId)')
       && graphFilterSource.includes('contextual.set(currentId, current)'),
@@ -2668,7 +2713,7 @@ function registerUiContractTests(context) {
       filters.indexOf('workspaceLists.forEach'),
     );
     const workspaceSelection = workspaceClick.slice(
-      workspaceClick.indexOf('const item = event.target.closest("[data-workspace]")'),
+      workspaceClick.indexOf('const item = event.target.closest("[data-workspace], [data-source-workspace]")'),
       workspaceClick.indexOf('if (activeList.id === "projectSidebarList" && state.workspace !== "all")'),
     );
 
@@ -2729,6 +2774,10 @@ function registerUiContractTests(context) {
       filterEvents.indexOf('const bindSortableSidebarProjects'),
       filterEvents.indexOf('$("#loadMoreBtn")'),
     );
+    const treeKeyboardBinding = filterEvents.slice(
+      filterEvents.indexOf('workspaceLists.forEach'),
+      filterEvents.indexOf('$("#projectHistoryRail")'),
+    );
 
     assert.match(
       sidebarMarkup,
@@ -2747,7 +2796,9 @@ function registerUiContractTests(context) {
     ]);
     assertIncludesAll(sidebarMarkup, [
       'aria-grabbed="false"',
-      'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"',
+      'projectKeyboardShortcuts',
+      'canReorder ? "Alt+ArrowUp Alt+ArrowDown"',
+      'canRemove ? "Delete"',
       'aria-describedby="projectReorderHelp"',
       'project-sidebar-drag-handle',
     ]);
@@ -2765,6 +2816,30 @@ function registerUiContractTests(context) {
     ]);
     assert.ok(filterEvents.includes('bindSortableSidebarProjects($("#projectSidebarList"))'),
       '왼쪽 프로젝트 목록에 정렬 이벤트를 연결하지 않았습니다.');
+    assertIncludesAll(treeKeyboardBinding, [
+      '["ArrowLeft", "ArrowRight"].includes(event.key)',
+      'list.addEventListener("focusin"',
+      'setRovingTreeItem(list, treeItem)',
+      'treeItem.getAttribute("aria-owns")',
+      'candidate.getAttribute("aria-controls") === ownedGroupId',
+      'document.getElementById(ownedGroupId)?.querySelector',
+      'treeItem.closest(".project-sidebar-source")',
+      'treeItem.closest(".project-sidebar-project")',
+      `? '[role="treeitem"]'`,
+      '{ wrap: !tree, roving: tree }',
+      'event.key === "Delete"',
+      'querySelector("[data-remove-workspace]")',
+      'remove.click()',
+    ]);
+    assert.match(treeKeyboardBinding, /if \(!treeItem\) return;\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);/,
+      '모든 트리 항목의 Left/Right no-op도 기본 스크롤과 버블링을 막아야 합니다.');
+    assert.match(filterEvents, /const next = wrap[\s\S]*Math\.max\(0, Math\.min\(items\.length - 1, requested\)\)/,
+      '트리의 Up/Down은 첫 항목과 마지막 항목에서 반대편으로 순환하면 안 됩니다.');
+    assert.match(treeKeyboardBinding, /toggle\.click\(\);[\s\S]*focusRememberedTreeItem\(identity\);/,
+      '트리 접기/펼치기는 disclosure를 재사용하고 다시 그린 항목으로 포커스를 복원해야 합니다.');
+    assert.ok(filterEvents.includes('.project-sidebar-item[role="treeitem"]')
+      && filterEvents.includes('.project-sidebar-source-filter[role="treeitem"]'),
+    '마우스로 disclosure를 누른 뒤에도 소유 treeitem으로 포커스를 복원해야 합니다.');
     assert.match(filterEvents, /Date\.now\(\) - sidebarProjectDragEndedAt < 250/,
       '드래그 직후 click이 프로젝트 선택으로 실행되는 것을 막아야 합니다.');
     assert.ok(quality.includes('projectOrder: (state.projectOrder || [])'),
@@ -2901,6 +2976,7 @@ function registerUiContractTests(context) {
     const dashboardSource = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const eventSource = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
     const appSource = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
+    const interactionSource = fs.readFileSync(path.join(root, 'scripts', 'interaction-check.js'), 'utf8');
     const qualitySource = fs.readFileSync(path.join(root, 'renderer', 'app-quality.js'), 'utf8');
     const messagesSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const sidebarStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-studio-shell.css'), 'utf8');
@@ -3017,15 +3093,21 @@ function registerUiContractTests(context) {
         `data-sidebar-source-key="${sourceKey(projectKey, source)}"`,
       ).includes(`data-source-kind="${expectedKind}"`),
       `${source} 행이 ${expectedKind} 유형임을 마크업에서 구분할 수 없습니다.`);
-      assert.ok(sharedProject.includes(`data-workspace="${cwd}" data-project-source="${source}"`),
+      assert.ok(sharedProject.includes(`data-source-workspace="${cwd}" data-project-source="${source}"`),
         `${source} 프로그램 필터가 동일 경로의 다른 source와 구분되지 않았습니다.`);
-      assert.ok(projectless.includes(`data-workspace="${projectlessKey}" data-project-source="${source}"`),
+      assert.ok(projectless.includes(`data-source-workspace="${projectlessKey}" data-project-source="${source}"`),
         `${source} 프로젝트 없음 필터가 source 경계를 잃었습니다.`);
     }
-    assert.ok(sharedProject.includes(`data-workspace="${cwd}" data-project-source="all"`),
-      '프로젝트 전체 선택은 source=all인 별도 필터여야 합니다.');
-    assert.ok(projectless.includes(`data-workspace="${projectlessKey}" data-project-source="all"`),
-      '프로젝트 없음 전체 선택도 source=all 필터여야 합니다.');
+    const sharedProjectSelector = tagWith(sharedProject, `data-workspace="${cwd}" data-project-source="all"`);
+    const projectlessSelector = tagWith(projectless, `data-workspace="${projectlessKey}" data-project-source="all"`);
+    assert.ok(sharedProjectSelector.includes('project-sidebar-item'),
+      '프로젝트 이름 버튼이 source=all인 전체 선택 필터여야 합니다.');
+    assert.ok(projectlessSelector.includes('project-sidebar-item'),
+      '프로젝트 없음 이름 버튼도 source=all인 전체 선택 필터여야 합니다.');
+    assert.equal(sidebar.innerHTML.includes('모든 프로그램과 플러그인'), false,
+      '프로젝트 아래에 중복 전체 선택 행을 표시하면 안 됩니다.');
+    assert.equal(sidebar.innerHTML.includes('studio.sidebar.all_sources'), false,
+      '번역 키가 그대로 보이는 경우에도 중복 전체 선택 행으로 간주해야 합니다.');
 
     const directProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'direct'));
     const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
@@ -3054,6 +3136,28 @@ function registerUiContractTests(context) {
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.aside'))
       .includes('data-open-session="builtin.aside:aside-projectless"'));
 
+    const projectTreeItem = tagWith(sharedProject, `data-workspace="${cwd}" data-project-source="all"`);
+    const sourceTreeItem = tagWith(openCodeProgram, `data-source-workspace="${cwd}" data-project-source="builtin.opencode"`);
+    assertIncludesAll(projectTreeItem, ['role="treeitem"', 'aria-level="1"', 'aria-selected="false"', 'aria-expanded="true"', 'aria-owns=', 'tabindex="0"']);
+    assertIncludesAll(sourceTreeItem, ['role="treeitem"', 'aria-level="2"', 'aria-selected="false"', 'aria-expanded="true"', 'aria-owns=', 'tabindex="-1"']);
+    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1,
+      '프로젝트 트리는 렌더 시 진입 가능한 treeitem을 하나만 제공해야 합니다.');
+    assert.equal((sidebar.innerHTML.match(/data-sidebar-(?:project|source)-toggle=[^>]*tabindex="-1"/g) || []).length, 8,
+      '프로젝트와 프로그램 disclosure는 별도 Tab 정지점이 아니어야 합니다.');
+    const removeButtons = sidebar.innerHTML.match(/<button[^>]*data-remove-workspace[^>]*>/g) || [];
+    assert.match(dashboardSource, /data-remove-workspace[\s\S]{0,500}?tabindex="-1"/,
+      '프로젝트 제거 버튼 정의는 composite tree의 별도 Tab 정지점을 만들지 않아야 합니다.');
+    assert.ok(removeButtons.every(button => button.includes('tabindex="-1"')),
+      '프로젝트 제거 버튼은 composite tree의 별도 Tab 정지점이 아니어야 합니다.');
+    const treeButtons = sidebar.innerHTML.match(/<button[^>]*>/g) || [];
+    assert.equal(treeButtons.filter(button => !/tabindex="(?:0|-1)"/.test(button)).length, 0,
+      '프로젝트 트리 내부에는 로빙 treeitem 외의 암묵적 Tab 정지점이 없어야 합니다.');
+    for (const item of [projectTreeItem, sourceTreeItem]) {
+      const ownedId = /aria-owns="([^"]+)"/.exec(item)?.[1];
+      assert.ok(ownedId && tagWith(sidebar.innerHTML, `id="${ownedId}"`).includes('role="group"'),
+        '트리 선택 항목이 펼침 화살표의 자식 그룹을 접근성 트리에 소유해야 합니다.');
+    }
+
     const controls = [...sidebar.innerHTML.matchAll(/aria-controls="([^"]+)"/g)].map(match => match[1]);
     assert.equal(controls.length, 8, '프로젝트 2개와 프로그램 6개 모두 독립 disclosure여야 합니다.');
     assert.equal(new Set(controls).size, controls.length, '각 disclosure의 aria-controls 대상 ID가 겹치면 안 됩니다.');
@@ -3079,8 +3183,21 @@ function registerUiContractTests(context) {
       'data-sidebar-source-toggle', true, 'project-sidebar-sessions');
     assert.equal(state.workspace, cwd);
     assert.equal(state.workspaceSource, 'builtin.aside');
-    assert.ok(tagWith(expandedProject, `data-project-source="builtin.aside"`).includes('aria-pressed="true"'),
+    const selectedSourceTreeItem = tagWith(expandedProject, `data-project-source="builtin.aside"`);
+    assert.ok(selectedSourceTreeItem.includes('aria-selected="true"'),
       '다른 프로그램을 접어도 선택한 source 필터가 바뀌면 안 됩니다.');
+    assert.ok(selectedSourceTreeItem.includes('tabindex="0"'),
+      '선택한 프로그램은 프로젝트 트리의 단일 Tab 진입점이어야 합니다.');
+    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
+
+    state.sidebarCollapsedProjects.add(projectKey);
+    dashboard.renderWorkspaces();
+    const collapsedSelectedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
+    assert.ok(tagWith(collapsedSelectedProject, `data-workspace="${cwd}" data-project-source="all"`).includes('tabindex="0"'),
+      '선택한 프로그램의 부모 프로젝트가 접히면 보이는 프로젝트 항목이 Tab 진입점이어야 합니다.');
+    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
+    state.sidebarCollapsedProjects.delete(projectKey);
+    dashboard.renderWorkspaces();
 
     const workspaceHandler = eventSource.slice(
       eventSource.indexOf('const handleWorkspaceClick = async (event) => {'),
@@ -3088,9 +3205,24 @@ function registerUiContractTests(context) {
     );
     const projectToggleIndex = workspaceHandler.indexOf('[data-sidebar-project-toggle]');
     const sourceToggleIndex = workspaceHandler.indexOf('[data-sidebar-source-toggle]');
-    const filterIndex = workspaceHandler.indexOf('[data-workspace]');
+    const filterIndex = workspaceHandler.indexOf('[data-workspace], [data-source-workspace]');
     assert.ok(projectToggleIndex >= 0 && sourceToggleIndex >= 0 && filterIndex > projectToggleIndex && filterIndex > sourceToggleIndex,
-      '프로젝트·프로그램 disclosure는 필터 선택과 분리해 먼저 처리해야 합니다.');
+      '프로젝트·프로그램 disclosure 화살표는 이름 필터 선택과 분리해 먼저 처리해야 합니다.');
+    assert.ok(appSource.includes('"data-source-workspace"'),
+      '프로그램 이름 버튼은 렌더 후에도 포커스를 복원할 수 있는 안정 식별자여야 합니다.');
+    assert.ok(eventSource.includes(`? '[role="treeitem"]'`),
+      '프로젝트·프로그램·작업 이름이 프로젝트 트리의 방향키 탐색 순서에 포함되어야 합니다.');
+    assert.ok(eventSource.includes('const workspaceAttribute = trigger.id === "sidebarNewProjectBtn" ? "data-source-workspace" : "data-workspace";'),
+      '새 프로젝트를 추가한 뒤 직접 실행 프로그램 행으로 스크롤해야 합니다.');
+    assertIncludesAll(eventSource, [
+      'state.sidebarCollapsedProjects.delete(selectedKey);',
+      'state.sidebarCollapsedSources.delete(`${selectedKey}::direct`);',
+    ]);
+    assert.ok(interactionSource.includes("{ selector: '[data-source-workspace]', action: 'workspace:source-select' }"),
+      '프로그램 이름 버튼이 상호작용 전수 점검 매니페스트에 없습니다.');
+    assert.ok(interactionSource.includes("{ selector: '[data-sidebar-project-toggle]', action: 'workspace:project-toggle' }")
+      && interactionSource.includes("{ selector: '[data-sidebar-source-toggle]', action: 'workspace:source-toggle' }"),
+    '분리된 프로젝트·프로그램 펼침 화살표가 상호작용 전수 점검 매니페스트에 없습니다.');
     assertIncludesAll(workspaceHandler, ['state.sidebarCollapsedProjects', 'state.sidebarCollapsedSources', 'renderWorkspaces()']);
     const concreteSourceSync = workspaceHandler.slice(
       workspaceHandler.indexOf('if (requestedSource !== "all")'),
@@ -3149,7 +3281,7 @@ function registerUiContractTests(context) {
     assert.equal(state.workspace, '__projectless__');
     assert.equal(state.workspaceSource, 'builtin.aside');
     const selectedProjectless = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectlessKey);
-    assert.ok(tagWith(selectedProjectless, 'data-project-source="builtin.aside"').includes('aria-pressed="true"'),
+    assert.ok(tagWith(selectedProjectless, 'data-project-source="builtin.aside"').includes('aria-selected="true"'),
       'Aside 프로젝트 없음 항목의 선택 상태가 다른 source로 새면 안 됩니다.');
     assert.deepStrictEqual(
       Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id),
@@ -3179,6 +3311,7 @@ function registerUiContractTests(context) {
 
   test('플러그인 설정 응답은 응답 시점의 drawer 선택만 닫는다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
+    const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const messages = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const handler = source.slice(
       source.indexOf('$("#sourcePluginSettingsList")?.addEventListener("change"'),
@@ -3195,13 +3328,84 @@ function registerUiContractTests(context) {
       '비활성화된 source를 선택 중이면 같은 프로젝트의 전체 프로그램 필터로 복구해야 합니다.');
     assert.equal(selectedSourceFallback.includes('state.workspace = "all";'), false,
       'source 하나를 껐다는 이유만으로 아직 존재하는 프로젝트 선택까지 전역 전체로 지우면 안 됩니다.');
-    assert.match(handler.slice(selectedIndex), /selectedAfterChange\?\.sourcePluginId === pluginId\) closeDrawer\(\)/);
+    assert.match(handler.slice(selectedIndex), /const projectedAfterChange = state\.rawSnapshot \? projectVisibleSnapshot\(state\.rawSnapshot\) : null;[\s\S]*projectedAfterChange\.sessions\.some\(\(session\) => session\.id === state\.selectedId\)[\s\S]*!selectedStillVisible\) closeDrawer\(\)/,
+      '비활성화한 source의 새 투영에서 사라진 루트·하위 세션의 캐시된 drawer를 닫아야 합니다.');
     assert.match(handler, /const activationWarning = String\(result\.warning \|\| ""\)\.trim\(\);/);
     assert.match(handler, /activationWarning\s*\? "settings\.plugins\.activation_warning"\s*:\s*requestedEnabled/,
       '설정은 저장됐지만 refresh/restart가 실패한 응답을 일반 성공 토스트로 표시하면 안 됩니다.');
     assert.match(handler, /toast\(t\(toastKey, \{ plugin: label, detail: activationWarning \}\)\);/);
     assert.match(messages, /"settings\.plugins\.activation_warning": \{"ko":"[^"]+","en":"[^"]+","zh-CN":"[^"]+"\}/,
       '적용 지연과 재시작 필요를 안내할 한국어·영어·중국어 메시지가 없습니다.');
+    const settingsRenderer = dashboard.slice(
+      dashboard.indexOf('function renderSourcePluginSettings()'),
+      dashboard.indexOf('\n  return {', dashboard.indexOf('function renderSourcePluginSettings()')),
+    );
+    assert.ok(settingsRenderer.includes('list.innerHTML = definitions.map((definition) => {'),
+      '저장 실패 render는 브라우저가 바꾼 checked·disabled·busy 상태를 실제 DOM에서 복구해야 합니다.');
+    assert.equal(settingsRenderer.includes('lastSourcePluginSettingsHtml'), false,
+      'state 문자열만 비교하는 캐시는 실패한 플러그인 토글의 DOM 상태를 고착시킵니다.');
+  });
+
+  test('공용 날짜 포매터 캐시는 시스템 시간대 변경을 무효화한다', () => {
+    const shared = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
+    assert.ok(shared.includes('resolvedOptions().timeZone'));
+    assert.ok(shared.includes('offset !== dateTimeFormatOffset'));
+    assert.ok(shared.includes('dateTimeFormatCache.clear()'));
+    assert.ok(shared.includes('window.addEventListener("focus", () => refreshDateTimeFormatZone(true))'));
+    assert.ok(shared.includes('`${dateTimeFormatTimeZone}|${locale}|${JSON.stringify(options || {})}`'));
+
+    let zone = 'UTC';
+    let offset = 0;
+    let now = 1_700_000_000_000;
+    const focusListeners = [];
+    class FakeDate extends Date {
+      constructor(...args) { super(...(args.length ? args : [now])); }
+      static now() { return now; }
+      getTimezoneOffset() { return offset; }
+    }
+    class FakeDateTimeFormat {
+      constructor() { this.zone = zone; }
+      resolvedOptions() { return { timeZone: this.zone }; }
+      format() { return this.zone; }
+    }
+    const sandbox = {
+      console,
+      Date: FakeDate,
+      Intl: { DateTimeFormat: FakeDateTimeFormat },
+      document: {
+        hidden: false,
+        addEventListener() {},
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+      },
+      window: {
+        addEventListener(type, listener) {
+          if (type === 'focus') focusListeners.push(listener);
+        },
+      },
+    };
+    vm.runInNewContext(shared, sandbox, { filename: 'shared.js' });
+    const utc = sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' });
+    assert.equal(utc.format(), 'UTC');
+
+    zone = 'Asia/Seoul';
+    offset = -540;
+    const seoul = sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' });
+    assert.equal(seoul.format(), 'Asia/Seoul');
+    assert.notStrictEqual(seoul, utc);
+
+    zone = 'Asia/Tokyo';
+    now += 1_000;
+    assert.strictEqual(
+      sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' }),
+      seoul,
+      '같은 offset의 zone 변경은 강제 probe 전 기존 formatter를 재사용합니다.',
+    );
+    focusListeners[0]();
+    assert.equal(
+      sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' }).format(),
+      'Asia/Tokyo',
+    );
   });
 
   test('비활성 플러그인 실행 draft는 modal을 열 때 직접 실행으로 치유한다', () => {
@@ -3271,12 +3475,27 @@ function registerUiContractTests(context) {
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const themeStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-theme.css'), 'utf8');
     const settingsStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-settings.css'), 'utf8');
+    const noviceStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-novice.css'), 'utf8');
     const popupSettingsSource = fs.readFileSync(path.join(root, 'renderer', 'app-attention-popup-settings.js'), 'utf8');
     const i18nSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const settings = html.slice(html.indexOf('id="settingsSection"'), html.indexOf('id="terminalSection"'));
     assert.equal(settings.includes('settings-meta-grid'), false, '설정과 무관한 설치 진단 정보가 다시 노출되면 안 됩니다.');
     assert.equal(settings.includes('settings-emblem'), false, '설정 제목에 의미 없는 장식이 다시 추가되면 안 됩니다.');
+    assert.ok(settings.includes('id="currentVersion"'), '설정 화면에 현재 프로그램 버전 값이 없습니다.');
+    assert.ok(settings.includes('data-i18n="ui.running_version"')
+      && settings.includes('data-i18n-aria-label="ui.compare_running_and_latest_versions"'),
+    '설정 화면이 업데이트 대상이 아니라 현재 실행 중인 프로그램 버전을 명확히 설명해야 합니다.');
+    assert.ok(dashboard.includes('const runningCurrent = state.versions.app || update.currentVersion || "";')
+      && dashboard.includes('const current = runningCurrent;')
+      && dashboard.includes('const comparisonCurrent = update.currentVersionKnown === false'),
+    '설치 대상 버전을 확인하지 못해도 현재 실행 중인 프로그램 버전은 숨기면 안 됩니다.');
+    const hiddenNoviceSelectors = Array.from(noviceStyles.matchAll(/([^{}]+)\{[^{}]*display:\s*none;[^{}]*\}/g), match => match[1]);
+    assert.equal(
+      hiddenNoviceSelectors.some(selectors => selectors.includes('body[data-current-view="settings"] .version-route')),
+      false,
+      '일반 설정 화면에서 현재 프로그램 버전 비교 영역을 숨기면 안 됩니다.',
+    );
     assert.equal(dashboard.includes('provider-visibility-name"><b>${esc(provider.label)}</b><small>'), false, 'AI 표시 설정에 제공사 부가 정보가 다시 노출되면 안 됩니다.');
     assert.ok(dashboard.includes('update.installMode === "automatic"'), '업데이트 안내가 자동 설치와 수동 설치를 구분해야 합니다.');
     assert.ok(dashboard.includes('ui.open_the_installer_and_follow_its_instructions_to_finish_updating'), '수동 업데이트에는 설치 파일 안내가 표시되어야 합니다.');
@@ -3434,6 +3653,25 @@ function registerUiContractTests(context) {
     assert.equal(projected.summary.providers.find(provider => provider.id === 'codex').active, 1);
     assert.equal(projected.summary.providers.find(provider => provider.id === 'codex').usage.total, 20);
     assert.equal(projected.tmux.summary.aiPanes, 1);
+    const desktopSession = {
+      id: 'desktop-history', provider: 'codex', clientKind: 'codex-desktop', status: 'completed', usage: { total: 30 },
+    };
+    const desktopChild = {
+      id: 'desktop-history-child', parentId: desktopSession.id, provider: 'codex', clientKind: 'codex-cli', status: 'completed', usage: { total: 5 },
+    };
+    assert.equal(core.desktopSourcePluginId(desktopSession), 'builtin.codex-desktop');
+    assert.equal(core.isDesktopSessionVisible(desktopSession), true);
+    assert.equal(core.isSourcePluginVisible('builtin.omo'), false, 'OpenCode 비활성화는 OMO alias에도 적용되어야 합니다.');
+    core.state.sourcePluginSettings = { version: 3, enabledPluginIds: ['builtin.claude-desktop'], asideHistoryFolders: [] };
+    assert.equal(core.isDesktopSessionVisible(desktopSession), false);
+    const desktopHidden = core.projectVisibleSnapshot({
+      ...core.state.rawSnapshot,
+      sessions: [...core.state.rawSnapshot.sessions, desktopChild, desktopSession],
+    });
+    assert.equal(desktopHidden.sessions.some(session => session.id === desktopSession.id), false,
+      '명시적으로 끈 데스크톱 기록은 raw snapshot과 detail 캐시에 남아 있어도 투영에서 숨겨야 합니다.');
+    assert.equal(desktopHidden.sessions.some(session => session.id === desktopChild.id), false,
+      '숨겨진 데스크톱 기록의 하위 세션을 고아 루트로 다시 표시하면 안 됩니다.');
     core.loadProviderVisibility({ hidden: ['gemini', 'unknown'] });
     assert.deepStrictEqual(Array.from(core.state.hiddenProviders), ['gemini']);
   });

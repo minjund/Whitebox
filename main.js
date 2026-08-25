@@ -55,7 +55,13 @@ const { AttentionHookInstaller } = require('./src/attentionHookInstaller');
 const { AttentionActivationCoordinator } = require('./src/attentionActivationCoordinator');
 const { macPathEntries } = require('./src/platformPath');
 const { SourcePluginControlHost } = require('./src/sourcePlugins/controlHost');
-const { SourcePluginSettingsStore, isSourcePluginEnabled } = require('./src/sourcePlugins/settingsStore');
+const {
+  DESKTOP_SOURCE_PLUGIN_IDS,
+  SOURCE_PLUGIN_SETTINGS_VERSION,
+  SourcePluginSettingsStore,
+  desktopSourcePluginId,
+  isSourcePluginEnabled,
+} = require('./src/sourcePlugins/settingsStore');
 const { applySourcePluginEnabled } = require('./src/sourcePlugins/settingsActivation');
 const { summaryForSessions } = require('./src/sourcePlugins/snapshotProjection');
 const { normalizeSourceSession } = require('./src/sourcePlugins/contracts');
@@ -383,11 +389,29 @@ function saveProviderVisibility(value = {}) {
 
 function visibleSnapshotSessions(snapshot = lastSnapshot) {
   const sourceSettings = sourcePluginSettingsStore?.snapshot() || { enabledPluginIds: [] };
-  const sessions = (snapshot.sessions || []).filter(session => (
-    session.sourcePluginId
-      ? isSourcePluginEnabled(sourceSettings, session.sourcePluginId)
-      : isProviderVisible(session.provider)
-  ));
+  const hiddenDesktopIds = new Set();
+  let sessions = (snapshot.sessions || []).filter(session => {
+    if (session.sourcePluginId) return isSourcePluginEnabled(sourceSettings, session.sourcePluginId);
+    if (!isProviderVisible(session.provider)) return false;
+    const desktopPluginId = desktopSourcePluginId(session.clientKind);
+    if (desktopPluginId && !isSourcePluginEnabled(sourceSettings, desktopPluginId)) {
+      hiddenDesktopIds.add(session.id);
+      return false;
+    }
+    return true;
+  });
+  // Children of a hidden desktop session would otherwise resurface as orphan
+  // root cards; hide the whole subtree along with it.
+  let pruned = hiddenDesktopIds.size > 0;
+  while (pruned) {
+    pruned = false;
+    sessions = sessions.filter(session => {
+      if (!session.parentId || !hiddenDesktopIds.has(session.parentId)) return true;
+      hiddenDesktopIds.add(session.id);
+      pruned = true;
+      return false;
+    });
+  }
   return {
     ...snapshot,
     sessions,
@@ -825,7 +849,7 @@ function startMonitorWorker() {
         ])];
         lastSnapshot = snapshotWithoutSessions(message.snapshot, hiddenSessionIds, availability);
         const snapshot = visibleSnapshotSessions(lastSnapshot);
-        attentionNotifier.sync(visibleSnapshotSessions(lastSnapshot));
+        attentionNotifier.sync(snapshot);
         reconcileAttentionPopups();
         sendSnapshot(snapshot);
       }).catch(error => reportRecoverableError('monitor-snapshot-binding', error));
@@ -1978,7 +2002,11 @@ function bootstrapState() {
     sourcePlugins: sourcePluginControlHost ? sourcePluginControlHost.listSources() : [],
     sourcePluginSettings: sourcePluginSettingsStore
       ? sourcePluginSettingsStore.snapshot()
-      : { version: 2, enabledPluginIds: [], asideHistoryFolders: [] },
+      : {
+        version: SOURCE_PLUGIN_SETTINGS_VERSION,
+        enabledPluginIds: [...DESKTOP_SOURCE_PLUGIN_IDS],
+        asideHistoryFolders: [],
+      },
   };
 }
 
@@ -2002,6 +2030,9 @@ async function requestAgentDetail(sessionId) {
     if (!monitorWorker || requestedSessionId.length > 500) return resolve(null);
     const card = (lastSnapshot.sessions || []).find(session => session.id === requestedSessionId);
     if (card && !card.sourcePluginId && !isProviderVisible(card.provider)) return resolve(null);
+    const desktopPluginId = card && !card.sourcePluginId ? desktopSourcePluginId(card.clientKind) : '';
+    if (desktopPluginId && sourcePluginSettingsStore
+      && !isSourcePluginEnabled(sourcePluginSettingsStore.snapshot(), desktopPluginId)) return resolve(null);
     const requestId = ++detailRequestId;
     const timer = setTimeout(() => {
       if (!pendingDetails.has(requestId)) return;
@@ -2072,6 +2103,23 @@ function registerIpcHandlers() {
       return session;
     },
     setSourcePluginEnabled: (pluginId, enabled) => {
+      if (DESKTOP_SOURCE_PLUGIN_IDS.includes(String(pluginId || ''))) {
+        // Desktop toggles have no monitor plugin behind them — they only gate
+        // core sessions in the snapshot, so a settings save plus a re-filtered
+        // snapshot push is the complete state change.
+        const update = sourcePluginSettingsUpdateQueue.catch(() => {}).then(() => {
+          const settings = sourcePluginSettingsStore.setPluginEnabled(pluginId, enabled === true);
+          sendSnapshot(visibleSnapshotSessions(lastSnapshot));
+          return {
+            ok: true,
+            settings,
+            sources: sourcePluginControlHost ? sourcePluginControlHost.listSources() : [],
+            warning: '',
+          };
+        });
+        sourcePluginSettingsUpdateQueue = update.catch(() => {});
+        return update;
+      }
       const update = sourcePluginSettingsUpdateQueue.catch(() => {}).then(() => applySourcePluginEnabled({
         store: sourcePluginSettingsStore,
         host: sourcePluginControlHost,

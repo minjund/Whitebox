@@ -29,7 +29,6 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     isLiveSession,
     isControlRoomSession = isLiveSession,
     controlRoomStatus = session => session?.status,
-    isResultReviewComplete = () => false,
     latestWorkCopy,
     statusIcon,
     renderProviderRail,
@@ -164,11 +163,10 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
       118,
     );
     const decisionRequested = Boolean(
-      session.responseIntent?.category && session.responseIntent.category !== "none"
+      session.responseIntent?.required === true || session.responseIntent?.category === "required"
       || ["approval", "decision"].includes(session.attention?.kind),
     );
     const decisionRetained = hasRetainedDecision(session);
-    const reviewPending = sessionNeedsResultReview(session);
     const taskCompleted = session.status === "completed";
     const decisionState = decisionRetained ? "retained" : decisionRequested ? "pending" : "absent";
     const accessibleId = `memory-${String(session.id || "").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -180,21 +178,17 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
       stage("04", t("memory.proof"), evidenceState === "missing"
         ? t("memory.none")
         : t(`memory.stage_evidence_${evidenceState}`), evidenceState === "missing" ? "pending" : evidenceState),
-      stage("05", t("memory.judgement"), evidenceState === "missing"
-        ? t("memory.no_result_to_review")
-        : t(`memory.stage_decision_${decisionState}`), evidenceState === "missing"
-        ? "pending"
-        : decisionRetained ? "decision" : decisionRequested ? "unverified" : "pending"),
+      stage("05", t("memory.judgement"), t(`memory.stage_decision_${decisionState}`),
+        decisionRetained ? "decision" : decisionRequested ? "unverified" : ""),
     ].join("");
-    return `<article class="session-card memory-record ${reviewPending ? "review-pending" : ""} ${taskCompleted ? "task-completed" : ""} ${statusClass(session.status)}"
+    return `<article class="session-card memory-record ${taskCompleted ? "task-completed" : ""} ${statusClass(session.status)}"
       data-session-id="${esc(session.id)}"
-      ${reviewPending ? 'data-result-review="true"' : ""}
       data-motion-key="memory:${esc(session.id)}"
       data-motion-value="${esc(session.updatedAt || "")}:${esc(session.status || "")}"
       style="${providerStyle(session.provider)}"
       role="button" tabindex="0"
       aria-labelledby="${accessibleId}-title" aria-describedby="${accessibleId}-${taskCompleted ? "status" : "proof"}">
-      <span class="memory-record-mark" aria-hidden="true">${taskCompleted ? "✓" : verified && !decisionRetained ? "!" : verified ? "✓" : "○"}</span>
+      <span class="memory-record-mark" aria-hidden="true">${decisionRequested && !decisionRetained ? "!" : taskCompleted || verified ? "✓" : "○"}</span>
       <span class="memory-record-intent">
         <small>${isProjectlessSession(session)
           ? `${esc(t("memory.start_folder"))}: ${esc(t("ui.no_project"))} · ${esc(t("memory.last_activity", { time: memoryActivityTime(session.updatedAt) }))}`
@@ -204,18 +198,16 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
         ${titlePreview.text.includes(provider.label) ? "" : `<em>${esc(t("memory.provider", { provider: provider.label }))}${decisionRetained ? ` · ${esc(t("memory.decisions"))}` : ""}</em>`}
         ${sessionBadgesHtml(session, { compact: true, includeModel: false })}
       </span>
-      ${reviewPending
-        ? `<span class="memory-review-wrap"><button type="button" class="memory-review-action" data-open-session="${esc(session.id)}" data-result-review="true"><b>${esc(provider.label)} 결과 확인하기 <i aria-hidden="true">→</i></b></button><small><span class="memory-review-help-desktop">결과를 열면 확인 상태가 저장되어 다음 실행 때 다시 나타나지 않습니다.</span><span class="memory-review-help-mobile">결과를 열면 확인 상태가 저장됩니다.</span></small></span>`
-        : `<details class="memory-record-lineage">
+      <details class="memory-record-lineage">
           <summary><span class="memory-summary-closed">${esc(t("memory.expand_summary"))}</span><span class="memory-summary-open">${esc(t("memory.collapse_summary"))}</span><i aria-hidden="true">⌄</i></summary>
           <small>${esc(t("memory.lineage"))}</small>
           <span class="memory-record-chain">${chain}</span>
-        </details>`}
-      ${reviewPending ? `<span class="memory-record-proof memory-review-proof-proxy" aria-hidden="true"></span>` : `<span id="${accessibleId}-proof" class="memory-record-proof ${evidenceState}">
+        </details>
+      <span id="${accessibleId}-proof" class="memory-record-proof ${evidenceState}">
         <small>${esc(t("memory.proof"))}</small>
         <b>${esc(t(`memory.evidence_${evidenceState}`))}</b>
         <em title="${esc(outcomePreview.full)}">${esc(outcomePreview.text)}</em>
-      </span>`}
+      </span>
       <span class="memory-record-open">${esc(t("memory.open_record"))}<i aria-hidden="true">→</i></span>
     </article>`;
   }
@@ -224,7 +216,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return t("memory.time_unknown");
     const localeTag = window.WhiteboxI18n.getLocaleTag();
-    return new Intl.DateTimeFormat(localeTag, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(localeTag, {
       year: "numeric", month: "long", day: "numeric",
       hour: localeTag.startsWith("ko") ? "2-digit" : "numeric",
       minute: "2-digit",
@@ -233,7 +225,6 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
   }
 
   function hasRetainedDecision(session) {
-    if (isResultReviewComplete(session)) return true;
     const outcome = session.outcome || {};
     if (outcome.decision || outcome.approval?.status === "approved" || outcome.approval?.status === "denied") return true;
     return (session.lifecycle || []).some((row) => {
@@ -244,41 +235,30 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     });
   }
 
-  function sessionNeedsResultReview(session) {
-    const outcome = session.outcome || {};
-    const verified = outcome.verified === true || session.evidence?.completion === "observed";
-    return verified && !hasRetainedDecision(session);
-  }
-
   function renderMemoryMetrics(sessions) {
-    const resultSessions = sessions.filter((session) => {
-      const artifacts = session.outcome?.artifacts?.length || 0;
-      const checks = session.outcome?.checks?.length || 0;
-      const completion = session.outcome?.verified || session.evidence?.completion === "observed";
-      return artifacts > 0 || checks > 0 || completion;
-    });
-    const decisionCount = resultSessions.filter(hasRetainedDecision).length;
-    const evidenceCount = Math.max(0, resultSessions.length - decisionCount);
-    const completedCount = resultSessions.filter(session => session.status === "completed").length;
+    const decisionCount = sessions.filter(hasRetainedDecision).length;
+    const completedCount = sessions.filter(session => session.status === "completed").length;
     $("#memoryRecordCount").textContent = t("memory.metric_count", { count: fullNumber(sessions.length) });
     $("#memoryEvidenceLabel").textContent = t("memory.evidence");
     $("#memoryEvidenceCount").textContent = t("memory.metric_count", { count: fullNumber(completedCount) });
-    $("#memoryDecisionLabel").textContent = "확인 완료";
+    $("#memoryDecisionLabel").textContent = t("memory.recorded_decisions");
     $("#memoryDecisionCount").textContent = t("memory.metric_count", { count: fullNumber(decisionCount) });
     const priorityAction = $("#memoryPriorityAction");
     if (priorityAction) {
-      priorityAction.classList.toggle("hidden", evidenceCount === 0);
+      priorityAction.classList.toggle("hidden", completedCount === 0);
       priorityAction.textContent = t("memory.open_completed", { count: fullNumber(completedCount) });
     }
     if ($("#memoryPrinciple")) {
       $("#memoryPrinciple").textContent = t("memory.principle", {
         total: fullNumber(sessions.length),
         new: fullNumber(completedCount),
-        reviewed: fullNumber(decisionCount),
+        decisions: fullNumber(decisionCount),
       });
     }
     if ($("#viewTitle")) $("#viewTitle").textContent = t("memory.archive_title", { count: fullNumber(sessions.length) });
   }
+
+  let lastSessionGridHtml = null;
 
   function renderSessionsContent(motionKind = "refresh", deferMotion = false) {
     keepDesktopSidebarAtTop();
@@ -373,7 +353,11 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     $("#activeEmptyState").classList.toggle("hidden", !activeEmpty);
     $("#liveSection").classList.toggle("hidden", !homeView || !projectSelected);
     $("#viewTitle").textContent = memoryView ? t("memory.archive_title") : VIEW_TITLES[state.view] || window.WhiteboxI18n.t("ui.recent_conversations_and_tasks");
-    $("#sessionGrid").innerHTML = visible.map((session) => memoryView ? memoryCard(session) : sessionCard(session)).join("");
+    const nextSessionGridHtml = visible.map((session) => memoryView ? memoryCard(session) : sessionCard(session)).join("");
+    if (lastSessionGridHtml !== nextSessionGridHtml) {
+      $("#sessionGrid").innerHTML = nextSessionGridHtml;
+      lastSessionGridHtml = nextSessionGridHtml;
+    }
     if (memoryView) renderMemoryMetrics(regular);
     $("#sessionGrid").classList.toggle("hidden", visible.length === 0);
     $("#loadMoreBtn").classList.toggle("hidden", regular.length <= effectiveLimit);

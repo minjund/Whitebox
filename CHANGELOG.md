@@ -5,6 +5,23 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.7 - 2026-08-25
+
+- Show the running Whitebox version directly in Settings, including compact
+  windows, alongside the latest release and update controls.
+- Open completed canonical Codex Desktop history from every GPT conversation
+  surface in a new `codex fork` PTY that inherits the original context, while
+  keeping malformed, imported, and other non-writable records read-only.
+- Make project and source names select their filters independently from the
+  disclosure arrows, with full tree keyboard navigation and 44-pixel targets.
+- Let users hide Claude Desktop or Codex Desktop history from Settings while
+  keeping both visible by default across upgrades and cold starts.
+- Remove the redundant completed-result acknowledgement step, show the exact
+  history transition time, and improve workflow label readability.
+- Reduce idle CPU and rendering work across the app: skip unchanged control-room,
+  session-grid, and settings re-renders, cache repeated file reads, hashes, and
+  date formatters on the monitor's hot scan path, and coalesce resize handling.
+
 ## 1.7.6 - 2026-08-24
 
 - Open Codex Desktop conversations in a provider-native forked PTY instead of

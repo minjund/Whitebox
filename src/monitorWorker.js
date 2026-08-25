@@ -57,6 +57,18 @@ function scheduleScan(delayMs = 120) {
   if (typeof scheduledScanTimer.unref === 'function') scheduledScanTimer.unref();
 }
 
+const resolvedWatchPaths = new Map();
+
+function resolveWatchPath(file) {
+  let resolved = resolvedWatchPaths.get(file);
+  if (!resolved) {
+    if (resolvedWatchPaths.size > 4096) resolvedWatchPaths.clear();
+    resolved = path.resolve(file);
+    resolvedWatchPaths.set(file, resolved);
+  }
+  return resolved;
+}
+
 for (const root of [
   path.join(workerData.home, '.claude', 'projects'),
   path.join(workerData.home, '.codex', 'sessions'),
@@ -67,9 +79,13 @@ for (const root of [
   if (!fs.existsSync(root)) continue;
   try {
     const watcher = fs.watch(root, { recursive: process.platform === 'win32' || process.platform === 'darwin' }, (eventType, filename) => {
-      if (eventType === 'rename') monitor.listCache.clear();
+      if (eventType === 'rename') {
+        monitor.listCache.clear();
+        scheduleScan();
+        return;
+      }
       const changed = filename ? path.resolve(root, String(filename)) : '';
-      const known = changed && [...monitor.listCache.values()].some(entry => (entry.paths || []).some(file => path.resolve(file) === changed));
+      const known = changed && [...monitor.listCache.values()].some(entry => (entry.paths || []).some(file => resolveWatchPath(file) === changed));
       if (!known) monitor.listCache.clear();
       scheduleScan();
     });

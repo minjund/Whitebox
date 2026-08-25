@@ -1289,12 +1289,21 @@ function registerTerminalAgentActionTests(context) {
       environment: { kind: 'windows', distro: '' },
     };
 
-    for (const externalId of ['terminal:stale-row', 'bridge:recursive-source', 'x'.repeat(195)]) {
-      const invalidSupport = actions.forkSupport({
+    for (const invalidSession of [
+      ...['terminal:stale-row', 'bridge:recursive-source', 'x'.repeat(195)].map(externalId => ({
         ...session,
         id: `codex:${externalId}`,
         externalId,
-      });
+      })),
+      { ...session, sourcePluginId: 'builtin.opencode' },
+      { ...session, sourcePlugin: { id: 'builtin.omo' } },
+      { ...session, sourcePlugin: 'builtin.omo' },
+      { ...session, sourcePlugin: {} },
+      { ...session, readOnly: true },
+      { ...session, controlAuthority: 'read-only-import' },
+      { ...session, importMode: 'local-history' },
+    ]) {
+      const invalidSupport = actions.forkSupport(invalidSession);
       assert.equal(invalidSupport.supported, false);
       assert.equal(invalidSupport.code, 'CODEX_DESKTOP_FORK_INVALID_SESSION');
     }

@@ -33,6 +33,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return Boolean(session && !["running", "starting"].includes(session.status));
   }
 
+  const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+
   function latestSessionSort(sessions = []) {
     return [...sessions].sort((left, right) =>
       Date.parse(right.updatedAt || right.startedAt || 0) - Date.parse(left.updatedAt || left.startedAt || 0)
@@ -603,6 +605,18 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (projectlessSidebarProject) sortedSidebarProjects.push(projectlessSidebarProject);
     const canReorderSidebarProjects = defaultSidebarProjects.length > 1;
     const SIDEBAR_SESSION_PREVIEW_LIMIT = 3;
+    const selectedSidebarProjectKey = state.workspace === PROJECTLESS_WORKSPACE
+      ? PROJECTLESS_WORKSPACE
+      : normalizedProjectPath(state.workspace);
+    const selectedSidebarProject = sortedSidebarProjects.find((item) => item.key === selectedSidebarProjectKey);
+    const selectedSidebarSource = selectedSidebarProject
+      && !state.sidebarCollapsedProjects.has(selectedSidebarProject.key)
+      ? selectedSidebarProject.sources.find((source) => (
+        source.sourceId === String(state.workspaceSource || "all")
+      ))
+      : null;
+    const sidebarTabStopProjectKey = selectedSidebarProject?.key || sortedSidebarProjects[0]?.key || "";
+    const sidebarTabStopSourceKey = selectedSidebarSource?.sourceKey || "";
     const sidebarSessionItem = (session) => {
       const live = isControlRoomSession(session);
       const attention = Boolean(context.needsManagementInbox?.(session));
@@ -611,7 +625,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         : live ? t("project.in_progress") : t("studio.sidebar.waiting");
       const title = shortText(session.title || session.workspace || t("studio.session.untitled"), 48);
       return `<button type="button" class="project-sidebar-session ${attention ? "attention" : live ? "live" : ""}"
-        data-open-session="${esc(session.id)}" role="treeitem" aria-level="3"
+        data-open-session="${esc(session.id)}" role="treeitem" aria-level="3" tabindex="-1"
         aria-label="${esc(`${title}. ${status}`)}" title="${esc(title)}">
         <i aria-hidden="true"></i><b>${esc(title)}</b><small>${esc(status)}</small>
       </button>`;
@@ -624,6 +638,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       const projectExpanded = !state.sidebarCollapsedProjects.has(item.key);
       const sourceListId = `projectSidebarSources${projectIndex}`;
       const canReorder = item.key !== PROJECTLESS_WORKSPACE && canReorderSidebarProjects;
+      const canRemove = item.saved && item.key !== PROJECTLESS_WORKSPACE;
+      const projectKeyboardShortcuts = [canReorder ? "Alt+ArrowUp Alt+ArrowDown" : "", canRemove ? "Delete" : ""]
+        .filter(Boolean).join(" ");
       const filterLabel = t("project.filter_named", { name: item.name, count: item.count });
       const accessibleLabel = item.resultReady.length
         ? `${filterLabel}. ${t("studio.sidebar.result_ready_label", { count: item.resultReady.length })}`
@@ -649,20 +666,24 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           data-sidebar-source-key="${esc(source.sourceKey)}" data-project-scope="${esc(source.sourceKey)}"
           data-source-kind="${source.sourceKind}" role="none">
           <div class="project-sidebar-source-row">
-            <button type="button" class="project-sidebar-source-toggle" data-sidebar-source-toggle="${esc(source.sourceKey)}"
+            <button type="button" class="project-sidebar-source-filter ${selected ? "selected" : ""}"
+              data-source-workspace="${esc(item.path)}" data-project-source="${esc(source.sourceId)}"
+              data-sidebar-project-ref="${esc(item.key)}" data-sidebar-source-ref="${esc(source.sourceKey)}"
               data-live-session-count="${source.live.length}" data-attention-session-count="${source.attention.length}"
               data-result-ready-count="${source.resultReady.length}" data-project-priority="${source.priority}"
-              aria-expanded="${sourceExpanded ? "true" : "false"}" aria-controls="${sessionsId}" role="treeitem" aria-level="2"
-              aria-label="${esc(t(sourceExpanded ? "studio.sidebar.collapse_source" : "studio.sidebar.expand_source", { source: source.sourceLabel }))}">
+              aria-label="${esc(t("studio.sidebar.view_source", { source: source.sourceLabel, project: item.name }))}"
+              aria-selected="${selected ? "true" : "false"}" aria-expanded="${sourceExpanded ? "true" : "false"}"
+              aria-owns="${sessionsId}" role="treeitem" aria-level="2"
+              tabindex="${source.sourceKey === sidebarTabStopSourceKey ? "0" : "-1"}">
               <span class="project-sidebar-source-mark" aria-hidden="true">${sourceMark(source.sourceId)}</span>
               <span class="project-sidebar-source-copy"><strong>${esc(source.sourceLabel)}</strong><small><b>${esc(kindLabel)}</b> · ${esc(t("studio.sidebar.source_tasks_summary", { count: source.sessions.length, status: sourceStatus }))}</small></span>
+            </button>
+            <button type="button" class="project-sidebar-source-toggle" data-sidebar-source-toggle="${esc(source.sourceKey)}"
+              tabindex="-1"
+              aria-expanded="${sourceExpanded ? "true" : "false"}" aria-controls="${sessionsId}"
+              aria-label="${esc(t(sourceExpanded ? "studio.sidebar.collapse_source" : "studio.sidebar.expand_source", { source: source.sourceLabel }))}">
               <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
             </button>
-            <button type="button" class="project-sidebar-source-filter ${selected ? "selected" : ""}"
-              data-workspace="${esc(item.path)}" data-project-source="${esc(source.sourceId)}"
-              data-sidebar-project-ref="${esc(item.key)}" data-sidebar-source-ref="${esc(source.sourceKey)}"
-              aria-label="${esc(t("studio.sidebar.view_source", { source: source.sourceLabel, project: item.name }))}"
-              aria-pressed="${selected ? "true" : "false"}">${esc(t("studio.sidebar.view_action"))}</button>
           </div>
           <div id="${sessionsId}" class="project-sidebar-sessions" role="group"${sourceExpanded ? "" : " hidden"}>
             ${sessionPreview.length
@@ -677,16 +698,20 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       return `<section class="project-sidebar-group project-sidebar-project ${projectSelected ? "selected" : ""} ${item.attention.length ? "has-attention" : ""} ${item.resultReady.length ? "has-result-ready" : ""}"
         data-sidebar-project-key="${esc(item.key)}" ${canReorder ? `data-project-sortable="${esc(item.key)}"` : ""} role="none">
         <div class="project-sidebar-row">
-          <button type="button" class="workspace-item project-sidebar-item project-sidebar-project-toggle"
-            data-sidebar-project-toggle="${esc(item.key)}" title="${esc(item.path)}"
+          <button type="button" class="workspace-item project-sidebar-item ${allSourcesSelected ? "selected" : ""}"
+            data-workspace="${esc(item.path)}" data-project-source="all" data-sidebar-project-ref="${esc(item.key)}"
+            title="${esc(item.path)}"
             data-live-session-count="${item.live.length}"
             data-attention-session-count="${item.attention.length}"
             data-result-ready-count="${item.resultReady.length}"
             data-project-priority="${item.priority}"
             draggable="${canReorder ? "true" : "false"}"
-            ${canReorder ? 'aria-grabbed="false" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-describedby="projectReorderHelp"' : ""}
-            aria-label="${esc(t(projectExpanded ? "studio.sidebar.collapse_project" : "studio.sidebar.expand_project", { project: accessibleLabel }))}"
-            aria-expanded="${projectExpanded ? "true" : "false"}" aria-controls="${sourceListId}" role="treeitem" aria-level="1">
+            ${canReorder ? 'aria-grabbed="false" aria-describedby="projectReorderHelp"' : ""}
+            ${projectKeyboardShortcuts ? `aria-keyshortcuts="${projectKeyboardShortcuts}"` : ""}
+            aria-label="${esc(accessibleLabel)}" aria-selected="${allSourcesSelected ? "true" : "false"}"
+            aria-expanded="${projectExpanded ? "true" : "false"}" aria-owns="${sourceListId}"
+            role="treeitem" aria-level="1"
+            tabindex="${item.key === sidebarTabStopProjectKey && !sidebarTabStopSourceKey ? "0" : "-1"}">
             ${canReorder ? `<span class="project-sidebar-drag-handle" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
             <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(item.name))}</span>
             <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><small>${esc(t("studio.sidebar.project_tree_summary", {
@@ -702,24 +727,24 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
                   : item.live.length
                     ? `<span class="project-sidebar-live" aria-label="${esc(t("studio.sidebar.live_label", { count: item.live.length }))}"><i aria-hidden="true"></i></span>`
                     : ""}
-              <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
             </span>
           </button>
-          ${item.saved && item.key !== PROJECTLESS_WORKSPACE
-            ? `<button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}"
-              aria-label="${esc(t("workspace.remove_named", { name: item.name }))}"
-              title="${esc(t("workspace.remove_named", { name: item.name }))}">×</button>`
-            : `<span class="project-sidebar-project-tail" aria-hidden="true"></span>`}
+          <span class="project-sidebar-row-actions">
+            <button type="button" class="project-sidebar-project-toggle" data-sidebar-project-toggle="${esc(item.key)}"
+              tabindex="-1"
+              aria-expanded="${projectExpanded ? "true" : "false"}" aria-controls="${sourceListId}"
+              aria-label="${esc(t(projectExpanded ? "studio.sidebar.collapse_project" : "studio.sidebar.expand_project", { project: accessibleLabel }))}">
+              <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
+            </button>
+            ${canRemove
+              ? `<button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}"
+                tabindex="-1"
+                aria-label="${esc(t("workspace.remove_named", { name: item.name }))}"
+                title="${esc(t("workspace.remove_named", { name: item.name }))}">×</button>`
+              : ""}
+          </span>
         </div>
         <div id="${sourceListId}" class="project-sidebar-source-list" role="group"${projectExpanded ? "" : " hidden"}>
-          <button type="button" class="project-sidebar-project-filter ${allSourcesSelected ? "selected" : ""}"
-            data-workspace="${esc(item.path)}" data-project-source="all"
-            data-sidebar-project-ref="${esc(item.key)}"
-            data-live-session-count="${item.live.length}" data-attention-session-count="${item.attention.length}"
-            data-result-ready-count="${item.resultReady.length}" data-project-priority="${item.priority}"
-            aria-label="${esc(accessibleLabel)}" aria-pressed="${allSourcesSelected ? "true" : "false"}">
-            <strong>${esc(t("studio.sidebar.all_sources"))}</strong><small>${esc(t("settings.plugins.project_count", { count: item.count }))}</small>
-          </button>
           ${sourceItems}
         </div>
       </section>`;
@@ -781,6 +806,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (taskProjectName) taskProjectName.textContent = selectedProject?.name || projectName(state.workspace);
     if (taskProjectPath) taskProjectPath.textContent = projectSelected && state.workspace !== PROJECTLESS_WORKSPACE ? state.workspace : "";
     document.body.dataset.projectSelected = projectSelected ? "true" : "false";
+    context.syncProjectContextNavigation?.();
     if (projectContextName) {
       projectContextName.textContent = state.workspace === "all"
         ? t("studio.sidebar.title")
@@ -812,11 +838,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? latestHistorySessions.map((session) => {
           const provider = state.providerMap.get(session.provider);
           const providerLabel = provider?.label || String(session.provider || "AI").toUpperCase();
-          const transcriptSurface = session.presentation?.conversationSurface === "transcript"
-            || session.controlCapabilities?.pty === false;
-          const reviewPending = resultReviewTargets(session).length > 0;
+          const completedMainPty = String(session.status || "") === "completed"
+            && canForkCodexDesktopSession(session);
+          const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
+            || session.controlCapabilities?.pty === false) && !completedMainPty;
           const historyInteraction = transcriptSurface
-            ? `data-open-session="${esc(session.id)}" ${reviewPending ? 'data-result-review="true"' : ""}`
+            ? `data-open-session="${esc(session.id)}"`
             : `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
           const updatedAt = new Date(session.updatedAt || 0);
           const updatedLabel = Number.isNaN(updatedAt.getTime())
@@ -1137,10 +1164,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const available = ["available", "downloading", "downloaded"].includes(update.status);
     const downloading = update.status === "downloading";
     const downloaded = update.status === "downloaded";
-    const current = update.currentVersionKnown === false
+    const runningCurrent = state.versions.app || update.currentVersion || "";
+    const comparisonCurrent = update.currentVersionKnown === false
       ? window.WhiteboxI18n.t("ui.version_unknown")
-      : update.currentVersion || state.versions.app || "";
-    $("#sidebarAppVersion").textContent = state.versions.app || current || "—";
+      : update.currentVersion || runningCurrent;
+    const current = runningCurrent;
+    $("#sidebarAppVersion").textContent = current || "—";
     $("#updatePanel").dataset.updateStatus = update.status || "idle";
     $("#currentVersion").textContent = current || "—";
     $("#latestVersion").textContent = update.latestVersion || window.WhiteboxI18n.t("ui.not_checked");
@@ -1151,9 +1180,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const versionComparison = $("#versionComparisonLabel");
     if (versionComparison) {
       versionComparison.textContent = update.status === "available" || update.status === "downloading" || update.status === "downloaded"
-        ? t("update.comparison_available", { current: current || "—", version: update.latestVersion || "—" })
+        ? t("update.comparison_available", { current: comparisonCurrent || "—", version: update.latestVersion || "—" })
         : update.status === "current"
-          ? t("update.comparison_current", { version: current || "—" })
+          ? t("update.comparison_current", { version: comparisonCurrent || "—" })
           : update.status === "checking"
             ? t("update.comparison_checking")
             : t("update.comparison_unchecked");
@@ -1162,12 +1191,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       update.installType,
       update.latestVersion || "—",
       update.targetInstallType,
-      current || "—",
+      comparisonCurrent || "—",
     );
     $("#releasePublishedAt").textContent = update.publishedAt
       ? window.WhiteboxI18n.t("update.published", {
           version: update.latestVersion || "—",
-          date: new Intl.DateTimeFormat(uiLocale(), {
+          date: window.WhiteboxRendererUtils.dateTimeFormat(uiLocale(), {
             year: "numeric",
             month: "long",
             day: "numeric",
@@ -1227,13 +1256,16 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     syncUpdateNavigationStatus();
   }
 
+  let lastProviderOverviewHtml = null;
+  let lastProviderVisibilityHtml = null;
+
   function renderProviderOverview() {
     pruneProviderFilters();
     const summaries = (state.snapshot && state.snapshot.summary && state.snapshot.summary.providers) || state.providers;
     const sessions = displaySessions();
     const visibleSummaries = summaries.filter((provider) => isProviderVisible(provider.id));
     const overviewTabStopId = state.providerFilters.size ? [...state.providerFilters][0] : visibleSummaries[0]?.id;
-    $("#providerOverview").innerHTML = visibleSummaries
+    const nextProviderOverviewHtml = visibleSummaries
       .map((provider, index) => {
         const rootCount = sessions.filter((session) => session.provider === provider.id && !session.parentId).length;
         const selected = state.providerFilters.has(provider.id);
@@ -1263,6 +1295,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     </button>`;
       })
       .join("");
+    if (lastProviderOverviewHtml !== nextProviderOverviewHtml) {
+      $("#providerOverview").innerHTML = nextProviderOverviewHtml;
+      lastProviderOverviewHtml = nextProviderOverviewHtml;
+    }
   }
 
   function pruneProviderFilters() {
@@ -1448,7 +1484,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   function renderProviderVisibilitySettings() {
     const list = $("#providerVisibilityList");
     if (!list) return;
-    list.innerHTML = state.providers.map((provider) => {
+    const nextVisibilityHtml = state.providers.map((provider) => {
       const visible = isProviderVisible(provider.id);
       const status = window.WhiteboxI18n.t(visible ? "settings.providers.visible" : "settings.providers.hidden");
       return `<label class="provider-visibility-option ${visible ? "enabled" : "disabled"}" style="${providerStyle(provider.id)}">
@@ -1459,6 +1495,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         <span class="provider-toggle" aria-hidden="true"><b>${esc(status)}</b><i></i></span>
       </label>`;
     }).join("");
+    if (lastProviderVisibilityHtml !== nextVisibilityHtml) {
+      list.innerHTML = nextVisibilityHtml;
+      lastProviderVisibilityHtml = nextVisibilityHtml;
+    }
   }
 
   function renderSourcePluginSettings() {
@@ -1469,7 +1509,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const definitions = [
       { id: "builtin.opencode", label: "OpenCode", mark: "OC", color: "#4c8bf5", descriptionKey: "settings.plugins.opencode_description" },
       { id: "builtin.aside", label: "Aside", mark: "A", color: "#b983ff", descriptionKey: "settings.plugins.aside_description" },
+      { id: "builtin.claude-desktop", label: "Claude Desktop", mark: "CL", color: "#d97757", descriptionKey: "settings.plugins.claude_desktop_description", clientKind: "claude-desktop" },
+      { id: "builtin.codex-desktop", label: "Codex Desktop", mark: "CX", color: "#10a37f", descriptionKey: "settings.plugins.codex_desktop_description", clientKind: "codex-desktop" },
     ];
+    const desktopSessionCount = (clientKind) => (state.rawSnapshot?.sessions || state.snapshot?.sessions || [])
+      .filter((session) => !session.sourcePluginId && String(session.clientKind || "").toLowerCase() === clientKind).length;
     list.innerHTML = definitions.map((definition) => {
       const source = statuses.get(definition.id) || {};
       const enabled = enabledPluginIds.has(definition.id);
@@ -1478,10 +1522,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       const unavailable = !platformSupported;
       const busy = state.sourcePluginSettingRequests?.has(definition.id);
       const locked = busy || (unavailable && !enabled);
+      const sessionCount = definition.clientKind ? desktopSessionCount(definition.clientKind) : Number(source.sessionCount || 0);
       const status = unavailable
         ? t("settings.plugins.unavailable")
         : enabled
-          ? t("settings.plugins.enabled", { count: Number(source.sessionCount || 0) })
+          ? t("settings.plugins.enabled", { count: sessionCount })
           : t("settings.plugins.disabled");
       const detail = enabled && source.reason
         ? source.reason

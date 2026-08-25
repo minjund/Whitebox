@@ -39,7 +39,7 @@ async function installGuards(win) {
 
 async function reloadApp(win) {
   await win.reload();
-  await waitFor(win, `Boolean(window.WhiteboxApp?.initialized && document.querySelector('#projectSidebarList [data-workspace]'))`, '화면 재초기화 실패');
+  await waitFor(win, `Boolean(window.WhiteboxApp?.initialized && document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]'))`, '화면 재초기화 실패');
   await installGuards(win);
 }
 
@@ -272,7 +272,7 @@ app.whenReady().then(async () => {
 
   try {
     await win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-    await waitFor(win, `Boolean(window.WhiteboxApp?.initialized && document.querySelector('#projectSidebarList [data-workspace]'))`, '프로젝트 화면 초기화 실패');
+    await waitFor(win, `Boolean(window.WhiteboxApp?.initialized && document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]'))`, '프로젝트 화면 초기화 실패');
     await installGuards(win);
     if (process.env.WHITEBOX_PROJECT_CAPTURE_ONLY === '1') {
       await prepareProject(win);
@@ -311,21 +311,33 @@ app.whenReady().then(async () => {
     }
 
     report.layouts.initial = await inspectLayout(win, '프로젝트 선택 초기 화면');
-    const projectPaths = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#projectSidebarList [data-workspace]')].map(item => item.dataset.workspace)`);
+    const projectPaths = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].map(item => item.dataset.workspace)`);
     report.projectCount = projectPaths.length;
     for (const workspace of projectPaths) {
       await win.webContents.executeJavaScript(`(() => {
-        const item = [...document.querySelectorAll('#projectSidebarList [data-workspace]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
+        const item = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
         item?.click();
       })()`);
       await waitFor(win, `window.WhiteboxApp.state.workspace === ${JSON.stringify(workspace)}`, `프로젝트 클릭 실패: ${workspace}`);
       const projectState = await win.webContents.executeJavaScript(`(() => ({
-        selected: document.querySelectorAll('#projectSidebarList [data-workspace][aria-pressed="true"]').length,
-        projects: document.querySelectorAll('#projectSidebarList [data-workspace]').length,
-        nestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session, #projectSidebarList .project-sidebar-sessions').length,
+        selected: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
+        projects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
+        sources: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
+        expandedProjects: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+          .filter(item => item.getAttribute('aria-expanded') === 'true').length,
+        expandedSources: [...document.querySelectorAll('#projectSidebarList [data-source-workspace]')]
+          .filter(item => item.getAttribute('aria-expanded') === 'true').length,
+        nestedSessionAreas: document.querySelectorAll('#projectSidebarList .project-sidebar-sessions').length,
+        nestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session').length,
         mainProjects: [...document.querySelectorAll('.control-room-project-group')].map(item => item.dataset.controlProject),
       }))()`);
-      if (projectState.selected !== 1 || projectState.projects !== projectPaths.length || projectState.nestedSessions !== 0 || projectState.mainProjects.length > 1) {
+      if (projectState.selected !== 1 || projectState.projects !== projectPaths.length
+        || projectState.sources < projectState.projects
+        || projectState.expandedProjects !== projectState.projects
+        || projectState.expandedSources !== projectState.sources
+        || projectState.nestedSessionAreas !== projectState.sources
+        || projectState.nestedSessions < projectState.sources
+        || projectState.mainProjects.length > 1) {
         throw new Error(`프로젝트 선택 격리 실패: ${workspace} · ${JSON.stringify(projectState)}`);
       }
       report.clicked.push(`프로젝트: ${workspace}`);

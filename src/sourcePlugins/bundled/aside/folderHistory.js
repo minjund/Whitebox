@@ -584,11 +584,23 @@ function scanAsideHistoryFolders(roots, options = {}) {
         artifactsByDirectory.set(fileInfo.directory,
           listContainedArtifactFiles(fileInfo.root, fileInfo.directory, transcriptFiles, options));
       }
+      const discoveredArtifacts = artifactsByDirectory.get(fileInfo.directory);
+      const artifactSignature = discoveredArtifacts
+        .map(artifact => [artifact.path, artifact.size, artifact.updatedAt].join('\u0000'))
+        .sort()
+        .join('\n');
+      const unchanged = cache && cache.get(fileInfo.file);
+      if (unchanged && unchanged.mtimeMs === stat.mtimeMs && unchanged.size === stat.size
+        && unchanged.artifactSignature === artifactSignature
+        && Array.isArray(unchanged.records)) {
+        for (const record of unchanged.records) addRecord(record);
+        continue;
+      }
       const context = {
         ...fileInfo,
         fileSystem,
         mtimeMs: stat.mtimeMs,
-        discoveredArtifacts: artifactsByDirectory.get(fileInfo.directory),
+        discoveredArtifacts,
       };
       if (fileInfo.extension === '.md') {
         const messages = parseMarkdownMessages(readBoundedText(fileInfo, options));
@@ -608,7 +620,12 @@ function scanAsideHistoryFolders(roots, options = {}) {
         throw new Error('Aside transcript did not contain a complete task record yet.');
       }
       for (const record of fileRecords) addRecord(record);
-      if (cache) cache.set(fileInfo.file, { records: fileRecords });
+      if (cache) cache.set(fileInfo.file, {
+        records: fileRecords,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        artifactSignature,
+      });
     } catch (error) {
       errors.push({ file: fileInfo.file, message: safeFolderErrorMessage(error) });
       const previous = cache && cache.get(fileInfo.file);

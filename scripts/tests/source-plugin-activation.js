@@ -49,9 +49,10 @@ function registerSourcePluginActivationTests(context) {
     const blocker = path.join(temp, 'source-plugin-settings-blocker');
     fs.writeFileSync(blocker, 'not-a-directory');
     const store = new SourcePluginSettingsStore(path.join(blocker, 'source-plugins.json'));
-    assert.deepEqual(store.snapshot().enabledPluginIds, []);
+    const defaultEnabled = store.snapshot().enabledPluginIds;
+    assert.equal(defaultEnabled.includes('builtin.opencode'), false);
     assert.throws(() => store.setPluginEnabled('builtin.opencode', true));
-    assert.deepEqual(store.snapshot().enabledPluginIds, []);
+    assert.deepEqual(store.snapshot().enabledPluginIds, defaultEnabled);
   });
 
   test('Whitebox가 실행한 작업이 남아 있으면 plugin 비활성화를 거절하고 stop 경로를 유지한다', async () => {

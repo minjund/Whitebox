@@ -553,8 +553,12 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       });
       cancelAnimationFrame(qualityMutationFrame);
       qualityMutationFrame = requestAnimationFrame(() => {
-        const roots = [...pendingQualityRoots];
+        const pending = [...pendingQualityRoots];
         pendingQualityRoots.clear();
+        // Skip detached nodes and roots already covered by a pending ancestor
+        // so each subtree is enhanced once per frame.
+        const roots = pending.filter((root) => root.isConnected
+          && !pending.some((other) => other !== root && other.contains && other.contains(root)));
         roots.forEach(enhanceQualityControls);
       });
     });
@@ -619,7 +623,13 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       });
     };
     refresh();
-    window.addEventListener("resize", refresh);
+    // Resize fires continuously during window drags; coalesce the
+    // document-wide layout reads into one pass per animation frame.
+    let overflowRefreshFrame = 0;
+    window.addEventListener("resize", () => {
+      cancelAnimationFrame(overflowRefreshFrame);
+      overflowRefreshFrame = requestAnimationFrame(refresh);
+    });
   }
 
   function installViewportSafetyClass() {

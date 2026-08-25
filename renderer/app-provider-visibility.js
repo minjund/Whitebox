@@ -42,11 +42,51 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     return !id || (state.sourcePluginSettings?.enabledPluginIds || []).includes(id);
   }
 
+  function desktopSourcePluginId(session) {
+    if (!session || session.sourcePluginId) return "";
+    const kind = String(session.clientKind || "").toLowerCase();
+    if (kind === "claude-desktop") return "builtin.claude-desktop";
+    if (kind === "codex-desktop") return "builtin.codex-desktop";
+    return "";
+  }
+
+  function isDesktopSessionVisible(session) {
+    const id = desktopSourcePluginId(session);
+    if (!id) return true;
+    // Desktop history is visible by default; hide only on an explicit opt-out
+    // recorded in the loaded settings.
+    const ids = state.sourcePluginSettings?.enabledPluginIds;
+    return !Array.isArray(ids) || ids.includes(id);
+  }
+
+  function isSessionVisible(session) {
+    return isSourcePluginVisible(session?.sourcePluginId)
+      && (session?.sourcePluginId || isProviderVisible(session?.provider))
+      && isDesktopSessionVisible(session);
+  }
+
+  function visibleSessionProjection(sessions = []) {
+    const hiddenIds = new Set();
+    let projected = (sessions || []).filter((session) => {
+      if (isSessionVisible(session)) return true;
+      if (session?.id) hiddenIds.add(session.id);
+      return false;
+    });
+    let pruned = hiddenIds.size > 0;
+    while (pruned) {
+      pruned = false;
+      projected = projected.filter((session) => {
+        if (!session?.parentId || !hiddenIds.has(session.parentId)) return true;
+        if (session.id) hiddenIds.add(session.id);
+        pruned = true;
+        return false;
+      });
+    }
+    return projected;
+  }
+
   function visibleSessions() {
-    return (state.snapshot?.sessions || []).filter((session) => (
-      isSourcePluginVisible(session.sourcePluginId)
-      && (session.sourcePluginId || isProviderVisible(session.provider))
-    ));
+    return visibleSessionProjection(state.snapshot?.sessions || []);
   }
 
   function visibleTmux(tmux = (state.rawSnapshot || state.snapshot)?.tmux) {
@@ -80,10 +120,7 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
 
   function projectVisibleSnapshot(snapshot = state.rawSnapshot || state.snapshot) {
     if (!snapshot) return snapshot;
-    const sessions = (snapshot.sessions || []).filter((session) => (
-      isSourcePluginVisible(session.sourcePluginId)
-      && (session.sourcePluginId || isProviderVisible(session.provider))
-    ));
+    const sessions = visibleSessionProjection(snapshot.sessions || []);
     const usage = Object.fromEntries(USAGE_KEYS.map((key) => [
       key,
       sessions.reduce((sum, session) => sum + Number(session.usage?.[key] || 0), 0),
@@ -142,6 +179,9 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     saveProviderVisibility,
     isProviderVisible,
     isSourcePluginVisible,
+    desktopSourcePluginId,
+    isDesktopSessionVisible,
+    visibleSessionProjection,
     visibleProviders,
     visibleSessions,
     visibleTmux,

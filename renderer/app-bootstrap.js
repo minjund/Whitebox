@@ -216,7 +216,7 @@
       if (session) {
         const options = event === 'attention'
           ? safeAttentionDrawerOptions
-          : { tab: 'summary', resultReview: true };
+          : { tab: 'summary' };
         if (session.parentId) openSubagentConversation(session.id, options);
         else openDrawer(session.id, options);
       } else toast(t("bootstrap.opened_attention_list"));

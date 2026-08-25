@@ -1174,3 +1174,26 @@ body button:disabled:not([aria-busy="true"]) {
     padding-bottom: 24px;
   }
 }
+
+/* Work-progress screen (focused workflow canvas): short Korean labels were
+ * ellipsized mid-word ("일을 맡…", "이 작업에서 누…"), leaving them unreadable.
+ * Inside this screen only, wrap instead of truncating. */
+.agent-workflow-canvas .workflow-metric-grid small {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-canvas .communication-route b,
+.agent-workflow-canvas .agent-workflow-selected .agent-identity b,
+.agent-workflow-canvas .agent-workflow-selected .agent-identity small,
+.agent-workflow-canvas .execution-activity-kicker small {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}

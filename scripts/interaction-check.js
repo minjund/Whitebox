@@ -279,7 +279,6 @@ const ACTION_MANIFEST = [
     optionalReason: 'The supervision intervention disclosure is behind the current early return in renderOperationsOverview and is not rendered by the fixture.',
   },
   { selector: '[data-reassign-session]', action: 'management:reassign' },
-  { selector: '[data-result-review-complete]', action: 'management:result-review-complete' },
   {
     selector: '[data-scroll-latest]',
     action: 'drawer:latest',
@@ -351,6 +350,9 @@ const ACTION_MANIFEST = [
     optionalReason: 'renderSessionsContent unconditionally hides #providerOverview in the current product, so provider cards are not an activatable surface; the visible provider filter chips are exercised instead.',
   },
   { selector: '[data-workspace]', action: 'workspace:select' },
+  { selector: '[data-source-workspace]', action: 'workspace:source-select' },
+  { selector: '[data-sidebar-project-toggle]', action: 'workspace:project-toggle' },
+  { selector: '[data-sidebar-source-toggle]', action: 'workspace:source-toggle' },
   { selector: '[data-remove-workspace]', action: 'workspace:remove' },
   { selector: '[data-session-sortable][draggable="true"]', action: 'session:reorder-drag' },
   { selector: '[data-session-id]', action: 'drawer:open-card' },
@@ -1147,7 +1149,14 @@ async function exerciseGuideAndMobileTools(win, round) {
 async function exerciseUpdates(win, round) {
   await win.webContents.executeJavaScript('window.interactionTest.restoreCurrentUpdate()');
   await click(win, '[data-view="settings"]', 'nav:settings');
-  await waitFor(win, `window.WhiteboxApp.state.update.status === 'current' && document.querySelector('#currentVersion').textContent === '1.5.1' && document.querySelector('#sidebarAppVersion').textContent === '1.5.1' && document.querySelector('#updateStateTitle').textContent === '현재 최신 버전입니다.' && document.querySelector('#checkUpdateBtn').textContent.includes('업데이트 다시 확인')`, '현재 버전과 최신 상태가 설정 화면에 명확히 표시되지 않았습니다.');
+  await waitFor(win, `window.WhiteboxApp.state.update.status === 'current'
+    && document.querySelector('#currentVersion').textContent === '1.5.1'
+    && document.querySelector('#sidebarAppVersion').textContent === '1.5.1'
+    && document.querySelector('.version-route').getClientRects().length > 0
+    && getComputedStyle(document.querySelector('.version-route')).display !== 'none'
+    && getComputedStyle(document.querySelector('.version-route')).visibility === 'visible'
+    && document.querySelector('#updateStateTitle').textContent === '현재 최신 버전입니다.'
+    && document.querySelector('#checkUpdateBtn').textContent.includes('업데이트 다시 확인')`, '현재 버전과 최신 상태가 설정 화면에 명확히 표시되지 않았습니다.');
   await clearCalls(win);
   await win.webContents.executeJavaScript(`window.interactionTest.configure({ delays: { checkForUpdate: 160 } })`);
   await click(win, '#checkUpdateBtn', 'update:check');
@@ -1379,8 +1388,7 @@ async function exerciseManagementControls(win, round) {
     `확인이 필요한 작업을 첫 화면에서 찾을 수 없습니다: ${JSON.stringify(managementScope)}`);
   assert(managementScope.controlRooms >= 1 && managementScope.rootMain && managementScope.rootHelpers >= 1
     && managementScope.rootExecutions >= 1 && managementScope.rootCompleted >= 1 && managementScope.flowVisibleWithoutFocus,
-    `클릭 전 메인·서브에이전트·실행 명령·완료 흐름이 보이지 않습니다: ${JSON.stringify(managementScope)}`);
-
+  `클릭 전 메인·서브에이전트·실행 명령·완료 흐름이 보이지 않습니다: ${JSON.stringify(managementScope)}`);
   const controlOrderBefore = await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('#liveSessionGrid [data-control-session]'), node => node.dataset.controlSession)`);
   assert(controlOrderBefore.length >= 2, '세션 위치 변경을 검증할 실행 중 세션이 부족합니다.');
   const controlDrag = await win.webContents.executeJavaScript(`(() => {
@@ -1547,8 +1555,8 @@ async function exerciseManagementControls(win, round) {
   await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')
     && Boolean(document.querySelector('#detailDrawer [data-managed-run-action="retry"]'))
     && Boolean(document.querySelector('#detailDrawer [data-reassign-session="fixture-failed"]'))
-    && Boolean(document.querySelector('#detailDrawer [data-result-review-complete="fixture-failed"]'))`,
-  '실패 작업 상세에 확인 완료, 다시 실행과 재배정 제어가 표시되지 않았습니다.');
+    && !document.querySelector('#detailDrawer [data-result-review-complete="fixture-failed"]')`,
+  '실패 작업 상세에서 별도 결과 확인 없이 다시 실행과 재배정 제어를 표시하지 못했습니다.');
   await clearCalls(win);
   await click(win, '#detailDrawer [data-managed-run-action="retry"]', 'management:run-control');
   await waitFor(win, `window.interactionTest.getCalls().some(item => item.name === 'retryAgent' && item.args[0] === 'fixture-failed-run')`, '실패한 실행의 다시 실행 요청이 전달되지 않았습니다.');
@@ -1567,18 +1575,11 @@ async function exerciseManagementControls(win, round) {
       && active.getClientRects().length > 0;
   })()`, '재배정 취소 뒤 닫힌 상세 창 내부가 아닌 바깥 트리거로 초점이 복원되지 않았습니다.');
   mark('management:reassign-focus-restore');
-  await click(win, '[data-session-id="fixture-failed"]', 'drawer:open-graph');
-  await click(win, '.drawer-tab[data-tab="summary"]', 'drawer:tab-summary');
-  await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')
-    && Boolean(document.querySelector('#detailDrawer [data-result-review-complete="fixture-failed"]'))`,
-  '재배정 취소 뒤 실패 작업 상세를 다시 열지 못했습니다.');
-  await click(win, '#detailDrawer [data-result-review-complete="fixture-failed"]', 'management:result-review-complete');
-  await waitFor(win, `!document.querySelector('#detailDrawer').classList.contains('open')
-    && window.WhiteboxApp.isResultReviewComplete(window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-failed'))
+  await waitFor(win, `!window.WhiteboxApp.isResultReviewComplete(window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-failed'))
     && !window.WhiteboxApp.needsManagementReview(window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-failed'))
     && !document.querySelector('[data-session-id="fixture-failed"] [data-result-review="true"]')
-    && Boolean(localStorage.getItem(window.WhiteboxApp.RESULT_REVIEW_STORAGE_KEY))`,
-  '확인 완료한 결과가 저장되거나 확인 목록에서 제거되지 않았습니다.');
+    && !localStorage.getItem(window.WhiteboxApp.RESULT_REVIEW_STORAGE_KEY)`,
+  '실패 작업에 불필요한 결과 확인 상태가 남아 있습니다.');
 
   await click(win, '[data-view="active"]', 'nav:active');
   await click(win, '[data-session-id="fixture-paused-run"]', 'drawer:open-graph');
@@ -1605,7 +1606,7 @@ async function exerciseManagementControls(win, round) {
   await win.webContents.executeJavaScript(`window.interactionTest.clearControls()`);
   await click(win, '#closeDrawerBtn', 'drawer:close');
   await waitFor(win, `!document.querySelector('#detailDrawer').classList.contains('open')`, '관리 제어 검증 뒤 상세 창이 닫히지 않았습니다.');
-  round.observed.management = { inbox: true, compactReview: true, resultReviewComplete: true, retry: true, resume: true, pause: true, stop: true, quickApprove: true, quickDeny: true, reassign: true };
+  round.observed.management = { inbox: true, compactReview: true, resultReviewRemoved: true, retry: true, resume: true, pause: true, stop: true, quickApprove: true, quickDeny: true, reassign: true };
 }
 
 async function exerciseLanguageSettings(win, round) {
@@ -1802,11 +1803,48 @@ async function exerciseProviderVisibility(win, round) {
 async function exerciseDashboardControls(win, round) {
   await prepareProjectFirstStep(win);
   await click(win, '[data-view="all"]', 'nav:all');
-  await clearCalls(win);
-  await click(win, '#sidebarNewProjectBtn', 'workspace:add-sidebar');
-  await waitFor(win, `window.interactionTest.getCalls().some(item => item.name === 'addWorkspaces')
-    && window.WhiteboxApp.state.workspace === 'D:\\\\fixture'`,
-  '왼쪽 프로젝트 추가 버튼이 폴더 선택 결과를 프로젝트 홈에 반영하지 못했습니다.');
+  await win.webContents.executeJavaScript(`(() => {
+    const app = window.WhiteboxApp;
+    app.state.sidebarCollapsedProjects.add('d:/fixture');
+    app.state.sidebarCollapsedSources.add('d:/fixture::direct');
+    app.renderWorkspaces();
+    window.__projectSidebarScrollTargets = [];
+    window.__projectSidebarOriginalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function instrumentProjectSidebarScroll(options) {
+      window.__projectSidebarScrollTargets.push({
+        workspace: this.dataset?.sourceWorkspace || this.dataset?.workspace || '',
+        source: this.dataset?.projectSource || '',
+      });
+      return window.__projectSidebarOriginalScrollIntoView?.call(this, options);
+    };
+  })()`);
+  try {
+    await clearCalls(win);
+    await click(win, '#sidebarNewProjectBtn', 'workspace:add-sidebar');
+    await waitFor(win, `(() => {
+      const expectedWorkspace = ${JSON.stringify('D:\\fixture')};
+      const direct = [...document.querySelectorAll('#projectSidebarList [data-source-workspace][data-project-source="direct"]')]
+        .find(item => item.dataset.sourceWorkspace === expectedWorkspace);
+      const project = direct?.closest('.project-sidebar-project');
+      return window.interactionTest.getCalls().some(item => item.name === 'addWorkspaces')
+        && window.WhiteboxApp.state.workspace === expectedWorkspace
+        && !window.WhiteboxApp.state.sidebarCollapsedProjects.has('d:/fixture')
+        && !window.WhiteboxApp.state.sidebarCollapsedSources.has('d:/fixture::direct')
+        && direct?.getClientRects().length > 0
+        && direct.getAttribute('aria-expanded') === 'true'
+        && project?.querySelector('.project-sidebar-item')?.getAttribute('aria-expanded') === 'true'
+        && window.__projectSidebarScrollTargets.some(item => item.workspace === expectedWorkspace && item.source === 'direct');
+    })()`,
+    '왼쪽 프로젝트 추가 버튼이 접힌 기존 프로젝트를 펼치고 직접 실행 프로그램으로 이동하지 못했습니다.');
+  } finally {
+    await win.webContents.executeJavaScript(`(() => {
+      if (window.__projectSidebarOriginalScrollIntoView) {
+        Element.prototype.scrollIntoView = window.__projectSidebarOriginalScrollIntoView;
+      }
+      delete window.__projectSidebarOriginalScrollIntoView;
+      delete window.__projectSidebarScrollTargets;
+    })()`);
+  }
   await win.webContents.executeJavaScript(`(() => {
     document.querySelector('#operationsOverview')?.scrollIntoView({ block: 'start', inline: 'nearest' });
     return document.fonts.ready;
@@ -1891,7 +1929,7 @@ async function exerciseDashboardControls(win, round) {
       && !app.matchesManagementFilter(session, 'optional')).length);
     const expected = {
       now: Math.max(0, activeRoots - reviewNeeded),
-      memory: sessions.filter(session => !session.parentId && ['completed', 'cancelled', 'failed', 'idle'].includes(session.status)).length,
+      memory: sessions.filter(session => !session.parentId && app.isPastRecord(session)).length,
       runtime: (app.state.snapshot?.automations || []).filter(item => !app.state.hiddenProviders.has(item.provider || 'codex')).length
         + sessions.filter(app.isRuntimeLoopSession).length,
       tmux: Number(app.state.snapshot?.tmux?.summary?.windows || 0),
@@ -1917,10 +1955,15 @@ async function exerciseDashboardControls(win, round) {
     historyTitles: [...document.querySelectorAll('#projectHistoryList :is([data-open-session], [data-inline-pty-trigger]) span')]
       .map(node => node.textContent.trim()),
     title: document.querySelector('#projectHistoryTitle')?.textContent || '',
+    actionTargets: [...document.querySelectorAll('#projectSidebarList [data-sidebar-project-toggle], #projectSidebarList [data-sidebar-source-toggle], #projectSidebarList [data-remove-workspace]')]
+      .filter(node => node.getClientRects().length)
+      .map(node => ({ type: node.hasAttribute('data-remove-workspace') ? 'remove' : 'toggle', width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })),
   }))()`);
   assert(projectStudio.projects >= 2 && !projectStudio.allProjectsOption && projectStudio.historyVisible && projectStudio.attentionProjects >= 1
     && projectStudio.historyTitles.length >= 1
     && projectStudio.historyTitles.every(title => title && title !== 'NaN')
+    && projectStudio.actionTargets.length >= 3
+    && projectStudio.actionTargets.every(target => target.width >= 44 && target.height >= 44)
     && projectStudio.title.includes('지난 세션'),
   `프로젝트 중심 스튜디오 셸이 올바르지 않습니다: ${JSON.stringify(projectStudio)}`);
   const projectOwnership = await win.webContents.executeJavaScript(`(() => {
@@ -1975,10 +2018,66 @@ async function exerciseDashboardControls(win, round) {
     && selectedProjectHistory.sessionIds.length > 0
     && selectedProjectHistory.allRelated,
   `선택한 프로젝트의 지난 세션이 본문 하단에 올바르게 배치되지 않았습니다: ${JSON.stringify(selectedProjectHistory)}`);
+  await click(win, '#projectSidebarList [data-source-workspace="D:\\\\fixture"][data-project-source="direct"]', 'workspace:source-select');
+  await waitFor(win, `window.WhiteboxApp.state.workspace === 'D:\\\\fixture'
+    && window.WhiteboxApp.state.workspaceSource === 'direct'`,
+  '프로그램 이름 버튼이 해당 프로젝트의 직접 실행 작업만 선택하지 못했습니다.');
   await click(win, '#projectSidebarList [data-workspace="D:\\\\fixture"]', 'workspace:select');
   await waitFor(win, `window.WhiteboxApp.state.workspace === 'D:\\\\fixture'
+    && window.WhiteboxApp.state.workspaceSource === 'all'
     && document.querySelector('#projectHistoryTitle')?.textContent.includes('화면 개선')`,
   '선택한 왼쪽 프로젝트를 다시 눌렀을 때 프로젝트 선택이 유지되지 않았습니다.');
+  const fixtureProjectToggle = '#projectSidebarList [data-sidebar-project-key="d:/fixture"] [data-sidebar-project-toggle]';
+  await click(win, fixtureProjectToggle, 'workspace:project-toggle');
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureProjectToggle)})?.getAttribute('aria-expanded') === 'false'`,
+    '프로젝트 펼침 화살표가 프로젝트 선택과 분리되어 접히지 않았습니다.');
+  await click(win, fixtureProjectToggle, 'workspace:project-toggle');
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureProjectToggle)})?.getAttribute('aria-expanded') === 'true'`,
+    '프로젝트 펼침 화살표로 프로그램 목록을 다시 열지 못했습니다.');
+  const fixtureSourceToggle = '#projectSidebarList [data-sidebar-project-key="d:/fixture"] [data-sidebar-source-toggle]';
+  await click(win, fixtureSourceToggle, 'workspace:source-toggle');
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureSourceToggle)})?.getAttribute('aria-expanded') === 'false'`,
+    '프로그램 펼침 화살표가 프로그램 선택과 분리되어 접히지 않았습니다.');
+  await click(win, fixtureSourceToggle, 'workspace:source-toggle');
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureSourceToggle)})?.getAttribute('aria-expanded') === 'true'`,
+    '프로그램 펼침 화살표로 작업 목록을 다시 열지 못했습니다.');
+  const fixtureProjectTree = '#projectSidebarList [data-sidebar-project-key="d:/fixture"] .project-sidebar-item[role="treeitem"]';
+  await win.webContents.executeJavaScript(`(() => {
+    const item = document.querySelector(${JSON.stringify(fixtureProjectTree)});
+    item.focus();
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+  })()`);
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureProjectTree)})?.getAttribute('aria-expanded') === 'false'
+    && document.activeElement === document.querySelector(${JSON.stringify(fixtureProjectTree)})`,
+  '프로젝트 트리의 왼쪽 방향키가 접은 뒤 프로젝트에 포커스를 복원하지 못했습니다.');
+  await win.webContents.executeJavaScript(`(() => {
+    const item = document.querySelector(${JSON.stringify(fixtureProjectTree)});
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  })()`);
+  await waitFor(win, `document.querySelector(${JSON.stringify(fixtureProjectTree)})?.getAttribute('aria-expanded') === 'true'
+    && document.activeElement === document.querySelector(${JSON.stringify(fixtureProjectTree)})`,
+  '프로젝트 트리의 오른쪽 방향키가 펼친 뒤 프로젝트에 포커스를 복원하지 못했습니다.');
+  await win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(fixtureProjectTree)})
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))`);
+  await waitFor(win, `document.activeElement?.matches('#projectSidebarList [data-sidebar-project-key="d:/fixture"] .project-sidebar-source-filter[role="treeitem"]')`,
+    '펼친 프로젝트의 오른쪽 방향키가 첫 프로그램으로 이동하지 못했습니다.');
+  await win.webContents.executeJavaScript(`document.activeElement
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))`);
+  await waitFor(win, `document.activeElement?.matches('#projectSidebarList [data-sidebar-project-key="d:/fixture"] .project-sidebar-source-filter[role="treeitem"][aria-expanded="false"]')`,
+    '프로그램 트리의 왼쪽 방향키가 작업 목록을 접고 포커스를 복원하지 못했습니다.');
+  await win.webContents.executeJavaScript(`document.activeElement
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))`);
+  await waitFor(win, `document.activeElement === document.querySelector(${JSON.stringify(fixtureProjectTree)})`,
+    '접힌 프로그램의 왼쪽 방향키가 상위 프로젝트로 이동하지 못했습니다.');
+  await win.webContents.executeJavaScript(`document.activeElement
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))`);
+  await waitFor(win, `document.activeElement?.matches('#projectSidebarList [data-sidebar-project-key="d:/fixture"] .project-sidebar-source-filter[role="treeitem"][aria-expanded="false"]')`,
+    '프로젝트의 오른쪽 방향키가 접힌 프로그램으로 다시 이동하지 못했습니다.');
+  await win.webContents.executeJavaScript(`document.activeElement
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))`);
+  await waitFor(win, `document.activeElement?.matches('#projectSidebarList [data-sidebar-project-key="d:/fixture"] .project-sidebar-source-filter[role="treeitem"][aria-expanded="true"]')`,
+    '접힌 프로그램의 오른쪽 방향키가 작업 목록을 다시 펼치지 못했습니다.');
+  mark('workspace:tree-keyboard');
   await click(win, '#openProjectHistoryBtn', 'history:open-all');
   await waitFor(win, `window.WhiteboxApp.state.view === 'active'
     && window.WhiteboxApp.state.workspace === 'D:\\\\fixture'
@@ -2105,12 +2204,34 @@ async function exerciseDashboardControls(win, round) {
   await win.webContents.executeJavaScript(`(() => {
     const app = window.WhiteboxApp;
     const root = app.state.snapshot.sessions.find(session => session.id === 'fixture-root');
+    const descendants = new Set(root.childIds || []);
+    for (const childId of [...descendants]) {
+      const child = app.state.snapshot.sessions.find(session => session.id === childId);
+      for (const grandchildId of child?.childIds || []) descendants.add(grandchildId);
+    }
+    for (const session of app.state.snapshot.sessions.filter(item => item.id === root.id || descendants.has(item.id))) {
+      session.status = 'completed';
+      session.activityState = 'idle';
+      session.attention = null;
+      session.executions = (session.executions || []).map(execution => ({
+        ...execution,
+        status: 'completed',
+        statusDetail: execution.statusDetail || '정상 완료',
+        exitCode: execution.exitCode ?? 0,
+        completedAt: execution.completedAt || session.updatedAt,
+      }));
+      if (Array.isArray(session.collaboration?.spawns)) {
+        session.collaboration.spawns = session.collaboration.spawns.map(spawn => ({ ...spawn, status: 'completed' }));
+      }
+      app.state.pendingConversationMessages.delete(session.id);
+    }
     root.status = 'completed';
-    root.statusDetail = '메인 작업 완료 · 백그라운드 작업 정리 중';
+    root.statusDetail = '메인과 도움 AI 작업 완료';
     root.completedAt = root.messages.findLast(message => message.role === 'assistant')?.timestamp || root.updatedAt;
+    app.state.controlRoomObservedIds.add(root.id);
     app.renderSessions('archive-fixture');
   })()`);
-  await waitFor(win, `Boolean(document.querySelector('[data-control-session="fixture-root"] [data-session-archive="fixture-root"]'))`, '완료됐지만 백그라운드 실행이 남은 세션에 지난 기록 이동 버튼이 표시되지 않았습니다.');
+  await waitFor(win, `Boolean(document.querySelector('[data-control-session="fixture-root"] [data-session-archive="fixture-root"]'))`, '전체 작업이 완료된 세션에 지난 기록 이동 버튼이 표시되지 않았습니다.');
   await click(win, '[data-control-session="fixture-root"] [data-session-archive="fixture-root"]', 'control-room:move-to-history');
   await sleep(240);
   const archiveResult = await win.webContents.executeJavaScript(`(() => {
@@ -2134,9 +2255,9 @@ async function exerciseDashboardControls(win, round) {
     localStorage.removeItem(app.SESSION_ARCHIVE_STORAGE_KEY);
     app.renderSessions('archive-fixture-restore');
   })()`);
-  assert(!archiveResult.liveRoot && archiveResult.liveChildIncluded && archiveResult.memoryReady
+  assert(!archiveResult.liveRoot && !archiveResult.liveChildIncluded && archiveResult.memoryReady
     && archiveResult.manuallyArchived && !archiveResult.controlRoomSession,
-  `지난 기록 이동이 완료 세션을 관제 영역에서 내리고 진행 중인 도움 AI만 남기지 못했습니다: ${JSON.stringify(archiveResult)}`);
+  `지난 기록 이동이 완료된 세션 계보 전체를 관제 영역에서 내리지 못했습니다: ${JSON.stringify(archiveResult)}`);
   await waitFor(win, `Boolean(document.querySelector('[data-control-session="fixture-root"]'))`, '지난 기록 이동 검증 후 관제 fixture를 복원하지 못했습니다.');
   round.observed.controlRoom = controlRoom;
   await clearCalls(win);
@@ -2236,8 +2357,8 @@ async function exerciseDashboardControls(win, round) {
   await waitFor(win, `(() => {
     const chip = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
       .find(item => item.dataset.workspace === 'C:\\\\Users\\\\fixture\\\\board-migration-loop');
-    return chip?.querySelector('.project-sidebar-copy small')?.textContent.includes('세션 1')
-      && chip?.querySelector('.project-sidebar-live')?.getAttribute('aria-label')?.includes('1')
+    return Number(chip?.dataset.liveSessionCount || 0) === 1
+      && Boolean(chip?.querySelector('.project-sidebar-live'))
       && ![...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .some(item => item.dataset.workspace === '/mnt/c/Users/fixture/board-migration-loop');
   })()`, 'Windows 프로젝트와 같은 WSL 실행 경로를 하나의 진행 중 프로젝트로 합치지 못했습니다.');
@@ -2257,9 +2378,19 @@ async function exerciseDashboardControls(win, round) {
     session.originCwd = 'D:\\\\fixture';
     app.render('wsl-project-alias-restore');
   })()`);
-  await click(win, '[data-view="active"]', 'nav:active');
   win.setSize(480, 720);
-  await sleep(120);
+  await waitFor(win, `(() => {
+    const navigation = document.querySelector('#projectContextNav');
+    const more = document.querySelector('#mobileMoreBtn');
+    return window.innerWidth <= 720
+      && window.WhiteboxApp.state.workspace === 'all'
+      && window.WhiteboxApp.state.view === 'all'
+      && !navigation?.classList.contains('hidden')
+      && navigation?.getAttribute('aria-hidden') === 'false'
+      && !navigation?.hasAttribute('inert')
+      && more?.getClientRects().length > 0;
+  })()`, '모바일 프로젝트 미선택 화면에서 작업 탐색과 프로젝트 선택 경로가 나타나지 않았습니다.');
+  await click(win, '[data-view="active"]', 'nav:active');
   await click(win, '#mobileMoreBtn', 'mobile:more');
   if (!await win.webContents.executeJavaScript(`document.querySelector('.mobile-project-picker')?.open`)) {
     await click(win, '.mobile-project-picker > summary', 'mobile:project-picker');
@@ -2340,6 +2471,9 @@ async function exerciseDashboardControls(win, round) {
   '모바일 AI 선택 목록이 모든 AI 보기로 돌아오지 못했습니다.');
   win.setSize(1440, 940);
   await waitFor(win, `window.innerWidth > 720
+    && !document.querySelector('#projectContextNav')?.classList.contains('hidden')
+    && document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') === 'false'
+    && !document.querySelector('#projectContextNav')?.hasAttribute('inert')
     && document.querySelector('[data-provider-filter="gpt"]')?.getClientRects().length > 0
     && getComputedStyle(document.querySelector('[data-provider-filter="gpt"]')).display !== 'none'`,
   '모바일 AI 선택 검사 뒤 데스크톱 AI 선택 버튼이 다시 나타나지 않았습니다.');
@@ -3442,6 +3576,10 @@ async function focusRoot(win) {
 }
 
 async function exerciseGraph(win, round) {
+  await win.webContents.executeJavaScript(`(() => {
+    window.WhiteboxI18n.setLocale('ko');
+    window.WhiteboxApp.render('locale');
+  })()`);
   const drawerOpen = await win.webContents.executeJavaScript(`document.querySelector('#detailDrawer').classList.contains('open')`);
   if (drawerOpen) {
     await click(win, '#closeDrawerBtn', 'graph:close-existing-drawer');
@@ -3453,10 +3591,12 @@ async function exerciseGraph(win, round) {
   const goalSummary = await win.webContents.executeJavaScript(`(() => {
     const goal = document.querySelector('.agent-workflow-selected .agent-task');
     const breadcrumb = document.querySelector('#graphBreadcrumbs .current');
-    return { text: goal?.textContent || '', full: goal?.title || '', note: Boolean(document.querySelector('.agent-workflow-selected .agent-goal-note')), breadcrumbText: breadcrumb?.textContent || '', breadcrumbFull: breadcrumb?.title || '' };
+    const chatTitle = document.querySelector('[data-workflow-chat-title="fixture-root"]');
+    return { text: goal?.textContent || '', full: goal?.title || '', note: Boolean(document.querySelector('.agent-workflow-selected .agent-goal-note')), breadcrumbText: breadcrumb?.textContent || '', breadcrumbFull: breadcrumb?.title || '', chatTitleText: chatTitle?.textContent || '', chatTitleFull: chatTitle?.title || '' };
   })()`);
   assert(goalSummary.text === '화면 설명과 버튼을 쉽게 개선하기' && goalSummary.full === goalSummary.text
-    && !goalSummary.note && goalSummary.breadcrumbText === goalSummary.text && goalSummary.breadcrumbFull === goalSummary.text,
+    && !goalSummary.note && goalSummary.breadcrumbText === goalSummary.text && goalSummary.breadcrumbFull === goalSummary.text
+    && goalSummary.chatTitleText === goalSummary.text && goalSummary.chatTitleFull === goalSummary.text,
   `짧고 쉬운 지금 목표가 손상 없이 표시되지 않았습니다: ${JSON.stringify(goalSummary)}`);
   await waitFor(win, `document.querySelector('[data-execution-activities="3"][data-running-executions="2"]')
     && document.querySelectorAll('[data-execution-kind="shell"]').length === 2
@@ -4374,6 +4514,10 @@ async function exerciseInlineTerminal(win, round) {
 
   const historySessionId = `fixture-old-history-${round.index}`;
   const transcriptHistorySessionId = `fixture-old-transcript-${round.index}`;
+  const codexDesktopHistoryExternalId = `fixture-old-codex-desktop-${round.index}`;
+  const codexDesktopHistorySessionId = `codex:${codexDesktopHistoryExternalId}`;
+  const malformedCodexDesktopHistorySessionId = `codex:fixture-malformed-desktop-${round.index}`;
+  const retainedSessionId = `fixture-retained-history-${round.index}`;
   const historyExternalId = `${historySessionId}-external`;
   const historyWorkspace = `D:\\fixture-history-${round.index}`;
   const historyTimestamp = new Date(Date.now() - (72 + round.index) * 60 * 60 * 1000).toISOString();
@@ -4420,6 +4564,8 @@ async function exerciseInlineTerminal(win, round) {
       ...session,
       id: transcriptId,
       externalId: '',
+      clientKind: 'codex-cli',
+      sourcePluginId: '',
       title: '오래전에 완료한 읽기 전용 기록',
       presentation: { ...(session.presentation || {}), conversationSurface: 'transcript' },
       controlCapabilities: { ...(session.controlCapabilities || {}), pty: false },
@@ -4428,8 +4574,66 @@ async function exerciseInlineTerminal(win, round) {
         { id: transcriptId + '-assistant', role: 'assistant', text: '이 기록은 읽기 전용입니다.', timestamp },
       ],
     });
+    const codexDesktopId = ${JSON.stringify(codexDesktopHistorySessionId)};
+    const codexDesktopExists = window.interactionTest.getSnapshot().sessions.some(item => item.id === codexDesktopId);
+    const codexDesktopAdded = codexDesktopExists || window.interactionTest.addSession({
+      ...session,
+      id: codexDesktopId,
+      externalId: ${JSON.stringify(codexDesktopHistoryExternalId)},
+      clientKind: 'codex-desktop',
+      sourcePluginId: '',
+      title: '오래전에 완료한 Codex Desktop 기록',
+      presentation: { ...(session.presentation || {}), conversationSurface: 'transcript' },
+      controlCapabilities: { ...(session.controlCapabilities || {}), pty: false },
+      messages: [
+        { id: codexDesktopId + '-user', role: 'user', text: '기존 대화 내용을 이어서 새 세션으로 열어줘', timestamp },
+        { id: codexDesktopId + '-assistant', role: 'assistant', text: '기존 작업을 완료했습니다.', timestamp },
+      ],
+    });
+    const malformedCodexDesktopId = ${JSON.stringify(malformedCodexDesktopHistorySessionId)};
+    const malformedCodexDesktopExists = window.interactionTest.getSnapshot().sessions.some(item => item.id === malformedCodexDesktopId);
+    const malformedCodexDesktopAdded = malformedCodexDesktopExists || window.interactionTest.addSession({
+      ...session,
+      id: malformedCodexDesktopId,
+      externalId: 'invalid desktop history id',
+      clientKind: 'codex-desktop',
+      sourcePluginId: '',
+      title: '식별자가 손상된 Codex Desktop 기록',
+      presentation: { ...(session.presentation || {}), conversationSurface: 'transcript' },
+      controlCapabilities: { ...(session.controlCapabilities || {}), pty: false },
+      messages: [
+        { id: malformedCodexDesktopId + '-user', role: 'user', text: '손상된 기록을 안전하게 열어줘', timestamp },
+        { id: malformedCodexDesktopId + '-assistant', role: 'assistant', text: '읽기 전용으로 표시합니다.', timestamp },
+      ],
+    });
+    const retainedId = ${JSON.stringify(retainedSessionId)};
+    const retainedAt = new Date().toISOString();
+    const retainedExists = window.interactionTest.getSnapshot().sessions.some(item => item.id === retainedId);
+    const retainedAdded = retainedExists || window.interactionTest.addSession({
+      ...session,
+      id: retainedId,
+      externalId: retainedId + '-external',
+      clientKind: 'codex-desktop',
+      sourcePluginId: '',
+      title: '방금 완료한 AI 기록',
+      startedAt: retainedAt,
+      updatedAt: retainedAt,
+      completedAt: retainedAt,
+      health: { level: 'healthy', signals: [], lastActivityAt: retainedAt },
+      presentation: { ...(session.presentation || {}), conversationSurface: 'transcript' },
+      controlCapabilities: { ...(session.controlCapabilities || {}), pty: false },
+      messages: [
+        { id: retainedId + '-user', role: 'user', text: '방금 작업을 마쳐줘', timestamp: retainedAt },
+        { id: retainedId + '-assistant', role: 'assistant', text: '작업을 방금 완료했습니다.', timestamp: retainedAt },
+      ],
+      lifecycle: [{ type: 'complete', status: 'completed', label: '작업 완료', detail: '방금 완료', timestamp: retainedAt }],
+    });
+    window.WhiteboxApp.state.controlRoomObservedIds.add(retainedId);
     window.interactionTest.emitSnapshot();
-    return { ok: added && transcriptAdded, exists, transcriptExists };
+    return {
+      ok: added && transcriptAdded && codexDesktopAdded && malformedCodexDesktopAdded && retainedAdded,
+      exists, transcriptExists, codexDesktopExists, malformedCodexDesktopExists, retainedExists,
+    };
   })()`);
   assert(historyPrepared?.ok, `오래된 지난 기록 fixture를 만들지 못했습니다: ${JSON.stringify(historyPrepared)}`);
   await waitFor(win, `window.WhiteboxApp.state.snapshot.sessions.some(session => session.id === ${JSON.stringify(historySessionId)})`,
@@ -4443,11 +4647,36 @@ async function exerciseInlineTerminal(win, round) {
     app.state.providerFilters.clear();
     app.state.graphFocusId = null;
     app.state.inlineTerminalSessionId = null;
+    window.WhiteboxI18n.setLocale('ko');
     if (!app.state.workspaces.some(item => item.path === ${JSON.stringify(historyWorkspace)})) {
       app.state.workspaces.push({ name: '오래된 기록 검증', path: ${JSON.stringify(historyWorkspace)} });
     }
     app.render('filter');
   })()`);
+  try {
+    await waitFor(win, `(() => {
+      const label = document.querySelector('[data-control-session=${JSON.stringify(retainedSessionId)}] .control-session-retention')?.textContent.trim() || '';
+      return /^\\d{2}:\\d{2} 이후 지난 기록으로 이동$/.test(label);
+    })()`, '완료 기록 이동 안내가 절대 시각으로 표시되지 않았습니다.');
+  } catch (error) {
+    const retentionDiagnostic = await win.webContents.executeJavaScript(`(() => {
+      const app = window.WhiteboxApp;
+      const id = ${JSON.stringify(retainedSessionId)};
+      const session = app.state.snapshot.sessions.find(item => item.id === id);
+      return {
+        id,
+        session: session ? { status: session.status, updatedAt: session.updatedAt, completedAt: session.completedAt, messages: session.messages } : null,
+        workspace: app.state.workspace,
+        observed: app.state.controlRoomObservedIds.has(id),
+        retained: session ? app.isControlRoomSession(session) : null,
+        deadline: session ? app.sessionRetentionDeadline(session) : 0,
+        graphIds: app.graphFilteredSessions().map(item => item.id),
+        controlIds: [...document.querySelectorAll('[data-control-session]')].map(node => node.dataset.controlSession),
+        label: document.querySelector('[data-control-session=' + JSON.stringify(id) + '] .control-session-retention')?.textContent.trim() || '',
+      };
+    })()`);
+    throw new Error(`${error.message}: ${JSON.stringify(retentionDiagnostic)}`);
+  }
   try {
     await waitFor(win, `!window.WhiteboxApp.isRecentSession(window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === ${JSON.stringify(historySessionId)}))
       && Boolean(document.querySelector('#projectHistoryList [data-inline-pty-trigger=${JSON.stringify(historySessionId)}]'))`,
@@ -4566,44 +4795,177 @@ async function exerciseInlineTerminal(win, round) {
     window.WhiteboxApp.render('focus-back');
   })()`);
   await waitFor(win, `Boolean(document.querySelector('#projectHistoryList [data-open-session=${JSON.stringify(transcriptHistorySessionId)}]'))`,
-    '읽기 전용 지난 기록이 안전한 상세 화면 경로로 표시되지 않았습니다.');
+    '일반 읽기 전용 기록이 안전한 상세 화면 경로로 표시되지 않았습니다.');
   await clearCalls(win);
   await click(win, `#projectHistoryList [data-open-session=${JSON.stringify(transcriptHistorySessionId)}]`, 'history:transcript');
   await waitFor(win, `window.WhiteboxApp.state.selectedId === ${JSON.stringify(transcriptHistorySessionId)}
-    && window.WhiteboxApp.state.drawerTab === 'summary'
     && document.querySelector('#detailDrawer')?.classList.contains('open')
-    && document.querySelector('#detailDrawer')?.dataset.presentation === 'context'
-    && document.querySelector('#detailDrawer')?.dataset.conversationSurface === 'standard'
-    && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')
     && window.WhiteboxApp.state.inlineTerminalSessionId === null
-    && window.WhiteboxApp.isResultReviewComplete(window.WhiteboxApp.state.snapshot.sessions
+    && !window.WhiteboxApp.isResultReviewComplete(window.WhiteboxApp.state.snapshot.sessions
       .find(session => session.id === ${JSON.stringify(transcriptHistorySessionId)}))
     && !window.interactionTest.getCalls().some(call => call.name === 'terminalCreate')`,
-  '읽기 전용 지난 기록의 결과 요약이 컨텍스트 상세 화면에서 확인 처리되지 않았습니다.');
-  const transcriptHistoryDiagnostic = await win.webContents.executeJavaScript(`(() => ({
+  '일반 읽기 전용 기록이 새 PTY나 결과 확인 상태 없이 상세 화면으로 열리지 않았습니다.');
+  const readOnlyHistoryDiagnostic = await win.webContents.executeJavaScript(`(() => ({
     id: ${JSON.stringify(transcriptHistorySessionId)},
+    drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
     presentation: document.querySelector('#detailDrawer')?.dataset.presentation || '',
     conversationSurface: document.querySelector('#detailDrawer')?.dataset.conversationSurface || '',
+    inlineSessionId: window.WhiteboxApp.state.inlineTerminalSessionId,
+    resultReviewComplete: window.WhiteboxApp.isResultReviewComplete(
+      window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === ${JSON.stringify(transcriptHistorySessionId)})),
+    terminalCreateCount: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+  }))()`);
+  assert(readOnlyHistoryDiagnostic.drawerOpen
+    && readOnlyHistoryDiagnostic.inlineSessionId === null
+    && !readOnlyHistoryDiagnostic.resultReviewComplete
+    && readOnlyHistoryDiagnostic.terminalCreateCount === 0,
+  `일반 읽기 전용 기록의 상세·PTY 상태가 올바르지 않습니다: ${JSON.stringify(readOnlyHistoryDiagnostic)}`);
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
+  await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')`,
+    '일반 읽기 전용 기록 상세 화면을 닫지 못했습니다.');
+  await waitFor(win, `Boolean(document.querySelector('#projectHistoryList [data-open-session=${JSON.stringify(malformedCodexDesktopHistorySessionId)}]'))
+    && !document.querySelector('#projectHistoryList [data-inline-pty-trigger=${JSON.stringify(malformedCodexDesktopHistorySessionId)}]')`,
+  'canonical identity가 아닌 Codex Desktop 기록이 읽기 전용 경로로 표시되지 않았습니다.');
+  await clearCalls(win);
+  await click(win, `#projectHistoryList [data-open-session=${JSON.stringify(malformedCodexDesktopHistorySessionId)}]`, 'history:malformed-desktop-transcript');
+  await waitFor(win, `window.WhiteboxApp.state.selectedId === ${JSON.stringify(malformedCodexDesktopHistorySessionId)}
+    && document.querySelector('#detailDrawer')?.classList.contains('open')
+    && document.querySelector('#detailDrawer')?.dataset.terminalChat === 'false'
+    && document.querySelector('#detailDrawer')?.dataset.conversationSurface === 'transcript'
+    && window.WhiteboxApp.state.inlineTerminalSessionId === null
+    && !window.interactionTest.getCalls().some(call => call.name === 'terminalCreate')`,
+  'canonical identity가 아닌 Codex Desktop 기록이 새 PTY 없이 읽기 전용 상세로 열리지 않았습니다.');
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
+  await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')`,
+    '손상된 Codex Desktop 기록의 읽기 전용 상세 화면을 닫지 못했습니다.');
+  await waitFor(win, `Boolean(document.querySelector('#projectHistoryList [data-inline-pty-trigger=${JSON.stringify(codexDesktopHistorySessionId)}]'))`,
+    '완료된 Codex Desktop 기록이 새 fork PTY 경로로 표시되지 않았습니다.');
+  await clearCalls(win);
+  await click(win, `#projectHistoryList [data-inline-pty-trigger=${JSON.stringify(codexDesktopHistorySessionId)}]`, 'history:completed-ai-pty');
+  try {
+    await waitFor(win, `window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(codexDesktopHistorySessionId)}
+    && window.WhiteboxApp.state.inlineTerminalSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}
+    && Boolean(document.querySelector('.agent-workflow-canvas[data-workflow-focus=${JSON.stringify(codexDesktopHistorySessionId)}]'))
+    && Boolean(document.querySelector('[data-inline-agent-terminal=${JSON.stringify(codexDesktopHistorySessionId)}]'))
+    && !document.querySelector('#detailDrawer')?.classList.contains('open')
+    && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')
+    && window.WhiteboxTerminal.embeddedState().connected
+    && window.WhiteboxTerminal.embeddedState().agentSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}
+    && !window.WhiteboxApp.isResultReviewComplete(window.WhiteboxApp.state.snapshot.sessions
+      .find(session => session.id === ${JSON.stringify(codexDesktopHistorySessionId)}))
+    && window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate'
+      && call.args[0].agentForkSourceSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}).length === 1
+    && window.interactionTest.getCalls().some(call => call.name === 'terminalCreate'
+      && call.args[0].provider === 'codex'
+      && call.args[0].args.join(' ') === ${JSON.stringify(`fork ${codexDesktopHistoryExternalId}`)}
+      && call.args[0].agentForkSourceSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}
+      && /^acs1:[0-9a-f]{64}$/.test(call.args[0].agentForkSourceSignature || '')
+      && !call.args[0].bridgeId
+      && !Object.prototype.hasOwnProperty.call(call.args[0], 'initialCommand'))`,
+    '완료된 Codex Desktop 기록을 원본 resume 없이 대화 이력을 상속한 새 fork PTY로 열지 못했습니다.', 160);
+  } catch (error) {
+    const forkDiagnostic = await win.webContents.executeJavaScript(`(() => ({
+      graphFocusId: window.WhiteboxApp.state.graphFocusId,
+      inlineSessionId: window.WhiteboxApp.state.inlineTerminalSessionId,
+      embedded: window.WhiteboxTerminal.embeddedState(),
+      drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
+      focusedCanvas: Boolean(document.querySelector('.agent-workflow-canvas[data-workflow-focus=${JSON.stringify(codexDesktopHistorySessionId)}]')),
+      inlineShell: Boolean(document.querySelector('[data-inline-agent-terminal=${JSON.stringify(codexDesktopHistorySessionId)}]')),
+      calls: window.interactionTest.getCalls().map(call => ({ name: call.name, payload: call.args?.[0] || null })),
+    }))()`);
+    throw new Error(`${error.message}: ${JSON.stringify(forkDiagnostic)}`);
+  }
+  const transcriptHistoryDiagnostic = await win.webContents.executeJavaScript(`(() => ({
+    id: ${JSON.stringify(codexDesktopHistorySessionId)},
     drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
     backdropHidden: document.querySelector('#drawerBackdrop')?.classList.contains('hidden') || false,
     inlineSessionId: window.WhiteboxApp.state.inlineTerminalSessionId,
-    terminalCreateCount: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+    graphFocusId: window.WhiteboxApp.state.graphFocusId,
+    resultReviewComplete: window.WhiteboxApp.isResultReviewComplete(
+      window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === ${JSON.stringify(codexDesktopHistorySessionId)})),
+    resultReviewTrigger: Boolean(document.querySelector('[data-result-review="true"]')),
+    terminalId: window.WhiteboxTerminal.embeddedState().terminalId || '',
+    terminalCreate: window.interactionTest.getCalls().find(call => call.name === 'terminalCreate'
+      && call.args[0].agentForkSourceSessionId === ${JSON.stringify(codexDesktopHistorySessionId)})?.args?.[0] || null,
+    terminalCreateCount: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate'
+      && call.args[0].agentForkSourceSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}).length,
+  }))()`);
+  assert(!transcriptHistoryDiagnostic.drawerOpen
+    && transcriptHistoryDiagnostic.backdropHidden
+    && transcriptHistoryDiagnostic.inlineSessionId === codexDesktopHistorySessionId
+    && transcriptHistoryDiagnostic.graphFocusId === codexDesktopHistorySessionId
+    && !transcriptHistoryDiagnostic.resultReviewComplete
+    && !transcriptHistoryDiagnostic.resultReviewTrigger
+    && transcriptHistoryDiagnostic.terminalCreateCount === 1
+    && transcriptHistoryDiagnostic.terminalCreate?.args?.join(' ') === `fork ${codexDesktopHistoryExternalId}`
+    && !transcriptHistoryDiagnostic.terminalCreate?.bridgeId,
+  `완료된 Codex Desktop 기록의 fork PTY·결과 확인 제거 상태가 올바르지 않습니다: ${JSON.stringify(transcriptHistoryDiagnostic)}`);
+  await click(win, '[data-inline-terminal-close]', 'history:completed-ai-pty-close');
+  await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === null
+    && !document.querySelector('[data-inline-agent-terminal]')
+    && !window.WhiteboxTerminal.embeddedState().connected`,
+  '완료된 AI 기록의 PTY를 닫아 연결을 해제하지 못했습니다.');
+  await win.webContents.executeJavaScript(`(() => {
+    window.interactionTest.removeTerminal(${JSON.stringify(transcriptHistoryDiagnostic.terminalId)});
+    window.interactionTest.emitTerminalState('removed');
+  })()`);
+  await waitFor(win, `!window.WhiteboxTerminal.agentTargets(window.WhiteboxApp.state.snapshot.sessions
+    .find(session => session.id === ${JSON.stringify(codexDesktopHistorySessionId)}))
+    .some(target => target.kind === 'terminal')`,
+  '중앙 상세의 cold fork 검증 전에 기존 fork PTY가 목록에서 제거되지 않았습니다.');
+  await clearCalls(win);
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer(${JSON.stringify(codexDesktopHistorySessionId)})`);
+  await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')
+    && document.querySelector('#detailDrawer')?.dataset.terminalChat === 'true'
+    && document.querySelector('#detailDrawer')?.dataset.conversationSurface === 'pty'
+    && window.WhiteboxTerminal.embeddedState().connected
+    && window.WhiteboxTerminal.embeddedState().agentSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}
+    && window.WhiteboxTerminal.embeddedState().terminalId !== ${JSON.stringify(transcriptHistoryDiagnostic.terminalId)}
+    && window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate'
+      && call.args[0].agentForkSourceSessionId === ${JSON.stringify(codexDesktopHistorySessionId)}).length === 1
+    && window.interactionTest.getCalls().some(call => call.name === 'terminalCreate'
+      && call.args[0].args.join(' ') === ${JSON.stringify(`fork ${codexDesktopHistoryExternalId}`)}
+      && /^acs1:[0-9a-f]{64}$/.test(call.args[0].agentForkSourceSignature || '')
+      && !call.args[0].bridgeId
+      && !Object.prototype.hasOwnProperty.call(call.args[0], 'initialCommand'))`,
+  '지난 작업 카드·왼쪽 트리의 중앙 상세 경로가 canonical Codex Desktop 기록을 새 fork PTY로 열지 못했습니다.', 160);
+  const centralDrawerFork = await win.webContents.executeJavaScript(`(() => ({
+    terminalChat: document.querySelector('#detailDrawer')?.dataset.terminalChat || '',
+    conversationSurface: document.querySelector('#detailDrawer')?.dataset.conversationSurface || '',
+    terminalId: window.WhiteboxTerminal.embeddedState().terminalId || '',
+    createCount: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+    create: window.interactionTest.getCalls().find(call => call.name === 'terminalCreate')?.args?.[0] || null,
   }))()`);
   await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
-  await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')`,
-    '읽기 전용 지난 기록의 컨텍스트 상세 화면을 닫지 못했습니다.');
+  await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')
+    && !window.WhiteboxTerminal.embeddedState().connected`,
+  '중앙 상세 경로의 Codex Desktop fork PTY를 닫지 못했습니다.');
   await win.webContents.executeJavaScript(`(() => {
     window.interactionTest.removeTerminal(${JSON.stringify(historyDiagnostic.terminalId)});
+    window.interactionTest.removeTerminal(${JSON.stringify(transcriptHistoryDiagnostic.terminalId)});
+    window.interactionTest.removeTerminal(${JSON.stringify(centralDrawerFork.terminalId)});
     window.interactionTest.emitTerminalState('removed');
+    for (const id of ${JSON.stringify([historySessionId, transcriptHistorySessionId, codexDesktopHistorySessionId, malformedCodexDesktopHistorySessionId, retainedSessionId])}) {
+      window.interactionTest.removeSession(id);
+      window.WhiteboxApp.state.controlRoomObservedIds.delete(id);
+    }
+    window.interactionTest.emitSnapshot();
     window.WhiteboxApp.state.workspaces = window.WhiteboxApp.state.workspaces
       .filter(item => item.path !== ${JSON.stringify(historyWorkspace)});
   })()`);
+  await waitFor(win, `(() => {
+    const removedIds = new Set(${JSON.stringify([historySessionId, transcriptHistorySessionId, codexDesktopHistorySessionId, malformedCodexDesktopHistorySessionId, retainedSessionId])});
+    return !window.WhiteboxApp.state.snapshot.sessions.some(session => removedIds.has(session.id))
+      && !window.WhiteboxApp.state.rawSnapshot.sessions.some(session => removedIds.has(session.id));
+  })()`, '지난 기록 fixture 정리가 renderer snapshot에 반영되지 않았습니다.');
   await prepareProjectFirstStep(win);
   round.observed.inlineTerminal = {
     ...diagnostic,
     refreshStability: inlineRefreshStability,
     history: historyDiagnostic,
+    readOnlyHistory: readOnlyHistoryDiagnostic,
     transcriptHistory: transcriptHistoryDiagnostic,
+    centralDrawerFork,
   };
 }
 

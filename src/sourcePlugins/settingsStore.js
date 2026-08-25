@@ -4,13 +4,23 @@ const fs = require('fs');
 const path = require('path');
 const { restrictPathPermissions } = require('../dataRetention');
 
-const SOURCE_PLUGIN_SETTINGS_VERSION = 2;
-const SUPPORTED_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.opencode', 'builtin.aside']);
+const SOURCE_PLUGIN_SETTINGS_VERSION = 3;
+// Desktop toggles gate sessions the core monitor already reads (clientKind
+// claude-desktop / codex-desktop); they have no monitor plugin of their own.
+const DESKTOP_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.claude-desktop', 'builtin.codex-desktop']);
+const SUPPORTED_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.opencode', 'builtin.aside', ...DESKTOP_SOURCE_PLUGIN_IDS]);
 const DEFAULT_SETTINGS = Object.freeze({
   version: SOURCE_PLUGIN_SETTINGS_VERSION,
-  enabledPluginIds: Object.freeze([]),
+  enabledPluginIds: DESKTOP_SOURCE_PLUGIN_IDS,
   asideHistoryFolders: Object.freeze([]),
 });
+
+function desktopSourcePluginId(clientKind) {
+  const kind = String(clientKind || '').toLowerCase();
+  if (kind === 'claude-desktop') return 'builtin.claude-desktop';
+  if (kind === 'codex-desktop') return 'builtin.codex-desktop';
+  return '';
+}
 
 function normalizedEnabledPluginIds(value) {
   const supported = new Set(SUPPORTED_SOURCE_PLUGIN_IDS);
@@ -19,9 +29,17 @@ function normalizedEnabledPluginIds(value) {
     : Object.entries(value && value.enabledPlugins || {})
       .filter(([, enabled]) => enabled === true)
       .map(([id]) => id);
-  return [...new Set(configured
+  const ids = new Set(configured
     .map(item => String(item || '').trim())
-    .filter(id => supported.has(id)))];
+    .filter(id => supported.has(id)));
+  // Desktop app history was always visible before these toggles existed, so a
+  // settings file that predates them (or is missing) means "keep showing" —
+  // only a v3+ file that omits a desktop id records a deliberate opt-out.
+  const version = Number(value && value.version);
+  if (!Number.isFinite(version) || version < 3) {
+    for (const id of DESKTOP_SOURCE_PLUGIN_IDS) ids.add(id);
+  }
+  return [...ids];
 }
 
 function normalizeSettings(value) {
@@ -111,9 +129,11 @@ class SourcePluginSettingsStore {
 
 module.exports = {
   DEFAULT_SETTINGS,
+  DESKTOP_SOURCE_PLUGIN_IDS,
   SOURCE_PLUGIN_SETTINGS_VERSION,
   SUPPORTED_SOURCE_PLUGIN_IDS,
   SourcePluginSettingsStore,
+  desktopSourcePluginId,
   isSourcePluginEnabled,
   normalizeSettings,
   normalizedEnabledPluginIds,

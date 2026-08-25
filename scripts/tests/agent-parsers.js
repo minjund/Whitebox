@@ -1590,6 +1590,34 @@ function registerAgentParserTests(context) {
   registerCollaborationSummaryTests(context);
   registerProtectedCollaborationTests(context);
   registerCodexRecoveryTests(context);
+
+  const { test, temp } = context;
+  test('관리 세션 parse 캐시는 스캔별 계층 파생 상태와 분리된다', () => {
+    const runsDir = path.join(temp, 'managed-session-cache');
+    const runDir = path.join(runsDir, 'run-parent');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({
+      id: 'run-parent', provider: 'codex', externalId: 'parent', cwd: temp,
+    }));
+    fs.writeFileSync(path.join(runDir, 'session.json'), JSON.stringify({
+      externalId: 'parent', cwd: temp, originCwd: temp,
+      status: 'completed', startedAt: '2026-08-25T00:00:00.000Z', updatedAt: '2026-08-25T00:01:00.000Z',
+      messages: [], lifecycle: [], childIds: [], runtimePresence: [],
+      collaboration: { spawns: [], communications: [], retainedAgents: [] },
+    }));
+
+    const monitor = new AgentMonitor({ home: path.join(temp, 'managed-cache-home'), runsDir });
+    const first = monitor.managedSessions()[0];
+    first.childIds.push('codex:phantom-child');
+    first.collaboration.spawns.push({ childId: 'codex:phantom-child', inferred: true });
+    first.collaboration.communications.push({ childId: 'codex:phantom-child' });
+
+    const second = monitor.managedSessions()[0];
+    assert.notStrictEqual(second, first);
+    assert.deepStrictEqual(second.childIds, []);
+    assert.deepStrictEqual(second.collaboration.spawns, []);
+    assert.deepStrictEqual(second.collaboration.communications, []);
+  });
 }
 
 module.exports = { registerAgentParserTests };
