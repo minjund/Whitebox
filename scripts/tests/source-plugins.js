@@ -148,7 +148,9 @@ function registerSourcePluginTests(context) {
     const rendererCore = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
     assert.equal(main.includes('version: SOURCE_PLUGIN_SETTINGS_VERSION'), true);
     assert.equal(main.includes('enabledPluginIds: [...DESKTOP_SOURCE_PLUGIN_IDS]'), true);
-    assert.equal(rendererCore.includes('version: 3,\n      enabledPluginIds: ["builtin.claude-desktop", "builtin.codex-desktop"]'), true);
+    assert.match(rendererCore,
+      /sourcePluginSettings:\s*\{\s*version:\s*3,\s*enabledPluginIds:\s*\["builtin\.claude-desktop",\s*"builtin\.codex-desktop"\]/,
+      'renderer cold-start defaults must enable both desktop history sources.');
 
     // A loaded v3 snapshot remains authoritative, including an explicit opt-out.
     assert.deepEqual(normalizeSettings({
