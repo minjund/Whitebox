@@ -138,12 +138,48 @@ function createWorkbench(root, options = {}) {
           this.helperTextarea.className = 'xterm-helper-textarea';
           host.appendChild(this.helperTextarea);
         }
-        onScroll() {}
+        onScroll(callback) { this.scrollHandler = callback; }
         onData(callback) { this.dataHandler = callback; }
         onResize() {}
         attachCustomKeyEventHandler(callback) { this.keyEventHandler = callback; }
         focus() { this.helperTextarea?.focus(); }
-        write(data, callback) { this.writes.push(String(data)); callback?.(); }
+        write(data, callback) {
+          this.writes.push(String(data));
+          if (Number.isFinite(options.remoteWriteBaseY)) {
+            this.buffer.active.baseY = Number(options.remoteWriteBaseY);
+            this.buffer.active.viewportY = Number(options.remoteWriteBaseY);
+            this.scrollHandler?.(this.buffer.active.viewportY);
+          }
+          callback?.();
+        }
+        clear() {}
+        reset() {
+          this.buffer.active.viewportY = 0;
+          this.buffer.active.baseY = 0;
+          this.scrollHandler?.(0);
+        }
+        scrollToTop() {
+          this.scrollToTopCalls = Number(this.scrollToTopCalls || 0) + 1;
+          this.scrollToTopDurations = [
+            ...(this.scrollToTopDurations || []),
+            this.options.smoothScrollDuration,
+          ];
+          if (this.options.smoothScrollDuration === 0) {
+            this.buffer.active.viewportY = 0;
+            this.scrollHandler?.(0);
+          }
+        }
+        scrollToLine(line) {
+          this.scrollToLineCalls = [...(this.scrollToLineCalls || []), Number(line)];
+          this.scrollToLineDurations = [
+            ...(this.scrollToLineDurations || []),
+            this.options.smoothScrollDuration,
+          ];
+          if (this.options.smoothScrollDuration === 0) {
+            this.buffer.active.viewportY = Number(line);
+            this.scrollHandler?.(this.buffer.active.viewportY);
+          }
+        }
         scrollToBottom() {
           this.scrollToBottomCalls = Number(this.scrollToBottomCalls || 0) + 1;
           this.scrollToBottomDurations = [
@@ -151,6 +187,7 @@ function createWorkbench(root, options = {}) {
             this.options.smoothScrollDuration,
           ];
           this.buffer.active.viewportY = this.buffer.active.baseY;
+          this.scrollHandler?.(this.buffer.active.viewportY);
         }
         dispose() {}
       },
@@ -167,6 +204,7 @@ function createWorkbench(root, options = {}) {
           terminalCalls.push([id, text, deliveryOptions]);
           return options.terminalCommandResult || { ok: true };
         },
+        tmuxCapture: options.tmuxCapture || (async () => null),
       },
     },
   };
@@ -182,18 +220,24 @@ function createWorkbench(root, options = {}) {
     commandDrafts: new Map(),
     commandDeliveries: new Map(),
     terminals: new Map(),
-    remoteTerminal: {
+    remoteTerminal: options.createRemoteTerminal ? null : {
       host: createFixtureElement(),
       terminal: { clear() {}, reset() {} },
       fit: { fit() {} },
       readOnly: true,
     },
+    remoteCapture: '',
+    remoteViewportAnchor: null,
+    remoteViewportAtBottom: false,
+    remoteCaptureApplying: false,
+    captureInFlight: false,
     captureGeneration: 0,
+    captureRevision: 0,
     terminalSessionRevision: 0,
     terminalListRequestGeneration: 0,
     sessionOrder: [],
     sessionRenderKey: '',
-    active: false,
+    active: options.active === true,
     platform: { label: 'Test computer' },
   };
   const workbench = sandbox.window.WhiteboxTerminalWorkbench({
@@ -364,6 +408,60 @@ function registerTerminalInteractionTests(context) {
     assert.equal(terminal.options.smoothScrollDuration, 100);
     assert.equal(entry.outputRestoreGeneration, 11,
       '사용자 scrollback의 output anchor generation을 fit이 변경했습니다.');
+  });
+
+  test('tmux 캡처는 자동 viewport 복원을 동기화하고 사용자 smooth-scroll 설정을 보존한다', async () => {
+    const remote = {
+      distro: { name: 'FixtureLinux' },
+      session: { name: 'workspace' },
+      window: { index: 0, name: 'main' },
+      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
+    };
+    let captureRevision = 0;
+    const { state, workbench, terminalInstances } = createWorkbench(root, {
+      remote,
+      active: true,
+      createRemoteTerminal: true,
+      remoteWriteBaseY: 64,
+      tmuxCapture: async () => ({ output: `capture-${++captureRevision}\n` }),
+    });
+
+    await workbench.captureRemote();
+    const terminal = terminalInstances[0];
+    assert.equal(terminal.buffer.active.viewportY, 0,
+      '첫 tmux 캡처의 smooth-scroll가 끝나기 전에 하단 viewport를 저장했습니다.');
+    assert.deepStrictEqual(terminal.scrollToTopDurations, [0],
+      '첫 캡처의 자동 top 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.equal(state.remoteViewportAnchor, 0);
+    assert.deepStrictEqual(
+      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
+      ['0', '64'],
+      '캡처 완료 표식이 reset/write 중간 좌표와 섞였습니다.',
+    );
+
+    terminal.buffer.active.viewportY = 17;
+    terminal.scrollHandler(17);
+    await workbench.captureRemote();
+    assert.equal(terminal.buffer.active.viewportY, 17,
+      '반복 캡처가 사용자가 선택한 scrollback 위치를 덮어썼습니다.');
+    assert.deepStrictEqual(terminal.scrollToLineCalls, [17]);
+    assert.deepStrictEqual(terminal.scrollToLineDurations, [0],
+      '사용자 viewport 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.deepStrictEqual(
+      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
+      ['17', '64'],
+      '반복 캡처 완료 표식이 복원 전 viewport를 노출했습니다.',
+    );
+
+    terminal.buffer.active.viewportY = terminal.buffer.active.baseY;
+    terminal.scrollHandler(terminal.buffer.active.baseY);
+    await workbench.captureRemote();
+    assert.equal(terminal.buffer.active.viewportY, terminal.buffer.active.baseY,
+      '하단을 보던 tmux 캡처가 새 출력의 하단을 따라가지 못했습니다.');
+    assert.deepStrictEqual(terminal.scrollToBottomDurations, [0],
+      '자동 tail 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.equal(terminal.options.smoothScrollDuration, 100,
+      '자동 viewport 복원 뒤 일반 사용자 smooth-scroll 설정을 복원하지 않았습니다.');
   });
 
   test('host reconnect로 xterm을 교체하면 사용 중이던 PTY 입력 포커스를 조건부 복원한다', async () => {
