@@ -5,7 +5,14 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
-## 1.7.7 - 2026-08-25
+## 1.7.8 - 2026-08-25
+
+Includes everything prepared for 1.7.7, whose tag was created but never
+published because the release pipeline rejected GitHub's draft asset URLs.
+
+- Accept GitHub's untagged draft asset URLs during release verification so a
+  verified draft can be published; public releases still require canonical
+  tag URLs.
 
 - Show the running Whitebox version directly in Settings, including compact
   windows, alongside the latest release and update controls.
