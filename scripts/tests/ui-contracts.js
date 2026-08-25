@@ -913,7 +913,8 @@ const MAIN_PROCESS_CONTRACTS = [
   ": (notificationDetail || session.title || '이름 없는 작업')",
   'title: notificationCopy',
   'function notifyTerminalPrompt',
-  "attentionNotifier.sync(visibleSnapshotSessions(lastSnapshot))",
+  "const snapshot = visibleSnapshotSessions(lastSnapshot)",
+  "attentionNotifier.sync(snapshot)",
   "agents:attention-requested",
   "pendingAttentionSessionId",
   "markRendererReady",
@@ -3310,6 +3311,7 @@ function registerUiContractTests(context) {
 
   test('플러그인 설정 응답은 응답 시점의 drawer 선택만 닫는다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
+    const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const messages = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const handler = source.slice(
       source.indexOf('$("#sourcePluginSettingsList")?.addEventListener("change"'),
@@ -3326,13 +3328,22 @@ function registerUiContractTests(context) {
       '비활성화된 source를 선택 중이면 같은 프로젝트의 전체 프로그램 필터로 복구해야 합니다.');
     assert.equal(selectedSourceFallback.includes('state.workspace = "all";'), false,
       'source 하나를 껐다는 이유만으로 아직 존재하는 프로젝트 선택까지 전역 전체로 지우면 안 됩니다.');
-    assert.match(handler.slice(selectedIndex), /selectedAfterChange\?\.sourcePluginId === pluginId\) closeDrawer\(\)/);
+    assert.match(handler.slice(selectedIndex), /const projectedAfterChange = state\.rawSnapshot \? projectVisibleSnapshot\(state\.rawSnapshot\) : null;[\s\S]*projectedAfterChange\.sessions\.some\(\(session\) => session\.id === state\.selectedId\)[\s\S]*!selectedStillVisible\) closeDrawer\(\)/,
+      '비활성화한 source의 새 투영에서 사라진 루트·하위 세션의 캐시된 drawer를 닫아야 합니다.');
     assert.match(handler, /const activationWarning = String\(result\.warning \|\| ""\)\.trim\(\);/);
     assert.match(handler, /activationWarning\s*\? "settings\.plugins\.activation_warning"\s*:\s*requestedEnabled/,
       '설정은 저장됐지만 refresh/restart가 실패한 응답을 일반 성공 토스트로 표시하면 안 됩니다.');
     assert.match(handler, /toast\(t\(toastKey, \{ plugin: label, detail: activationWarning \}\)\);/);
     assert.match(messages, /"settings\.plugins\.activation_warning": \{"ko":"[^"]+","en":"[^"]+","zh-CN":"[^"]+"\}/,
       '적용 지연과 재시작 필요를 안내할 한국어·영어·중국어 메시지가 없습니다.');
+    const settingsRenderer = dashboard.slice(
+      dashboard.indexOf('function renderSourcePluginSettings()'),
+      dashboard.indexOf('\n  return {', dashboard.indexOf('function renderSourcePluginSettings()')),
+    );
+    assert.ok(settingsRenderer.includes('list.innerHTML = definitions.map((definition) => {'),
+      '저장 실패 render는 브라우저가 바꾼 checked·disabled·busy 상태를 실제 DOM에서 복구해야 합니다.');
+    assert.equal(settingsRenderer.includes('lastSourcePluginSettingsHtml'), false,
+      'state 문자열만 비교하는 캐시는 실패한 플러그인 토글의 DOM 상태를 고착시킵니다.');
   });
 
   test('비활성 플러그인 실행 draft는 modal을 열 때 직접 실행으로 치유한다', () => {
@@ -3580,6 +3591,25 @@ function registerUiContractTests(context) {
     assert.equal(projected.summary.providers.find(provider => provider.id === 'codex').active, 1);
     assert.equal(projected.summary.providers.find(provider => provider.id === 'codex').usage.total, 20);
     assert.equal(projected.tmux.summary.aiPanes, 1);
+    const desktopSession = {
+      id: 'desktop-history', provider: 'codex', clientKind: 'codex-desktop', status: 'completed', usage: { total: 30 },
+    };
+    const desktopChild = {
+      id: 'desktop-history-child', parentId: desktopSession.id, provider: 'codex', clientKind: 'codex-cli', status: 'completed', usage: { total: 5 },
+    };
+    assert.equal(core.desktopSourcePluginId(desktopSession), 'builtin.codex-desktop');
+    assert.equal(core.isDesktopSessionVisible(desktopSession), true);
+    assert.equal(core.isSourcePluginVisible('builtin.omo'), false, 'OpenCode 비활성화는 OMO alias에도 적용되어야 합니다.');
+    core.state.sourcePluginSettings = { version: 3, enabledPluginIds: ['builtin.claude-desktop'], asideHistoryFolders: [] };
+    assert.equal(core.isDesktopSessionVisible(desktopSession), false);
+    const desktopHidden = core.projectVisibleSnapshot({
+      ...core.state.rawSnapshot,
+      sessions: [...core.state.rawSnapshot.sessions, desktopChild, desktopSession],
+    });
+    assert.equal(desktopHidden.sessions.some(session => session.id === desktopSession.id), false,
+      '명시적으로 끈 데스크톱 기록은 raw snapshot과 detail 캐시에 남아 있어도 투영에서 숨겨야 합니다.');
+    assert.equal(desktopHidden.sessions.some(session => session.id === desktopChild.id), false,
+      '숨겨진 데스크톱 기록의 하위 세션을 고아 루트로 다시 표시하면 안 됩니다.');
     core.loadProviderVisibility({ hidden: ['gemini', 'unknown'] });
     assert.deepStrictEqual(Array.from(core.state.hiddenProviders), ['gemini']);
   });

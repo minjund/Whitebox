@@ -47,7 +47,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const date = new Date(timestamp);
     if (!Number.isFinite(date.getTime())) return "";
     const localeTag = window.WhiteboxI18n.getLocaleTag();
-    return new Intl.DateTimeFormat(localeTag, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(localeTag, {
       hour: "2-digit",
       minute: "2-digit",
       ...(localeTag.startsWith("ko") ? { hourCycle: "h23" } : {}),

@@ -18,6 +18,9 @@ GitHub release notes remain the authoritative version history.
   keeping both visible by default across upgrades and cold starts.
 - Remove the redundant completed-result acknowledgement step, show the exact
   history transition time, and improve workflow label readability.
+- Reduce idle CPU and rendering work across the app: skip unchanged control-room,
+  session-grid, and settings re-renders, cache repeated file reads, hashes, and
+  date formatters on the monitor's hot scan path, and coalesce resize handling.
 
 ## 1.7.6 - 2026-08-24
 

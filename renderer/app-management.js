@@ -28,7 +28,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return t("memory.time_unknown");
     const localeTag = window.WhiteboxI18n.getLocaleTag();
-    return new Intl.DateTimeFormat(localeTag, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(localeTag, {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -530,7 +530,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return t("usage.reset_unknown");
     return t("usage.resets_at", {
-      time: new Intl.DateTimeFormat(undefined, {
+      time: window.WhiteboxRendererUtils.dateTimeFormat(undefined, {
         weekday: "short",
         hour: "2-digit",
         minute: "2-digit",

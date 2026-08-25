@@ -98,7 +98,7 @@ window.WhiteboxAppFactories.createRuntimeOverview = function createRuntimeOvervi
       dayLabels = rule.BYDAY.split(",")
         .map((day) => weekdayDates[day])
         .filter(Boolean)
-        .map((day) => new Intl.DateTimeFormat(uiLocale(), { weekday: "short" }).format(new Date(2026, 0, day)));
+        .map((day) => window.WhiteboxRendererUtils.dateTimeFormat(uiLocale(), { weekday: "short" }).format(new Date(2026, 0, day)));
       if (dayLabels.length) details.push(dayLabels.join("·"));
     }
     if (String(uiLocale()).toLowerCase().startsWith("ko")) {
@@ -177,7 +177,7 @@ window.WhiteboxAppFactories.createRuntimeOverview = function createRuntimeOvervi
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return t("memory.time_unknown");
     const locale = uiLocale();
-    return new Intl.DateTimeFormat(locale, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(locale, {
       year: "numeric", month: "long", day: "numeric",
       hour: String(locale).toLowerCase().startsWith("ko") ? "2-digit" : "numeric",
       minute: "2-digit",

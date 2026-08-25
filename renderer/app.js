@@ -284,6 +284,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   });
   function captureMotionLayout() {
     const items = new Map();
+    // playMotionLayout discards the captured rects on the first paint and for
+    // reduced-motion users, so skip the document-wide layout reads entirely.
+    if (!motionState.ready || motionPreference.matches) return items;
     $$("[data-motion-key]").forEach((element) => {
       const key = element.dataset.motionKey;
       if (!key || items.has(key)) return;
@@ -301,13 +304,13 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return { x: 0, y: 9 };
   }
   function playMotionLayout(previous, kind = "refresh") {
-    const elements = $$("[data-motion-key]");
     document.documentElement.dataset.lastMotion = kind;
     if (!motionState.ready) {
       motionState.ready = true;
       return;
     }
     if (motionPreference.matches) return;
+    const elements = $$("[data-motion-key]");
     requestAnimationFrame(() => {
       let entered = 0;
       elements.forEach((element) => {

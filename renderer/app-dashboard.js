@@ -1196,7 +1196,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     $("#releasePublishedAt").textContent = update.publishedAt
       ? window.WhiteboxI18n.t("update.published", {
           version: update.latestVersion || "—",
-          date: new Intl.DateTimeFormat(uiLocale(), {
+          date: window.WhiteboxRendererUtils.dateTimeFormat(uiLocale(), {
             year: "numeric",
             month: "long",
             day: "numeric",
@@ -1256,13 +1256,16 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     syncUpdateNavigationStatus();
   }
 
+  let lastProviderOverviewHtml = null;
+  let lastProviderVisibilityHtml = null;
+
   function renderProviderOverview() {
     pruneProviderFilters();
     const summaries = (state.snapshot && state.snapshot.summary && state.snapshot.summary.providers) || state.providers;
     const sessions = displaySessions();
     const visibleSummaries = summaries.filter((provider) => isProviderVisible(provider.id));
     const overviewTabStopId = state.providerFilters.size ? [...state.providerFilters][0] : visibleSummaries[0]?.id;
-    $("#providerOverview").innerHTML = visibleSummaries
+    const nextProviderOverviewHtml = visibleSummaries
       .map((provider, index) => {
         const rootCount = sessions.filter((session) => session.provider === provider.id && !session.parentId).length;
         const selected = state.providerFilters.has(provider.id);
@@ -1292,6 +1295,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     </button>`;
       })
       .join("");
+    if (lastProviderOverviewHtml !== nextProviderOverviewHtml) {
+      $("#providerOverview").innerHTML = nextProviderOverviewHtml;
+      lastProviderOverviewHtml = nextProviderOverviewHtml;
+    }
   }
 
   function pruneProviderFilters() {
@@ -1477,7 +1484,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   function renderProviderVisibilitySettings() {
     const list = $("#providerVisibilityList");
     if (!list) return;
-    list.innerHTML = state.providers.map((provider) => {
+    const nextVisibilityHtml = state.providers.map((provider) => {
       const visible = isProviderVisible(provider.id);
       const status = window.WhiteboxI18n.t(visible ? "settings.providers.visible" : "settings.providers.hidden");
       return `<label class="provider-visibility-option ${visible ? "enabled" : "disabled"}" style="${providerStyle(provider.id)}">
@@ -1488,6 +1495,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         <span class="provider-toggle" aria-hidden="true"><b>${esc(status)}</b><i></i></span>
       </label>`;
     }).join("");
+    if (lastProviderVisibilityHtml !== nextVisibilityHtml) {
+      list.innerHTML = nextVisibilityHtml;
+      lastProviderVisibilityHtml = nextVisibilityHtml;
+    }
   }
 
   function renderSourcePluginSettings() {

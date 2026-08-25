@@ -216,7 +216,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return t("memory.time_unknown");
     const localeTag = window.WhiteboxI18n.getLocaleTag();
-    return new Intl.DateTimeFormat(localeTag, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(localeTag, {
       year: "numeric", month: "long", day: "numeric",
       hour: localeTag.startsWith("ko") ? "2-digit" : "numeric",
       minute: "2-digit",
@@ -257,6 +257,8 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     }
     if ($("#viewTitle")) $("#viewTitle").textContent = t("memory.archive_title", { count: fullNumber(sessions.length) });
   }
+
+  let lastSessionGridHtml = null;
 
   function renderSessionsContent(motionKind = "refresh", deferMotion = false) {
     keepDesktopSidebarAtTop();
@@ -351,7 +353,11 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     $("#activeEmptyState").classList.toggle("hidden", !activeEmpty);
     $("#liveSection").classList.toggle("hidden", !homeView || !projectSelected);
     $("#viewTitle").textContent = memoryView ? t("memory.archive_title") : VIEW_TITLES[state.view] || window.WhiteboxI18n.t("ui.recent_conversations_and_tasks");
-    $("#sessionGrid").innerHTML = visible.map((session) => memoryView ? memoryCard(session) : sessionCard(session)).join("");
+    const nextSessionGridHtml = visible.map((session) => memoryView ? memoryCard(session) : sessionCard(session)).join("");
+    if (lastSessionGridHtml !== nextSessionGridHtml) {
+      $("#sessionGrid").innerHTML = nextSessionGridHtml;
+      lastSessionGridHtml = nextSessionGridHtml;
+    }
     if (memoryView) renderMemoryMetrics(regular);
     $("#sessionGrid").classList.toggle("hidden", visible.length === 0);
     $("#loadMoreBtn").classList.toggle("hidden", regular.length <= effectiveLimit);

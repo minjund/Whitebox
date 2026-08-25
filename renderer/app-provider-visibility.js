@@ -59,12 +59,34 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     return !Array.isArray(ids) || ids.includes(id);
   }
 
+  function isSessionVisible(session) {
+    return isSourcePluginVisible(session?.sourcePluginId)
+      && (session?.sourcePluginId || isProviderVisible(session?.provider))
+      && isDesktopSessionVisible(session);
+  }
+
+  function visibleSessionProjection(sessions = []) {
+    const hiddenIds = new Set();
+    let projected = (sessions || []).filter((session) => {
+      if (isSessionVisible(session)) return true;
+      if (session?.id) hiddenIds.add(session.id);
+      return false;
+    });
+    let pruned = hiddenIds.size > 0;
+    while (pruned) {
+      pruned = false;
+      projected = projected.filter((session) => {
+        if (!session?.parentId || !hiddenIds.has(session.parentId)) return true;
+        if (session.id) hiddenIds.add(session.id);
+        pruned = true;
+        return false;
+      });
+    }
+    return projected;
+  }
+
   function visibleSessions() {
-    return (state.snapshot?.sessions || []).filter((session) => (
-      isSourcePluginVisible(session.sourcePluginId)
-      && (session.sourcePluginId || isProviderVisible(session.provider))
-      && isDesktopSessionVisible(session)
-    ));
+    return visibleSessionProjection(state.snapshot?.sessions || []);
   }
 
   function visibleTmux(tmux = (state.rawSnapshot || state.snapshot)?.tmux) {
@@ -98,11 +120,7 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
 
   function projectVisibleSnapshot(snapshot = state.rawSnapshot || state.snapshot) {
     if (!snapshot) return snapshot;
-    const sessions = (snapshot.sessions || []).filter((session) => (
-      isSourcePluginVisible(session.sourcePluginId)
-      && (session.sourcePluginId || isProviderVisible(session.provider))
-      && isDesktopSessionVisible(session)
-    ));
+    const sessions = visibleSessionProjection(snapshot.sessions || []);
     const usage = Object.fromEntries(USAGE_KEYS.map((key) => [
       key,
       sessions.reduce((sum, session) => sum + Number(session.usage?.[key] || 0), 0),
@@ -163,6 +181,7 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     isSourcePluginVisible,
     desktopSourcePluginId,
     isDesktopSessionVisible,
+    visibleSessionProjection,
     visibleProviders,
     visibleSessions,
     visibleTmux,

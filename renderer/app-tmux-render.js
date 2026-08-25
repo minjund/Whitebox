@@ -8,7 +8,7 @@ window.WhiteboxAppFactories.createTmuxRenderer = function createTmuxRenderer(con
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return t("memory.time_unknown");
     const locale = window.WhiteboxI18n.getLocaleTag();
-    return new Intl.DateTimeFormat(locale, {
+    return window.WhiteboxRendererUtils.dateTimeFormat(locale, {
       year: "numeric", month: "long", day: "numeric",
       hour: locale.startsWith("ko") ? "2-digit" : "numeric",
       minute: "2-digit",

@@ -549,14 +549,26 @@ function withinBridgeDiscoveryWindow(value, bridgeStart) {
     && timestamp <= bridgeStart + BRIDGE_DISCOVERY_WINDOW_MS;
 }
 
+const messagePromptFingerprints = new WeakMap();
+
+function cachedMessagePromptFingerprint(message) {
+  if (!message || typeof message !== 'object') return promptFingerprint(message?.text);
+  const text = message.text;
+  let cached = messagePromptFingerprints.get(message);
+  if (!cached || cached.text !== text) {
+    cached = { text, fingerprint: promptFingerprint(text) };
+    messagePromptFingerprints.set(message, cached);
+  }
+  return cached.fingerprint;
+}
+
 function bridgePromptMatches(session, bridge) {
   const expected = String(bridge?.initialPromptFingerprint || '').trim().toLowerCase();
   const bridgeStart = Date.parse(bridge?.startedAt || 0);
   if (!/^[a-f0-9]{64}$/u.test(expected) || !Number.isFinite(bridgeStart)) return false;
   return (session?.messages || []).some(message => {
-    if (message?.role !== 'user' || promptFingerprint(message.text) !== expected) return false;
-    const messageAt = Date.parse(message.timestamp || 0);
-    return Number.isFinite(messageAt) && withinBridgeDiscoveryWindow(message.timestamp, bridgeStart);
+    if (message?.role !== 'user' || !withinBridgeDiscoveryWindow(message.timestamp, bridgeStart)) return false;
+    return cachedMessagePromptFingerprint(message) === expected;
   });
 }
 

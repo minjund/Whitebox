@@ -597,6 +597,7 @@ class AgentMonitor extends EventEmitter {
     this.availability = {};
     this.parseCache = new Map();
     this.listCache = new Map();
+    this.managedCache = new Map();
     this.pinnedFileCache = new Map();
     this.pinnedSessions = [];
     this.historyHomes = [];
@@ -651,6 +652,9 @@ class AgentMonitor extends EventEmitter {
           && String(name || '').toLowerCase().includes(externalId)
         ), 1, 6)[0];
         file = match && match.file || '';
+        if (this.pinnedFileCache.size > 500) {
+          this.pinnedFileCache = new Map([...this.pinnedFileCache.entries()].slice(-300));
+        }
         this.pinnedFileCache.set(cacheKey, { at: Date.now(), file });
       }
       const stat = safeStat(file);
@@ -773,7 +777,26 @@ class AgentMonitor extends EventEmitter {
       // A missing or temporarily locked run directory represents an empty snapshot.
       return [];
     }
-    return dirs.map(item => parseManagedSession(path.join(this.runsDir, item.name))).filter(Boolean);
+    const seenRunDirs = new Set();
+    const sessions = dirs.map(item => {
+      const runDir = path.join(this.runsDir, item.name);
+      seenRunDirs.add(runDir);
+      const metaStat = safeStat(path.join(runDir, 'meta.json'));
+      const liveStat = safeStat(path.join(runDir, 'session.json'));
+      const cacheKey = [
+        metaStat && metaStat.mtimeMs, metaStat && metaStat.size,
+        liveStat && liveStat.mtimeMs, liveStat && liveStat.size,
+      ].join('|');
+      const cached = this.managedCache.get(runDir);
+      if (cached && cached.key === cacheKey) {
+        return cached.value ? cloneSessionForScan(cached.value) : null;
+      }
+      const value = parseManagedSession(runDir);
+      this.managedCache.set(runDir, { key: cacheKey, value });
+      return value ? cloneSessionForScan(value) : null;
+    }).filter(Boolean);
+    for (const runDir of this.managedCache.keys()) if (!seenRunDirs.has(runDir)) this.managedCache.delete(runDir);
+    return sessions;
   }
 
   scanNow() {

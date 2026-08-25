@@ -6,8 +6,21 @@
  * without introducing a bundler or changing Electron's preload boundary.
  */
 let bootstrapPromise = null;
+const dateTimeFormatCache = new Map();
 
 window.WhiteboxRendererUtils = Object.freeze({
+  // Intl.DateTimeFormat construction is far more expensive than format();
+  // reuse one instance per locale+options combination across render passes.
+  dateTimeFormat(locale, options) {
+    const key = `${locale}|${JSON.stringify(options || {})}`;
+    let formatter = dateTimeFormatCache.get(key);
+    if (!formatter) {
+      if (dateTimeFormatCache.size > 64) dateTimeFormatCache.clear();
+      formatter = new Intl.DateTimeFormat(locale, options);
+      dateTimeFormatCache.set(key, formatter);
+    }
+    return formatter;
+  },
   $: selector => document.querySelector(selector),
   $$: selector => [...document.querySelectorAll(selector)],
   esc(value) {

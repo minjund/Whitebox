@@ -26,6 +26,7 @@ const {
   normalizeSettings,
 } = require('../../src/sourcePlugins/settingsStore');
 const { discoverAsideTools } = require('../../src/sourcePlugins/bundled/aside/capabilities');
+const { scanAsideHistoryFolders } = require('../../src/sourcePlugins/bundled/aside/folderHistory');
 const {
   OmoOpenCodeMonitor,
   openCodeDbPath,
@@ -666,6 +667,33 @@ function registerSourcePluginTests(context) {
     assert.equal(calls, 0);
   });
 
+  test('Aside 폴더 캐시는 transcript가 그대로여도 산출물 추가·수정·삭제를 반영한다', () => {
+    const selectedRoot = path.join(temp, 'aside-artifact-cache');
+    const taskDir = path.join(selectedRoot, 'task-one');
+    const transcript = path.join(taskDir, 'task.json');
+    const artifact = path.join(taskDir, 'result.txt');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(transcript, JSON.stringify({
+      id: 'aside-artifact-cache-task', source: 'Aside Browser',
+      messages: [{ role: 'user', text: '산출물을 만들어줘' }],
+    }));
+    const cache = new Map();
+    const scan = () => scanAsideHistoryFolders([selectedRoot], { cache, fullHistory: true });
+
+    assert.deepStrictEqual(scan().sessions[0].artifacts, []);
+    fs.writeFileSync(artifact, 'one');
+    let artifacts = scan().sessions[0].artifacts;
+    assert.deepStrictEqual(artifacts.map(item => item.path), [fs.realpathSync(artifact)]);
+    assert.equal(artifacts[0].size, 3);
+
+    fs.writeFileSync(artifact, 'updated artifact');
+    artifacts = scan().sessions[0].artifacts;
+    assert.equal(artifacts[0].size, Buffer.byteLength('updated artifact'));
+
+    fs.unlinkSync(artifact);
+    assert.deepStrictEqual(scan().sessions[0].artifacts, []);
+  });
+
   test('Aside CLI가 있어도 macOS 15 미만이면 시작과 제어를 fail closed한다', async () => {
     const host = new SourcePluginControlHost({
       platform: 'darwin',
@@ -895,7 +923,9 @@ function registerSourcePluginTests(context) {
     const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
     const visibility = fs.readFileSync(path.join(root, 'renderer', 'app-provider-visibility.js'), 'utf8');
     assert.equal(main.includes('if (session.sourcePluginId) return isSourcePluginEnabled('), true);
-    assert.equal(visibility.includes('isSourcePluginVisible(session.sourcePluginId)'), true);
+    assert.equal(visibility.includes('isSessionVisible(session)'), true);
+    assert.equal(visibility.includes('visibleSessionProjection(sessions = [])'), true);
+    assert.equal(visibility.includes('visibleSessionProjection(snapshot.sessions || [])'), true);
   });
 }
 

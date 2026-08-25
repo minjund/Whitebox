@@ -849,7 +849,7 @@ function startMonitorWorker() {
         ])];
         lastSnapshot = snapshotWithoutSessions(message.snapshot, hiddenSessionIds, availability);
         const snapshot = visibleSnapshotSessions(lastSnapshot);
-        attentionNotifier.sync(visibleSnapshotSessions(lastSnapshot));
+        attentionNotifier.sync(snapshot);
         reconcileAttentionPopups();
         sendSnapshot(snapshot);
       }).catch(error => reportRecoverableError('monitor-snapshot-binding', error));

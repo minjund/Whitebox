@@ -100,12 +100,23 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
     return inlineShell.isConnected && liveSessionGrid.contains(inlineShell);
   }
 
+  let lastAppliedGraphHtml = null;
+
   function applyGraphHtml(liveSessionGrid, nextHtml, options = {}) {
-    if (options.preserveFocusedComposer) return false;
+    if (options.preserveFocusedComposer) {
+      lastAppliedGraphHtml = null;
+      return false;
+    }
     if (!options.preserveInlineTerminal) {
+      // Skip the full innerHTML rebuild when this snapshot produced the exact
+      // same markup: it avoids a large parse/layout pass on idle refreshes and
+      // keeps open disclosures, tab states, and typed drafts alive.
+      if (lastAppliedGraphHtml === nextHtml) return true;
       liveSessionGrid.innerHTML = nextHtml;
+      lastAppliedGraphHtml = nextHtml;
       return true;
     }
+    lastAppliedGraphHtml = null;
     if (reconcileGraphPreservingInline(liveSessionGrid, nextHtml, options.inlineShell)) return true;
 
     // A topology change can move the selected task to a structurally different
@@ -156,8 +167,13 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
         ? [...rootSessions].sort((a, b) => Number((b.context && b.context.percent) || 0) - Number((a.context && a.context.percent) || 0))
         : stableSessionSort(rootSessions);
     if (!model.nodes.length && !tmuxEntries.length) {
-      if (!preserveFocusedComposer) liveSessionGrid.innerHTML = "";
-      $("#graphBreadcrumbs").innerHTML = "";
+      if (!preserveFocusedComposer) {
+        if (lastAppliedGraphHtml !== "") liveSessionGrid.innerHTML = "";
+        lastAppliedGraphHtml = "";
+      } else {
+        lastAppliedGraphHtml = null;
+      }
+      if ($("#graphBreadcrumbs").firstChild) $("#graphBreadcrumbs").innerHTML = "";
       $("#graphResetBtn").classList.add("hidden");
       $("#agentMapToolbar")?.classList.add("hidden");
       $("#controlRoomProjectToolbar")?.classList.remove("hidden");
@@ -199,7 +215,7 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
         inlineShell: mountedInlineShell,
       });
       restoreDisclosureStates(liveSessionGrid);
-      $("#graphBreadcrumbs").innerHTML = "";
+      if ($("#graphBreadcrumbs").firstChild) $("#graphBreadcrumbs").innerHTML = "";
       $("#agentMapToolbar")?.classList.add("hidden");
       $("#controlRoomProjectToolbar")?.classList.remove("hidden");
       $("#controlRoomListToolbar")?.classList.remove("hidden");

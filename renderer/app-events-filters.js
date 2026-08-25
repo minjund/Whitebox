@@ -4,7 +4,7 @@ window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEventBindings(context = {}) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
-  const { $, state, setProviderVisible = () => {}, projectVisibleSnapshot = snapshot => snapshot, visibleSnapshot = () => state.snapshot, closeDrawer = () => {}, openDrawer = () => {}, openRunModal = () => {}, syncRunComposer = () => {}, saveRunDraft = () => {}, renderSessions, render, renderWorkspaces, renderGlobalStats = () => {}, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, filteredSessions, resultReviewTargets = () => [], performUiAction, toast, announce, selectView = () => {}, normalizedSearch = (value) => String(value || "").trim(), saveDashboardPreferences = () => {}, saveProjectDismissals = () => {}, moveProjectOrder = () => false, acknowledgeProjectNotices = () => 0, discardDialogTrigger = () => {}, setDialogOpenState = () => {}, syncControlRoomDisclosureButtons = () => {}, preconnectProjectAgentTerminals = () => Promise.resolve([]) } = context;
+  const { $, state, setProviderVisible = () => {}, isSourcePluginVisible = () => true, isDesktopSessionVisible = () => true, projectVisibleSnapshot = snapshot => snapshot, visibleSnapshot = () => state.snapshot, closeDrawer = () => {}, openDrawer = () => {}, openRunModal = () => {}, syncRunComposer = () => {}, saveRunDraft = () => {}, renderSessions, render, renderWorkspaces, renderGlobalStats = () => {}, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, filteredSessions, resultReviewTargets = () => [], performUiAction, toast, announce, selectView = () => {}, normalizedSearch = (value) => String(value || "").trim(), saveDashboardPreferences = () => {}, saveProjectDismissals = () => {}, moveProjectOrder = () => false, acknowledgeProjectNotices = () => 0, discardDialogTrigger = () => {}, setDialogOpenState = () => {}, syncControlRoomDisclosureButtons = () => {}, preconnectProjectAgentTerminals = () => Promise.resolve([]) } = context;
 
   let sidebarProjectDragEndedAt = 0;
 
@@ -649,8 +649,12 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       const selectedAfterChange = (state.rawSnapshot?.sessions || []).find((session) => session.id === state.selectedId)
         || state.details.get(state.selectedId);
-      if (!requestedEnabled && selectedAfterChange?.sourcePluginId === pluginId) closeDrawer();
-      if (state.rawSnapshot) state.snapshot = projectVisibleSnapshot(state.rawSnapshot);
+      const projectedAfterChange = state.rawSnapshot ? projectVisibleSnapshot(state.rawSnapshot) : null;
+      const selectedStillVisible = projectedAfterChange
+        ? projectedAfterChange.sessions.some((session) => session.id === state.selectedId)
+        : isSourcePluginVisible(selectedAfterChange?.sourcePluginId) && isDesktopSessionVisible(selectedAfterChange);
+      if (!requestedEnabled && selectedAfterChange && !selectedStillVisible) closeDrawer();
+      if (projectedAfterChange) state.snapshot = projectedAfterChange;
       if (window.WhiteboxTerminal) window.WhiteboxTerminal.updateSnapshot(visibleSnapshot(), state.workspaces);
       render("filter");
       const source = (state.sourcePlugins || []).find((item) => item.id === pluginId);
