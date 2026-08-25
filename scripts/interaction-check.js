@@ -1609,6 +1609,24 @@ async function exerciseManagementControls(win, round) {
       && window.WhiteboxApp.state.agentCommandDrafts.get('fixture-waiting') === input.value
       && submit && !submit.disabled;
   })()`, '직접 답변을 입력해도 실제 전송 버튼이 활성화되지 않았습니다.');
+  const customAnswerTerminalBaseline = await win.webContents.executeJavaScript(`(() => {
+    const session = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-waiting');
+    return window.interactionTest.getTerminals()
+      .filter(item => item.bridgeId === 'fixture-waiting')
+      .map(item => ({
+        id: item.id,
+        provider: item.provider,
+        resumeId: item.agentResumeSessionId,
+        conversationBound: item.conversationBound,
+        signatureMatches: item.agentConnectionSignature === window.interactionTest.connectionSignatureForSession(session),
+      }));
+  })()`);
+  assert(customAnswerTerminalBaseline.length <= 1
+    && customAnswerTerminalBaseline.every(item => item.provider === 'gemini'
+      && item.resumeId === 'fixture-waiting-external'
+      && item.conversationBound === true
+      && item.signatureMatches),
+  `직접 답변 전 기존 AI 대화 PTY가 정확한 fixture가 아닙니다: ${JSON.stringify(customAnswerTerminalBaseline)}`);
   await clearCalls(win);
   await click(win, '.approval-custom-answer .conversation-send', 'agent:conversation-send');
   await waitFor(win, `(() => {
@@ -1619,10 +1637,14 @@ async function exerciseManagementControls(win, round) {
     const terminalId = commands[0]?.args?.[0];
     const terminal = window.interactionTest.getTerminals().find(item => item.id === terminalId);
     const session = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-waiting');
+    const baselineIds = ${JSON.stringify(customAnswerTerminalBaseline.map(item => item.id))};
+    const exactCreate = baselineIds.length
+      ? creates.length === 0 && terminalId === baselineIds[0]
+      : creates.length === 1
+        && creates[0].args[0]?.bridgeId === 'fixture-waiting'
+        && creates[0].args[0]?.agentConnectionSignature === window.interactionTest.connectionSignatureForSession(session);
     return commands.length === 1
-      && creates.length === 1
-      && creates[0].args[0]?.bridgeId === 'fixture-waiting'
-      && creates[0].args[0]?.agentConnectionSignature === window.interactionTest.connectionSignatureForSession(session)
+      && exactCreate
       && terminal?.bridgeId === 'fixture-waiting'
       && terminal?.agentResumeSessionId === 'fixture-waiting-external'
       && terminal?.conversationBound === true;
@@ -1672,7 +1694,8 @@ async function exerciseManagementControls(win, round) {
   assert(denyCommand, '거절 빠른 응답의 실제 전달 문구를 찾지 못했습니다.');
   await clearCalls(win);
   await click(win, '[data-management-session="fixture-waiting"] [data-attention-quick]:not(.approve)', 'management:quick-deny');
-  await waitFor(win, `(() => {
+  try {
+    await waitFor(win, `(() => {
     const calls = window.interactionTest.getCalls();
     const commandCalls = calls.filter(item => item.name === 'terminalCommand'
       && item.args[1] === ${JSON.stringify(denyCommand)});
@@ -1696,7 +1719,27 @@ async function exerciseManagementControls(win, round) {
       && terminal?.backend === 'direct'
       && terminal?.agentConnectionSignature === window.interactionTest.connectionSignatureForSession(session);
   })()`,
-  '거절 빠른 응답이 해당 AI 대화를 복원해 전달되지 않았습니다.', 160);
+    '거절 빠른 응답이 해당 AI 대화를 복원해 전달되지 않았습니다.', 160);
+  } catch (error) {
+    const diagnostic = await win.webContents.executeJavaScript(`(() => ({
+      calls: window.interactionTest.getCalls().filter(item => ['terminalCreate', 'terminalCommand', 'terminalWrite'].includes(item.name)),
+      terminals: window.interactionTest.getTerminals().filter(item => item.bridgeId === 'fixture-waiting'),
+      embedded: window.WhiteboxTerminal.embeddedState(),
+      selectedId: window.WhiteboxApp.state.selectedId,
+      drawerMode: window.WhiteboxApp.state.drawerMode,
+      drawerTab: window.WhiteboxApp.state.drawerTab,
+      drawer: {
+        open: document.querySelector('#detailDrawer')?.classList.contains('open'),
+        terminalChat: document.querySelector('#detailDrawer')?.dataset.terminalChat,
+        surface: document.querySelector('#detailDrawer')?.dataset.conversationSurface,
+      },
+      sourceForm: (() => {
+        const form = document.querySelector('#attentionInbox [data-agent-command-form="fixture-waiting"]');
+        return form ? { connected: form.isConnected, ...form.dataset } : null;
+      })(),
+    }))()`);
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+  }
   const denyOpenedDrawer = await win.webContents.executeJavaScript(
     `document.querySelector('#detailDrawer')?.classList.contains('open') === true`,
   );

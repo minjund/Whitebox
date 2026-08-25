@@ -3604,6 +3604,7 @@ function registerTerminalAgentActionTests(context) {
     let activeForm = null;
     let drawerOpen = false;
     let preserveFormOnOpen = false;
+    let deferDrawerOwnership = false;
 
     const composer = {
       dataset: { mode: 'terminal' },
@@ -3698,6 +3699,7 @@ function registerTerminalAgentActionTests(context) {
       toast: () => {},
       openDrawer: sessionId => {
         opened.push(sessionId);
+        if (deferDrawerOwnership) return;
         state.selectedId = sessionId;
         state.drawerMode = 'session';
         state.drawerTab = 'chat';
@@ -3710,6 +3712,18 @@ function registerTerminalAgentActionTests(context) {
         notifyMutation();
       },
     });
+    const completeDrawerOpen = sessionId => {
+      state.selectedId = sessionId;
+      state.drawerMode = 'session';
+      state.drawerTab = 'chat';
+      drawerOpen = true;
+      drawer.dataset.mode = 'session';
+      drawer.dataset.terminalChat = 'true';
+      drawer.dataset.conversationSurface = 'connecting';
+      if (!preserveFormOnOpen) activeForm = null;
+      embedded = {};
+      notifyMutation();
+    };
     const connectForm = (sessionId, terminalId) => {
       const input = { value: '', disabled: false, dataset: { agentCommandDraft: sessionId } };
       const submit = { disabled: false };
@@ -3758,6 +3772,8 @@ function registerTerminalAgentActionTests(context) {
       connectForm,
       setEmbedded(value) { embedded = { ...(value || {}) }; },
       setPreserveFormOnOpen(value) { preserveFormOnOpen = Boolean(value); },
+      setDeferDrawerOwnership(value) { deferDrawerOwnership = Boolean(value); },
+      completeDrawerOpen,
       switchDrawer(sessionId) {
         state.selectedId = sessionId;
         state.drawerMode = 'session';
@@ -3806,6 +3822,32 @@ function registerTerminalAgentActionTests(context) {
       command: '승인하고 계속해 주세요.',
     }]);
     assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '승인하고 계속해 주세요.');
+    assert.deepStrictEqual(harness.errors, []);
+  });
+
+  test('빠른 응답은 이전 embedded PTY 정리로 drawer 소유권 전환이 늦어져도 한 번 제출한다', () => {
+    const harness = createQuickResponseHarness();
+    const target = {
+      id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
+    };
+    harness.setDeferDrawerOwnership(true);
+
+    harness.actions.quickRespond(harness.sessionA.id, 'drawer 전환 뒤 한 번만 전달', harness.noFormRoot);
+    harness.flushFrames();
+    assert.deepStrictEqual(harness.submissions, [], '자기 drawer를 소유하기 전에는 제출하면 안 됩니다.');
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
+
+    harness.setDeferDrawerOwnership(false);
+    harness.completeDrawerOpen(harness.sessionA.id);
+    harness.targets.set(harness.sessionA.id, [target]);
+    harness.connectForm(harness.sessionA.id, target.terminalId);
+    harness.flushFrames();
+
+    assert.deepStrictEqual(harness.submissions, [{
+      sessionId: harness.sessionA.id,
+      terminalId: target.terminalId,
+      command: 'drawer 전환 뒤 한 번만 전달',
+    }]);
     assert.deepStrictEqual(harness.errors, []);
   });
 

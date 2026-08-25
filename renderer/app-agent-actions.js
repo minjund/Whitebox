@@ -1079,6 +1079,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       frame: null,
       retryTimer: null,
       retries: 0,
+      owned: false,
       timeout: null,
       observer: null,
       terminalListener: null,
@@ -1136,9 +1137,14 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       if (pendingQuickResponses.get(sessionId) !== pending || !pending.opened) return;
       const drawer = document.querySelector?.("#detailDrawer");
       if (!ownsOpenDrawer(drawer)) {
-        finish(false);
+        // openDrawer may first await disposal of a previously embedded PTY.
+        // Do not drop the response during that transition; once this waiter
+        // has observed its own drawer, any later ownership loss is final.
+        if (pending.owned) finish(false);
+        else scheduleRetry();
         return;
       }
+      pending.owned = true;
       const composer = drawer.querySelector?.("#drawerComposer");
       // PTY-only drawers deliberately render no duplicate composer. In that
       // layout the visible review card remains the submit surface that started

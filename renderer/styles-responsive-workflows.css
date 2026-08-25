@@ -223,6 +223,15 @@
     grid-template-columns: 1fr;
   }
 
+  .workflow-progress-layout {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  .workflow-progress-now {
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
   .live-section-head {
     align-items: flex-start;
   }
@@ -399,15 +408,6 @@
   .agent-workflow-canvas {
     padding: 18px;
     overflow: hidden;
-  }
-
-  .workflow-progress-layout {
-    grid-template-columns: minmax(0,1fr);
-  }
-
-  .workflow-progress-now {
-    border-right: 0;
-    border-bottom: 1px solid var(--line-soft);
   }
 
   .agent-workflow-grid {

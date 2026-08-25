@@ -191,7 +191,9 @@ app.whenReady().then(() => {
           options: select?.options.length || 0,
           cardVisible: Boolean(card && card.getBoundingClientRect().height > 0),
           noOverflow: Boolean(section && section.scrollWidth <= section.clientWidth + 2),
-          focusedChrome: isHidden(document.querySelector('.topbar')) && isHidden(document.querySelector('#projectContextNav')),
+          focusedChrome: isHidden(document.querySelector('.topbar'))
+            && !isHidden(document.querySelector('#projectContextNav'))
+            && document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') === 'false',
           headerVisible: !isHidden(document.querySelector('.settings-head')),
           noDiagnosticCards: !document.querySelector('.settings-meta-grid'),
           noProviderCompanyLabels: !document.querySelector('.provider-visibility-name small'),
