@@ -11,8 +11,12 @@ const { parseCliArguments, desktopLaunchSpec, readCodexEndpoint } = require('../
 const { providerList, normalizeProvider, modelContextWindow } = require('../../src/providerRegistry');
 const { UpdateManager, compareVersions, normalizeVersion, safeFileName } = require('../../src/updateManager');
 const {
+  assertCompleteReleaseAssetSet,
   assertReleaseAssetSelections,
+  assertRemoteReleaseMatchesLocal,
   fixtureReleaseAssets,
+  isDraftReleaseAssetUrl,
+  releaseAssetUrl,
   selectionDecoys,
 } = require('../release-asset-contract');
 const {
@@ -1597,6 +1601,36 @@ function registerCliAndUpdateTests(context) {
     assert.throws(() => fixtureReleaseAssets('3.1.0+build.1'), /Stable release version is invalid/);
     assert.equal(safeFileName('..'), '');
     assert.equal(safeFileName('.'), '');
+  });
+
+  test('드래프트 릴리스는 untagged 자산 URL만 허용하고 공개 릴리스는 정식 태그 URL을 요구한다', () => {
+    const version = '3.1.0';
+    const local = fixtureReleaseAssets(version).map(asset => ({ ...asset, digest: asset.digest.toLowerCase() }));
+    const draftUrl = name => `https://github.com/minjund/Whitebox/releases/download/untagged-4cf3d88818e903c46bb4/${name}`;
+    const draftAssets = local.map(asset => ({ ...asset, browser_download_url: draftUrl(asset.name) }));
+
+    assert.equal(isDraftReleaseAssetUrl(draftUrl('Whitebox-Setup-3.1.0.exe'), 'Whitebox-Setup-3.1.0.exe'), true);
+    assert.equal(isDraftReleaseAssetUrl(draftUrl('Whitebox-Setup-3.1.0.exe'), 'Whitebox-3.1.0-portable.exe'), false);
+    assert.equal(isDraftReleaseAssetUrl(releaseAssetUrl(version, 'Whitebox-Setup-3.1.0.exe'), 'Whitebox-Setup-3.1.0.exe'), false);
+    assert.equal(isDraftReleaseAssetUrl(`https://example.com/releases/download/untagged-abc/Whitebox-Setup-3.1.0.exe`, 'Whitebox-Setup-3.1.0.exe'), false);
+
+    // Draft assets carry GitHub's untagged path until publication rewrites it.
+    assertCompleteReleaseAssetSet(draftAssets, version, { expectDraft: true });
+    assert.throws(() => assertCompleteReleaseAssetSet(draftAssets, version), /not canonical/);
+    assert.throws(() => assertCompleteReleaseAssetSet(local, version, { expectDraft: true }), /draft download URL/);
+    assert.throws(() => assertCompleteReleaseAssetSet(
+      draftAssets.map(asset => ({ ...asset, browser_download_url: draftUrl('different.exe') })), version, { expectDraft: true },
+    ), /draft download URL/);
+
+    const draftRelease = { tag_name: `v${version}`, draft: true, prerelease: false, assets: draftAssets };
+    assert.equal(assertRemoteReleaseMatchesLocal(draftRelease, local, version, { expectDraft: true }), true);
+    assert.throws(() => assertRemoteReleaseMatchesLocal(draftRelease, local, version, { expectDraft: false }), /draft state is incorrect/);
+    assert.throws(() => assertRemoteReleaseMatchesLocal({ ...draftRelease, draft: false }, local, version, { expectDraft: false }), /not canonical/);
+
+    // A published release must expose canonical tag URLs again.
+    const publishedRelease = { tag_name: `v${version}`, draft: false, prerelease: false, assets: local };
+    assert.equal(assertRemoteReleaseMatchesLocal(publishedRelease, local, version, { expectDraft: false }), true);
+    assert.throws(() => assertRemoteReleaseMatchesLocal(publishedRelease, local, version, { expectDraft: true }), /draft state is incorrect/);
   });
 
   test('최신 정식 태그를 확인하고 검증한 업데이트 파일을 저장한다', async () => {
