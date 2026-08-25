@@ -4,6 +4,8 @@ window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createAgentActions = function createAgentActions(context = {}) {
   const QUICK_RESPONSE_DRAWER_TIMEOUT_MS = 30_000;
+  const QUICK_RESPONSE_RETRY_INTERVAL_MS = 50;
+  const QUICK_RESPONSE_MAX_RETRIES = QUICK_RESPONSE_DRAWER_TIMEOUT_MS / QUICK_RESPONSE_RETRY_INTERVAL_MS;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const errorText = (error, key, params) => window.WhiteboxI18n.errorText(error, key, params);
   const {
@@ -1052,26 +1054,31 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       && Boolean(submit)
       && typeof form?.requestSubmit === "function";
     if (!baseReady) return null;
-    if (!options.drawer || !options.composer) return { input, target };
+    if (!options.drawer) return { input, target };
 
     const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+    const composerReady = options.composer
+      ? options.composer.dataset?.mode === "terminal"
+      : options.sourceForm === true;
     const drawerReady = options.drawer.dataset?.mode === "session"
       && options.drawer.dataset?.terminalChat === "true"
       && options.drawer.dataset?.conversationSurface === "pty"
-      && options.composer.dataset?.mode === "terminal"
+      && composerReady
       && embedded.connected === true
       && embedded.agentSessionId === sessionId
       && String(target.terminalId || target.id || "") === String(embedded.terminalId || "");
     return drawerReady ? { input, target } : null;
   }
 
-  function queueQuickResponseForDrawer(sessionId, command) {
+  function queueQuickResponseForDrawer(sessionId, command, sourceForm = null) {
     if (pendingQuickResponses.has(sessionId)) return;
     const pending = {
       command,
       opened: false,
       scheduled: false,
       frame: null,
+      retryTimer: null,
+      retries: 0,
       timeout: null,
       observer: null,
       terminalListener: null,
@@ -1081,6 +1088,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       if (pendingQuickResponses.get(sessionId) !== pending) return;
       pendingQuickResponses.delete(sessionId);
       if (pending.frame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(pending.frame);
+      if (pending.retryTimer !== null) clearTimeout(pending.retryTimer);
       if (pending.timeout !== null) clearTimeout(pending.timeout);
       pending.observer?.disconnect?.();
       if (pending.terminalListener && typeof window.removeEventListener === "function") {
@@ -1094,7 +1102,35 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       && state.drawerMode === "session"
       && state.drawerTab === "chat";
 
-    const attemptSubmit = () => {
+    const scheduleAttempt = () => {
+      if (pending.scheduled || pendingQuickResponses.get(sessionId) !== pending) return;
+      if (pending.retryTimer !== null) {
+        clearTimeout(pending.retryTimer);
+        pending.retryTimer = null;
+      }
+      pending.scheduled = true;
+      if (typeof requestAnimationFrame === "function") {
+        pending.frame = requestAnimationFrame(attemptSubmit);
+      } else {
+        pending.frame = setTimeout(attemptSubmit, 0);
+      }
+    };
+
+    const scheduleRetry = () => {
+      if (pending.retryTimer !== null || pendingQuickResponses.get(sessionId) !== pending) return;
+      if (pending.retries >= QUICK_RESPONSE_MAX_RETRIES) {
+        finish(true);
+        return;
+      }
+      pending.retryTimer = setTimeout(() => {
+        pending.retryTimer = null;
+        pending.retries += 1;
+        scheduleAttempt();
+      }, QUICK_RESPONSE_RETRY_INTERVAL_MS);
+      pending.retryTimer?.unref?.();
+    };
+
+    function attemptSubmit() {
       pending.scheduled = false;
       pending.frame = null;
       if (pendingQuickResponses.get(sessionId) !== pending || !pending.opened) return;
@@ -1104,9 +1140,24 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         return;
       }
       const composer = drawer.querySelector?.("#drawerComposer");
-      const form = composer?.querySelector?.(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
-      const ready = readyQuickResponseForm(sessionId, form, { drawer, composer });
-      if (!ready) return;
+      // PTY-only drawers deliberately render no duplicate composer. In that
+      // layout the visible review card remains the submit surface that started
+      // this action; it is safe only while the owned drawer and exact signed
+      // embedded target below still match this session.
+      const drawerForm = composer?.querySelector?.(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
+      const form = drawerForm || (sourceForm?.isConnected ? sourceForm : null);
+      const ready = readyQuickResponseForm(sessionId, form, {
+        drawer,
+        composer,
+        sourceForm: Boolean(!drawerForm && form === sourceForm),
+      });
+      if (!ready) {
+        // DOM/PTY notifications may be coalesced just before the signed target
+        // state becomes visible. Keep a bounded waiter alive while this drawer
+        // still belongs to the same session instead of losing the response.
+        scheduleRetry();
+        return;
+      }
 
       ready.input.value = pending.command;
       state.agentCommandDrafts.set(sessionId, pending.command);
@@ -1119,17 +1170,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         window.WhiteboxRendererUtils.reportRecoverableError("quick-response-submit", error);
         context.toast?.(t("agent.delivery_retry_ready"));
       }
-    };
-
-    const scheduleAttempt = () => {
-      if (pending.scheduled || pendingQuickResponses.get(sessionId) !== pending) return;
-      pending.scheduled = true;
-      if (typeof requestAnimationFrame === "function") {
-        pending.frame = requestAnimationFrame(attemptSubmit);
-      } else {
-        pending.frame = setTimeout(attemptSubmit, 0);
-      }
-    };
+    }
 
     pending.terminalListener = () => scheduleAttempt();
     if (typeof window.addEventListener === "function") {
@@ -1165,7 +1206,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const composer = form?.closest?.("#drawerComposer") || null;
     const drawer = composer?.dataset?.mode === "terminal" ? document.querySelector?.("#detailDrawer") : null;
     const ready = readyQuickResponseForm(sessionId, form, drawer ? { drawer, composer } : {});
-    if (!ready) return queueQuickResponseForDrawer(sessionId, command);
+    if (!ready) return queueQuickResponseForDrawer(sessionId, command, form);
     form.requestSubmit();
   }
 
