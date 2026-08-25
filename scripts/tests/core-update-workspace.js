@@ -12,7 +12,10 @@ const { providerList, normalizeProvider, modelContextWindow } = require('../../s
 const { UpdateManager, compareVersions, normalizeVersion, safeFileName } = require('../../src/updateManager');
 const {
   assertReleaseAssetSelections,
+  assertRemoteReleaseMatchesLocal,
+  canonicalizedDraftAssets,
   fixtureReleaseAssets,
+  releaseAssetUrl,
   selectionDecoys,
 } = require('../release-asset-contract');
 const {
@@ -1597,6 +1600,30 @@ function registerCliAndUpdateTests(context) {
     assert.throws(() => fixtureReleaseAssets('3.1.0+build.1'), /Stable release version is invalid/);
     assert.equal(safeFileName('..'), '');
     assert.equal(safeFileName('.'), '');
+  });
+
+  test('draft 릴리스의 untagged 자산 URL은 canonical로 정규화되고 공개 릴리스는 그대로 엄격 검증한다', () => {
+    const version = '3.1.0';
+    const localAssets = fixtureReleaseAssets(version);
+    const draftAssets = localAssets.map(asset => ({
+      ...asset,
+      browser_download_url: `https://github.com/minjund/Whitebox/releases/download/untagged-e93f10dab29a03692e7a/${asset.name}`,
+    }));
+    const normalized = canonicalizedDraftAssets(draftAssets, version);
+    for (const asset of normalized) {
+      assert.equal(asset.browser_download_url, releaseAssetUrl(version, asset.name));
+    }
+    const releaseShape = assets => ({ tag_name: `v${version}`, draft: true, prerelease: false, assets });
+    assert.equal(assertRemoteReleaseMatchesLocal(releaseShape(draftAssets), localAssets, version, { expectDraft: true }), true);
+    // Published releases must keep the exact canonical URL contract.
+    assert.throws(() => assertRemoteReleaseMatchesLocal(
+      { ...releaseShape(draftAssets), draft: false }, localAssets, version, { expectDraft: false },
+    ), /Release asset URL is not canonical/);
+    // Draft mode still rejects URLs outside GitHub's draft or canonical shapes.
+    const hostileAssets = draftAssets.map(asset => ({ ...asset, browser_download_url: `https://example.com/${asset.name}` }));
+    assert.throws(() => assertRemoteReleaseMatchesLocal(
+      releaseShape(hostileAssets), localAssets, version, { expectDraft: true },
+    ), /neither a GitHub draft nor a canonical URL/);
   });
 
   test('최신 정식 태그를 확인하고 검증한 업데이트 파일을 저장한다', async () => {

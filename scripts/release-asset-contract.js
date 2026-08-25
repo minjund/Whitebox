@@ -127,12 +127,35 @@ function assetsFromDirectory(directory, version) {
   });
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// GitHub serves draft-release asset downloads from an "untagged-<id>" path and
+// only rewrites them to the canonical /releases/download/v<version>/ URL when
+// the release is published. Verify the draft URL shape strictly, then map each
+// asset onto its canonical URL so every downstream contract check stays exact.
+function canonicalizedDraftAssets(assets, version) {
+  return (Array.isArray(assets) ? assets : []).map(asset => {
+    const name = String(asset && asset.name || '');
+    const pattern = new RegExp(
+      `^https://github\\.com/minjund/Whitebox/releases/download/(?:v${escapeRegExp(version)}|untagged-[A-Za-z0-9]+)/${escapeRegExp(name)}$`,
+    );
+    assert.match(String(asset && asset.browser_download_url || ''), pattern,
+      `Draft release asset URL is neither a GitHub draft nor a canonical URL: ${name || '<missing>'}`);
+    return { ...asset, browser_download_url: releaseAssetUrl(version, name) };
+  });
+}
+
 function assertRemoteReleaseMatchesLocal(release, localAssets, version, options = {}) {
   assert(release && typeof release === 'object', 'GitHub release metadata is missing.');
   assert.equal(release.tag_name, `v${version}`, 'GitHub release tag does not match the package version.');
   if (options.expectDraft !== undefined) assert.equal(release.draft, options.expectDraft, 'GitHub release draft state is incorrect.');
   assert.equal(release.prerelease, false, 'GitHub release must not be a prerelease.');
-  const remoteAssets = assertCompleteReleaseAssetSet(release.assets, version);
+  const candidateAssets = options.expectDraft === true
+    ? canonicalizedDraftAssets(release.assets, version)
+    : release.assets;
+  const remoteAssets = assertCompleteReleaseAssetSet(candidateAssets, version);
   assertReleaseAssetSelections(remoteAssets, version);
   for (const local of localAssets) {
     const remote = remoteAssets.find(asset => asset.name === local.name);
@@ -170,6 +193,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  canonicalizedDraftAssets,
   assertCompleteReleaseAssetSet,
   assertRemoteReleaseMatchesLocal,
   assertReleaseAssetSelections,
