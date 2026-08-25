@@ -100,6 +100,10 @@
     remoteCapture: '',
     remoteViewportAnchor: null,
     remoteViewportAtBottom: false,
+    remoteWheelIdleUntil: 0,
+    remotePendingWheelEvents: [],
+    remoteCaptureRetryTimer: null,
+    remoteUserScrollRevision: 0,
     remoteCaptureApplying: false,
     captureTimer: null,
     captureInFlight: false,
@@ -1432,22 +1436,6 @@
     if (state.active && state.selectedTmux) startCapture();
   }
 
-  function scrollTmuxToLine(line) {
-    if (!state.remoteTerminal) return false;
-    const target = Math.max(0, Math.floor(Number(line) || 0));
-    state.remoteTerminal.terminal.scrollToLine(target);
-    const buffer = state.remoteTerminal.terminal.buffer.active;
-    state.remoteViewportAnchor = Number(buffer.viewportY) || 0;
-    state.remoteViewportAtBottom = state.remoteViewportAnchor >= Number(buffer.baseY || 0);
-    return true;
-  }
-
-  function scrollTmuxByLines(lines) {
-    if (!state.remoteTerminal) return false;
-    state.remoteTerminal.terminal.scrollLines(Math.trunc(Number(lines) || 0));
-    return true;
-  }
-
   function scrollTerminalToLine(id, line) {
     const entry = state.terminals.get(String(id || ''));
     if (!entry) return false;
@@ -1530,8 +1518,6 @@
     resolveAttentionPrompt,
     respondToPrompt,
     refreshPendingPrompts: () => schedulePendingPromptRefresh(true),
-    scrollTmuxToLine,
-    scrollTmuxByLines,
     scrollTerminalToLine,
   };
   window.addEventListener('whitebox:locale-changed', () => {

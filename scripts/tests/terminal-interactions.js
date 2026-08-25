@@ -5,9 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-function createElement(documentRef = () => null) {
+function createElement(documentRef = () => null, queryFallback = true) {
   const classes = new Set();
   const changes = [];
+  const children = [];
+  const listeners = new Map();
   const element = {
     dataset: {},
     disabled: false,
@@ -16,10 +18,23 @@ function createElement(documentRef = () => null) {
     innerHTML: '',
     placeholder: '',
     isConnected: true,
-    querySelector() { return createElement(documentRef); },
+    querySelector(selector) {
+      const className = String(selector || '').startsWith('.') ? String(selector).slice(1) : '';
+      for (const child of children) {
+        if (className && child.classList?.contains(className)) return child;
+        const nested = child.querySelector?.(selector);
+        if (nested) return nested;
+      }
+      return queryFallback ? createElement(documentRef, true) : null;
+    },
     appendChild(child) {
+      if (child.parentElement && Array.isArray(child.parentElement.children)) {
+        const previousIndex = child.parentElement.children.indexOf(child);
+        if (previousIndex >= 0) child.parentElement.children.splice(previousIndex, 1);
+      }
       child.parentElement = this;
       child.isConnected = this.isConnected;
+      children.push(child);
       return child;
     },
     contains(candidate) {
@@ -29,10 +44,57 @@ function createElement(documentRef = () => null) {
       return false;
     },
     remove() {
+      if (this.parentElement && Array.isArray(this.parentElement.children)) {
+        const index = this.parentElement.children.indexOf(this);
+        if (index >= 0) this.parentElement.children.splice(index, 1);
+      }
       this.parentElement = null;
       this.isConnected = false;
     },
-    addEventListener() {},
+    addEventListener(type, callback, options = {}) {
+      const key = String(type || '');
+      if (!listeners.has(key)) listeners.set(key, []);
+      listeners.get(key).push({
+        callback,
+        capture: options === true || Boolean(options?.capture),
+      });
+    },
+    removeEventListener(type, callback, options = {}) {
+      const key = String(type || '');
+      const capture = options === true || Boolean(options?.capture);
+      const registered = listeners.get(key) || [];
+      const index = registered.findIndex(listener => listener.callback === callback && listener.capture === capture);
+      if (index >= 0) registered.splice(index, 1);
+    },
+    dispatchEvent(event) {
+      if (!event || !event.type) throw new TypeError('Fixture event requires a type.');
+      if (!event.target) event.target = this;
+      const path = [];
+      for (let current = this; current; current = current.parentElement) path.push(current);
+      const invoke = (current, capture) => {
+        event.currentTarget = current;
+        for (const listener of [...(current.__listeners.get(String(event.type)) || [])]) {
+          if (listener.capture !== capture) continue;
+          listener.callback.call(current, event);
+          if (event.__immediatePropagationStopped) break;
+        }
+      };
+      for (const current of [...path].reverse()) {
+        invoke(current, true);
+        if (event.__propagationStopped) break;
+      }
+      if (!event.__propagationStopped) {
+        invoke(this, false);
+        if (event.bubbles !== false) {
+          for (const current of path.slice(1)) {
+            if (event.__propagationStopped) break;
+            invoke(current, false);
+          }
+        }
+      }
+      event.currentTarget = null;
+      return !event.defaultPrevented;
+    },
     setAttribute() {},
     toggleAttribute() {},
     removeAttribute() {},
@@ -41,6 +103,8 @@ function createElement(documentRef = () => null) {
       if (document) document.activeElement = this;
     },
   };
+  element.children = children;
+  element.__listeners = listeners;
   const record = (type, tokens) => {
     changes.push({ type, tokens: [...tokens] });
     if (type === 'add' && tokens.includes('hidden')) {
@@ -82,7 +146,8 @@ function createElement(documentRef = () => null) {
 function createWorkbench(root, options = {}) {
   const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
   let fixtureDocument = null;
-  const createFixtureElement = () => createElement(() => fixtureDocument);
+  const createFixtureElement = () => createElement(() => fixtureDocument, true);
+  const createDomElement = () => createElement(() => fixtureDocument, false);
   const elements = new Map();
   const element = selector => {
     if (!elements.has(selector)) elements.set(selector, createFixtureElement());
@@ -95,12 +160,40 @@ function createWorkbench(root, options = {}) {
   const documentListeners = new Map();
   const session = options.session || null;
   const remote = options.remote || null;
+  class FixtureWheelEvent {
+    constructor(type, init = {}) {
+      this.type = String(type || '');
+      this.bubbles = Boolean(init.bubbles);
+      this.cancelable = Boolean(init.cancelable);
+      this.deltaX = Number(init.deltaX) || 0;
+      this.deltaY = Number(init.deltaY) || 0;
+      this.deltaZ = Number(init.deltaZ) || 0;
+      this.deltaMode = Number(init.deltaMode) || 0;
+      this.ctrlKey = Boolean(init.ctrlKey);
+      this.shiftKey = Boolean(init.shiftKey);
+      this.altKey = Boolean(init.altKey);
+      this.metaKey = Boolean(init.metaKey);
+      this.defaultPrevented = false;
+      this.__propagationStopped = false;
+      this.__immediatePropagationStopped = false;
+    }
+    preventDefault() {
+      if (this.cancelable) this.defaultPrevented = true;
+    }
+    stopPropagation() {
+      this.__propagationStopped = true;
+    }
+    stopImmediatePropagation() {
+      this.__immediatePropagationStopped = true;
+      this.__propagationStopped = true;
+    }
+  }
   fixtureDocument = {
     body: createFixtureElement(),
     activeElement: null,
     hidden: options.visibilityState === 'hidden',
     visibilityState: options.visibilityState || 'visible',
-    createElement: createFixtureElement,
+    createElement: createDomElement,
     querySelector: element,
     querySelectorAll: () => [],
     getElementById: id => element(`#${id}`),
@@ -120,30 +213,90 @@ function createWorkbench(root, options = {}) {
     cancelAnimationFrame: options.cancelAnimationFrame || (() => {}),
     setInterval: () => 1,
     clearInterval() {},
-    setTimeout,
-    clearTimeout,
+    setTimeout: options.setTimeout || setTimeout,
+    clearTimeout: options.clearTimeout || clearTimeout,
     window: {
       cancelAnimationFrame: options.cancelAnimationFrame || (() => {}),
       WhiteboxI18n: { t: key => key },
+      WheelEvent: FixtureWheelEvent,
       Terminal: class FixtureTerminal {
         constructor() {
           this.writes = [];
+          this.wheelEvents = [];
           this.buffer = { active: { viewportY: 0, baseY: 0 } };
           this.options = { smoothScrollDuration: 100 };
           terminalInstances.push(this);
         }
         loadAddon() {}
         open(host) {
-          this.helperTextarea = createFixtureElement();
+          this.xtermElement = createDomElement();
+          this.xtermElement.className = 'xterm';
+          this.scrollableElement = createDomElement();
+          this.scrollableElement.className = 'xterm-scrollable-element';
+          this.screenElement = createDomElement();
+          this.screenElement.className = 'xterm-screen';
+          this.helperTextarea = createDomElement();
           this.helperTextarea.className = 'xterm-helper-textarea';
-          host.appendChild(this.helperTextarea);
+          host.appendChild(this.xtermElement);
+          this.xtermElement.appendChild(this.scrollableElement);
+          this.scrollableElement.appendChild(this.screenElement);
+          this.screenElement.appendChild(this.helperTextarea);
+          this.scrollableElement.addEventListener('wheel', event => {
+            this.wheelEvents.push(event);
+            const direction = Math.sign(Number(event.deltaY) || 0);
+            if (!direction || event.defaultPrevented) return;
+            this.scrollLines(direction * 3);
+            event.preventDefault();
+          }, { passive: false });
         }
-        onScroll() {}
+        onScroll(callback) { this.scrollHandler = callback; }
         onData(callback) { this.dataHandler = callback; }
         onResize() {}
         attachCustomKeyEventHandler(callback) { this.keyEventHandler = callback; }
         focus() { this.helperTextarea?.focus(); }
-        write(data, callback) { this.writes.push(String(data)); callback?.(); }
+        write(data, callback) {
+          this.writes.push(String(data));
+          if (Number.isFinite(options.remoteWriteBaseY)) {
+            this.buffer.active.baseY = Number(options.remoteWriteBaseY);
+            this.buffer.active.viewportY = Number(options.remoteWriteBaseY);
+            this.scrollHandler?.(this.buffer.active.viewportY);
+          }
+          callback?.();
+        }
+        clear() {}
+        reset() {
+          this.resetCalls = Number(this.resetCalls || 0) + 1;
+          this.buffer.active.viewportY = 0;
+          this.buffer.active.baseY = 0;
+          this.scrollHandler?.(0);
+        }
+        scrollLines(lines) {
+          const active = this.buffer.active;
+          active.viewportY = Math.max(0, Math.min(Number(active.baseY) || 0, Number(active.viewportY || 0) + Number(lines || 0)));
+          this.scrollHandler?.(active.viewportY);
+        }
+        scrollToTop() {
+          this.scrollToTopCalls = Number(this.scrollToTopCalls || 0) + 1;
+          this.scrollToTopDurations = [
+            ...(this.scrollToTopDurations || []),
+            this.options.smoothScrollDuration,
+          ];
+          if (this.options.smoothScrollDuration === 0) {
+            this.buffer.active.viewportY = 0;
+            this.scrollHandler?.(0);
+          }
+        }
+        scrollToLine(line) {
+          this.scrollToLineCalls = [...(this.scrollToLineCalls || []), Number(line)];
+          this.scrollToLineDurations = [
+            ...(this.scrollToLineDurations || []),
+            this.options.smoothScrollDuration,
+          ];
+          if (this.options.smoothScrollDuration === 0) {
+            this.buffer.active.viewportY = Number(line);
+            this.scrollHandler?.(this.buffer.active.viewportY);
+          }
+        }
         scrollToBottom() {
           this.scrollToBottomCalls = Number(this.scrollToBottomCalls || 0) + 1;
           this.scrollToBottomDurations = [
@@ -151,6 +304,7 @@ function createWorkbench(root, options = {}) {
             this.options.smoothScrollDuration,
           ];
           this.buffer.active.viewportY = this.buffer.active.baseY;
+          this.scrollHandler?.(this.buffer.active.viewportY);
         }
         dispose() {}
       },
@@ -167,6 +321,7 @@ function createWorkbench(root, options = {}) {
           terminalCalls.push([id, text, deliveryOptions]);
           return options.terminalCommandResult || { ok: true };
         },
+        tmuxCapture: options.tmuxCapture || (async () => null),
       },
     },
   };
@@ -182,18 +337,28 @@ function createWorkbench(root, options = {}) {
     commandDrafts: new Map(),
     commandDeliveries: new Map(),
     terminals: new Map(),
-    remoteTerminal: {
+    remoteTerminal: options.createRemoteTerminal ? null : {
       host: createFixtureElement(),
       terminal: { clear() {}, reset() {} },
       fit: { fit() {} },
       readOnly: true,
     },
+    remoteCapture: '',
+    remoteViewportAnchor: null,
+    remoteViewportAtBottom: false,
+    remoteWheelIdleUntil: 0,
+    remotePendingWheelEvents: [],
+    remoteCaptureRetryTimer: null,
+    remoteUserScrollRevision: 0,
+    remoteCaptureApplying: false,
+    captureInFlight: false,
     captureGeneration: 0,
+    captureRevision: 0,
     terminalSessionRevision: 0,
     terminalListRequestGeneration: 0,
     sessionOrder: [],
     sessionRenderKey: '',
-    active: false,
+    active: options.active === true,
     platform: { label: 'Test computer' },
   };
   const workbench = sandbox.window.WhiteboxTerminalWorkbench({
@@ -223,7 +388,17 @@ function createWorkbench(root, options = {}) {
     tmuxRows: () => options.tmuxRows || [],
     updateSnapshot() {},
   });
-  return { state, workbench, terminalCalls, rawWrites, terminalInstances, notices, elements, document: fixtureDocument };
+  return {
+    state,
+    workbench,
+    terminalCalls,
+    rawWrites,
+    terminalInstances,
+    notices,
+    elements,
+    document: fixtureDocument,
+    WheelEvent: FixtureWheelEvent,
+  };
 }
 
 function loadPreloadApi(root, invoke) {
@@ -364,6 +539,223 @@ function registerTerminalInteractionTests(context) {
     assert.equal(terminal.options.smoothScrollDuration, 100);
     assert.equal(entry.outputRestoreGeneration, 11,
       '사용자 scrollback의 output anchor generation을 fit이 변경했습니다.');
+  });
+
+  test('tmux 캡처는 자동 viewport 복원을 동기화하고 사용자 smooth-scroll 설정을 보존한다', async () => {
+    const remote = {
+      distro: { name: 'FixtureLinux' },
+      session: { name: 'workspace' },
+      window: { index: 0, name: 'main' },
+      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
+    };
+    let captureRevision = 0;
+    const { state, workbench, terminalInstances } = createWorkbench(root, {
+      remote,
+      active: true,
+      createRemoteTerminal: true,
+      remoteWriteBaseY: 64,
+      tmuxCapture: async () => ({ output: `capture-${++captureRevision}\n` }),
+    });
+
+    await workbench.captureRemote();
+    const terminal = terminalInstances[0];
+    assert.equal(terminal.buffer.active.viewportY, 0,
+      '첫 tmux 캡처의 smooth-scroll가 끝나기 전에 하단 viewport를 저장했습니다.');
+    assert.deepStrictEqual(terminal.scrollToTopDurations, [0],
+      '첫 캡처의 자동 top 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.equal(state.remoteViewportAnchor, 0);
+    assert.deepStrictEqual(
+      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
+      ['0', '64'],
+      '캡처 완료 표식이 reset/write 중간 좌표와 섞였습니다.',
+    );
+
+    terminal.buffer.active.viewportY = 17;
+    terminal.scrollHandler(17);
+    await workbench.captureRemote();
+    assert.equal(terminal.buffer.active.viewportY, 17,
+      '반복 캡처가 사용자가 선택한 scrollback 위치를 덮어썼습니다.');
+    assert.deepStrictEqual(terminal.scrollToLineCalls, [17]);
+    assert.deepStrictEqual(terminal.scrollToLineDurations, [0],
+      '사용자 viewport 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.deepStrictEqual(
+      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
+      ['17', '64'],
+      '반복 캡처 완료 표식이 복원 전 viewport를 노출했습니다.',
+    );
+
+    terminal.buffer.active.viewportY = terminal.buffer.active.baseY;
+    terminal.scrollHandler(terminal.buffer.active.baseY);
+    await workbench.captureRemote();
+    assert.equal(terminal.buffer.active.viewportY, terminal.buffer.active.baseY,
+      '하단을 보던 tmux 캡처가 새 출력의 하단을 따라가지 못했습니다.');
+    assert.deepStrictEqual(terminal.scrollToBottomDurations, [0],
+      '자동 tail 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
+    assert.equal(terminal.options.smoothScrollDuration, 100,
+      '자동 viewport 복원 뒤 일반 사용자 smooth-scroll 설정을 복원하지 않았습니다.');
+  });
+
+  test('tmux 캡처 적용 중 실제 Xterm wheel 입력은 한 번 큐에 보관한 뒤 같은 이벤트로 재생한다', async () => {
+    const remote = {
+      distro: { name: 'FixtureLinux' },
+      session: { name: 'workspace' },
+      window: { index: 0, name: 'main' },
+      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
+    };
+    const frames = [];
+    let captureNumber = 0;
+    const { state, workbench, terminalInstances, WheelEvent } = createWorkbench(root, {
+      remote,
+      active: true,
+      createRemoteTerminal: true,
+      remoteWriteBaseY: 64,
+      requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+      tmuxCapture: async () => ({ output: `capture-${++captureNumber}\n` }),
+    });
+    const waitForFrame = async () => {
+      for (let attempt = 0; attempt < 10 && !frames.length; attempt += 1) await Promise.resolve();
+      assert.equal(frames.length, 1, 'tmux 캡처 viewport 복원 프레임이 예약되지 않았습니다.');
+    };
+
+    const firstCapture = workbench.captureRemote();
+    await waitForFrame();
+    frames.shift()();
+    await firstCapture;
+
+    const terminal = terminalInstances[0];
+    terminal.buffer.active.viewportY = 17;
+    terminal.scrollHandler(17);
+    terminal.wheelEvents.length = 0;
+    const secondCapture = workbench.captureRemote();
+    await waitForFrame();
+    assert.equal(state.remoteCaptureApplying, true,
+      'wheel 경쟁을 재현하기 전에 tmux reset/write 적용 구간이 끝났습니다.');
+
+    const physicalWheel = new WheelEvent('wheel', {
+      deltaX: 4,
+      deltaY: -240,
+      deltaZ: 2,
+      deltaMode: 0,
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    terminal.screenElement.dispatchEvent(physicalWheel);
+    assert.equal(physicalWheel.defaultPrevented, true,
+      'reset/write 중 wheel이 빈 Xterm 버퍼로 전달되었습니다.');
+    assert.equal(terminal.wheelEvents.length, 0,
+      '캡처 적용 중 wheel을 Xterm smooth-scroll 처리기가 먼저 소비했습니다.');
+    assert.equal(state.remotePendingWheelEvents.length, 1,
+      '캡처 적용 중 wheel을 정확히 한 번 보관하지 않았습니다.');
+
+    frames.shift()();
+    await secondCapture;
+
+    assert.equal(state.remoteCaptureApplying, false);
+    assert.equal(state.remotePendingWheelEvents.length, 0,
+      '캡처 완료 뒤 재생한 wheel이 큐에 남았습니다.');
+    assert.equal(terminal.wheelEvents.length, 1,
+      '보관한 wheel이 Xterm에 정확히 한 번 재생되지 않았습니다.');
+    const replayedWheel = terminal.wheelEvents[0];
+    assert.ok(replayedWheel instanceof WheelEvent, '재생 입력이 실제 WheelEvent 형태가 아닙니다.');
+    assert.notStrictEqual(replayedWheel, physicalWheel, '취소된 원본 DOM 이벤트 객체를 다시 사용했습니다.');
+    assert.strictEqual(replayedWheel.target, terminal.screenElement,
+      '재생 wheel이 실제 포인터 표면인 .xterm-screen에서 시작하지 않았습니다.');
+    assert.deepStrictEqual(
+      [replayedWheel.deltaX, replayedWheel.deltaY, replayedWheel.deltaZ, replayedWheel.deltaMode],
+      [4, -240, 2, 0],
+      '재생 wheel의 delta를 원본과 동일하게 보존하지 않았습니다.',
+    );
+    assert.deepStrictEqual(
+      [replayedWheel.ctrlKey, replayedWheel.shiftKey, replayedWheel.altKey, replayedWheel.metaKey],
+      [true, true, false, true],
+      '재생 wheel의 modifier를 원본과 동일하게 보존하지 않았습니다.',
+    );
+    assert.equal(terminal.buffer.active.viewportY, 14,
+      '재생 wheel이 복원된 scrollback에서 Xterm 스크롤을 이어가지 못했습니다.');
+    assert.equal(state.remoteUserScrollRevision, 2,
+      '물리 wheel과 재생 wheel이 각각 한 번씩 관찰되지 않았습니다.');
+    assert.equal(terminal.options.smoothScrollDuration, 100,
+      'wheel 재생이 사용자 smooth-scroll 설정을 변경했습니다.');
+  });
+
+  test('tmux smooth wheel 유휴 구간에 도착한 새 캡처는 버퍼를 교체하지 않고 재시도 하나만 예약한다', async () => {
+    const remote = {
+      distro: { name: 'FixtureLinux' },
+      session: { name: 'workspace' },
+      window: { index: 0, name: 'main' },
+      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
+    };
+    let captureNumber = 0;
+    let timerSequence = 0;
+    const scheduledTimers = new Map();
+    const clearedTimers = [];
+    const { state, workbench, terminalInstances, WheelEvent } = createWorkbench(root, {
+      remote,
+      active: true,
+      createRemoteTerminal: true,
+      remoteWriteBaseY: 64,
+      tmuxCapture: async () => ({ output: `capture-${++captureNumber}\n` }),
+      setTimeout: (callback, delay) => {
+        const id = ++timerSequence;
+        scheduledTimers.set(id, { callback, delay });
+        return id;
+      },
+      clearTimeout: id => {
+        clearedTimers.push(id);
+        scheduledTimers.delete(id);
+      },
+    });
+
+    await workbench.captureRemote();
+    const terminal = terminalInstances[0];
+    terminal.wheelEvents.length = 0;
+    const userWheel = new WheelEvent('wheel', {
+      deltaY: 120,
+      deltaMode: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    terminal.screenElement.dispatchEvent(userWheel);
+    assert.equal(terminal.wheelEvents.length, 1,
+      '유휴 구간을 시작한 실제 wheel이 Xterm 처리기에 도달하지 않았습니다.');
+    assert.ok(state.remoteWheelIdleUntil > Date.now(),
+      'wheel 뒤 smooth-scroll 완료 유예 시간이 설정되지 않았습니다.');
+
+    const before = {
+      capture: state.remoteCapture,
+      captureRevision: state.captureRevision,
+      resetCalls: terminal.resetCalls,
+      writes: terminal.writes.length,
+    };
+    await workbench.captureRemote();
+
+    assert.equal(captureNumber, 2, '새 tmux 캡처 결과를 실제로 조회하지 않았습니다.');
+    assert.equal(state.remoteCapture, before.capture,
+      'smooth-scroll 유휴 구간의 결과가 현재 캡처로 확정되었습니다.');
+    assert.equal(state.captureRevision, before.captureRevision,
+      '버린 캡처가 완료 revision을 올렸습니다.');
+    assert.equal(terminal.resetCalls, before.resetCalls,
+      'smooth-scroll 유휴 구간에 Xterm 버퍼를 reset했습니다.');
+    assert.equal(terminal.writes.length, before.writes,
+      'smooth-scroll 유휴 구간에 새 캡처를 Xterm에 썼습니다.');
+    assert.equal(scheduledTimers.size, 1,
+      'smooth-scroll 완료 뒤 캡처 재시도를 정확히 하나 예약하지 않았습니다.');
+    const [[retryTimerId, retryTimer]] = [...scheduledTimers.entries()];
+    assert.strictEqual(state.remoteCaptureRetryTimer, retryTimerId);
+    assert.ok(retryTimer.delay > 0 && retryTimer.delay <= 134,
+      '재시도가 smooth-scroll 및 두 프레임 유예 범위를 벗어났습니다.');
+
+    workbench.stopCapture();
+    assert.equal(state.remoteCaptureRetryTimer, null);
+    assert.equal(state.remoteWheelIdleUntil, 0);
+    assert.equal(state.remotePendingWheelEvents.length, 0);
+    assert.deepStrictEqual(clearedTimers, [retryTimerId],
+      '캡처 중단 시 예약된 wheel 유휴 재시도를 취소하지 않았습니다.');
+    assert.equal(scheduledTimers.size, 0);
   });
 
   test('host reconnect로 xterm을 교체하면 사용 중이던 PTY 입력 포커스를 조건부 복원한다', async () => {

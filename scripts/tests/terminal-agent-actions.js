@@ -3592,16 +3592,19 @@ function registerTerminalAgentActionTests(context) {
     };
     const listeners = new Map();
     const frames = new Map();
+    const timers = new Map();
     const observers = [];
     const targets = new Map();
     const opened = [];
     const submissions = [];
     const errors = [];
     let nextFrame = 1;
+    let nextTimer = 1;
     let embedded = {};
     let activeForm = null;
     let drawerOpen = false;
     let preserveFormOnOpen = false;
+    let deferDrawerOwnership = false;
 
     const composer = {
       dataset: { mode: 'terminal' },
@@ -3632,6 +3635,21 @@ function registerTerminalAgentActionTests(context) {
       return id;
     };
     const cancelFrame = id => frames.delete(id);
+    const setTimer = (callback, delay = 0) => {
+      const id = nextTimer++;
+      timers.set(id, { callback, delay });
+      return id;
+    };
+    const clearTimer = id => timers.delete(id);
+    const runRetryTimer = () => {
+      const entry = [...timers.entries()]
+        .filter(([, timer]) => timer.delay < 30_000)
+        .sort((left, right) => left[1].delay - right[1].delay)[0];
+      assert.ok(entry, '빠른 응답 재시도 timer가 예약되어야 합니다.');
+      const [id, timer] = entry;
+      timers.delete(id);
+      timer.callback();
+    };
     const flushFrames = () => {
       let turns = 0;
       while (frames.size) {
@@ -3670,8 +3688,8 @@ function registerTerminalAgentActionTests(context) {
       MutationObserver: FakeMutationObserver,
       requestAnimationFrame: requestFrame,
       cancelAnimationFrame: cancelFrame,
-      setTimeout,
-      clearTimeout,
+      setTimeout: setTimer,
+      clearTimeout: clearTimer,
     };
     vm.runInNewContext(source, sandbox, { filename: 'app-agent-actions.js' });
     const actions = windowObject.WhiteboxAppFactories.createAgentActions({
@@ -3681,6 +3699,7 @@ function registerTerminalAgentActionTests(context) {
       toast: () => {},
       openDrawer: sessionId => {
         opened.push(sessionId);
+        if (deferDrawerOwnership) return;
         state.selectedId = sessionId;
         state.drawerMode = 'session';
         state.drawerTab = 'chat';
@@ -3693,11 +3712,24 @@ function registerTerminalAgentActionTests(context) {
         notifyMutation();
       },
     });
+    const completeDrawerOpen = sessionId => {
+      state.selectedId = sessionId;
+      state.drawerMode = 'session';
+      state.drawerTab = 'chat';
+      drawerOpen = true;
+      drawer.dataset.mode = 'session';
+      drawer.dataset.terminalChat = 'true';
+      drawer.dataset.conversationSurface = 'connecting';
+      if (!preserveFormOnOpen) activeForm = null;
+      embedded = {};
+      notifyMutation();
+    };
     const connectForm = (sessionId, terminalId) => {
       const input = { value: '', disabled: false, dataset: { agentCommandDraft: sessionId } };
       const submit = { disabled: false };
       const form = {
         sessionId,
+        isConnected: true,
         dataset: {
           agentCommandForm: sessionId,
           agentCommandProvider: sessionId.split(':')[0],
@@ -3734,11 +3766,14 @@ function registerTerminalAgentActionTests(context) {
       noFormRoot: { querySelector: () => null },
       requestFrame,
       flushFrames,
+      runRetryTimer,
       notifyMutation,
       dispatchTerminalChange,
       connectForm,
       setEmbedded(value) { embedded = { ...(value || {}) }; },
       setPreserveFormOnOpen(value) { preserveFormOnOpen = Boolean(value); },
+      setDeferDrawerOwnership(value) { deferDrawerOwnership = Boolean(value); },
+      completeDrawerOpen,
       switchDrawer(sessionId) {
         state.selectedId = sessionId;
         state.drawerMode = 'session';
@@ -3787,6 +3822,106 @@ function registerTerminalAgentActionTests(context) {
       command: '승인하고 계속해 주세요.',
     }]);
     assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '승인하고 계속해 주세요.');
+    assert.deepStrictEqual(harness.errors, []);
+  });
+
+  test('빠른 응답은 이전 embedded PTY 정리로 drawer 소유권 전환이 늦어져도 한 번 제출한다', () => {
+    const harness = createQuickResponseHarness();
+    const target = {
+      id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
+    };
+    harness.setDeferDrawerOwnership(true);
+
+    harness.actions.quickRespond(harness.sessionA.id, 'drawer 전환 뒤 한 번만 전달', harness.noFormRoot);
+    harness.flushFrames();
+    assert.deepStrictEqual(harness.submissions, [], '자기 drawer를 소유하기 전에는 제출하면 안 됩니다.');
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
+
+    harness.setDeferDrawerOwnership(false);
+    harness.completeDrawerOpen(harness.sessionA.id);
+    harness.targets.set(harness.sessionA.id, [target]);
+    harness.connectForm(harness.sessionA.id, target.terminalId);
+    harness.flushFrames();
+
+    assert.deepStrictEqual(harness.submissions, [{
+      sessionId: harness.sessionA.id,
+      terminalId: target.terminalId,
+      command: 'drawer 전환 뒤 한 번만 전달',
+    }]);
+    assert.deepStrictEqual(harness.errors, []);
+  });
+
+  test('빠른 응답은 마지막 ready 이벤트 뒤 signed target 상태가 늦게 반영되어도 bounded retry로 한 번만 제출한다', () => {
+    const harness = createQuickResponseHarness();
+    const target = {
+      id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
+    };
+
+    harness.actions.quickRespond(harness.sessionA.id, '늦은 target에도 한 번만 전달', harness.noFormRoot);
+    harness.actions.quickRespond(harness.sessionA.id, '두 번째 클릭은 무시', harness.noFormRoot);
+    harness.flushFrames();
+
+    harness.connectForm(harness.sessionA.id, target.terminalId);
+    harness.dispatchTerminalChange(harness.sessionA.id);
+    harness.flushFrames();
+    assert.deepStrictEqual(harness.submissions, [], 'signed target이 보이기 전에는 제출하면 안 됩니다.');
+
+    // Reproduce the production race: the final DOM/PTY notification already
+    // ran, then the in-memory signed target becomes visible without a new event.
+    harness.targets.set(harness.sessionA.id, [target]);
+    harness.runRetryTimer();
+    harness.flushFrames();
+    harness.dispatchTerminalChange(harness.sessionA.id);
+    harness.flushFrames();
+
+    assert.deepStrictEqual(harness.submissions, [{
+      sessionId: harness.sessionA.id,
+      terminalId: target.terminalId,
+      command: '늦은 target에도 한 번만 전달',
+    }]);
+    assert.deepStrictEqual(harness.errors, []);
+  });
+
+  test('PTY 전용 drawer는 중복 composer 없이 확인함의 원래 form으로 빠른 응답을 한 번 제출한다', () => {
+    const harness = createQuickResponseHarness();
+    const target = {
+      id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
+    };
+    const form = harness.connectForm(harness.sessionA.id, target.terminalId);
+    form.closest = () => null;
+    form.dataset.agentCommandInputModeSelected = 'conversation';
+    form.dataset.agentTerminalReady = 'false';
+    form.dataset.agentSendAvailable = 'false';
+    harness.setEmbedded({ connected: false, agentSessionId: harness.sessionA.id, terminalId: target.terminalId });
+    const managementRoot = { querySelector: () => form };
+
+    harness.actions.quickRespond(harness.sessionA.id, '원래 확인함에서 한 번만 전달', managementRoot);
+    harness.flushFrames();
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
+    assert.deepStrictEqual(harness.submissions, []);
+
+    harness.targets.set(harness.sessionA.id, [target]);
+    form.dataset.agentTerminalReady = 'true';
+    form.dataset.agentSendAvailable = 'true';
+    harness.setEmbedded({ connected: true, agentSessionId: harness.sessionA.id, terminalId: 'terminal:wrong' });
+    harness.drawerRoot.dataset.conversationSurface = 'pty';
+    harness.notifyMutation();
+    harness.dispatchTerminalChange(harness.sessionA.id);
+    harness.flushFrames();
+    assert.deepStrictEqual(harness.submissions, [], '다른 embedded PTY에는 원래 확인함 form을 제출하면 안 됩니다.');
+
+    harness.setEmbedded({ connected: true, agentSessionId: harness.sessionA.id, terminalId: target.terminalId });
+    harness.notifyMutation();
+    harness.dispatchTerminalChange(harness.sessionA.id);
+    harness.flushFrames();
+    harness.dispatchTerminalChange(harness.sessionA.id);
+    harness.flushFrames();
+
+    assert.deepStrictEqual(harness.submissions, [{
+      sessionId: harness.sessionA.id,
+      terminalId: target.terminalId,
+      command: '원래 확인함에서 한 번만 전달',
+    }]);
     assert.deepStrictEqual(harness.errors, []);
   });
 

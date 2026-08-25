@@ -699,7 +699,8 @@ function registerCliAndUpdateTests(context) {
       { version: '1.7.5', env: 'WHITEBOX_V175_INSTALLER', installMode: 'automatic' },
     ]);
     const previousFixed = manifest.previousFixed;
-    assert.equal(previousFixed.version, '1.7.6');
+    assert.equal(compareVersions(previousFixed.version, cohorts.at(-1).version), 1,
+      'previousFixed must be newer than every immutable frozen cohort.');
     assert.equal(cohorts.some(cohort => cohort.version === previousFixed.version), false,
       'previousFixed is a public-channel attestation, not a frozen source attempt.');
     const latestRelease = {

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full Whitebox commit SHA to build and verify from the official v1.7.3, v1.7.4, and fixed v1.7.5 installers
+        description: Full SHA to verify frozen 1.7.3-1.7.5, previous fixed, legacy bridge, and candidate self-reinstall paths
         required: true
         type: string
 

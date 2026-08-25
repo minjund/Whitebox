@@ -339,7 +339,19 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     });
     $("#attentionInbox").addEventListener("input", (event) => {
       const input = event.target.closest("[data-agent-command-draft]");
-      if (input) state.agentCommandDrafts.set(input.dataset.agentCommandDraft, input.value);
+      if (!input) return;
+      state.agentCommandDrafts.set(input.dataset.agentCommandDraft, input.value);
+      const form = input.closest("form");
+      const count = form?.querySelector("[data-conversation-draft-count]");
+      if (count) {
+        count.textContent = window.WhiteboxI18n.t("agent.input_count", { count: input.value.length.toLocaleString() });
+        count.classList.toggle("hidden", input.value.length < 7200);
+        count.classList.toggle("limit-near", input.value.length >= 7800);
+      }
+      const submit = form?.querySelector(".conversation-send");
+      if (submit && !submit.matches('[aria-busy="true"]')) {
+        submit.disabled = form.dataset.agentSendAvailable !== "true" || !input.value.trim();
+      }
     });
     $("#attentionInbox").addEventListener("change", (event) => {
       const picker = event.target.closest("[data-agent-command-target]");

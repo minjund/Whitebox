@@ -5,6 +5,8 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const RAW_INPUT_BATCH_CHARS = 128 * 1024;
   const MAX_RAW_INPUT_QUEUE_CHARS = 512 * 1024;
+  const MAX_PENDING_REMOTE_WHEEL_EVENTS = 32;
+  const REMOTE_WHEEL_FRAME_SETTLE_MS = 34;
   const {
     $, state, notice, setConnectionState, currentSession, currentTmux, saveCurrentDraft, restoreCurrentDraft,
     renderHistoryPanel, terminalTypeMark, terminalTypeLabel, providerLabel, xtermOptions, preferredWorkspace, firstDistro, guarded,
@@ -245,6 +247,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const syncScrollState = viewportY => {
       const normalizedViewport = Number(viewportY) || 0;
       const baseY = Number(terminal.buffer.active.baseY) || 0;
+      // A remote capture replaces the entire xterm buffer. Do not publish the
+      // transient reset/write coordinates as a completed viewport: observers
+      // could otherwise pair the previous capture revision with baseY=0.
+      if (readOnly && state.remoteCaptureApplying) return;
       host.dataset.viewportY = String(normalizedViewport);
       host.dataset.baseY = String(baseY);
       // Xterm may consume wheel events before they bubble to the host. Its
@@ -257,7 +263,33 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     };
     terminal.onScroll(syncScrollState);
     syncScrollState(0);
-    if (!readOnly) {
+    if (readOnly) {
+      host.addEventListener('wheel', event => {
+        state.remoteUserScrollRevision = Number(state.remoteUserScrollRevision || 0) + 1;
+        const smoothDuration = Math.max(0, Number(terminal.options?.smoothScrollDuration) || 0);
+        state.remoteWheelIdleUntil = Date.now() + smoothDuration + REMOTE_WHEEL_FRAME_SETTLE_MS;
+        if (!state.remoteCaptureApplying) return;
+        // reset/write temporarily leaves the replacement buffer without usable
+        // scrollback. Hold wheel input and replay it against the completed xterm
+        // instead of letting the event disappear against baseY=0.
+        event.preventDefault();
+        event.stopPropagation();
+        const queue = Array.isArray(state.remotePendingWheelEvents)
+          ? state.remotePendingWheelEvents
+          : (state.remotePendingWheelEvents = []);
+        if (queue.length >= MAX_PENDING_REMOTE_WHEEL_EVENTS) queue.shift();
+        queue.push({
+          deltaX: Number(event.deltaX) || 0,
+          deltaY: Number(event.deltaY) || 0,
+          deltaZ: Number(event.deltaZ) || 0,
+          deltaMode: Number(event.deltaMode) || 0,
+          ctrlKey: Boolean(event.ctrlKey),
+          shiftKey: Boolean(event.shiftKey),
+          altKey: Boolean(event.altKey),
+          metaKey: Boolean(event.metaKey),
+        });
+      }, { capture: true, passive: false });
+    } else {
       const rememberUserScroll = () => { entry.userScrollRevision += 1; };
       host.addEventListener('wheel', event => {
         const deltaY = Number(event.deltaY) || 0;
@@ -306,22 +338,27 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return entry;
   }
 
-  function scrollToBottomImmediately(terminal) {
+  function scrollImmediately(terminal, action) {
     const options = terminal?.options;
     if (!options) {
-      terminal?.scrollToBottom();
+      action();
       return;
     }
     const smoothScrollDuration = options.smoothScrollDuration;
     try {
-      // Public xterm scrollToBottom honors smoothScrollDuration. A resize sync
-      // can cancel that animation and restore the pre-fit ydisp, so automatic
-      // follow must be synchronous while ordinary user scrolling stays smooth.
+      // Public xterm viewport methods honor smoothScrollDuration. A later
+      // capture or resize can cancel that animation and retain the pre-scroll
+      // ydisp, so automatic restoration must finish synchronously while
+      // ordinary user scrolling stays smooth.
       options.smoothScrollDuration = 0;
-      terminal.scrollToBottom();
+      action();
     } finally {
       options.smoothScrollDuration = smoothScrollDuration;
     }
+  }
+
+  function scrollToBottomImmediately(terminal) {
+    scrollImmediately(terminal, () => terminal.scrollToBottom());
   }
 
   function fitEntry(entry, _sessionId = '') {
@@ -873,6 +910,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     }
     const row = tmuxRows().find(item => item.distro.name === distroName && item.pane.nativeId === paneId);
     if (!row) return notice(t('terminal.error.selected_split_missing'), 'error');
+    clearRemoteWheelState();
     saveCurrentDraft();
     const generation = ++state.captureGeneration;
     if (interactionMode) state.interactionMode = interactionMode;
@@ -995,21 +1033,66 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     await selectSession(created.id);
   }
 
+  function clearRemoteWheelState() {
+    if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
+    state.remoteCaptureRetryTimer = null;
+    state.remoteWheelIdleUntil = 0;
+    state.remotePendingWheelEvents = [];
+  }
+
+  function scheduleRemoteCaptureRetry(delayMs) {
+    if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
+    state.remoteCaptureRetryTimer = setTimeout(() => {
+      state.remoteCaptureRetryTimer = null;
+      captureRemote();
+    }, Math.max(1, Math.ceil(Number(delayMs) || 0)));
+  }
+
+  function replayRemoteWheelEvents(entry, events) {
+    if (!entry || !events.length || typeof window.WheelEvent !== 'function') return;
+    // Replay from the surface a physical pointer wheel targets. The event then
+    // bubbles through Xterm's overlaid scrollable element into its smooth-wheel
+    // handler by the same route as real input.
+    const target = entry.host.querySelector?.('.xterm-screen')
+      || entry.host.querySelector?.('.xterm-scrollable-element')
+      || entry.host.querySelector?.('.xterm');
+    if (!target) return;
+    for (const event of events) {
+      target.dispatchEvent(new window.WheelEvent('wheel', {
+        ...event,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+  }
+
   async function captureRemote() {
     if (state.captureInFlight) return;
     const remote = currentTmux();
     if (!remote || !state.active || state.selectedId) return;
     const captureKey = `${remote.distro.name}:${remote.pane.nativeId}`;
     const captureGeneration = state.captureGeneration;
+    let appliedEntry = null;
     state.captureInFlight = true;
     try {
       const result = await guarded(() => window.whitebox.tmuxCapture({ distro: remote.distro.name, target: remote.pane.nativeId, lines: 1_500 }));
       const current = currentTmux();
-      if (!current || `${current.distro.name}:${current.pane.nativeId}` !== captureKey) return;
+      if (!state.active || captureGeneration !== state.captureGeneration || state.selectedId
+        || !current || `${current.distro.name}:${current.pane.nativeId}` !== captureKey) return;
       if (!result || typeof result.output !== 'string' || result.output === state.remoteCapture) return;
+      const wheelSettleRemaining = Number(state.remoteWheelIdleUntil || 0) - Date.now();
+      if (wheelSettleRemaining > 0) {
+        // Discard this now-stale capture. Applying it would reset xterm in the
+        // middle of its smooth wheel animation and cut off the user's target.
+        scheduleRemoteCaptureRetry(wheelSettleRemaining);
+        return;
+      }
+      if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
+      state.remoteCaptureRetryTimer = null;
       const firstCapture = !state.remoteCapture;
       state.remoteCapture = result.output;
       const entry = ensureRemoteTerminal();
+      appliedEntry = entry;
       const buffer = entry.terminal.buffer.active;
       const previousViewport = state.remoteViewportAnchor == null
         ? Number(buffer && buffer.viewportY || 0)
@@ -1031,12 +1114,18 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         try {
           const latest = currentTmux();
           if (captureGeneration !== state.captureGeneration || !latest || `${latest.distro.name}:${latest.pane.nativeId}` !== captureKey) return;
-          if (firstCapture) entry.terminal.scrollToTop();
-          else if (state.remoteViewportAnchor == null ? wasAtBottom : state.remoteViewportAtBottom) entry.terminal.scrollToBottom();
-          else entry.terminal.scrollToLine(state.remoteViewportAnchor == null ? previousViewport : state.remoteViewportAnchor);
+          if (firstCapture) scrollImmediately(entry.terminal, () => entry.terminal.scrollToTop());
+          else if (state.remoteViewportAnchor == null ? wasAtBottom : state.remoteViewportAtBottom) {
+            scrollToBottomImmediately(entry.terminal);
+          } else {
+            const viewportAnchor = state.remoteViewportAnchor == null ? previousViewport : state.remoteViewportAnchor;
+            scrollImmediately(entry.terminal, () => entry.terminal.scrollToLine(viewportAnchor));
+          }
           const restoredBuffer = entry.terminal.buffer.active;
           state.remoteViewportAnchor = Number(restoredBuffer.viewportY) || 0;
           state.remoteViewportAtBottom = !firstCapture && state.remoteViewportAnchor >= Number(restoredBuffer.baseY || 0);
+          entry.host.dataset.viewportY = String(state.remoteViewportAnchor);
+          entry.host.dataset.baseY = String(Number(restoredBuffer.baseY) || 0);
           state.captureRevision += 1;
           entry.host.dataset.captureRevision = String(state.captureRevision);
         } catch (error) {
@@ -1048,11 +1137,21 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     } finally {
       state.remoteCaptureApplying = false;
       state.captureInFlight = false;
+      const pendingWheelEvents = Array.isArray(state.remotePendingWheelEvents)
+        ? state.remotePendingWheelEvents.splice(0)
+        : [];
+      const selected = currentTmux();
+      if (appliedEntry && pendingWheelEvents.length
+        && state.active && captureGeneration === state.captureGeneration && !state.selectedId
+        && selected && `${selected.distro.name}:${selected.pane.nativeId}` === captureKey) {
+        replayRemoteWheelEvents(appliedEntry, pendingWheelEvents);
+      }
     }
   }
 
   function startCapture() {
-    stopCapture();
+    if (state.captureTimer) clearInterval(state.captureTimer);
+    state.captureTimer = null;
     captureRemote();
     state.captureTimer = setInterval(captureRemote, 1_000);
   }
@@ -1060,6 +1159,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   function stopCapture() {
     if (state.captureTimer) clearInterval(state.captureTimer);
     state.captureTimer = null;
+    clearRemoteWheelState();
   }
 
   async function sendCommand(command) {

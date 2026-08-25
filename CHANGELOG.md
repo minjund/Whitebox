@@ -5,6 +5,16 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.9 - 2026-08-25
+
+- Preserve the user's real Xterm wheel position while a remote tmux capture is
+  refreshed, deferring stale buffer replacement until smooth scrolling settles.
+- Deliver review quick responses exactly once through the matching signed PTY
+  or its original inbox form, without crossing into another conversation.
+- Keep the review composer character count and send availability synchronized,
+  and expand interaction coverage for custom answers, completed helpers, and
+  coordination details.
+
 ## 1.7.8 - 2026-08-25
 
 Includes everything prepared for 1.7.7, whose tag was created but never
