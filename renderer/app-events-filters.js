@@ -30,19 +30,29 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       );
       $("#resetFiltersBtn").classList.toggle("hidden", !hasFilters);
     };
-    const moveFocus = (event, container, selector, previousKeys, nextKeys) => {
+    const setRovingTreeItem = (container, item) => {
+      if (!container || !item) return;
+      container.querySelectorAll('[role="treeitem"]').forEach((candidate) => {
+        candidate.tabIndex = candidate === item ? 0 : -1;
+      });
+    };
+    const moveFocus = (event, container, selector, previousKeys, nextKeys, { wrap = true, roving = false } = {}) => {
       if (![...previousKeys, ...nextKeys, "Home", "End"].includes(event.key)) return false;
       const items = Array.from(container.querySelectorAll(selector)).filter((item) => (
         !item.disabled && !item.hidden && !item.closest("[hidden]")
       ));
       if (!items.length) return false;
       const current = Math.max(0, items.indexOf(event.target.closest(selector)));
-      const next = event.key === "Home"
+      const requested = event.key === "Home"
         ? 0
         : event.key === "End"
           ? items.length - 1
-          : (current + (nextKeys.includes(event.key) ? 1 : -1) + items.length) % items.length;
+          : current + (nextKeys.includes(event.key) ? 1 : -1);
+      const next = wrap
+        ? (requested + items.length) % items.length
+        : Math.max(0, Math.min(items.length - 1, requested));
       event.preventDefault();
+      if (roving) setRovingTreeItem(container, items[next]);
       items[next].focus();
       return true;
     };
@@ -166,8 +176,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         const announcement = projectToggle.getAttribute("aria-label") || "";
         renderWorkspaces();
         saveDashboardPreferences();
-        requestAnimationFrame(() => Array.from(activeList.querySelectorAll("[data-sidebar-project-toggle]"))
-          .find((item) => item.dataset.sidebarProjectToggle === projectKey)?.focus({ preventScroll: true }));
+        requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-project-key="${CSS.escape(projectKey)}"] .project-sidebar-item[role="treeitem"]`)
+          ?.focus({ preventScroll: true }));
         if (announcement) announce(announcement);
         return;
       }
@@ -185,8 +195,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         const announcement = sourceToggle.getAttribute("aria-label") || "";
         renderWorkspaces();
         saveDashboardPreferences();
-        requestAnimationFrame(() => Array.from(activeList.querySelectorAll("[data-sidebar-source-toggle]"))
-          .find((item) => item.dataset.sidebarSourceToggle === sourceKey)?.focus({ preventScroll: true }));
+        requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-source-key="${CSS.escape(sourceKey)}"] .project-sidebar-source-filter[role="treeitem"]`)
+          ?.focus({ preventScroll: true }));
         if (announcement) announce(announcement);
         return;
       }
@@ -224,9 +234,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         announce(window.WhiteboxI18n.t("quality.workspace_removed", { name: path.split(/[\\/]/).filter(Boolean).pop() || path }));
         return;
       }
-      const item = event.target.closest("[data-workspace]");
+      const item = event.target.closest("[data-workspace], [data-source-workspace]");
       if (item) {
-        const requestedWorkspace = item.dataset.workspace;
+        const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;
         const requestedSource = item.dataset.projectSource || "all";
         const canToggleToAll = activeList.id !== "projectSidebarList";
         const toggleToAll = canToggleToAll && requestedWorkspace !== "all"
@@ -304,13 +314,94 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
     bindSortableSidebarProjects($("#projectSidebarList"));
     workspaceLists.forEach((list) => {
       list.addEventListener("click", handleWorkspaceClick);
+      if (list.id === "projectSidebarList") {
+        list.addEventListener("focusin", (event) => {
+          const treeItem = event.target.closest('[role="treeitem"]');
+          if (treeItem && list.contains(treeItem)) setRovingTreeItem(list, treeItem);
+        });
+      }
       list.addEventListener("keydown", (event) => {
         if (event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        if (event.currentTarget.id === "projectSidebarList" && event.key === "Delete") {
+          const treeItem = event.target.closest('[role="treeitem"][aria-level="1"]');
+          const remove = treeItem?.closest(".project-sidebar-project")?.querySelector("[data-remove-workspace]");
+          if (!remove) return;
+          event.preventDefault();
+          event.stopPropagation();
+          remove.click();
+          return;
+        }
+        if (event.currentTarget.id === "projectSidebarList" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+          const tree = event.currentTarget;
+          const treeItem = event.target.closest('[role="treeitem"]');
+          if (!treeItem) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const level = Number(treeItem.getAttribute("aria-level") || 0);
+          const expanded = treeItem.getAttribute("aria-expanded");
+          const ownedGroupId = treeItem.getAttribute("aria-owns") || "";
+          const rememberTreeItem = () => ({
+            level,
+            projectRef: String(treeItem.dataset.sidebarProjectRef || ""),
+            sourceRef: String(treeItem.dataset.sidebarSourceRef || ""),
+            sessionId: String(treeItem.dataset.openSession || ""),
+          });
+          const focusRememberedTreeItem = (identity) => requestAnimationFrame(() => {
+            const target = Array.from(tree.querySelectorAll('[role="treeitem"]')).find((candidate) => (
+              Number(candidate.getAttribute("aria-level") || 0) === identity.level
+              && String(candidate.dataset.sidebarProjectRef || "") === identity.projectRef
+              && String(candidate.dataset.sidebarSourceRef || "") === identity.sourceRef
+              && String(candidate.dataset.openSession || "") === identity.sessionId
+            ));
+            target?.focus({ preventScroll: true });
+          });
+          const toggleOwnedGroup = () => {
+            if (!ownedGroupId) return false;
+            const toggle = Array.from(tree.querySelectorAll("[aria-controls]")).find((candidate) => (
+              candidate.getAttribute("aria-controls") === ownedGroupId
+            ));
+            if (!toggle) return false;
+            const identity = rememberTreeItem();
+            toggle.click();
+            focusRememberedTreeItem(identity);
+            return true;
+          };
+          if (event.key === "ArrowRight") {
+            if (expanded === "false") {
+              if (!toggleOwnedGroup()) return;
+            } else if (expanded === "true") {
+              const child = document.getElementById(ownedGroupId)?.querySelector('[role="treeitem"]');
+              if (!child) return;
+              child.focus({ preventScroll: true });
+            } else {
+              return;
+            }
+          } else if (expanded === "true") {
+            if (!toggleOwnedGroup()) return;
+          } else {
+            const parent = level === 3
+              ? treeItem.closest(".project-sidebar-source")?.querySelector('.project-sidebar-source-filter[role="treeitem"]')
+              : level === 2
+                ? treeItem.closest(".project-sidebar-project")?.querySelector('.project-sidebar-item[role="treeitem"]')
+                : null;
+            if (!parent) return;
+            parent.focus({ preventScroll: true });
+          }
+          return;
+        }
         const horizontal = event.currentTarget.id === "workspaceList";
         const selector = event.currentTarget.id === "projectSidebarList"
-          ? "[data-sidebar-project-toggle], [data-sidebar-source-toggle], [data-workspace], [data-open-session]"
+          ? '[role="treeitem"]'
           : "[data-workspace]";
-        moveFocus(event, event.currentTarget, selector, horizontal ? ["ArrowLeft", "ArrowUp"] : ["ArrowUp"], horizontal ? ["ArrowRight", "ArrowDown"] : ["ArrowDown"]);
+        const tree = event.currentTarget.id === "projectSidebarList";
+        moveFocus(
+          event,
+          event.currentTarget,
+          selector,
+          horizontal ? ["ArrowLeft", "ArrowUp"] : ["ArrowUp"],
+          horizontal ? ["ArrowRight", "ArrowDown"] : ["ArrowDown"],
+          { wrap: !tree, roving: tree },
+        );
       });
     });
     $("#projectHistoryRail")?.addEventListener("click", (event) => {
@@ -563,7 +654,13 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       if (window.WhiteboxTerminal) window.WhiteboxTerminal.updateSnapshot(visibleSnapshot(), state.workspaces);
       render("filter");
       const source = (state.sourcePlugins || []).find((item) => item.id === pluginId);
-      const label = source?.source?.label || (pluginId === "builtin.opencode" ? "OpenCode" : "Aside");
+      const fallbackLabels = {
+        "builtin.opencode": "OpenCode",
+        "builtin.aside": "Aside",
+        "builtin.claude-desktop": "Claude Desktop",
+        "builtin.codex-desktop": "Codex Desktop",
+      };
+      const label = source?.source?.label || fallbackLabels[pluginId] || pluginId;
       const activationWarning = String(result.warning || "").trim();
       const toastKey = activationWarning
         ? "settings.plugins.activation_warning"
@@ -621,6 +718,10 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         && !dismissedPath.startsWith(`${selectedKey}/`)
       )));
       saveProjectDismissals();
+      if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
+      if (!(state.sidebarCollapsedSources instanceof Set)) state.sidebarCollapsedSources = new Set();
+      state.sidebarCollapsedProjects.delete(selectedKey);
+      state.sidebarCollapsedSources.delete(`${selectedKey}::direct`);
       state.workspace = selected.path;
       state.workspaceSource = "direct";
       state.visibleLimit = 30;
@@ -637,8 +738,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           : trigger.id === "sidebarNewProjectBtn"
             ? $("#projectSidebarList")
             : $("#workspaceList");
+        const workspaceAttribute = trigger.id === "sidebarNewProjectBtn" ? "data-source-workspace" : "data-workspace";
         const sourceSelector = trigger.id === "sidebarNewProjectBtn" ? '[data-project-source="direct"]' : "";
-        targetList?.querySelector(`[data-workspace="${CSS.escape(selected.path)}"]${sourceSelector}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        targetList?.querySelector(`[${workspaceAttribute}="${CSS.escape(selected.path)}"]${sourceSelector}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
       });
     };
     addWorkspaceButtons.forEach((button) => button.addEventListener("click", addWorkspace));

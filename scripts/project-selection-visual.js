@@ -54,7 +54,7 @@ app.whenReady().then(async () => {
         && window.WhiteboxApp.state.workspace === 'all'
         && !document.querySelector('#projectSelectionPrompt')?.classList.contains('hidden')
         && document.querySelector('#projectSelectionPrompt h2')?.textContent.trim() === '프로젝트를 선택해주세요'
-        && document.querySelectorAll('#projectSidebarList [data-workspace]').length >= 2)`,
+        && document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length >= 2)`,
       '프로젝트 선택 초기 화면이 준비되지 않았습니다.',
     );
 
@@ -133,26 +133,26 @@ app.whenReady().then(async () => {
         && getComputedStyle(element).display !== 'none'
         && element.getBoundingClientRect().width > 0
         && element.getBoundingClientRect().height > 0);
-      const projectOrder = [...document.querySelectorAll('#projectSidebarList [data-workspace][data-project-priority]')]
+      const projectItems = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')];
+      const projectOrder = projectItems
         .map(project => ({
+          key: project.dataset.sidebarProjectRef || '',
           name: project.querySelector('.project-sidebar-copy strong')?.textContent.trim() || '',
           initial: project.querySelector('.project-sidebar-icon')?.textContent.trim() || '',
           priority: project.dataset.projectPriority || '',
         }));
-      const priorityRank = { attention: 0, 'result-ready': 1, live: 2, idle: 3 };
-      const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
       const expectedInitial = name => {
         const characters = Array.from(String(name || '').trim());
         return (characters.find(character => /[\p{L}\p{N}]/u.test(character)) || characters[0] || '•')
           .toLocaleUpperCase('ko-KR');
       };
-      const fixedProjectOrder = projectOrder.every((project, index) => {
-        if (!index) return true;
-        const previous = projectOrder[index - 1];
-        const priorityDifference = priorityRank[project.priority] - priorityRank[previous.priority];
-        return priorityDifference > 0
-          || (priorityDifference === 0 && collator.compare(previous.name, project.name) <= 0);
-      });
+      const renderedProjectKeys = projectOrder.map(project => project.key);
+      const reorderableProjectKeys = renderedProjectKeys.filter(key => key !== '__projectless__');
+      const fixedProjectKeys = (window.WhiteboxApp.state.projectOrder || [])
+        .filter(key => reorderableProjectKeys.includes(key));
+      const fixedProjectOrder = reorderableProjectKeys.length === fixedProjectKeys.length
+        && reorderableProjectKeys.every((key, index) => key === fixedProjectKeys[index])
+        && renderedProjectKeys.at(-1) === '__projectless__';
       return {
         workspace: window.WhiteboxApp.state.workspace,
         prompt: prompt?.querySelector('h2')?.textContent.trim() || '',
@@ -160,11 +160,16 @@ app.whenReady().then(async () => {
         ongoingAnimations: [...(prompt?.querySelectorAll('.project-selection-orbit, .project-selection-stack, .project-selection-scan') || [])]
           .filter(element => getComputedStyle(element).animationName !== 'none').length,
         processingNavigationHidden: getComputedStyle(document.querySelector('#projectContextNav')).display === 'none',
+        processingNavigationState: {
+          hidden: document.querySelector('#projectContextNav')?.classList.contains('hidden') || false,
+          ariaHidden: document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') || '',
+          inert: document.querySelector('#projectContextNav')?.hasAttribute('inert') || false,
+        },
         promptVisible: visible(prompt),
-        projectCount: document.querySelectorAll('#projectSidebarList [data-workspace]').length,
-        projectActivityOrder: [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
-          .map(project => Number(project.dataset.liveSessionCount || 0)),
-        expandedProjects: document.querySelectorAll('#projectSidebarList [aria-expanded="true"]').length,
+        projectCount: projectItems.length,
+        sourceCount: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
+        projectActivityOrder: projectItems.map(project => Number(project.dataset.liveSessionCount || 0)),
+        expandedProjects: projectItems.filter(project => project.getAttribute('aria-expanded') === 'true').length,
         removableProjects: document.querySelectorAll('#projectSidebarList [data-remove-workspace]').length,
         sidebarAddOpensRun: document.querySelector('#sidebarNewProjectBtn')?.hasAttribute('data-open-run'),
         settingsAboveProviders: Boolean(
@@ -189,13 +194,16 @@ app.whenReady().then(async () => {
     const activeProjectsFirst = firstInactiveProject < 0
       || initial.projectActivityOrder.slice(firstInactiveProject).every(count => count === 0);
     if (initial.workspace !== 'all' || initial.prompt !== '프로젝트를 선택해주세요'
-      || !initial.promptVisible || initial.projectCount < 2 || initial.expandedProjects !== 0
+      || !initial.promptVisible || initial.projectCount < 2 || initial.sourceCount < initial.projectCount
+      || initial.expandedProjects !== initial.projectCount
       || initial.removableProjects < 1 || initial.sidebarAddOpensRun
       || !initial.settingsAboveProviders || initial.visibleSettingsButtons !== 1
       || !initial.settingsRemovedFromTools || !initial.projectListNoHorizontalOverflow
       || !initial.projectInitialsMatch || !initial.designReady || initial.ongoingAnimations < 3 || !initial.processingNavigationHidden
+      || !initial.processingNavigationState.hidden || initial.processingNavigationState.ariaHidden !== 'true'
+      || !initial.processingNavigationState.inert
       || !initial.fixedProjectOrder
-      || !['result-ready', 'live', 'idle'].every(priority => initial.projectOrder.some(project => project.priority === priority))
+      || !['attention', 'live', 'idle'].every(priority => initial.projectOrder.some(project => project.priority === priority))
       || !activeProjectsFirst || initial.liveVisible || initial.operationsVisible) {
       throw new Error(`프로젝트 초기 선택 화면 검증 실패: ${JSON.stringify(initial)}`);
     }
@@ -268,7 +276,7 @@ app.whenReady().then(async () => {
       const shortcut = document.querySelector('#shortcutHelpBtn');
       const rect = shortcut?.getBoundingClientRect();
       const projectList = document.querySelector('#projectSidebarList');
-      const projectTab = projectList?.querySelector('[data-workspace]');
+      const projectTab = projectList?.querySelector('.project-sidebar-item[data-workspace][data-project-source="all"]');
       const contextNav = document.querySelector('#projectContextNav');
       const sidebar = document.querySelector('.sidebar');
       const visible = element => Boolean(element
@@ -284,7 +292,7 @@ app.whenReady().then(async () => {
         projectListVisible: visible(projectList),
         projectTabVisible: visible(projectTab),
         projectTabWidth: projectTab?.getBoundingClientRect().width || 0,
-        projectTabCount: projectList?.querySelectorAll('[data-workspace]').length || 0,
+        projectTabCount: projectList?.querySelectorAll('.project-sidebar-item[data-workspace][data-project-source="all"]').length || 0,
         workTabsVisible: visible(contextNav),
         workTabCount: [...(contextNav?.querySelectorAll('[data-view]') || [])].filter(visible).length,
         legacyHelpCopyVisible: [...document.querySelectorAll('h1, h2, h3, p, span, b, small')]
@@ -314,7 +322,7 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('#closeShortcutHelpBtn')?.click()`);
     await waitFor(win, `document.querySelector('#shortcutHelpModal')?.classList.contains('hidden')`, '키보드 도움말을 닫지 못했습니다.');
     const settingsReturnWorkspace = await win.webContents.executeJavaScript(`(() => {
-      const project = document.querySelector('#projectSidebarList [data-workspace]');
+      const project = document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]');
       project?.click();
       return project?.dataset.workspace || '';
     })()`);
@@ -332,7 +340,7 @@ app.whenReady().then(async () => {
     await waitFor(win, `window.WhiteboxApp.state.view === 'all' && window.WhiteboxApp.state.workspace === 'all'`, '프로젝트 선택 화면 복원에 실패했습니다.');
 
     const selectedWorkspace = await win.webContents.executeJavaScript(`(() => {
-      const first = document.querySelector('#projectSidebarList [data-workspace]');
+      const first = document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]');
       const workspace = first?.dataset.workspace || '';
       first?.click();
       return workspace;
@@ -346,20 +354,24 @@ app.whenReady().then(async () => {
     );
 
     const selected = await win.webContents.executeJavaScript(`(() => {
-      const projects = [...document.querySelectorAll('#projectSidebarList [data-workspace]')];
-      const selectedProject = document.querySelector('#projectSidebarList [data-workspace][aria-pressed="true"]');
+      const projects = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')];
+      const sources = [...document.querySelectorAll('#projectSidebarList [data-source-workspace]')];
+      const selectedProject = document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]');
       const visible = element => Boolean(element
         && getComputedStyle(element).display !== 'none'
         && element.getBoundingClientRect().width > 0
         && element.getBoundingClientRect().height > 0);
       return {
         projectCount: projects.length,
+        sourceCount: sources.length,
         projectActivityOrder: projects.map(project => Number(project.dataset.liveSessionCount || 0)),
         allProjectsVisible: projects.every(project => project.getBoundingClientRect().height > 0),
-        selectedCount: document.querySelectorAll('#projectSidebarList [data-workspace][aria-pressed="true"]').length,
+        allSourcesVisible: sources.every(source => source.getBoundingClientRect().height > 0),
+        selectedCount: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
         selectedWorkspace: selectedProject?.dataset.workspace || '',
         selectedName: selectedProject?.querySelector('.project-sidebar-copy strong')?.textContent.trim() || '',
-        expandedCount: document.querySelectorAll('#projectSidebarList [aria-expanded="true"]').length,
+        expandedProjectCount: projects.filter(project => project.getAttribute('aria-expanded') === 'true').length,
+        expandedSourceCount: sources.filter(source => source.getAttribute('aria-expanded') === 'true').length,
         nestedSessionAreas: document.querySelectorAll('#projectSidebarList .project-sidebar-sessions').length,
         nestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session').length,
         taskToolbarVisible: visible(document.querySelector('#projectTaskToolbar')),
@@ -375,39 +387,33 @@ app.whenReady().then(async () => {
           action: card.querySelector('[data-open-session]')?.textContent.trim() || '',
         })),
         genericAttentionInboxVisible: visible(document.querySelector('#attentionInbox')),
+        contextNavigationVisible: visible(document.querySelector('#projectContextNav')),
+        contextNavigationState: {
+          hidden: document.querySelector('#projectContextNav')?.classList.contains('hidden') || false,
+          ariaHidden: document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') || '',
+          inert: document.querySelector('#projectContextNav')?.hasAttribute('inert') || false,
+        },
       };
     })()`);
-    if (selected.projectCount !== initial.projectCount || !selected.allProjectsVisible
+    if (selected.projectCount !== initial.projectCount || selected.sourceCount !== initial.sourceCount
+      || !selected.allProjectsVisible || !selected.allSourcesVisible
       || selected.selectedCount !== 1 || selected.selectedWorkspace !== selectedWorkspace
-      || selected.expandedCount !== 0 || selected.nestedSessionAreas !== 0 || selected.nestedSessions !== 0
+      || selected.expandedProjectCount !== selected.projectCount
+      || selected.expandedSourceCount !== selected.sourceCount
+      || selected.nestedSessionAreas !== selected.sourceCount || selected.nestedSessions < selected.sourceCount
       || !selected.taskToolbarVisible || !selected.taskButtonInProject || selected.taskProjectPath !== selectedWorkspace
       || selected.taskButtonText !== '＋새 AI 작업 시작' || !selected.taskButtonShortcutRemoved
-      || selected.mainProjects.length !== 1 || selected.reviewCards.length < 1
-      || !selected.reviewCards[0].title || /^대기합니다[.!]?$/.test(selected.reviewCards[0].title)
-      || !selected.reviewCards[0].action || selected.genericAttentionInboxVisible) {
+      || selected.mainProjects.length !== 1 || selected.reviewCards.length !== 0
+      || selected.genericAttentionInboxVisible || !selected.contextNavigationVisible
+      || selected.contextNavigationState.hidden || selected.contextNavigationState.ariaHidden !== 'false'
+      || selected.contextNavigationState.inert) {
       throw new Error(`전체 프로젝트 유지·선택 프로젝트 단일 행 검증 실패: ${JSON.stringify(selected)}`);
     }
 
     const selectedOutput = path.join(outputDir, 'whitebox-project-selected-all-visible.png');
     await capture(win, selectedOutput);
 
-    await win.webContents.executeJavaScript(`document.querySelector('[data-control-review] [data-open-session]')?.click()`);
-    await waitFor(
-      win,
-      `document.querySelector('#detailDrawer')?.classList.contains('open')
-        && window.WhiteboxApp.state.selectedId === ${JSON.stringify(selected.reviewCards[0].sessionId)}`,
-      '확인할 내용의 바로가기에서 해당 AI 대화를 열지 못했습니다.',
-    );
-    const directReview = await win.webContents.executeJavaScript(`(() => ({
-      selectedId: window.WhiteboxApp.state.selectedId,
-      drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open'),
-      drawerTitle: document.querySelector('#drawerTitle')?.textContent.trim() || '',
-    }))()`);
-    if (!directReview.drawerOpen || directReview.selectedId !== selected.reviewCards[0].sessionId || !directReview.drawerTitle) {
-      throw new Error(`확인할 내용 바로 열기 검증 실패: ${JSON.stringify(directReview)}`);
-    }
-    await win.webContents.executeJavaScript(`document.querySelector('#closeDrawerBtn')?.click()`);
-    await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')`, '확인 대화 창이 닫히지 않았습니다.');
+    const directReview = { removed: selected.reviewCards.length === 0 };
 
     await win.webContents.executeJavaScript(`document.querySelector('#newRunBtn')?.click()`);
     await waitFor(
@@ -454,7 +460,7 @@ Would you like to make the following edits?
       window.interactionTest.clearCalls();
       window.interactionTest.setTerminalReplay('terminal-main', ${JSON.stringify(approvalPrompt)});
       window.interactionTest.emitSnapshot();
-      [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(item => item.dataset.workspace === ${JSON.stringify(approvalWorkspace)})?.click();
     })()`);
     await waitFor(
@@ -492,11 +498,11 @@ Would you like to make the following edits?
     }
     const approvalDelivery = approvalState.calls;
     if (!approvalDelivery.some(call =>
-      call.name === 'terminalWrite' && call.args[0] === 'terminal-main' && call.args[1] === 'y')) {
+      call.name === 'terminalRespond' && call.args[0] === 'terminal-main' && call.args[1] === 'y')) {
       throw new Error(`파일 수정 진행 선택이 원래 Codex 터미널에 y 키로 전달되지 않았습니다: ${JSON.stringify(approvalDelivery)}`);
     }
     const approvalDeliveries = [{ choice: 'proceed', key: 'y' }];
-    for (const [choiceId, expectedKey] of [['always', 'a'], ['reject', '\u001b']]) {
+    for (const [choiceId, expectedKey] of [['always', 'a'], ['reject', 'Escape']]) {
       const promptVariant = approvalPrompt.replace(
         'p3-task2-report.md',
         `p3-task2-report-${choiceId}.md`,
@@ -519,7 +525,7 @@ Would you like to make the following edits?
       await waitFor(
         win,
         `window.interactionTest.getCalls().some(call =>
-          call.name === 'terminalWrite'
+          call.name === 'terminalRespond'
           && call.args[0] === 'terminal-main'
           && call.args[1] === ${JSON.stringify(expectedKey)})`,
         `${choiceId} 파일 수정 승인 선택이 원래 Codex 터미널에 전달되지 않았습니다.`,
@@ -531,7 +537,7 @@ Would you like to make the following edits?
         `${choiceId} 파일 수정 승인 선택 후 확인 카드가 정리되지 않았습니다.`,
         220,
       );
-      approvalDeliveries.push({ choice: choiceId, key: expectedKey === '\u001b' ? 'Escape' : expectedKey });
+      approvalDeliveries.push({ choice: choiceId, key: expectedKey });
       if (choiceId === 'reject') {
         await waitFor(
           win,
@@ -550,7 +556,7 @@ Would you like to make the following edits?
 
     await win.webContents.executeJavaScript(`(() => {
       window.interactionTest.clearCalls();
-      document.querySelector('#projectSidebarList [data-workspace][aria-pressed="true"]')?.click();
+      document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]')?.click();
       document.querySelector('#sidebarNewProjectBtn')?.click();
     })()`);
     await waitFor(
@@ -579,7 +585,7 @@ Would you like to make the following edits?
     await waitFor(
       win,
       `window.interactionTest.getCalls().some(call => call.name === 'removeWorkspace')
-        && ![...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+        && ![...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
           .some(item => item.dataset.workspace === ${JSON.stringify(removedWorkspace)})`,
       '왼쪽 프로젝트 삭제 후 항목이 목록에서 사라지지 않았습니다.',
     );

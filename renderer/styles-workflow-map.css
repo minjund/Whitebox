@@ -103,8 +103,12 @@
 }
 
 .agent-workflow-origin b {
-  display: block;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-size: 13px;
+  line-height: 1.4;
 }
 
 .agent-workflow-origin small {

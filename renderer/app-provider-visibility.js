@@ -42,10 +42,28 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     return !id || (state.sourcePluginSettings?.enabledPluginIds || []).includes(id);
   }
 
+  function desktopSourcePluginId(session) {
+    if (!session || session.sourcePluginId) return "";
+    const kind = String(session.clientKind || "").toLowerCase();
+    if (kind === "claude-desktop") return "builtin.claude-desktop";
+    if (kind === "codex-desktop") return "builtin.codex-desktop";
+    return "";
+  }
+
+  function isDesktopSessionVisible(session) {
+    const id = desktopSourcePluginId(session);
+    if (!id) return true;
+    // Desktop history is visible by default; hide only on an explicit opt-out
+    // recorded in the loaded settings.
+    const ids = state.sourcePluginSettings?.enabledPluginIds;
+    return !Array.isArray(ids) || ids.includes(id);
+  }
+
   function visibleSessions() {
     return (state.snapshot?.sessions || []).filter((session) => (
       isSourcePluginVisible(session.sourcePluginId)
       && (session.sourcePluginId || isProviderVisible(session.provider))
+      && isDesktopSessionVisible(session)
     ));
   }
 
@@ -83,6 +101,7 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     const sessions = (snapshot.sessions || []).filter((session) => (
       isSourcePluginVisible(session.sourcePluginId)
       && (session.sourcePluginId || isProviderVisible(session.provider))
+      && isDesktopSessionVisible(session)
     ));
     const usage = Object.fromEntries(USAGE_KEYS.map((key) => [
       key,
@@ -142,6 +161,8 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
     saveProviderVisibility,
     isProviderVisible,
     isSourcePluginVisible,
+    desktopSourcePluginId,
+    isDesktopSessionVisible,
     visibleProviders,
     visibleSessions,
     visibleTmux,

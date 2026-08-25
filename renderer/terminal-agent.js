@@ -288,6 +288,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!isCodexDesktopSession(agentSession)) {
       return { supported: false, reason: t('terminal.agent.no_input_target') };
     }
+    const sourcePlugin = agentSession.sourcePlugin;
+    const sourcePluginId = String(agentSession.sourcePluginId
+      || (typeof sourcePlugin === 'string' ? sourcePlugin : sourcePlugin?.id || (sourcePlugin ? '__present__' : ''))).trim();
+    const controlAuthority = String(agentSession.controlAuthority || '').trim();
+    const importMode = String(agentSession.importMode || '').trim();
     const sessionId = String(agentSession.externalId || '').trim();
     const sourceSessionId = String(agentSession.id || '').trim();
     const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
@@ -296,7 +301,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       || sourceSessionId !== canonicalSourceSessionId
       || /^(?:terminal|bridge):/i.test(sessionId)
       || /^process-\d+$/i.test(sessionId)
-      || (runId && runId === sessionId)) {
+      || (runId && runId === sessionId)
+      || sourcePluginId
+      || agentSession.readOnly === true
+      || controlAuthority
+      || importMode) {
       return {
         supported: false,
         code: 'CODEX_DESKTOP_FORK_INVALID_SESSION',

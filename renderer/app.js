@@ -6,6 +6,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   const observedText = (value) => window.WhiteboxI18n.observedText(value);
   const PROJECTLESS_WORKSPACE = "__projectless__";
   const SESSION_RETENTION_MS = 30 * 60 * 1000;
+  const RESULT_REVIEW_REQUIRED = false;
   const LIVE_ACTIVITY_STATES = new Set(["thinking", "working", "juggling", "notification"]);
   const SESSION_ARCHIVE_STORAGE_KEY = "whitebox:session-archives:v1";
   const RESULT_REVIEW_STORAGE_KEY = "whitebox:result-reviews:v1";
@@ -56,7 +57,11 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     runProvider: "claude",
     runSource: "direct",
     sourcePlugins: [],
-    sourcePluginSettings: { version: 2, enabledPluginIds: [], asideHistoryFolders: [] },
+    sourcePluginSettings: {
+      version: 3,
+      enabledPluginIds: ["builtin.claude-desktop", "builtin.codex-desktop"],
+      asideHistoryFolders: [],
+    },
     sourcePluginSettingRequests: new Set(),
     details: new Map(),
     detailLoadingIds: new Set(),
@@ -134,7 +139,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     });
   }
   const FOCUS_IDENTITY_ATTRIBUTES = [
-    "data-session-id", "data-session-sortable", "data-workspace", "data-remove-workspace",
+    "data-session-id", "data-session-sortable", "data-workspace", "data-source-workspace", "data-remove-workspace",
     "data-open-session", "data-provider-card", "data-provider-filter", "data-provider-visibility",
     "data-token-provider", "data-graph-focus", "data-supervision-focus", "data-result-review",
     "data-view", "data-mobile-view", "data-action",
@@ -437,9 +442,20 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     saveGuideState();
     renderGuide();
   }
+  function syncProjectContextNavigation() {
+    const navigation = $("#projectContextNav");
+    if (!navigation) return false;
+    const mobileLayout = window.matchMedia("(max-width: 720px)").matches;
+    const visible = mobileLayout || state.view !== "all" || state.workspace !== "all";
+    navigation.classList.toggle("hidden", !visible);
+    navigation.setAttribute("aria-hidden", visible ? "false" : "true");
+    navigation.toggleAttribute("inert", !visible);
+    return visible;
+  }
   function syncViewChrome() {
     const meta = VIEW_META[state.view] || VIEW_META.all;
     document.body.dataset.currentView = state.view;
+    syncProjectContextNavigation();
     $("#backToProjectsBtn")?.classList.toggle("hidden", state.view === "all");
     $("#pageEyebrow").textContent = state.view === "active" ? "" : meta.eyebrow;
     $("#pageEyebrow").classList.toggle("hidden", state.view === "active");
@@ -671,6 +687,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   function handleResponsiveResize() {
     closeMobileToolsAboveBreakpoint();
     syncMemoryFilterDisclosure();
+    syncProjectContextNavigation();
   }
   syncMemoryFilterDisclosure(true);
   window.addEventListener?.("resize", handleResponsiveResize);
@@ -993,10 +1010,11 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   function sessionResponseTimestamp(session) {
     const assistantAt = Math.max(0, ...(session?.messages || [])
       .filter((message) => message?.role === "assistant")
-      .map((message) => Date.parse(message.timestamp || 0))
+      .map((message) => message.timestamp ? Date.parse(message.timestamp) : Number.NaN)
       .filter(Number.isFinite));
     if (assistantAt) return assistantAt;
-    const completedAt = Date.parse(session?.completedAt || session?.endedAt || 0);
+    const completionTimestamp = session?.completedAt || session?.endedAt || "";
+    const completedAt = completionTimestamp ? Date.parse(completionTimestamp) : Number.NaN;
     return Number.isFinite(completedAt) ? completedAt : 0;
   }
   function conversationMessageKey(message) {
@@ -1144,11 +1162,13 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return !required && !isWorkflowLive(session) && (verified || terminal);
   }
   function isResultReviewComplete(sessionOrId) {
+    if (!RESULT_REVIEW_REQUIRED) return false;
     const session = resultReviewSnapshot(sessionOrId);
     if (!session || !isResultReviewCandidate(session)) return false;
     return state.resultReviews.get(String(session.id || ""))?.stamp === resultReviewStamp(session);
   }
   function resultReviewTargets(sessionOrId, options = {}) {
+    if (!RESULT_REVIEW_REQUIRED) return [];
     const root = resultReviewSnapshot(sessionOrId);
     if (!root) return [];
     const sessions = state.snapshot?.sessions || [root];
@@ -1344,9 +1364,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     if (!["waiting", "paused", "failed"].includes(String(session?.status || "")) && isWorkflowLive(session)) return "running";
     return session?.status;
   }
-  function sessionRetentionMinutes(session, now = Date.now()) {
-    const remaining = SESSION_RETENTION_MS - Math.max(0, Number(now) - sessionResponseTimestamp(session));
-    return Math.max(0, Math.ceil(remaining / 60_000));
+  function sessionRetentionDeadline(session) {
+    const responseAt = sessionResponseTimestamp(session);
+    return responseAt ? responseAt + SESSION_RETENTION_MS : 0;
   }
   function archiveSession(sessionOrId) {
     const session = typeof sessionOrId === "object"
@@ -1472,6 +1492,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     saveGuideState,
     renderGuide,
     markGuideStep,
+    syncProjectContextNavigation,
     syncViewChrome,
     selectView,
     currentDialog,
@@ -1528,7 +1549,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     isSessionManuallyArchived,
     isControlRoomSession,
     controlRoomStatus,
-    sessionRetentionMinutes,
+    sessionRetentionDeadline,
     archiveSession,
     isRuntimeLoopSession,
     subagentWorkState,

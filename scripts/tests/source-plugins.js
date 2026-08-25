@@ -19,7 +19,10 @@ const {
 } = require('../../src/sourcePlugins/controlHost');
 const { SourcePluginMonitorHost } = require('../../src/sourcePlugins/monitorHost');
 const {
+  DESKTOP_SOURCE_PLUGIN_IDS,
   SourcePluginSettingsStore,
+  desktopSourcePluginId,
+  isSourcePluginEnabled,
   normalizeSettings,
 } = require('../../src/sourcePlugins/settingsStore');
 const { discoverAsideTools } = require('../../src/sourcePlugins/bundled/aside/capabilities');
@@ -86,23 +89,72 @@ function registerSourcePluginTests(context) {
 
   test('source plugin 설정은 OpenCode·Aside만 opt-in으로 정규화하고 방어 복사해 저장한다', () => {
     const settingsFile = path.join(temp, 'source-plugin-settings-v2.json');
+    // Legacy (pre-v3) input: desktop toggles did not exist yet, so they are
+    // migrated in as enabled instead of being treated as an opt-out.
     const normalized = normalizeSettings({
       enabledPluginIds: ['builtin.opencode', 'builtin.opencode', 'builtin.unknown', 'builtin.aside'],
       asideHistoryFolders: [temp, temp],
     });
     assert.deepEqual(normalized, {
-      version: 2,
-      enabledPluginIds: ['builtin.opencode', 'builtin.aside'],
+      version: 3,
+      enabledPluginIds: ['builtin.opencode', 'builtin.aside', ...DESKTOP_SOURCE_PLUGIN_IDS],
       asideHistoryFolders: [path.resolve(temp)],
     });
 
     const store = new SourcePluginSettingsStore(settingsFile);
-    assert.deepEqual(store.snapshot().enabledPluginIds, []);
+    assert.deepEqual(store.snapshot().enabledPluginIds, [...DESKTOP_SOURCE_PLUGIN_IDS]);
     const enabled = store.setPluginEnabled('builtin.opencode', true);
     enabled.enabledPluginIds.push('builtin.aside');
-    assert.deepEqual(store.snapshot().enabledPluginIds, ['builtin.opencode']);
-    assert.deepEqual(new SourcePluginSettingsStore(settingsFile).snapshot().enabledPluginIds, ['builtin.opencode']);
+    assert.deepEqual(store.snapshot().enabledPluginIds, [...DESKTOP_SOURCE_PLUGIN_IDS, 'builtin.opencode']);
+    assert.deepEqual(
+      new SourcePluginSettingsStore(settingsFile).snapshot().enabledPluginIds,
+      [...DESKTOP_SOURCE_PLUGIN_IDS, 'builtin.opencode'],
+    );
     assert.throws(() => store.setPluginEnabled('builtin.unknown', true), /지원하지 않는/);
+  });
+
+  test('데스크톱 앱 토글은 기본 켜짐이고 v3 파일의 명시적 opt-out만 유지된다', () => {
+    assert.equal(desktopSourcePluginId('claude-desktop'), 'builtin.claude-desktop');
+    assert.equal(desktopSourcePluginId('Codex-Desktop'), 'builtin.codex-desktop');
+    assert.equal(desktopSourcePluginId('claude-cli'), '');
+    assert.equal(desktopSourcePluginId(''), '');
+
+    // Missing settings (store not ready yet) must keep desktop history visible.
+    assert.equal(isSourcePluginEnabled(undefined, 'builtin.claude-desktop'), true);
+    assert.equal(isSourcePluginEnabled({ version: 2, enabledPluginIds: [] }, 'builtin.codex-desktop'), true);
+    // A v3 file that omits a desktop id records a deliberate opt-out.
+    assert.equal(isSourcePluginEnabled({ version: 3, enabledPluginIds: [] }, 'builtin.claude-desktop'), false);
+
+    const settingsFile = path.join(temp, 'source-plugin-settings-desktop.json');
+    const store = new SourcePluginSettingsStore(settingsFile);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.claude-desktop'), true);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.codex-desktop'), true);
+
+    store.setPluginEnabled('builtin.claude-desktop', false);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.claude-desktop'), false);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.codex-desktop'), true);
+    // The opt-out survives a reload of the persisted v3 file.
+    const reloaded = new SourcePluginSettingsStore(settingsFile);
+    assert.equal(isSourcePluginEnabled(reloaded.snapshot(), 'builtin.claude-desktop'), false);
+    assert.equal(isSourcePluginEnabled(reloaded.snapshot(), 'builtin.codex-desktop'), true);
+
+    store.setPluginEnabled('builtin.claude-desktop', true);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.claude-desktop'), true);
+  });
+
+  test('런타임 준비 전 bootstrap도 데스크톱 기록 기본값을 숨기지 않는다', () => {
+    const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+    const rendererCore = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
+    assert.equal(main.includes('version: SOURCE_PLUGIN_SETTINGS_VERSION'), true);
+    assert.equal(main.includes('enabledPluginIds: [...DESKTOP_SOURCE_PLUGIN_IDS]'), true);
+    assert.equal(rendererCore.includes('version: 3,\n      enabledPluginIds: ["builtin.claude-desktop", "builtin.codex-desktop"]'), true);
+
+    // A loaded v3 snapshot remains authoritative, including an explicit opt-out.
+    assert.deepEqual(normalizeSettings({
+      version: 3,
+      enabledPluginIds: ['builtin.codex-desktop'],
+      asideHistoryFolders: [],
+    }).enabledPluginIds, ['builtin.codex-desktop']);
   });
 
   test('비활성 source plugin은 monitor factory·watch·scan·외부 snapshot을 사용하지 않는다', async () => {
@@ -842,7 +894,7 @@ function registerSourcePluginTests(context) {
 
     const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
     const visibility = fs.readFileSync(path.join(root, 'renderer', 'app-provider-visibility.js'), 'utf8');
-    assert.equal(main.includes('isSourcePluginEnabled(sourceSettings, session.sourcePluginId)'), true);
+    assert.equal(main.includes('if (session.sourcePluginId) return isSourcePluginEnabled('), true);
     assert.equal(visibility.includes('isSourcePluginVisible(session.sourcePluginId)'), true);
   });
 }

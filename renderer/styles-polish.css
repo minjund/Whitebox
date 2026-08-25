@@ -358,8 +358,8 @@ body:is(
 }
 
 .project-sidebar-row {
-  grid-template-columns: minmax(0, 1fr) 44px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
 }
 
 .project-sidebar-remove {

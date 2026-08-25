@@ -274,12 +274,12 @@ window.WhiteboxAppFactories.createRuntimeOverview = function createRuntimeOvervi
     const phaseKind = session.loop && typeof session.loop === "object" && String(session.loop.phase || "").trim()
       ? "runtime.current_phase"
       : "runtime.expected_phase";
-    const resultNeedsReview = /결과|확인/.test(String(activePhase.label || ""));
-    const activityTitle = resultNeedsReview
-      ? "AI 작업이 끝났습니다. 결과를 확인해 주세요."
+    const resultPhase = activePhase.key === "observe";
+    const activityTitle = resultPhase
+      ? t("runtime.phase_observe")
       : window.WhiteboxI18n.observedText(activity.title);
-    const activityDetail = resultNeedsReview
-      ? "결과 화면을 열면 이 완료 결과를 확인한 것으로 저장합니다."
+    const activityDetail = resultPhase
+      ? t("runtime.phase_observe_detail")
       : window.WhiteboxI18n.observedText(activity.detail || session.statusDetail || "");
     const linkedAutomation = visibleAutomations().find((item) => automationSession(item)?.id === session.id);
     const linkedAutomationName = linkedAutomation?.name || t("runtime.linked_schedule_unknown");
@@ -296,7 +296,7 @@ window.WhiteboxAppFactories.createRuntimeOverview = function createRuntimeOvervi
         <div><small>${esc(t("runtime.now_working"))}</small><b title="${esc(activityTitle)}">${esc(activityTitle)}</b><p title="${esc(activityDetail)}">${esc(t("runtime.detail_work", { detail: activityDetail }))}</p></div>
         <time data-runtime-provider="${esc(provider.label)}" data-runtime-updated-at="${esc(session.updatedAt || session.startedAt || "")}">${esc(t("runtime.last_signal_time", { provider: provider.label, time: activityAge(session.updatedAt || session.startedAt) }))}</time>
       </section>
-      <div class="runtime-open-action runtime-result-next"><button type="button" class="runtime-open-task" data-loop-open="${esc(session.id)}" ${resultNeedsReview ? 'data-result-review="true"' : ""}>완료된 결과 열어 확인하기 →</button><small>결과를 열면 확인 상태가 저장되어 다음 실행 때 다시 나타나지 않습니다.</small></div>
+      <div class="runtime-open-action runtime-result-next"><button type="button" class="runtime-open-task" data-loop-open="${esc(session.id)}">${esc(t(resultPhase ? "runtime.open_result" : "runtime.open_task"))} →</button><small>${esc(resultPhase ? t("runtime.phase_observe_detail") : activePhase.detail)}</small></div>
       ${loopDiagram(session)}
       <footer class="runtime-loop-footer">
         <dl>
@@ -368,7 +368,7 @@ window.WhiteboxAppFactories.createRuntimeOverview = function createRuntimeOvervi
     const selectedActivePhase = selected
       ? (loopPhases(selected).find((phase) => phase.state === "active") || loopPhases(selected)[0])
       : null;
-    const resultReviewCount = selectedActivePhase && /결과|확인/.test(String(selectedActivePhase.label || "")) ? 1 : 0;
+    const resultReviewCount = selectedActivePhase?.key === "observe" ? 1 : 0;
     const runningLoopCount = Math.max(0, loops.length - resultReviewCount);
     const selectedId = selected?.id || "";
     const hasLoopTabs = loops.length > 1;

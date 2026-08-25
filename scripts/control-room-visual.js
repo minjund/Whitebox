@@ -53,18 +53,19 @@ app.whenReady().then(async () => {
         && window.WhiteboxApp?.state?.snapshot
         && window.WhiteboxApp?.state?.providerUsage?.providers?.claude?.shortWindow
         && !document.querySelector('#projectSelectionPrompt')?.classList.contains('hidden')
-        && document.querySelectorAll('#projectSidebarList [data-workspace]').length >= 2)`,
+        && document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length >= 2)`,
       '프로젝트 선택 홈이 준비되지 않았습니다.',
     );
     const initialSelectionMetrics = await win.webContents.executeJavaScript(`(() => ({
       workspace: window.WhiteboxApp.state.workspace,
       prompt: document.querySelector('#projectSelectionPrompt h2')?.textContent.trim() || '',
-      projectCount: document.querySelectorAll('#projectSidebarList [data-workspace]').length,
+      expectedPrompt: window.WhiteboxI18n.t('studio.project_selection_title'),
+      projectCount: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
       liveHidden: document.querySelector('#liveSection')?.classList.contains('hidden'),
       operationsHidden: document.querySelector('#operationsOverview')?.classList.contains('hidden'),
     }))()`);
     if (initialSelectionMetrics.workspace !== 'all'
-      || initialSelectionMetrics.prompt !== '프로젝트를 선택해주세요'
+      || initialSelectionMetrics.prompt !== initialSelectionMetrics.expectedPrompt
       || initialSelectionMetrics.projectCount < 2
       || !initialSelectionMetrics.liveHidden
       || !initialSelectionMetrics.operationsHidden) {
@@ -207,6 +208,11 @@ app.whenReady().then(async () => {
         sidebarNavigationRemoved: !document.querySelector('.sidebar .view-nav'),
         sidebarAllProjectsRemoved: !document.querySelector('#projectSidebarList [data-workspace="all"]'),
         projectContextVisible: Boolean(document.querySelector('#projectContextNav')?.getBoundingClientRect().height),
+        projectContextState: {
+          hidden: document.querySelector('#projectContextNav')?.classList.contains('hidden') || false,
+          ariaHidden: document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') || '',
+          inert: document.querySelector('#projectContextNav')?.hasAttribute('inert') || false,
+        },
         projectContextName: document.querySelector('#projectContextName')?.textContent.trim() || '',
         projectContextTabs: [...document.querySelectorAll('#projectViewTabs > [data-view]')]
           .filter(node => node.getBoundingClientRect().width > 0)
@@ -297,9 +303,11 @@ app.whenReady().then(async () => {
       || overviewMetrics.usageSummaryVisible || overviewMetrics.usageSummaryText
       || overviewMetrics.usageProviderCards !== 0 || overviewMetrics.usageGauges !== 0
       || !overviewMetrics.sidebarNavigationRemoved || !overviewMetrics.sidebarAllProjectsRemoved
-      || !overviewMetrics.projectContextVisible
-      || JSON.stringify(overviewMetrics.projectContextTabs) !== JSON.stringify(['all', 'active', 'waiting'])
-      || !overviewMetrics.projectToolsVisible
+      || overviewMetrics.projectContextVisible
+      || !overviewMetrics.projectContextState.hidden || overviewMetrics.projectContextState.ariaHidden !== 'true'
+      || !overviewMetrics.projectContextState.inert
+      || overviewMetrics.projectContextTabs.length !== 0
+      || overviewMetrics.projectToolsVisible
       || overviewMetrics.controlRooms < 1
       || !overviewMetrics.rootVisible || !overviewMetrics.mainNode || overviewMetrics.helperNodes < 1
       || !overviewMetrics.compositeSessionLabel.includes('내 답변 대기')
@@ -358,7 +366,7 @@ app.whenReady().then(async () => {
     const overviewOutput = await capture(win, outputDir, 'whitebox-control-room.png');
 
     await win.webContents.executeJavaScript(`(() => {
-      const project = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      const project = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.querySelector('strong')?.textContent.trim() === 'CMS_WEB');
       project?.click();
     })()`);
@@ -382,11 +390,13 @@ app.whenReady().then(async () => {
         .map(node => node.textContent.replace(/\\s+/g, ' ').trim()),
       tokenControls: document.querySelectorAll('#sessionTokenOverview button, #sessionTokenOverview summary').length,
       providerUsageHidden: !document.querySelector('#operationsOverview .provider-usage-disclosure'),
-      sidebarProjects: document.querySelectorAll('#projectSidebarList [data-workspace]').length,
+      sidebarProjects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
+      sidebarSources: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
+      sidebarNestedSessionAreas: document.querySelectorAll('#projectSidebarList .project-sidebar-sessions').length,
       sidebarNestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session[data-open-session]').length,
-      sidebarAllProjectsVisible: [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      sidebarAllProjectsVisible: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .every(node => node.getBoundingClientRect().height > 0),
-      sidebarSelectedProjects: document.querySelectorAll('#projectSidebarList [data-workspace][aria-pressed="true"]').length,
+      sidebarSelectedProjects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
       controlProjects: [...document.querySelectorAll('.control-room-project-group')].map(node => node.dataset.controlProject),
       projectFolderHeaderHidden: document.querySelector('.control-room-project-group > .control-project-header')?.getBoundingClientRect().height === 0,
       projectFlowLinkHidden: document.querySelector('.control-project-flow-link')?.getBoundingClientRect().height === 0,
@@ -429,7 +439,9 @@ app.whenReady().then(async () => {
       || projectContextMetrics.tokenControls !== 0
       || !projectContextMetrics.providerUsageHidden
       || projectContextMetrics.sidebarProjects < 4
-      || projectContextMetrics.sidebarNestedSessions !== 0
+      || projectContextMetrics.sidebarSources < projectContextMetrics.sidebarProjects
+      || projectContextMetrics.sidebarNestedSessionAreas !== projectContextMetrics.sidebarSources
+      || projectContextMetrics.sidebarNestedSessions < projectContextMetrics.sidebarSources
       || !projectContextMetrics.sidebarAllProjectsVisible
       || projectContextMetrics.sidebarSelectedProjects !== 1
       || projectContextMetrics.controlProjects.some(project => project !== 'CMS_WEB')
@@ -464,7 +476,7 @@ app.whenReady().then(async () => {
         `Boolean(document.querySelector('#advancedToolsNav > summary')?.getBoundingClientRect().width)`,
       ),
     };
-    if (!projectToolsMetrics.visible) throw new Error(`프로젝트 추가 기능 요약이 표시되지 않았습니다: ${JSON.stringify(projectToolsMetrics)}`);
+    if (projectToolsMetrics.visible) throw new Error(`프로젝트 미선택 홈에서 프로젝트 추가 기능이 숨겨지지 않았습니다: ${JSON.stringify(projectToolsMetrics)}`);
 
     const usageDetailMetrics = {
       removed: !await win.webContents.executeJavaScript(
@@ -515,7 +527,7 @@ app.whenReady().then(async () => {
       '프로젝트로 돌아가기 버튼이 프로젝트 화면으로 복귀시키지 못했습니다.',
     );
     await win.webContents.executeJavaScript(`(() => {
-      const project = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      const project = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.dataset.workspace === 'D:\\\\fixture');
       project?.click();
     })()`);
@@ -544,7 +556,7 @@ app.whenReady().then(async () => {
       const individualExpanded = Boolean(document.querySelector('.control-room-project-group')?.open);
       firstSummary?.click();
       const individualCollapsed = !document.querySelector('.control-room-project-group')?.open;
-      const cmsChip = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      const cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.querySelector('strong')?.textContent.trim().startsWith('CMS_WEB'));
       cmsChip?.click();
       const projectFiltered = control.state.workspace === 'D:\\\\cms-web'

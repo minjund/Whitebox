@@ -303,8 +303,8 @@ app.whenReady().then(async () => {
       || memoryMetrics.recordMetric < memoryMetrics.cards
       || memoryMetrics.evidenceMetric < 1
       || memoryMetrics.decisionMetric < 0
-      || !memoryMetrics.decisionMetricText.includes('확인 완료')
-      || !memoryMetrics.optionalDecisionState.includes('확인할 결과 없음')
+      || !memoryMetrics.decisionMetricText.includes('기록된 결정')
+      || !memoryMetrics.optionalDecisionState.includes('별도 결정 없음')
       || memoryMetrics.sectionOpacity < .99
       || !memoryMetrics.firstCardViewport?.visible
       || memoryMetrics.stageOverflow
@@ -313,7 +313,19 @@ app.whenReady().then(async () => {
     const memoryOutput = await capture(win, 'whitebox-philosophical-memory.png', 'active', '#sessionSection');
 
     await win.webContents.executeJavaScript(`document.querySelector('#sessionGrid [data-session-id="fixture-ended"]')?.click()`);
-    await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open') && !document.querySelector('.drawer-loading')`, '기억 상세가 열리지 않았습니다.');
+    await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')`, '기억 상세가 열리지 않았습니다.');
+    // Completed top-level conversations can legitimately open on the PTY
+    // surface, where #drawerContent stays empty. The philosophy audit is for
+    // the durable memory detail, so select its summary tab explicitly instead
+    // of treating a connecting terminal as an empty drawer.
+    await win.webContents.executeJavaScript(`document.querySelector('#drawerTabSummary')?.click()`);
+    await waitFor(
+      win,
+      `document.querySelector('#drawerTabSummary')?.classList.contains('active')
+        && !document.querySelector('.drawer-loading')
+        && (document.querySelector('#drawerContent')?.textContent.trim().length || 0) >= 50`,
+      '기억 요약 상세가 렌더링되지 않았습니다.',
+    );
     const memoryDrawer = await win.webContents.executeJavaScript(`(() => ({
       open: document.querySelector('#detailDrawer')?.classList.contains('open'),
       detailText: document.querySelector('#drawerContent')?.textContent.trim().length || 0,

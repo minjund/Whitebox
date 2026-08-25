@@ -698,6 +698,9 @@ const api = {
       bridgeId: options.bridgeId || '',
       agentResumeSessionId: resumeSessionId,
       agentConnectionSignature: options.agentConnectionSignature || '',
+      agentForkSourceSessionId: options.agentForkSourceSessionId || '',
+      agentForkSourceSignature: options.agentForkSourceSignature || '',
+      creationId: options.creationId || '',
       conversationBound,
       distro: options.distro || '',
       tmuxSession: options.tmuxSession || '',
@@ -898,6 +901,12 @@ const testApi = {
     snapshot.sessions.push(clone(session));
     snapshot.generatedAt = new Date(Date.now() + 1000).toISOString();
     return true;
+  },
+  removeSession: id => {
+    const before = snapshot.sessions.length;
+    snapshot.sessions = snapshot.sessions.filter(item => item.id !== id);
+    if (snapshot.sessions.length !== before) snapshot.generatedAt = new Date(Date.now() + 1000).toISOString();
+    return snapshot.sessions.length !== before;
   },
   addTerminal: terminal => {
     if (!terminal || !terminal.id || terminals.some(item => item.id === terminal.id)) return false;

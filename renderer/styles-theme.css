@@ -3095,8 +3095,10 @@ html[data-theme] :is(.form-error, .error-message) {
  * Keep the settings content concise while preserving the application shell.
  * Project and work tabs remain available so settings never becomes a dead end.
  */
-body[data-current-view="all"]:not([data-project-selected="true"]) #projectContextNav {
-  display: none;
+@media (min-width: 721px) {
+  body[data-current-view="all"]:not([data-project-selected="true"]) #projectContextNav {
+    display: none;
+  }
 }
 
 body[data-current-view="settings"] .topbar {
