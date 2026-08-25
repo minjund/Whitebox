@@ -7,12 +7,42 @@
  */
 let bootstrapPromise = null;
 const dateTimeFormatCache = new Map();
+let dateTimeFormatTimeZone = "";
+let dateTimeFormatOffset = Number.NaN;
+let dateTimeFormatZoneCheckedAt = 0;
+
+function refreshDateTimeFormatZone(force = false) {
+  const now = Date.now();
+  const offset = new Date().getTimezoneOffset();
+  if (!force && offset === dateTimeFormatOffset && now - dateTimeFormatZoneCheckedAt < 30_000) return;
+  let timeZone = `offset:${offset}`;
+  try {
+    timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone || timeZone;
+  } catch (_unsupportedTimeZone) {
+    // The numeric offset still invalidates formatters when the host zone moves.
+  }
+  if (timeZone !== dateTimeFormatTimeZone || offset !== dateTimeFormatOffset) dateTimeFormatCache.clear();
+  dateTimeFormatTimeZone = timeZone;
+  dateTimeFormatOffset = offset;
+  dateTimeFormatZoneCheckedAt = now;
+}
+
+refreshDateTimeFormatZone(true);
+if (typeof window.addEventListener === "function") {
+  window.addEventListener("focus", () => refreshDateTimeFormatZone(true));
+}
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshDateTimeFormatZone(true);
+  });
+}
 
 window.WhiteboxRendererUtils = Object.freeze({
   // Intl.DateTimeFormat construction is far more expensive than format();
   // reuse one instance per locale+options combination across render passes.
   dateTimeFormat(locale, options) {
-    const key = `${locale}|${JSON.stringify(options || {})}`;
+    refreshDateTimeFormatZone();
+    const key = `${dateTimeFormatTimeZone}|${locale}|${JSON.stringify(options || {})}`;
     let formatter = dateTimeFormatCache.get(key);
     if (!formatter) {
       if (dateTimeFormatCache.size > 64) dateTimeFormatCache.clear();

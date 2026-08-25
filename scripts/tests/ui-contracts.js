@@ -3346,6 +3346,68 @@ function registerUiContractTests(context) {
       'state 문자열만 비교하는 캐시는 실패한 플러그인 토글의 DOM 상태를 고착시킵니다.');
   });
 
+  test('공용 날짜 포매터 캐시는 시스템 시간대 변경을 무효화한다', () => {
+    const shared = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
+    assert.ok(shared.includes('resolvedOptions().timeZone'));
+    assert.ok(shared.includes('offset !== dateTimeFormatOffset'));
+    assert.ok(shared.includes('dateTimeFormatCache.clear()'));
+    assert.ok(shared.includes('window.addEventListener("focus", () => refreshDateTimeFormatZone(true))'));
+    assert.ok(shared.includes('`${dateTimeFormatTimeZone}|${locale}|${JSON.stringify(options || {})}`'));
+
+    let zone = 'UTC';
+    let offset = 0;
+    let now = 1_700_000_000_000;
+    const focusListeners = [];
+    class FakeDate extends Date {
+      constructor(...args) { super(...(args.length ? args : [now])); }
+      static now() { return now; }
+      getTimezoneOffset() { return offset; }
+    }
+    class FakeDateTimeFormat {
+      constructor() { this.zone = zone; }
+      resolvedOptions() { return { timeZone: this.zone }; }
+      format() { return this.zone; }
+    }
+    const sandbox = {
+      console,
+      Date: FakeDate,
+      Intl: { DateTimeFormat: FakeDateTimeFormat },
+      document: {
+        hidden: false,
+        addEventListener() {},
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+      },
+      window: {
+        addEventListener(type, listener) {
+          if (type === 'focus') focusListeners.push(listener);
+        },
+      },
+    };
+    vm.runInNewContext(shared, sandbox, { filename: 'shared.js' });
+    const utc = sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' });
+    assert.equal(utc.format(), 'UTC');
+
+    zone = 'Asia/Seoul';
+    offset = -540;
+    const seoul = sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' });
+    assert.equal(seoul.format(), 'Asia/Seoul');
+    assert.notStrictEqual(seoul, utc);
+
+    zone = 'Asia/Tokyo';
+    now += 1_000;
+    assert.strictEqual(
+      sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' }),
+      seoul,
+      '같은 offset의 zone 변경은 강제 probe 전 기존 formatter를 재사용합니다.',
+    );
+    focusListeners[0]();
+    assert.equal(
+      sandbox.window.WhiteboxRendererUtils.dateTimeFormat('en-US', { hour: '2-digit' }).format(),
+      'Asia/Tokyo',
+    );
+  });
+
   test('비활성 플러그인 실행 draft는 modal을 열 때 직접 실행으로 치유한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-run-modal.js'), 'utf8');
     const normalization = source.slice(
