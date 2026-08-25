@@ -231,7 +231,12 @@ const ACTION_MANIFEST = [
     required: false,
     optionalReason: 'Conversation-bound PTYs intentionally omit slash-command controls so a composer cannot switch provider history inside the signed terminal.',
   },
-  { selector: '[data-management-filter]', action: 'management:overview-filter' },
+  {
+    selector: '[data-management-filter]',
+    action: 'management:overview-filter',
+    required: false,
+    optionalReason: 'The selected-project shell hides the duplicate home review strip; the visible needs-review navigation opens the same inbox.',
+  },
   {
     selector: '[data-management-inbox-filter]',
     action: 'management:inbox-filter',
@@ -322,6 +327,7 @@ const ACTION_MANIFEST = [
   { selector: '#cancelRunBtn', action: 'run:cancel' },
   { selector: '#clearRunDraftBtn', action: 'run:clear-draft' },
   { selector: '#runForm button[type="submit"]', action: 'run:submit' },
+  { selector: '[data-run-source]', action: 'run:source' },
   { selector: '[data-run-provider]', action: 'run:provider' },
   { selector: '[data-provider-docs]', action: 'run:provider-docs' },
   { selector: '[data-provider-recheck]', action: 'run:provider-recheck' },
@@ -1300,6 +1306,10 @@ async function exerciseProviderUsage(win, round) {
 }
 
 async function exerciseManagementControls(win, round) {
+  await win.webContents.executeJavaScript(`window.WhiteboxI18n.setLocale('ko')`);
+  await waitFor(win, `document.documentElement.lang === 'ko'
+    && localStorage.getItem('whitebox:locale:v1') === 'ko'`,
+  '관리 화면 검증에 사용할 한국어 로케일을 준비하지 못했습니다.');
   await prepareProjectFirstStep(win);
   await click(win, '[data-view="all"]', 'nav:all');
   await waitFor(win, `Boolean(document.querySelector('[data-home-attention]'))
@@ -1466,7 +1476,7 @@ async function exerciseManagementControls(win, round) {
   await click(win, '#closeDrawerBtn', 'drawer:close');
   await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')`, 'PowerShell 실행 상세를 닫지 못했습니다.');
 
-  await click(win, '[data-management-filter]', 'management:overview-filter');
+  await click(win, '[data-view="waiting"]', 'nav:waiting');
   await waitFor(win, `window.WhiteboxApp.state.view === 'waiting' && window.WhiteboxApp.state.managementFilter === 'all'`, '운영 개요의 모두 보기가 전체 확인함을 열지 못했습니다.');
   await click(win, '.approval-custom-answer > summary', 'management:custom-answer');
   await waitFor(win, `document.querySelector('.approval-custom-answer')?.open
@@ -1801,6 +1811,10 @@ async function exerciseProviderVisibility(win, round) {
 }
 
 async function exerciseDashboardControls(win, round) {
+  await win.webContents.executeJavaScript(`window.WhiteboxI18n.setLocale('ko')`);
+  await waitFor(win, `document.documentElement.lang === 'ko'
+    && localStorage.getItem('whitebox:locale:v1') === 'ko'`,
+  '대시보드 검증에 사용할 한국어 로케일을 준비하지 못했습니다.');
   await prepareProjectFirstStep(win);
   await click(win, '[data-view="all"]', 'nav:all');
   await win.webContents.executeJavaScript(`(() => {
@@ -1950,6 +1964,12 @@ async function exerciseDashboardControls(win, round) {
   const projectStudio = await win.webContents.executeJavaScript(`(() => ({
     projects: document.querySelectorAll('#projectSidebarList [data-workspace]').length,
     attentionProjects: document.querySelectorAll('#projectSidebarList .project-sidebar-group.has-attention').length,
+    attentionContract: [...document.querySelectorAll('#projectSidebarList .project-sidebar-project')].every(project => {
+      const projectButton = project.querySelector('[data-workspace]');
+      const expected = Number(projectButton?.dataset.attentionSessionCount || 0) > 0;
+      return project.classList.contains('has-attention') === expected
+        && Boolean(project.querySelector('.project-sidebar-attention')) === expected;
+    }),
     allProjectsOption: Boolean(document.querySelector('#projectSidebarList [data-workspace="all"]')),
     historyVisible: Boolean(document.querySelector('#projectHistoryRail')?.getBoundingClientRect().height),
     historyTitles: [...document.querySelectorAll('#projectHistoryList :is([data-open-session], [data-inline-pty-trigger]) span')]
@@ -1959,7 +1979,7 @@ async function exerciseDashboardControls(win, round) {
       .filter(node => node.getClientRects().length)
       .map(node => ({ type: node.hasAttribute('data-remove-workspace') ? 'remove' : 'toggle', width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })),
   }))()`);
-  assert(projectStudio.projects >= 2 && !projectStudio.allProjectsOption && projectStudio.historyVisible && projectStudio.attentionProjects >= 1
+  assert(projectStudio.projects >= 2 && !projectStudio.allProjectsOption && projectStudio.historyVisible && projectStudio.attentionContract
     && projectStudio.historyTitles.length >= 1
     && projectStudio.historyTitles.every(title => title && title !== 'NaN')
     && projectStudio.actionTargets.length >= 3
@@ -2851,6 +2871,8 @@ async function exerciseRunModal(win, round) {
   await sleep(320);
   const promptFocusStable = await win.webContents.executeJavaScript(`document.activeElement === document.querySelector('#runPrompt')`);
   assert(promptFocusStable, '이전 상세 창의 지연 포커스 복원이 새 작업 입력창 포커스를 빼앗았습니다.');
+  await click(win, '[data-run-source="direct"]', 'run:source');
+  await waitFor(win, `document.querySelector('[data-run-source="direct"]')?.getAttribute('aria-checked') === 'true'`, '새 작업의 직접 실행 출처를 선택하지 못했습니다.');
   const composer = await win.webContents.executeJavaScript(`(() => {
     const prompt = document.querySelector('#runPrompt');
     const providers = document.querySelector('#runProviderPicker');
@@ -3087,7 +3109,7 @@ async function exerciseDrawer(win, round) {
     app.state.sort = 'recent';
     app.openDrawer('fixture-root');
   })()`);
-  await waitFor(win, `(() => {
+  const drawerDragSafe = await win.webContents.executeJavaScript(`(() => {
     const drawer = document.querySelector('#detailDrawer');
     const backdrop = document.querySelector('#drawerBackdrop');
     drawer.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 71, button: 0, clientX: 900, clientY: 240 }));
@@ -3724,7 +3746,20 @@ async function exerciseGraph(win, round) {
   await sleep(120);
   await focusRoot(win);
   await clearCalls(win);
-  await click(win, '#liveSessionGrid [data-open-session="fixture-root"]', 'drawer:open-graph');
+  const focusedRootPtyTrigger = '.agent-workflow-selected [data-inline-pty-trigger="fixture-root"]';
+  await click(win, focusedRootPtyTrigger, 'agent:inline-pty-toggle');
+  await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === 'fixture-root'
+    && Boolean(document.querySelector('[data-inline-agent-terminal="fixture-root"]'))
+    && !document.querySelector('#detailDrawer').classList.contains('open')
+    && window.WhiteboxTerminal.embeddedState().connected
+    && window.WhiteboxTerminal.embeddedState().terminalId === 'terminal-main'`,
+  '메인 AI를 누르면 상세 창 대신 클릭한 AI 아래에 PTY가 열리지 않았습니다.', 160);
+  await click(win, focusedRootPtyTrigger, 'agent:inline-pty-toggle');
+  await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === null
+    && !document.querySelector('[data-inline-agent-terminal]')
+    && !window.WhiteboxTerminal.embeddedState().connected`,
+  '같은 메인 AI를 다시 눌러 인라인 PTY를 닫지 못했습니다.');
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root', { context: true })`);
   await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')
     && document.querySelector('#detailDrawer').dataset.presentation === 'context'
     && document.body.classList.contains('conversation-context-open')
@@ -3861,14 +3896,16 @@ async function writeToEmbeddedXterm(win, viewportSelector, text) {
 }
 
 async function exerciseAgentControls(win, round) {
+  const visibleDrawerXtermScreen = '#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-screen';
   await click(win, '[data-view="all"]', 'nav:all');
   await resetGraphToOverview(win);
 
   await focusRoot(win);
   await waitFor(win, `Boolean(document.querySelector('[data-workflow-progress="fixture-root"]'))
+    && Boolean(document.querySelector('[data-inline-pty-trigger="fixture-root"]'))
     && !document.querySelector('#liveSessionGrid [data-agent-command-form]')`,
   '작업 진행 화면에서 별도 지시 입력창이 제거되지 않았습니다.');
-  await click(win, '[data-open-session="fixture-root"]', 'drawer:open-graph');
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root')`);
   await waitFor(win, `window.WhiteboxTerminal.embeddedState().connected
     && window.WhiteboxTerminal.embeddedState().terminalId === 'terminal-main'
     && Boolean(document.querySelector('#drawerTerminalViewport > .terminal-screen .xterm-helper-textarea'))
@@ -3879,14 +3916,16 @@ async function exerciseAgentControls(win, round) {
   mark('agent:command-submit');
   assert(await callCount(win, 'terminalCommand') === 0, 'PTY 직접 입력이 별도 메시지 command 경로를 호출했습니다.');
   await win.webContents.executeJavaScript(`document.querySelector('#drawerTerminalViewport > .terminal-screen').dataset.interactionTerminalIdentity = 'fixture-root-main'`);
-  await click(win, '#drawerTerminalViewport .xterm-helper-textarea', 'drawer:terminal-focus');
-  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport .xterm-helper-textarea')`,
+  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
+  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-helper-textarea')`,
   'PTY 화면을 클릭해도 실제 xterm 입력 커서로 이동하지 않았습니다.');
   await writeToEmbeddedXterm(win, '#drawerTerminalViewport', 'TERMINAL_DRAWER_CONTINUE');
   mark('agent:command-submit');
   assert(await callCount(win, 'terminalCommand') === 0, 'PTY 직접 입력이 구조화 메시지 경로를 호출했습니다.');
   await clearCalls(win);
-  await click(win, '#drawerTerminalViewport .xterm-helper-textarea', 'drawer:terminal-focus');
+  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
+  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-helper-textarea')`,
+  'PTY 화면의 Ctrl+C 입력 전에 실제 xterm 입력 커서를 준비하지 못했습니다.');
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'C', modifiers: ['control'] });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'C', modifiers: ['control'] });
   await waitFor(win, `window.interactionTest.getCalls().filter(item => item.name === 'terminalWrite'
@@ -3963,11 +4002,11 @@ async function exerciseAgentControls(win, round) {
   await click(win, '[data-graph-focus="fixture-live-0"]', 'graph:focus');
   await waitFor(win, `window.WhiteboxApp.state.graphFocusId === 'fixture-live-0'
     && Boolean(document.querySelector('[data-workflow-progress="fixture-live-0"]'))
-    && Boolean(document.querySelector('[data-open-session="fixture-live-0"]'))
+    && Boolean(document.querySelector('[data-inline-pty-trigger="fixture-live-0"]'))
     && !document.querySelector('#liveSessionGrid [data-agent-command-form]')`, '외부 CLI 세션의 읽기 전용 진행 화면이 표시되지 않았습니다.');
   await clearCalls(win);
   await win.webContents.executeJavaScript(`window.interactionTest.configure({ delays: { terminalCreate: 180 } })`);
-  await click(win, '[data-open-session="fixture-live-0"]', 'drawer:open-session');
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-live-0')`);
   await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')
     && document.querySelector('#detailDrawer').dataset.terminalChat === 'true'
     && ['connecting', 'pty'].includes(document.querySelector('#detailDrawer').dataset.conversationSurface)
@@ -4010,14 +4049,14 @@ async function exerciseAgentControls(win, round) {
     && document.querySelector('#drawerComposer')?.classList.contains('hidden')
     && !document.querySelector('#drawerComposer')?.children.length`,
   '외부 CLI 세션의 실제 PTY가 같은 대화창에 연결되지 않았습니다.');
-  await click(win, '#drawerTerminalViewport .xterm-helper-textarea', 'drawer:terminal-focus');
+  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
   await win.webContents.executeJavaScript(`(() => {
     window.interactionTest.setSessionRuntimePresence('fixture-root', []);
     window.interactionTest.removeTerminal('terminal-main');
     window.interactionTest.emitSnapshot();
     window.interactionTest.emitTerminalState('removed');
   })()`);
-  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport .xterm-helper-textarea')
+  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-helper-textarea')
     && window.WhiteboxTerminal.embeddedState().connected`,
   '실시간 대화 갱신 중 xterm 입력 포커스가 유지되지 않았습니다.');
   await writeToEmbeddedXterm(win, '#drawerTerminalViewport', 'HANDOFF_EXISTING_SESSION');
@@ -4090,10 +4129,10 @@ async function exerciseAgentControls(win, round) {
   await click(win, '[data-graph-focus="fixture-origin"]', 'graph:focus');
   await waitFor(win, `window.WhiteboxApp.state.graphFocusId === 'fixture-origin'
     && Boolean(document.querySelector('[data-workflow-progress="fixture-origin"]'))
-    && Boolean(document.querySelector('[data-open-session="fixture-origin"]'))
+    && Boolean(document.querySelector('[data-inline-pty-trigger="fixture-origin"]'))
     && !document.querySelector('#liveSessionGrid [data-agent-command-form]')`, '실행 중인 Codex 데스크톱 작업의 읽기 전용 진행 화면이 표시되지 않았습니다.');
   await clearCalls(win);
-  await click(win, '[data-open-session="fixture-origin"]', 'drawer:open-session');
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-origin')`);
   await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')
     && document.querySelector('#detailDrawer')?.dataset.terminalChat === 'true'
     && document.querySelector('#detailDrawer')?.dataset.conversationSurface === 'pty'

@@ -245,6 +245,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const syncScrollState = viewportY => {
       const normalizedViewport = Number(viewportY) || 0;
       const baseY = Number(terminal.buffer.active.baseY) || 0;
+      // A remote capture replaces the entire xterm buffer. Do not publish the
+      // transient reset/write coordinates as a completed viewport: observers
+      // could otherwise pair the previous capture revision with baseY=0.
+      if (readOnly && state.remoteCaptureApplying) return;
       host.dataset.viewportY = String(normalizedViewport);
       host.dataset.baseY = String(baseY);
       // Xterm may consume wheel events before they bubble to the host. Its
@@ -306,22 +310,27 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return entry;
   }
 
-  function scrollToBottomImmediately(terminal) {
+  function scrollImmediately(terminal, action) {
     const options = terminal?.options;
     if (!options) {
-      terminal?.scrollToBottom();
+      action();
       return;
     }
     const smoothScrollDuration = options.smoothScrollDuration;
     try {
-      // Public xterm scrollToBottom honors smoothScrollDuration. A resize sync
-      // can cancel that animation and restore the pre-fit ydisp, so automatic
-      // follow must be synchronous while ordinary user scrolling stays smooth.
+      // Public xterm viewport methods honor smoothScrollDuration. A later
+      // capture or resize can cancel that animation and retain the pre-scroll
+      // ydisp, so automatic restoration must finish synchronously while
+      // ordinary user scrolling stays smooth.
       options.smoothScrollDuration = 0;
-      terminal.scrollToBottom();
+      action();
     } finally {
       options.smoothScrollDuration = smoothScrollDuration;
     }
+  }
+
+  function scrollToBottomImmediately(terminal) {
+    scrollImmediately(terminal, () => terminal.scrollToBottom());
   }
 
   function fitEntry(entry, _sessionId = '') {
@@ -1031,12 +1040,18 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         try {
           const latest = currentTmux();
           if (captureGeneration !== state.captureGeneration || !latest || `${latest.distro.name}:${latest.pane.nativeId}` !== captureKey) return;
-          if (firstCapture) entry.terminal.scrollToTop();
-          else if (state.remoteViewportAnchor == null ? wasAtBottom : state.remoteViewportAtBottom) entry.terminal.scrollToBottom();
-          else entry.terminal.scrollToLine(state.remoteViewportAnchor == null ? previousViewport : state.remoteViewportAnchor);
+          if (firstCapture) scrollImmediately(entry.terminal, () => entry.terminal.scrollToTop());
+          else if (state.remoteViewportAnchor == null ? wasAtBottom : state.remoteViewportAtBottom) {
+            scrollToBottomImmediately(entry.terminal);
+          } else {
+            const viewportAnchor = state.remoteViewportAnchor == null ? previousViewport : state.remoteViewportAnchor;
+            scrollImmediately(entry.terminal, () => entry.terminal.scrollToLine(viewportAnchor));
+          }
           const restoredBuffer = entry.terminal.buffer.active;
           state.remoteViewportAnchor = Number(restoredBuffer.viewportY) || 0;
           state.remoteViewportAtBottom = !firstCapture && state.remoteViewportAnchor >= Number(restoredBuffer.baseY || 0);
+          entry.host.dataset.viewportY = String(state.remoteViewportAnchor);
+          entry.host.dataset.baseY = String(Number(restoredBuffer.baseY) || 0);
           state.captureRevision += 1;
           entry.host.dataset.captureRevision = String(state.captureRevision);
         } catch (error) {
