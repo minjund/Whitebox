@@ -65,7 +65,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         container.querySelectorAll(selector).forEach((group) => {
           group.classList.remove("project-sort-dragging");
           group.removeAttribute("data-project-drop-edge");
-          group.querySelector(".project-sidebar-item[draggable='true']")?.setAttribute("aria-grabbed", "false");
+          group.querySelector(".project-sidebar-item[aria-grabbed]")?.setAttribute("aria-grabbed", "false");
         });
       };
       const finishDrag = () => {
@@ -86,9 +86,12 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         return true;
       };
       container.addEventListener("dragstart", (event) => {
-        const item = event.target.closest(".project-sidebar-item[draggable='true']");
-        const group = item?.closest(selector);
-        if (!group || event.target.closest("[data-remove-workspace]")) return;
+        // Only the six-dot drag handle starts a move; dragging the row body
+        // would swallow plain clicks meant to open or close the project.
+        const handle = event.target.closest(".project-sidebar-drag-handle[draggable='true']");
+        const group = handle?.closest(selector);
+        const item = group?.querySelector(".project-sidebar-item");
+        if (!group || !item || event.target.closest("[data-remove-workspace]")) return;
         draggedProjectId = projectId(group);
         if (!draggedProjectId) {
           event.preventDefault();
@@ -133,7 +136,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         if (!container.contains(event.relatedTarget)) clearDropState();
       });
       container.addEventListener("keydown", (event) => {
-        const item = event.target.closest(".project-sidebar-item[draggable='true']");
+        const item = event.target.closest(".project-sidebar-item[aria-grabbed]");
         if (!item || event.target !== item || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
         const group = item.closest(selector);
         const groups = Array.from(container.querySelectorAll(selector));
@@ -200,6 +203,28 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         if (announcement) announce(announcement);
         return;
       }
+      const inlinePty = activeList.id === "projectSidebarList"
+        ? event.target.closest("[data-inline-pty-trigger]")
+        : null;
+      if (inlinePty) {
+        // A sidebar task opens its project workspace with the PTY attached —
+        // the same gesture as pressing PTY on the agent node — instead of the
+        // side drawer.
+        event.preventDefault();
+        event.stopPropagation();
+        const scope = inlinePty.closest(".project-sidebar-source")?.querySelector("[data-source-workspace]");
+        if (scope) {
+          state.workspace = scope.dataset.sourceWorkspace;
+          state.workspaceSource = scope.dataset.projectSource || "all";
+          state.visibleLimit = 30;
+          renderWorkspaces();
+        }
+        if (state.view !== "all") selectView("all", { motionKind: "filter" });
+        if ($("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
+        window.WhiteboxInlineTerminal?.toggle?.(inlinePty.dataset.inlinePtyTrigger);
+        saveDashboardPreferences();
+        return;
+      }
       const openSession = activeList.id === "projectSidebarList"
         ? event.target.closest("[data-open-session]")
         : null;
@@ -236,6 +261,22 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       const item = event.target.closest("[data-workspace], [data-source-workspace]");
       if (item) {
+        // A click on an already-open sidebar project row closes it (accordion);
+        // selecting the project happens on the click that opens it. Moving a
+        // project is reserved for its six-dot drag handle.
+        if (activeList.id === "projectSidebarList" && item.classList.contains("project-sidebar-item")) {
+          const projectKey = String(item.dataset.sidebarProjectRef || "");
+          if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
+          if (projectKey && !state.sidebarCollapsedProjects.has(projectKey)) {
+            state.sidebarCollapsedProjects.add(projectKey);
+            renderWorkspaces();
+            saveDashboardPreferences();
+            requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-project-key="${CSS.escape(projectKey)}"] .project-sidebar-item[role="treeitem"]`)
+              ?.focus({ preventScroll: true }));
+            announce(t("studio.sidebar.collapse_project", { project: item.getAttribute("aria-label") || "" }));
+            return;
+          }
+        }
         const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;
         const requestedSource = item.dataset.projectSource || "all";
         const canToggleToAll = activeList.id !== "projectSidebarList";

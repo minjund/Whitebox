@@ -137,8 +137,14 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   }
 
   function sessionProjectSource(session) {
-    const sourceId = String(session?.sourcePluginId || "direct");
-    return sourceId === "builtin.omo" ? "builtin.opencode" : sourceId;
+    const sourceId = String(session?.sourcePluginId || "");
+    if (sourceId) return sourceId === "builtin.omo" ? "builtin.opencode" : sourceId;
+    // Desktop-app conversations are read by the core monitor without a
+    // sourcePluginId; group them under their desktop toggle instead of Whitebox.
+    const kind = String(session?.clientKind || "").toLowerCase();
+    if (kind === "claude-desktop") return "builtin.claude-desktop";
+    if (kind === "codex-desktop") return "builtin.codex-desktop";
+    return "direct";
   }
 
   function sidebarProjectKey(projectPath) {
@@ -151,6 +157,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
 
   function sourcePluginLabel(sourceId) {
     if (!sourceId || sourceId === "direct") return "Whitebox";
+    if (sourceId === "builtin.claude-desktop") return "Claude Desktop";
+    if (sourceId === "builtin.codex-desktop") return "Codex Desktop";
     const source = (state.sourcePlugins || []).find((item) => item.id === sourceId);
     if (source?.source?.label) return source.source.label;
     return sourceId === "builtin.opencode" ? "OpenCode" : sourceId === "builtin.aside" ? "Aside Browser" : sourceId;
@@ -514,8 +522,15 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
     if (!(state.sidebarCollapsedSources instanceof Set)) state.sidebarCollapsedSources = new Set();
     const sidebarSourceOrder = new Map(sourceIds.map((sourceId, index) => [sourceId, index]));
-    const sourceKind = (sourceId) => sourceId === "direct" ? "program" : "plugin";
-    const sourceMark = (sourceId) => sourceId === "direct" ? "WB" : sourceId === "builtin.opencode" ? "OC" : "AS";
+    const DESKTOP_SOURCE_IDS = new Set(["builtin.claude-desktop", "builtin.codex-desktop"]);
+    // Desktop apps are standalone programs like Whitebox itself, not plugins.
+    const sourceKind = (sourceId) => sourceId === "direct" || DESKTOP_SOURCE_IDS.has(sourceId) ? "program" : "plugin";
+    const sourceMark = (sourceId) => ({
+      direct: "WB",
+      "builtin.opencode": "OC",
+      "builtin.claude-desktop": "CL",
+      "builtin.codex-desktop": "CX",
+    })[sourceId] || "AS";
     const sourceState = (item, sourceId, projectless = false) => {
       const rootMatches = (root) => sessionProjectSource(root) === sourceId
         && (projectless
@@ -624,8 +639,19 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? t("studio.sidebar.needs_review")
         : live ? t("project.in_progress") : t("studio.sidebar.waiting");
       const title = shortText(session.title || session.workspace || t("studio.session.untitled"), 48);
+      // Clicking a task jumps to its project workflow and opens the PTY, the
+      // same action as the agent node's PTY button; transcript-only records
+      // (plugin imports, Claude desktop conversations) keep the drawer.
+      const completedMainPty = String(session.status || "") === "completed"
+        && window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(session) === true;
+      const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
+        || session.controlCapabilities?.pty === false) && !completedMainPty;
+      const ptyCapable = !session.parentId && !session.sourcePluginId && !transcriptSurface;
+      const interaction = ptyCapable
+        ? `data-inline-pty-trigger="${esc(session.id)}"`
+        : `data-open-session="${esc(session.id)}"`;
       return `<button type="button" class="project-sidebar-session ${attention ? "attention" : live ? "live" : ""}"
-        data-open-session="${esc(session.id)}" role="treeitem" aria-level="3" tabindex="-1"
+        ${interaction} role="treeitem" aria-level="3" tabindex="-1"
         aria-label="${esc(`${title}. ${status}`)}" title="${esc(title)}">
         <i aria-hidden="true"></i><b>${esc(title)}</b><small>${esc(status)}</small>
       </button>`;
@@ -698,21 +724,20 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       return `<section class="project-sidebar-group project-sidebar-project ${projectSelected ? "selected" : ""} ${item.attention.length ? "has-attention" : ""} ${item.resultReady.length ? "has-result-ready" : ""}"
         data-sidebar-project-key="${esc(item.key)}" ${canReorder ? `data-project-sortable="${esc(item.key)}"` : ""} role="none">
         <div class="project-sidebar-row">
-          <button type="button" class="workspace-item project-sidebar-item ${allSourcesSelected ? "selected" : ""}"
+          <button type="button" class="workspace-item project-sidebar-item ${allSourcesSelected ? "selected" : ""} ${canReorder ? "can-reorder" : ""}"
             data-workspace="${esc(item.path)}" data-project-source="all" data-sidebar-project-ref="${esc(item.key)}"
             title="${esc(item.path)}"
             data-live-session-count="${item.live.length}"
             data-attention-session-count="${item.attention.length}"
             data-result-ready-count="${item.resultReady.length}"
             data-project-priority="${item.priority}"
-            draggable="${canReorder ? "true" : "false"}"
             ${canReorder ? 'aria-grabbed="false" aria-describedby="projectReorderHelp"' : ""}
             ${projectKeyboardShortcuts ? `aria-keyshortcuts="${projectKeyboardShortcuts}"` : ""}
             aria-label="${esc(accessibleLabel)}" aria-selected="${allSourcesSelected ? "true" : "false"}"
             aria-expanded="${projectExpanded ? "true" : "false"}" aria-owns="${sourceListId}"
             role="treeitem" aria-level="1"
             tabindex="${item.key === sidebarTabStopProjectKey && !sidebarTabStopSourceKey ? "0" : "-1"}">
-            ${canReorder ? `<span class="project-sidebar-drag-handle" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
+            ${canReorder ? `<span class="project-sidebar-drag-handle" draggable="${canReorder ? "true" : "false"}" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
             <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(item.name))}</span>
             <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><small>${esc(t("studio.sidebar.project_tree_summary", {
               count: Number(item.count || 0),

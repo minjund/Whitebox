@@ -1063,12 +1063,24 @@ body:is(
   text-align: left;
 }
 
-.project-sidebar-list .workspace-item.project-sidebar-item[draggable="true"] {
+/* The active/past/review tabs are retired from the project header; the DOM
+ * stays because count elements inside them are still updated by render code. */
+#projectViewTabs .nav-item[data-view="all"],
+#projectViewTabs .nav-item[data-view="active"],
+#projectViewTabs .nav-item[data-view="waiting"] {
+  display: none;
+}
+
+/* The row itself is a click target (open/close); only the six-dot handle drags. */
+.project-sidebar-list .workspace-item.project-sidebar-item.can-reorder {
   grid-template-columns: 12px 30px minmax(0, 1fr) auto;
+}
+
+.project-sidebar-drag-handle[draggable="true"] {
   cursor: grab;
 }
 
-.project-sidebar-list .workspace-item.project-sidebar-item[draggable="true"]:active,
+.project-sidebar-drag-handle[draggable="true"]:active,
 .project-sidebar-group.project-sort-dragging .workspace-item.project-sidebar-item {
   cursor: grabbing;
 }
@@ -1092,8 +1104,8 @@ body:is(
   transform: translateX(-2px);
 }
 
-.project-sidebar-item[draggable="true"]:hover .project-sidebar-drag-handle,
-.project-sidebar-item[draggable="true"]:focus-visible .project-sidebar-drag-handle,
+.project-sidebar-item.can-reorder:hover .project-sidebar-drag-handle,
+.project-sidebar-item.can-reorder:focus-visible .project-sidebar-drag-handle,
 .project-sidebar-group.project-sort-dragging .project-sidebar-drag-handle {
   color: var(--studio-cyan);
 }

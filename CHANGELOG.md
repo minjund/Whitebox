@@ -5,6 +5,15 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.10 - 2026-08-26
+
+- Group Claude Desktop and Codex Desktop conversations under their own program
+  toggles even when the core monitor supplies no source plugin identifier.
+- Open PTY-capable root tasks from the project sidebar directly in their project
+  workflow, while keeping transcript-only records in the read-only drawer.
+- Restore accordion-style project rows, reserve reordering for the drag handle,
+  and hide the retired project status tabs.
+
 ## 1.7.9 - 2026-08-25
 
 - Preserve the user's real Xterm wheel position while a remote tmux capture is
