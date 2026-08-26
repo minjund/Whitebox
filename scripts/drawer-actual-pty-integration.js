@@ -276,9 +276,15 @@ async function run() {
       'renderer와 실제 PTY preload가 준비되지 않았습니다.');
 
     const openedInline = await rendererValue(win, `(() => {
-      const workspace = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+      const findWorkspace = () => [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(node => node.dataset.workspace === ${JSON.stringify(root)});
+      let workspace = findWorkspace();
       workspace?.click();
+      // An expanded accordion row closes on its first click. Re-query after
+      // that synchronous render and click the collapsed row to select/open it;
+      // if it began collapsed, the first click already performed that action.
+      workspace = findWorkspace();
+      if (workspace?.getAttribute('aria-expanded') === 'false') workspace.click();
       const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
       trigger?.click();
       return Boolean(workspace && trigger);
