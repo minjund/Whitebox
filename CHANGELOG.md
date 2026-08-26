@@ -5,6 +5,11 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.11 - 2026-08-26
+
+- Force a final xterm repaint after each drained PTY output burst so completed
+  live lines cannot remain in the terminal buffer without appearing on screen.
+
 ## 1.7.10 - 2026-08-26
 
 - Group Claude Desktop and Codex Desktop conversations under their own program
