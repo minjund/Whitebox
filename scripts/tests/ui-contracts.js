@@ -3112,17 +3112,19 @@ function registerUiContractTests(context) {
     const directProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'direct'));
     const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
     const asideProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.aside'));
+    // Direct root tasks open their project workflow with the PTY attached;
+    // only transcript-only records keep the data-open-session drawer.
     assertIncludesAll(directProgram, [
-      'data-open-session="direct-root"',
-      'data-open-session="direct-root-2"',
-      'data-open-session="direct-root-3"',
+      'data-inline-pty-trigger="direct-root"',
+      'data-inline-pty-trigger="direct-root-2"',
+      'data-inline-pty-trigger="direct-root-3"',
       'project-sidebar-session-more',
       '+ 2개 작업 더 있음',
     ]);
-    assert.equal((directProgram.match(/data-open-session=/g) || []).length, 3,
+    assert.equal((directProgram.match(/data-inline-pty-trigger=/g) || []).length, 3,
       '작업이 많은 프로그램도 최신 root 작업 3개까지만 미리 보여야 합니다.');
-    assert.equal(directProgram.includes('data-open-session="direct-root-4"'), false);
-    assert.equal(directProgram.includes('data-open-session="direct-root-5"'), false);
+    assert.equal(directProgram.includes('data-inline-pty-trigger="direct-root-4"'), false);
+    assert.equal(directProgram.includes('data-inline-pty-trigger="direct-root-5"'), false);
     assert.ok(openCodeProgram.includes('data-open-session="builtin.opencode:open-root"'));
     assert.equal(openCodeProgram.includes('data-open-session="builtin.opencode:open-child"'), false,
       '프로그램 아래에는 하위 agent가 아니라 root session 작업 행만 표시해야 합니다.');
@@ -3130,7 +3132,7 @@ function registerUiContractTests(context) {
       '남은 root 작업이 없는 프로그램에 더 있음 요약을 표시하면 안 됩니다.');
     assert.ok(asideProgram.includes('data-open-session="builtin.aside:aside-root"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'direct'))
-      .includes('data-open-session="direct-projectless"'));
+      .includes('data-inline-pty-trigger="direct-projectless"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.opencode'))
       .includes('data-open-session="builtin.opencode:open-projectless"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.aside'))
