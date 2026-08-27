@@ -33,7 +33,14 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return Boolean(session && !["running", "starting"].includes(session.status));
   }
 
-  const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+  const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(session) === true;
+  const isDirectWritablePty = session => window.WhiteboxRendererUtils?.isWritableDirectSession?.(session) === true
+    && session?.controlCapabilities?.pty === true
+    && session?.presentation?.conversationSurface !== "transcript";
+  const hasWritablePtySurface = session => !session?.parentId && (
+    (String(session.status || "").toLowerCase() === "completed" && canForkCodexDesktopSession(session))
+    || isDirectWritablePty(session)
+  );
 
   function latestSessionSort(sessions = []) {
     return [...sessions].sort((left, right) =>
@@ -642,11 +649,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       // Clicking a task jumps to its project workflow and opens the PTY, the
       // same action as the agent node's PTY button; transcript-only records
       // (plugin imports, Claude desktop conversations) keep the drawer.
-      const completedMainPty = String(session.status || "") === "completed"
-        && window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(session) === true;
-      const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
-        || session.controlCapabilities?.pty === false) && !completedMainPty;
-      const ptyCapable = !session.parentId && !session.sourcePluginId && !transcriptSurface;
+      const ptyCapable = hasWritablePtySurface(session);
       const interaction = ptyCapable
         ? `data-inline-pty-trigger="${esc(session.id)}"`
         : `data-open-session="${esc(session.id)}"`;
@@ -863,13 +866,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? latestHistorySessions.map((session) => {
           const provider = state.providerMap.get(session.provider);
           const providerLabel = provider?.label || String(session.provider || "AI").toUpperCase();
-          const completedMainPty = String(session.status || "") === "completed"
-            && canForkCodexDesktopSession(session);
-          const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
-            || session.controlCapabilities?.pty === false) && !completedMainPty;
-          const historyInteraction = transcriptSurface
-            ? `data-open-session="${esc(session.id)}"`
-            : `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+          const historyInteraction = hasWritablePtySurface(session)
+            ? `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+            : `data-open-session="${esc(session.id)}"`;
           const updatedAt = new Date(session.updatedAt || 0);
           const updatedLabel = Number.isNaN(updatedAt.getTime())
             ? ""

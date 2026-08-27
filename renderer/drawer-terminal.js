@@ -27,6 +27,13 @@
     return String(target?.terminalId || target?.id || '');
   }
 
+  function ownsEmbeddedHost(embedded = window.WhiteboxTerminal?.embeddedState?.() || {}) {
+    const id = String(embedded.terminalId || '');
+    return Boolean(id && [...(viewport()?.children || [])].some(node =>
+      node.classList?.contains('terminal-screen')
+      && String(node.dataset?.terminalScreen || '') === id));
+  }
+
   function drawerSessionVisible(sessionId, expectedViewport = viewport()) {
     const drawer = element('detailDrawer');
     const terminalSurface = surface();
@@ -300,6 +307,7 @@
   }
 
   async function mount(session, options = {}) {
+    if (window.WhiteboxApp?.state?.ptyFocusSessionId) return { ok: false, reason: 'focus-owned', targets: [] };
     if (session?.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };
     if (!session?.id || !viewport()?.isConnected) return { ok: false, reason: 'invalid-mount', targets: [] };
     const signature = connectionSignature(session);
@@ -367,6 +375,7 @@
       && state.baseStatus.tone === 'connected';
     if (!options.force
       && embedded.connected
+      && ownsEmbeddedHost(embedded)
       && embedded.agentSessionId === session.id
       && (!requestedTargetId || embedded.terminalId === requestedTargetId)
       && (embeddedVerified || embeddedJustConnected)) {
@@ -401,6 +410,23 @@
         excludeTerminalIds: [...excludedTargetIds],
       });
       if (generation !== state.generation || state.session?.id !== session.id) {
+        const active = window.WhiteboxTerminal?.embeddedState?.() || {};
+        const resultTargetId = targetIdOf(result?.target);
+        // `WhiteboxTerminal.mountForAgent` has its own monotonic generation.
+        // Once this drawer starts a newer mount for the same session, an old
+        // call is cancelled before it can append a host. A matching host that
+        // is now inside the drawer therefore belongs to the newer call, even
+        // when its outer promise has not resumed yet. Do not let this stale
+        // continuation detach that current host.
+        const newerSameSessionMount = generation < state.generation
+          && state.session?.id === session.id;
+        if (!newerSameSessionMount
+          && resultTargetId
+          && active.agentSessionId === session.id
+          && String(active.terminalId || '') === resultTargetId
+          && ownsEmbeddedHost(active)) {
+          window.WhiteboxTerminal?.unmountEmbedded?.();
+        }
         return { ok: false, reason: 'cancelled', targets: [] };
       }
       state.target = result?.target || null;
@@ -455,7 +481,8 @@
   function unmount(options = {}) {
     const resetSessionId = String(options.sessionId || state.session?.id || '');
     state.generation += 1;
-    window.WhiteboxTerminal?.unmountEmbedded?.();
+    const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+    if (ownsEmbeddedHost(embedded)) window.WhiteboxTerminal?.unmountEmbedded?.();
     state.session = null;
     state.target = null;
     clearPendingMount();
@@ -657,7 +684,8 @@
         state.generation += 1;
         clearPendingMount();
         state.reconnectFocusIntent = null;
-        window.WhiteboxTerminal?.unmountEmbedded?.();
+        const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+        if (ownsEmbeddedHost(embedded)) window.WhiteboxTerminal?.unmountEmbedded?.();
         state.target = null;
         setStatus('unavailable', 'drawer.terminal_unavailable', terminal?.statusDetail || '');
       }

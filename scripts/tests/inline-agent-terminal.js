@@ -8,7 +8,9 @@ const vm = require('vm');
 function classList() {
   const values = new Set();
   return {
+    add: (...items) => items.forEach(value => values.add(value)),
     contains: value => values.has(value),
+    remove: (...items) => items.forEach(value => values.delete(value)),
     toggle(value, force) {
       const enabled = force == null ? !values.has(value) : Boolean(force);
       if (enabled) values.add(value);
@@ -25,13 +27,16 @@ function createInlineHarness(root, options = {}) {
     provider: 'codex',
     cwd: 'D:\\fixture',
     parentId: null,
+    controlCapabilities: { pty: true },
   };
+  const fixtureSessions = options.sessions || [session];
   const mountCalls = [];
   const resumeCalls = [];
   const forkCalls = [];
   const restartCalls = [];
   const focusCalls = [];
   const unmountCalls = [];
+  const renderCalls = [];
   const documentListeners = new Map();
   const windowListeners = new Map();
   const terminalStateListeners = [];
@@ -62,17 +67,24 @@ function createInlineHarness(root, options = {}) {
       return null;
     },
   };
-  const viewport = {
-    id: 'agentInlineTerminalViewport',
+  const createViewport = id => ({
+    id,
     children: [],
     isConnected: true,
     appendChild(node) {
+      const previousParent = node?.parentElement;
+      if (previousParent && Array.isArray(previousParent.children)) {
+        previousParent.children = previousParent.children.filter(child => child !== node);
+      }
       this.children = this.children.filter(child => child !== node);
       this.children.push(node);
       node.parentElement = this;
       return node;
     },
-  };
+  });
+  const viewport = createViewport('agentInlineTerminalViewport');
+  const focusViewport = createViewport('ptyFocusTerminalViewport');
+  const storageViewport = createViewport('terminalViewport');
   const status = { textContent: '' };
   const meta = { textContent: '' };
   const shell = {
@@ -87,18 +99,47 @@ function createInlineHarness(root, options = {}) {
       return null;
     },
   };
+  const focusShell = {
+    dataset: { inlineAgentTerminal: session.id },
+    querySelector(selector) {
+      if (selector === '[data-agent-terminal-viewport]' || selector === '#ptyFocusTerminalViewport') return focusViewport;
+      if (selector === '[data-inline-terminal-empty]') return empty;
+      if (selector === '[data-inline-terminal-resume]') return resume;
+      if (selector === '[data-inline-terminal-status]') return status;
+      if (selector === '[data-inline-terminal-meta]') return meta;
+      if (selector === '[data-inline-terminal-reconnect]') return reconnect;
+      return null;
+    },
+  };
+  const focusSurfaceAttributes = new Map([['aria-hidden', 'false']]);
+  const focusSurface = {
+    classList: classList(),
+    hidden: false,
+    isConnected: true,
+    parentElement: null,
+    style: {},
+    getAttribute: name => focusSurfaceAttributes.get(name) || null,
+    querySelector(selector) {
+      return selector === '[data-inline-agent-terminal]' ? focusShell : null;
+    },
+    setAttribute(name, value) { focusSurfaceAttributes.set(name, String(value)); },
+    removeAttribute(name) { focusSurfaceAttributes.delete(name); },
+  };
   let activeSession = session;
   let activeShell = shell;
   let activeViewport = viewport;
   const app = {
     state: {
       inlineTerminalSessionId: options.initialOpen === false ? null : session.id,
-      graphFocusId: null,
+      ptyFocusSessionId: options.initialFocus ? session.id : null,
+      graphFocusId: options.graphFocusId || null,
       details: new Map(),
-      snapshot: { sessions: [session] },
+      snapshot: { sessions: [...fixtureSessions] },
     },
-    snapshotSession: id => id === activeSession.id ? activeSession : null,
-    renderSessions() {},
+    snapshotSession: id => (id === activeSession.id ? activeSession : null)
+      || app.state.snapshot.sessions.find(item => item.id === id)
+      || null,
+    renderSessions(reason) { renderCalls.push(reason); },
   };
   const body = { closest: () => null };
   const documentElement = { closest: () => null };
@@ -108,7 +149,12 @@ function createInlineHarness(root, options = {}) {
     documentElement,
     visibilityState: 'visible',
     hasFocus: () => true,
-    querySelector: selector => selector === '[data-inline-agent-terminal]' ? activeShell : null,
+    querySelector(selector) {
+      if (selector === '#ptyFocusSurface') return focusSurface;
+      if (selector === '#agentInlineTerminal[data-inline-agent-terminal]') return activeShell;
+      if (selector === '[data-inline-agent-terminal]') return activeShell;
+      return null;
+    },
     addEventListener(type, listener) {
       const listeners = documentListeners.get(type) || [];
       listeners.push(listener);
@@ -116,13 +162,22 @@ function createInlineHarness(root, options = {}) {
     },
   };
   let embedded = { connected: false, agentSessionId: '', terminalId: '' };
+  let terminalMountGeneration = 0;
   let connectedTarget = null;
+  const terminalHosts = new Map();
+  const terminalHost = terminalId => {
+    const id = String(terminalId || '');
+    if (!terminalHosts.has(id)) {
+      terminalHosts.set(id, { dataset: { terminalScreen: id }, parentElement: null });
+    }
+    return terminalHosts.get(id);
+  };
   const connectResult = (result, mountedSession = activeSession, mount = activeViewport) => {
     if (!result?.ok || !result.target) return;
     connectedTarget = result.target;
     const terminalId = String(result.target.terminalId || result.target.id || '');
     embedded = { connected: true, agentSessionId: mountedSession.id, terminalId };
-    mount.appendChild({ dataset: { terminalScreen: terminalId }, parentElement: mount });
+    mount.appendChild(terminalHost(terminalId));
   };
   const terminal = {
     agentConnectionSignature: mountedSession => options.agentConnectionSignature?.(mountedSession)
@@ -142,9 +197,12 @@ function createInlineHarness(root, options = {}) {
       return true;
     },
     mountForAgent: async (mountedSession, mountOptions) => {
+      const mountGeneration = terminalMountGeneration;
       mountCalls.push({ session: mountedSession, options: { ...mountOptions } });
       const result = await options.mountForAgent(mountedSession, mountOptions, mountCalls.length);
-      if (options.autoConnectResults !== false) connectResult(result, mountedSession, mountOptions.mount);
+      if (options.autoConnectResults !== false && mountGeneration === terminalMountGeneration) {
+        connectResult(result, mountedSession, mountOptions.mount);
+      }
       return result;
     },
     resumeForAgent: async (...args) => {
@@ -168,9 +226,11 @@ function createInlineHarness(root, options = {}) {
       ? options.forkSupport(mountedSession)
       : { supported: false, reason: 'not forkable in fixture' },
     unmountEmbedded: () => {
+      terminalMountGeneration += 1;
       unmountCalls.push(embedded.terminalId);
+      const host = terminalHosts.get(embedded.terminalId);
+      if (host) storageViewport.appendChild(host);
       embedded = { connected: false, agentSessionId: '', terminalId: '' };
-      viewport.children = [];
     },
   };
   const window = {
@@ -180,7 +240,36 @@ function createInlineHarness(root, options = {}) {
       t: key => key,
       errorText: (_error, fallback) => fallback,
     },
-    WhiteboxRendererUtils: { reportRecoverableError() {} },
+    WhiteboxRendererUtils: {
+      reportRecoverableError() {},
+      canForkCodexDesktopSession(candidate) {
+        return Boolean(candidate
+          && candidate.provider === 'codex'
+          && candidate.clientKind === 'codex-desktop'
+          && candidate.status === 'completed'
+          && !candidate.parentId
+          && !candidate.sourcePluginId
+          && candidate.sourcePlugin == null
+          && candidate.readOnly !== true);
+      },
+      isWritableDirectSession(candidate) {
+        const markers = [candidate?.source, candidate?.clientKind, candidate?.provenance?.source?.id]
+          .map(value => String(value || '').toLowerCase());
+        return Boolean(candidate
+          && !candidate.parentId
+          && !candidate.sourcePluginId
+          && candidate.sourcePlugin == null
+          && !candidate.provenance?.source?.pluginId
+          && candidate.readOnly !== true
+          && !candidate.controlAuthority
+          && !candidate.importMode
+          && !markers.some(value => value === 'whitebox-bridge' || /(?:^|[.:/_-])(?:opencode|omo|aside)(?:$|[.:/_-])/.test(value)));
+      },
+    },
+    getComputedStyle: element => ({
+      display: element?.style?.display || (element?.classList?.contains?.('hidden') ? 'none' : 'block'),
+      visibility: element?.style?.visibility || 'visible',
+    }),
     whitebox: {
       onTerminalState(listener) { terminalStateListeners.push(listener); },
     },
@@ -204,13 +293,18 @@ function createInlineHarness(root, options = {}) {
     app,
     document,
     focusCalls,
+    focusShell,
+    focusSurface,
+    focusViewport,
     forkCalls,
     mountCalls,
     reconnectButton: reconnect,
     restartCalls,
     resumeCalls,
     resumeButton: resume,
+    renderCalls,
     inlineViewport: viewport,
+    storageViewport,
     unmountCalls,
     session,
     dispatchDocument(type, event = {}) {
@@ -222,36 +316,39 @@ function createInlineHarness(root, options = {}) {
     dispatchTerminalState(payload) {
       for (const listener of terminalStateListeners) listener(payload);
     },
-    setEmbedded(next) {
+    setEmbedded(next, mount = app.state.ptyFocusSessionId ? focusViewport : activeViewport) {
+      const previousHost = terminalHosts.get(embedded.terminalId);
+      if (previousHost?.parentElement && Array.isArray(previousHost.parentElement.children)) {
+        previousHost.parentElement.children = previousHost.parentElement.children.filter(child => child !== previousHost);
+        previousHost.parentElement = null;
+      }
       embedded = { connected: false, agentSessionId: '', terminalId: '', ...next };
-      activeViewport.children = embedded.connected && embedded.terminalId
-        ? [{ dataset: { terminalScreen: embedded.terminalId }, parentElement: activeViewport }]
-        : [];
+      if (embedded.connected && embedded.terminalId) mount.appendChild(terminalHost(embedded.terminalId));
+    },
+    setFocusSurfaceVisible(visible) {
+      focusSurface.hidden = !visible;
+      focusSurface.classList.toggle('hidden', !visible);
+      focusSurface.setAttribute('aria-hidden', String(!visible));
+    },
+    setFocusShellSessionId(sessionId) {
+      focusShell.dataset.inlineAgentTerminal = String(sessionId || '');
+    },
+    embeddedState: () => ({ ...embedded }),
+    embeddedHost: terminalId => terminalHosts.get(String(terminalId || embedded.terminalId || '')) || null,
+    terminalHostCount: () => terminalHosts.size,
+    enterFocus: (...args) => window.WhiteboxInlineTerminal.enterFocus(...args),
+    closeFocus: (...args) => window.WhiteboxInlineTerminal.closeFocus(...args),
+    setInlineOpen(sessionId) {
+      app.state.inlineTerminalSessionId = sessionId == null ? null : String(sessionId);
     },
     moveEmbeddedHostToDrawer() {
-      const host = activeViewport.children.find(child => (
-        String(child?.dataset?.terminalScreen || '') === String(embedded.terminalId || '')
-      ));
-      const drawerViewport = { id: 'drawerTerminalViewport', children: [] };
-      if (host) {
-        activeViewport.children = activeViewport.children.filter(child => child !== host);
-        drawerViewport.children.push(host);
-        host.parentElement = drawerViewport;
-      }
+      const host = terminalHosts.get(String(embedded.terminalId || '')) || null;
+      const drawerViewport = createViewport('drawerTerminalViewport');
+      if (host) drawerViewport.appendChild(host);
       return drawerViewport;
     },
     switchSession(nextSession) {
-      const nextViewport = {
-        id: 'agentInlineTerminalViewport',
-        children: [],
-        isConnected: true,
-        appendChild(node) {
-          this.children = this.children.filter(child => child !== node);
-          this.children.push(node);
-          node.parentElement = this;
-          return node;
-        },
-      };
+      const nextViewport = createViewport('agentInlineTerminalViewport');
       const nextEmpty = {
         classList: classList(),
         querySelector(selector) {
@@ -283,6 +380,250 @@ function createInlineHarness(root, options = {}) {
 
 function registerInlineAgentTerminalTests(context) {
   const { test, root } = context;
+
+  test('PTY 집중 모드는 담당 AI만 열고 기존 관제 선택을 바꾸지 않는다', async () => {
+    const mainSession = {
+      id: 'codex:focus-root-only',
+      externalId: 'focus-root-only-history',
+      provider: 'codex',
+      cwd: 'D:\\fixture',
+      parentId: null,
+      controlCapabilities: { pty: true },
+    };
+    const childSession = {
+      ...mainSession,
+      id: 'codex:focus-child-blocked',
+      externalId: 'focus-child-blocked-history',
+      parentId: mainSession.id,
+    };
+    const target = {
+      id: 'terminal:focus-root-only',
+      terminalId: 'terminal:focus-root-only',
+      kind: 'terminal',
+    };
+    const harness = createInlineHarness(root, {
+      session: mainSession,
+      sessions: [mainSession, childSession],
+      initialOpen: false,
+      graphFocusId: 'codex:remembered-graph-focus',
+      mountForAgent: async () => ({ ok: true, target }),
+    });
+    harness.setInlineOpen('codex:remembered-inline');
+
+    assert.equal(harness.enterFocus(childSession.id), false,
+      '독립 PTY가 없는 하위 AI가 집중 모드에 진입했습니다.');
+    assert.equal(harness.app.state.ptyFocusSessionId, null);
+    assert.equal(harness.mountCalls.length, 0);
+
+    for (const invalid of [
+      { ...mainSession, id: 'codex:focus-read-only', readOnly: true },
+      { ...mainSession, id: 'codex:focus-plugin-object', sourcePlugin: {} },
+      { ...mainSession, id: 'codex:focus-provenance', provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...mainSession, id: 'codex:focus-opencode', source: 'opencode' },
+    ]) {
+      const blocked = createInlineHarness(root, {
+        session: invalid,
+        initialOpen: false,
+        mountForAgent: async () => ({ ok: true, target }),
+      });
+      assert.equal(blocked.enterFocus(invalid.id), false);
+      blocked.toggle(invalid.id, { focus: false });
+      assert.equal(blocked.app.state.inlineTerminalSessionId, null);
+      assert.equal((await blocked.sync()).reason, 'not-ready');
+      assert.equal(blocked.mountCalls.length, 0,
+        `읽기 전용 projection이 PTY 경로에 진입했습니다: ${JSON.stringify(invalid)}`);
+    }
+
+    assert.equal(harness.enterFocus(mainSession.id), true);
+    assert.equal(harness.app.state.ptyFocusSessionId, mainSession.id);
+    assert.equal(harness.app.state.inlineTerminalSessionId, 'codex:remembered-inline',
+      '집중 모드 진입이 관제 화면의 기존 inline PTY 선택을 덮어썼습니다.');
+    assert.equal(harness.app.state.graphFocusId, 'codex:remembered-graph-focus',
+      '집중 모드 진입이 관제 화면의 기존 그래프 선택을 덮어썼습니다.');
+
+    const result = await harness.sync();
+    assert.equal(result.ok, true);
+    assert.equal(harness.mountCalls.length, 1);
+    assert.strictEqual(harness.mountCalls[0].options.mount, harness.focusViewport,
+      '집중 모드 PTY가 전용 focus viewport가 아닌 관제 inline viewport에 마운트됐습니다.');
+    assert.equal(harness.embeddedState().agentSessionId, mainSession.id);
+    assert.equal(harness.embeddedState().terminalId, target.terminalId);
+    assert.equal(harness.focusCalls.length, 1,
+      '사용자가 연 집중 모드 PTY에 입력 포커스를 전달하지 않았습니다.');
+  });
+
+  test('inline에서 PTY 집중 모드로 갔다 돌아와도 같은 terminal host를 재사용한다', async () => {
+    const target = {
+      id: 'terminal:focus-host-identity',
+      terminalId: 'terminal:focus-host-identity',
+      kind: 'terminal',
+    };
+    const harness = createInlineHarness(root, {
+      mountForAgent: async () => ({ ok: true, target }),
+    });
+
+    const inlineResult = await harness.sync();
+    assert.equal(inlineResult.ok, true);
+    const originalHost = harness.embeddedHost(target.terminalId);
+    assert.ok(originalHost, '관제 inline PTY host를 만들지 못했습니다.');
+    assert.strictEqual(originalHost.parentElement, harness.inlineViewport);
+    assert.equal(harness.terminalHostCount(), 1);
+
+    const downgradedInline = createInlineHarness(root, {
+      mountForAgent: async () => ({
+        ok: true,
+        target: { id: 'terminal:downgraded-inline', terminalId: 'terminal:downgraded-inline', kind: 'terminal' },
+      }),
+    });
+    assert.equal((await downgradedInline.sync()).ok, true);
+    downgradedInline.session.readOnly = true;
+    assert.equal((await downgradedInline.sync()).reason, 'not-eligible');
+    assert.equal(downgradedInline.app.state.inlineTerminalSessionId, null);
+    assert.equal(downgradedInline.embeddedState().connected, false,
+      'snapshot에서 읽기 전용으로 바뀐 inline 세션의 기존 writable host를 회수하지 않았습니다.');
+
+    const downgradedFocus = createInlineHarness(root, {
+      initialOpen: false,
+      mountForAgent: async () => ({
+        ok: true,
+        target: { id: 'terminal:downgraded-focus', terminalId: 'terminal:downgraded-focus', kind: 'terminal' },
+      }),
+    });
+    assert.equal(downgradedFocus.enterFocus(downgradedFocus.session.id), true);
+    assert.equal((await downgradedFocus.sync()).ok, true);
+    downgradedFocus.session.provenance = { source: { pluginId: 'builtin.omo' } };
+    assert.equal((await downgradedFocus.sync()).reason, 'not-eligible');
+    assert.equal(downgradedFocus.app.state.ptyFocusSessionId, null);
+    assert.equal(downgradedFocus.embeddedState().connected, false,
+      'snapshot에서 외부 projection으로 바뀐 focus 세션의 기존 writable host를 회수하지 않았습니다.');
+
+    let releasePendingFocusMount;
+    const pendingFocus = createInlineHarness(root, {
+      initialOpen: false,
+      mountForAgent: () => new Promise(resolve => { releasePendingFocusMount = resolve; }),
+    });
+    assert.equal(pendingFocus.enterFocus(pendingFocus.session.id), true);
+    const pendingResult = pendingFocus.sync();
+    await Promise.resolve();
+    assert.equal(pendingFocus.closeFocus(), true);
+    assert.equal(pendingFocus.unmountCalls.length, 1,
+      '아직 완료되지 않은 focus mount를 복귀 시 shared generation으로 취소하지 않았습니다.');
+    releasePendingFocusMount({
+      ok: true,
+      target: { id: 'terminal:late-focus', terminalId: 'terminal:late-focus', kind: 'terminal' },
+    });
+    assert.equal((await pendingResult).reason, 'cancelled');
+    assert.equal(pendingFocus.embeddedState().connected, false);
+    assert.equal(pendingFocus.focusViewport.children.length, 0,
+      '늦게 끝난 focus mount가 숨겨진 focus viewport에 xterm host를 남겼습니다.');
+
+    assert.equal(harness.enterFocus(harness.session.id), true);
+    const focusResult = await harness.sync();
+    assert.equal(focusResult.ok, true);
+    assert.equal(harness.embeddedState().terminalId, target.terminalId);
+    assert.strictEqual(harness.embeddedHost(target.terminalId), originalHost,
+      '집중 모드 진입이 같은 terminal ID의 xterm host를 새로 만들었습니다.');
+    assert.strictEqual(originalHost.parentElement, harness.focusViewport,
+      '기존 xterm host를 focus viewport로 재부모화하지 않았습니다.');
+    assert.equal(harness.inlineViewport.children.includes(originalHost), false,
+      '집중 모드 진입 뒤 같은 host가 관제 inline viewport에도 중복으로 남았습니다.');
+    assert.equal(harness.unmountCalls.length, 0,
+      '집중 모드 진입 중 살아 있는 embedded PTY를 불필요하게 unmount했습니다.');
+    assert.equal(harness.terminalHostCount(), 1);
+
+    assert.equal(harness.closeFocus(), true);
+    assert.equal(harness.app.state.ptyFocusSessionId, null);
+    assert.equal(harness.app.state.inlineTerminalSessionId, harness.session.id,
+      '관제로 복귀하면서 진입 전 inline PTY 선택을 잃었습니다.');
+    assert.deepStrictEqual(harness.unmountCalls, [target.terminalId]);
+    assert.strictEqual(originalHost.parentElement, harness.storageViewport,
+      '관제 재렌더 전 host를 terminal 보관 viewport로 안전하게 돌려놓지 않았습니다.');
+
+    const restored = await harness.sync();
+    assert.equal(restored.ok, true);
+    assert.equal(harness.embeddedState().terminalId, target.terminalId);
+    assert.strictEqual(harness.embeddedHost(target.terminalId), originalHost,
+      '관제 복귀가 기존 xterm host 대신 새 host를 만들었습니다.');
+    assert.strictEqual(originalHost.parentElement, harness.inlineViewport,
+      '관제 sync가 기존 host를 원래 inline viewport로 복원하지 않았습니다.');
+    assert.equal(harness.terminalHostCount(), 1);
+  });
+
+  test('숨겨졌거나 session이 어긋난 PTY 집중 surface는 writable PTY를 마운트하지 않는다', async () => {
+    async function blockedFocusSurface(mode) {
+      const harness = createInlineHarness(root, {
+        initialOpen: false,
+        mountForAgent: async () => ({
+          ok: true,
+          target: { id: 'terminal:unexpected-focus-mount', terminalId: 'terminal:unexpected-focus-mount', kind: 'terminal' },
+        }),
+      });
+      assert.equal(harness.enterFocus(harness.session.id), true);
+      if (mode === 'hidden') harness.setFocusSurfaceVisible(false);
+      else harness.setFocusShellSessionId('codex:stale-focus-shell');
+      const result = await harness.sync();
+      return { harness, result };
+    }
+
+    const hidden = await blockedFocusSurface('hidden');
+    assert.equal(hidden.result.reason, 'not-ready');
+    assert.equal(hidden.harness.mountCalls.length, 0,
+      '숨겨진 focus surface에 writable PTY를 마운트했습니다.');
+    assert.equal(hidden.harness.embeddedState().connected, false);
+
+    const stale = await blockedFocusSurface('stale');
+    assert.equal(stale.result.reason, 'not-ready');
+    assert.equal(stale.harness.mountCalls.length, 0,
+      '다른 session의 stale focus shell에 writable PTY를 마운트했습니다.');
+    assert.equal(stale.harness.embeddedState().connected, false);
+  });
+
+  test('PTY 집중 viewport가 소유한 reconnect는 같은 focus surface에만 다시 마운트한다', async () => {
+    const target = {
+      id: 'terminal:focus-reconnect-owner',
+      terminalId: 'terminal:focus-reconnect-owner',
+      kind: 'terminal',
+    };
+    const harness = createInlineHarness(root, {
+      initialOpen: false,
+      mountForAgent: async () => ({ ok: true, target }),
+    });
+    assert.equal(harness.enterFocus(harness.session.id), true);
+    const initial = await harness.sync();
+    assert.equal(initial.ok, true);
+    const originalHost = harness.embeddedHost(target.terminalId);
+    assert.strictEqual(originalHost?.parentElement, harness.focusViewport);
+    assert.equal(harness.mountCalls.length, 1);
+    assert.equal(harness.focusCalls.length, 1);
+
+    harness.dispatchWindow('whitebox:terminal-reconnect-focus', {
+      detail: { terminalId: target.terminalId },
+    });
+    harness.dispatchWindow('whitebox:terminal-reconnect-owner', {
+      detail: { terminalId: target.terminalId, mountId: harness.focusViewport.id },
+    });
+    harness.setEmbedded({
+      connected: false,
+      agentSessionId: harness.session.id,
+      terminalId: target.terminalId,
+    }, harness.focusViewport);
+    harness.dispatchTerminalState({
+      change: 'reconnected',
+      sessions: [{ id: target.terminalId, status: 'running' }],
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    assert.equal(harness.mountCalls.length, 2,
+      'focus viewport가 소유하던 reconnect PTY를 정확히 한 번 remount하지 않았습니다.');
+    assert.strictEqual(harness.mountCalls[1].options.mount, harness.focusViewport);
+    assert.equal(harness.embeddedState().connected, true);
+    assert.equal(harness.embeddedState().terminalId, target.terminalId);
+    assert.strictEqual(harness.embeddedHost(target.terminalId), originalHost,
+      'reconnect 뒤 같은 terminal host identity를 복원하지 않았습니다.');
+    assert.strictEqual(originalHost.parentElement, harness.focusViewport);
+    assert.equal(harness.focusCalls.length, 2,
+      'focused PTY reconnect 뒤 입력 포커스를 복원하지 않았습니다.');
+  });
 
   test('인라인 PTY 자동 연결은 동시 sync를 합치고 force sync는 pending mount를 안전하게 교체한다', async () => {
     const releaseMounts = [];
@@ -390,9 +731,11 @@ function registerInlineAgentTerminalTests(context) {
     harness.mountCalls.length = 0;
 
     harness.dispatchDocument('click', { target: harness.reconnectButton, stopPropagation() {} });
+    assert.equal(harness.enterFocus(harness.session.id), true,
+      'reconnect 진행 중 같은 세션의 focus surface로 전환하지 못했습니다.');
     harness.dispatchDocument('click', { target: harness.reconnectButton, stopPropagation() {} });
     await Promise.resolve();
-    assert.equal(harness.restartCalls.length, 1, '빠른 중복 클릭이 같은 provider PTY를 두 번 재시작했습니다.');
+    assert.equal(harness.restartCalls.length, 1, 'surface 전환 뒤 같은 reconnect가 provider PTY를 두 번 재시작했습니다.');
     assert.equal(harness.restartCalls[0][1].terminalId, 'terminal:inline-refresh');
     assert.equal(harness.resumeCalls.length, 0, '새로고침이 별도 resume 프로세스를 만들었습니다.');
 
@@ -403,6 +746,10 @@ function registerInlineAgentTerminalTests(context) {
     await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(harness.mountCalls.length, 1, '재시작한 PTY를 같은 terminal ID로 다시 마운트하지 않았습니다.');
     assert.equal(harness.mountCalls[0].options.targetId, 'terminal:inline-refresh');
+    assert.strictEqual(harness.mountCalls[0].options.mount, harness.focusViewport,
+      'inline에서 시작한 reconnect 완료가 현재 focus viewport에 PTY를 마운트하지 않았습니다.');
+    assert.equal(harness.reconnectButton.disabled, false,
+      'surface 전환 중 reconnect 버튼이 영구 disabled 상태로 남았습니다.');
   });
 
   test('세션 연결 서명이 바뀌면 연결된 오래된 PTY를 재사용하지 않는다', async () => {
@@ -585,6 +932,29 @@ function registerInlineAgentTerminalTests(context) {
     assert.equal(harness.mountCalls.length, 1, '현재 resume 결과를 inline PTY에 mount하지 않았습니다.');
     assert.equal(harness.focusCalls.length, 0,
       'resume await 중 사용자 조작을 완료 뒤 새 focus intent로 덮어써 PTY가 포커스를 빼앗았습니다.');
+
+    let releaseTransitionResume;
+    const transition = createInlineHarness(root, {
+      resumeForAgent: () => new Promise(resolve => { releaseTransitionResume = resolve; }),
+      mountForAgent: async () => ({
+        ok: true,
+        target: { id: 'terminal:focus-resumed', terminalId: 'terminal:focus-resumed', kind: 'terminal' },
+      }),
+    });
+    transition.dispatchDocument('click', { target: transition.resumeButton, stopPropagation() {} });
+    assert.equal(transition.enterFocus(transition.session.id), true);
+    transition.dispatchDocument('click', { target: transition.resumeButton, stopPropagation() {} });
+    const focusAutoSync = transition.sync({ force: true });
+    await Promise.resolve();
+    assert.equal(transition.resumeCalls.length, 1,
+      'inline resume 진행 중 focus auto-sync가 같은 provider resume을 중복 시작했습니다.');
+    releaseTransitionResume({ id: 'terminal:focus-resumed', terminalId: 'terminal:focus-resumed' });
+    await focusAutoSync;
+    assert.equal(transition.mountCalls.length, 1);
+    assert.strictEqual(transition.mountCalls[0].options.mount, transition.focusViewport,
+      'inline resume 완료가 전환된 focus surface 대신 오래된 viewport를 사용했습니다.');
+    assert.equal(transition.resumeButton.disabled, false,
+      'surface 전환 중 resume 버튼이 영구 disabled 상태로 남았습니다.');
   });
 
   test('Codex Desktop 인라인 PTY는 원본 resume 대신 기록을 이어받은 새 세션을 연다', async () => {
@@ -597,6 +967,7 @@ function registerInlineAgentTerminalTests(context) {
         clientKind: 'codex-desktop',
         cwd: 'D:\\fixture',
         parentId: null,
+        status: 'completed',
       },
       resumeSupport: () => ({ supported: false, originOwned: true }),
       forkSupport: () => ({ supported: true, action: 'fork' }),
@@ -661,6 +1032,7 @@ function registerInlineAgentTerminalTests(context) {
         clientKind: 'codex-desktop',
         cwd: 'D:\\fixture',
         parentId: null,
+        status: 'completed',
       },
       forkSupport: () => ({ supported: true, action: 'fork' }),
       mountForAgent: () => new Promise(resolve => { releaseExplicitMount = resolve; }),

@@ -376,6 +376,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
       $("#emptyState h3").textContent = emptyCopy[0];
       $("#emptyState p").textContent = emptyCopy[1];
     }
+    context.renderPtyFocus?.();
     if (!deferMotion) playMotionLayout(previousLayout, motionKind);
     if (motionKind === "view") animateVisibleSections();
   }
