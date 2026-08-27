@@ -102,6 +102,15 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
 
   let lastAppliedGraphHtml = null;
 
+  function unmountInlineEmbeddedUnlessFocused() {
+    // A focus mount can still be pending while embeddedState points at the
+    // previous inline owner. Never advance the shared generation from graph
+    // reconciliation while focus mode owns that lifecycle.
+    if (state.ptyFocusSessionId) return false;
+    window.WhiteboxTerminal?.unmountEmbedded?.();
+    return true;
+  }
+
   function applyGraphHtml(liveSessionGrid, nextHtml, options = {}) {
     if (options.preserveFocusedComposer) {
       lastAppliedGraphHtml = null;
@@ -127,7 +136,7 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
       .find(node => node.dataset.inlineAgentTerminal === state.inlineTerminalSessionId);
     if (!replacement) {
       state.inlineTerminalSessionId = null;
-      window.WhiteboxTerminal?.unmountEmbedded?.();
+      unmountInlineEmbeddedUnlessFocused();
     }
     return false;
   }
@@ -158,7 +167,7 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
       && mountedInlineShell?.dataset.inlineAgentTerminal === inlineSession.id;
     if (state.inlineTerminalSessionId && (!inlineSession || (focus && state.inlineTerminalSessionId !== focus.id))) {
       state.inlineTerminalSessionId = null;
-      window.WhiteboxTerminal?.unmountEmbedded?.();
+      unmountInlineEmbeddedUnlessFocused();
     }
     const rootSessions = model.nodes.filter((session) => !session.parentId || !model.included.has(session.parentId));
     const roots = state.controlRoomSort === "tokens"

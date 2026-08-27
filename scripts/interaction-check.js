@@ -214,6 +214,11 @@ const ACTION_MANIFEST = [
     optionalReason: 'The selected-project home hides the redundant project wrapper header and shows its work directly.',
   },
   { selector: '[data-session-archive]', action: 'control-room:move-to-history' },
+  { selector: '[data-pty-focus-trigger]', action: 'agent:pty-focus-open' },
+  { selector: '#ptyFocusBackBtn', action: 'agent:pty-focus-back' },
+  { selector: '[data-pty-focus-child]', action: 'agent:pty-focus-child-detail' },
+  { selector: '[data-pty-focus-execution]', action: 'agent:pty-focus-execution-detail' },
+  { selector: '#ptyFocusChildCloseBtn', action: 'agent:pty-focus-child-close' },
   { selector: '#loadMoreBtn', action: 'filter:load-more' },
   { selector: '[data-open-run]', action: 'run:open-empty' },
   { selector: '#closeDrawerBtn', action: 'drawer:close' },
@@ -591,7 +596,7 @@ async function click(win, selector, action, times = 1, eligibilityAttempts = 1, 
             .filter(Boolean)
             .map(parent => ({ id: parent.id, className: parent.className, display: getComputedStyle(parent).display })),
         })),
-        dialogs: ['#mobileToolsMenu', '#runModal', '#tmuxCreateModal', '#detailDrawer', '#quickPaletteModal', '#shortcutHelpModal', '#sessionResetModal']
+        dialogs: ['#mobileToolsMenu', '#ptyFocusChildModal', '#runModal', '#tmuxCreateModal', '#detailDrawer', '#quickPaletteModal', '#shortcutHelpModal', '#sessionResetModal']
           .filter(dialogSelector => {
             const dialog = document.querySelector(dialogSelector);
             return dialog && !dialog.classList.contains('hidden') && (dialog.classList.contains('open') || dialog.matches('.modal-backdrop') || dialog.id === 'mobileToolsMenu');
@@ -4052,7 +4057,7 @@ async function exerciseGraph(win, round) {
   '메인 AI를 누르면 상세 창 대신 클릭한 AI 아래에 PTY가 열리지 않았습니다.', 160);
   await click(win, focusedRootPtyTrigger, 'agent:inline-pty-toggle');
   await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === null
-    && !document.querySelector('[data-inline-agent-terminal]')
+    && !document.querySelector('#agentInlineTerminal[data-inline-agent-terminal]')
     && !window.WhiteboxTerminal.embeddedState().connected`,
   '같은 메인 AI를 다시 눌러 인라인 PTY를 닫지 못했습니다.');
   await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root', { context: true })`);
@@ -4597,18 +4602,333 @@ function controlRoomCompletedLayoutMatches(before, after, tolerance = 1.5) {
     ));
 }
 
+async function exercisePtyFocus(win, round) {
+  const roundLabel = round?.index || round || 1;
+  win.setSize(1920, 1080);
+  await prepareProjectFirstStep(win);
+  await click(win, '[data-view="all"]', 'nav:all');
+  await resetGraphToOverview(win);
+  await waitFor(win, `Boolean(document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]'))`,
+    '관제 화면에서 담당 노드 PTY 집중 모드 진입점을 찾지 못했습니다.');
+  await win.webContents.executeJavaScript(`(() => {
+    const root = window.interactionTest.getSnapshot().sessions.find(session => session.id === 'fixture-root');
+    const detail = JSON.parse(JSON.stringify(root));
+    detail.updatedAt = '2099-01-01T00:00:00.000Z';
+    detail.executions = (detail.executions || []).map(activity => ({
+      ...activity,
+      output: 'PTY_FOCUS_FULL_EXECUTION_OUTPUT',
+    }));
+    window.interactionTest.queueSessionDetail('fixture-root', [{ detail }]);
+  })()`);
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root', { context: true, focus: false })`);
+  await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')
+    && document.querySelector('#detailDrawer')?.dataset.presentation === 'context'
+    && window.WhiteboxTerminal.embeddedState().connected
+    && document.querySelector('#drawerTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')`,
+    'PTY 집중 모드 복원 검증을 위한 기존 상세 패널을 열지 못했습니다.');
+  const before = await win.webContents.executeJavaScript(`(() => {
+    const main = document.querySelector('#mainContent');
+    const sidebar = document.querySelector('.sidebar');
+    main.scrollTop = Math.min(96, Math.max(0, main.scrollHeight - main.clientHeight));
+    sidebar.scrollTop = Math.min(72, Math.max(0, sidebar.scrollHeight - sidebar.clientHeight));
+    const app = window.WhiteboxApp;
+    window.interactionTest.clearCalls();
+    return {
+      mainTop: main.scrollTop,
+      sidebarTop: sidebar.scrollTop,
+      graphFocusId: app.state.graphFocusId || '',
+      selectedId: app.state.selectedId || '',
+      expandedCompleted: [...app.state.expandedCompletedSubagents].sort(),
+      expandedExecutions: [...app.state.expandedExecutionSessions].sort(),
+      inlineSessionId: app.state.inlineTerminalSessionId || '',
+      otherRootCount: document.querySelectorAll('[data-control-session]:not([data-control-session="fixture-root"])').length,
+      drawerOpen: document.querySelector('#detailDrawer').classList.contains('open'),
+      drawerInert: document.querySelector('#detailDrawer').inert,
+      drawerAriaHidden: document.querySelector('#detailDrawer').getAttribute('aria-hidden'),
+      drawerBackdropHidden: document.querySelector('#drawerBackdrop').classList.contains('hidden'),
+      drawerTerminalMounted: Boolean(document.querySelector('#drawerTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')),
+    };
+  })()`);
+
+  await click(win, '.control-room-main[data-pty-focus-trigger="fixture-root"]', 'agent:pty-focus-open');
+  await waitFor(win, `(() => {
+    const app = window.WhiteboxApp;
+    const surface = document.querySelector('#ptyFocusSurface');
+    const shell = document.querySelector('#ptyFocusTerminalShell[data-inline-agent-terminal="fixture-root"]');
+    const embedded = window.WhiteboxTerminal.embeddedState();
+    return app.state.ptyFocusSessionId === 'fixture-root'
+      && surface && !surface.classList.contains('hidden') && !surface.inert
+      && shell && embedded.connected && embedded.terminalId === 'terminal-main'
+      && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')
+      && document.querySelector('#mainContent').inert && document.querySelector('.sidebar').inert
+      && document.querySelector('#detailDrawer').inert
+      && document.querySelector('#detailDrawer').getAttribute('aria-hidden') === 'true'
+      && getComputedStyle(document.querySelector('#detailDrawer')).visibility === 'hidden';
+  })()`, '담당 노드의 전체 화면 PTY 집중 모드가 같은 실제 PTY로 열리지 않았습니다.', 180);
+  markSelectors(['[data-pty-focus-trigger]', '#ptyFocusBackBtn', '[data-pty-focus-child]']);
+  await recordManifest(win);
+
+  const opened = await win.webContents.executeJavaScript(`(() => {
+    const surface = document.querySelector('#ptyFocusSurface');
+    const viewport = document.querySelector('#ptyFocusTerminalViewport');
+    const host = viewport?.querySelector(':scope > .terminal-screen');
+    const helper = host?.querySelector('.xterm-helper-textarea');
+    const app = window.WhiteboxApp;
+    if (!surface || !viewport || !host || !helper) return { ok: false };
+    helper.focus({ preventScroll: true });
+    window.__whiteboxPtyFocusIdentity = { surface, viewport, host, helper };
+    window.interactionTest.clearCalls();
+    return {
+      ok: true,
+      rootCards: surface.querySelectorAll('.pty-focus-root-node').length,
+      childTrigger: Boolean(surface.querySelector('[data-pty-focus-child="fixture-child"]')),
+      noOtherResponsibleSessions: !surface.querySelector('[data-control-session]:not([data-control-session="fixture-root"])'),
+      focused: document.activeElement === helper,
+      terminalId: window.WhiteboxTerminal.embeddedState().terminalId || '',
+      drawerOpen: document.querySelector('#detailDrawer').classList.contains('open'),
+      drawerPresentation: document.querySelector('#detailDrawer').dataset.presentation || '',
+      selectedId: app.state.selectedId || '',
+      statePreserved: (app.state.graphFocusId || '') === ${JSON.stringify(before.graphFocusId)}
+        && (app.state.selectedId || '') === ${JSON.stringify(before.selectedId)}
+        && (app.state.inlineTerminalSessionId || '') === ${JSON.stringify(before.inlineSessionId)},
+    };
+  })()`);
+  assert(opened.ok && opened.rootCards === 1 && opened.childTrigger && opened.noOtherResponsibleSessions
+    && opened.focused && opened.terminalId === 'terminal-main' && opened.statePreserved
+    && opened.drawerOpen && opened.drawerPresentation === 'context',
+  `PTY 집중 모드가 담당 노드 하나와 기존 관제 상태를 보존하지 못했습니다: ${JSON.stringify(opened)}`);
+
+  await win.webContents.executeJavaScript(`(async () => {
+    const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    for (let index = 0; index < 2; index += 1) {
+      window.WhiteboxApp.renderSessions('refresh');
+      await paint();
+    }
+    window.interactionTest.emitTerminalData('terminal-main', '\\r\\nPTY_FOCUS_REFRESH_CONTINUES_${roundLabel}\\r\\n');
+    await new Promise(resolve => setTimeout(resolve, 60));
+  })()`);
+  const refreshed = await win.webContents.executeJavaScript(`(() => {
+    const baseline = window.__whiteboxPtyFocusIdentity;
+    const surface = document.querySelector('#ptyFocusSurface');
+    const viewport = document.querySelector('#ptyFocusTerminalViewport');
+    const host = viewport?.querySelector(':scope > .terminal-screen');
+    const helper = host?.querySelector('.xterm-helper-textarea');
+    const calls = window.interactionTest.getCalls();
+    return {
+      surfaceIdentity: surface === baseline?.surface,
+      viewportIdentity: viewport === baseline?.viewport,
+      hostIdentity: host === baseline?.host,
+      helperIdentity: helper === baseline?.helper,
+      focused: document.activeElement === helper,
+      connected: window.WhiteboxTerminal.embeddedState().connected,
+      terminalId: window.WhiteboxTerminal.embeddedState().terminalId || '',
+      creates: calls.filter(call => call.name === 'terminalCreate').length,
+    };
+  })()`);
+  assert(refreshed.surfaceIdentity && refreshed.viewportIdentity && refreshed.hostIdentity && refreshed.helperIdentity
+    && refreshed.focused && refreshed.connected && refreshed.terminalId === 'terminal-main' && refreshed.creates === 0,
+  `snapshot 갱신이 PTY 집중 모드의 xterm host·scrollback·포커스를 교체했습니다: ${JSON.stringify(refreshed)}`);
+
+  for (const [width, height] of [[1024, 720], [760, 800]]) {
+    win.setSize(width, height);
+    await sleep(90);
+    const responsive = await win.webContents.executeJavaScript(`(() => {
+      const surface = document.querySelector('#ptyFocusSurface');
+      const back = document.querySelector('#ptyFocusBackBtn');
+      const flow = document.querySelector('#ptyFocusFlow');
+      const terminal = document.querySelector('#ptyFocusTerminalShell');
+      const viewport = document.querySelector('#ptyFocusTerminalViewport');
+      const bounds = node => node?.getBoundingClientRect();
+      const surfaceRect = bounds(surface);
+      const backRect = bounds(back);
+      const flowRect = bounds(flow);
+      const terminalRect = bounds(terminal);
+      const viewportRect = bounds(viewport);
+      return {
+        viewport: [window.innerWidth, window.innerHeight],
+        surface: surfaceRect && [surfaceRect.left, surfaceRect.top, surfaceRect.right, surfaceRect.bottom],
+        backVisible: Boolean(backRect?.width > 20 && backRect?.height > 20),
+        flowVisible: Boolean(flowRect?.width > 100 && flowRect?.height > 30),
+        terminalVisible: Boolean(terminalRect?.width > 200 && terminalRect?.height > 180),
+        terminalViewportVisible: Boolean(viewportRect?.width > 200 && viewportRect?.height > 120),
+        terminalInside: Boolean(terminalRect && terminalRect.left >= 0 && terminalRect.right <= window.innerWidth + 1
+          && terminalRect.top >= 0 && terminalRect.bottom <= window.innerHeight + 1),
+      };
+    })()`);
+    assert(responsive.backVisible && responsive.flowVisible && responsive.terminalVisible
+      && responsive.terminalViewportVisible && responsive.terminalInside,
+    `PTY 집중 모드가 ${width}x${height} 화면 안에 맞지 않습니다: ${JSON.stringify(responsive)}`);
+  }
+  win.setSize(1920, 1080);
+  await sleep(90);
+
+  await click(win, '#ptyFocusSurface [data-pty-focus-child="fixture-child"]', 'agent:pty-focus-child-detail');
+  await waitFor(win, `(() => {
+    const modal = document.querySelector('#ptyFocusChildModal');
+    return modal && !modal.classList.contains('hidden')
+      && modal.querySelector('#ptyFocusChildBody')?.children.length > 0;
+  })()`, '하위 노드의 읽기 전용 팝업이 PTY를 가리고 입력을 차단하지 못했습니다.', 160);
+  await waitFor(win, `document.querySelector('#ptyFocusChildModal')?.contains(document.activeElement)`,
+    '하위 노드 팝업이 열린 뒤 키보드 포커스가 팝업으로 이동하지 않았습니다.', 80);
+  const childPopupState = await win.webContents.executeJavaScript(`(() => {
+    const modal = document.querySelector('#ptyFocusChildModal');
+    return {
+      hidden: modal.classList.contains('hidden'),
+      inert: modal.inert,
+      shellInert: document.querySelector('#appShell').inert,
+      ariaModal: modal.getAttribute('aria-modal'),
+      bodyChildren: modal.querySelector('#ptyFocusChildBody')?.children.length || 0,
+      writableControls: modal.querySelectorAll('form, input, textarea, select, [contenteditable="true"]').length,
+      focusInside: modal.contains(document.activeElement),
+      active: document.activeElement?.id || document.activeElement?.className || document.activeElement?.tagName || '',
+      connected: window.WhiteboxTerminal.embeddedState().connected,
+      opacity: getComputedStyle(modal).opacity,
+      visibility: getComputedStyle(modal).visibility,
+      drawerOpen: document.querySelector('#detailDrawer').classList.contains('open'),
+      drawerPresentation: document.querySelector('#detailDrawer').dataset.presentation || '',
+    };
+  })()`);
+  assert(!childPopupState.hidden && !childPopupState.inert && childPopupState.shellInert
+    && childPopupState.ariaModal === 'true' && childPopupState.bodyChildren > 0
+    && childPopupState.writableControls === 0 && childPopupState.focusInside
+    && childPopupState.connected && Number(childPopupState.opacity) > 0.9 && childPopupState.visibility === 'visible'
+    && childPopupState.drawerOpen && childPopupState.drawerPresentation === 'context',
+  `하위 노드의 읽기 전용 팝업이 PTY를 가리고 입력을 차단하지 못했습니다: ${JSON.stringify(childPopupState)}`);
+  await win.webContents.executeJavaScript(`window.interactionTest.emitTerminalData('terminal-main', '\\r\\nPTY_BEHIND_MODAL_CONTINUES_${roundLabel}\\r\\n')`);
+  await sleep(80);
+  const modalState = await win.webContents.executeJavaScript(`(() => {
+    const baseline = window.__whiteboxPtyFocusIdentity;
+    const host = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen');
+    const modal = document.querySelector('#ptyFocusChildModal');
+    const dialog = modal?.querySelector('.pty-focus-child-dialog');
+    const modalStyle = modal && getComputedStyle(modal);
+    const dialogStyle = dialog && getComputedStyle(dialog);
+    const modalRect = modal?.getBoundingClientRect();
+    const dialogRect = dialog?.getBoundingClientRect();
+    const calls = window.interactionTest.getCalls();
+    return {
+      sameHost: host === baseline?.host,
+      connected: window.WhiteboxTerminal.embeddedState().connected,
+      terminalId: window.WhiteboxTerminal.embeddedState().terminalId || '',
+      creates: calls.filter(call => call.name === 'terminalCreate').length,
+      modal: modalStyle && { display: modalStyle.display, visibility: modalStyle.visibility, opacity: modalStyle.opacity, zIndex: modalStyle.zIndex },
+      dialog: dialogStyle && { display: dialogStyle.display, visibility: dialogStyle.visibility, opacity: dialogStyle.opacity, zIndex: dialogStyle.zIndex },
+      modalRect: modalRect && [modalRect.left, modalRect.top, modalRect.width, modalRect.height],
+      dialogRect: dialogRect && [dialogRect.left, dialogRect.top, dialogRect.width, dialogRect.height],
+    };
+  })()`);
+  assert(modalState.sameHost && modalState.connected && modalState.terminalId === 'terminal-main' && modalState.creates === 0
+    && Number(modalState.modal?.opacity) > 0.9 && modalState.modalRect?.[2] > 0 && modalState.dialogRect?.[2] > 0,
+    `하위 노드 팝업이 뒤의 PTY 실행 또는 host identity를 중단했습니다: ${JSON.stringify(modalState)}`);
+  fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
+  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'whitebox-pty-focus-child-modal.png'), (await win.webContents.capturePage()).toPNG());
+
+  await click(win, '#ptyFocusChildCloseBtn', 'agent:pty-focus-child-close');
+  await waitFor(win, `document.querySelector('#ptyFocusChildModal').classList.contains('hidden')
+    && document.querySelector('#ptyFocusChildModal').inert
+    && !document.querySelector('#appShell').inert
+    && document.activeElement === document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')
+    && window.WhiteboxTerminal.embeddedState().connected`,
+  '하위 노드 팝업을 닫은 뒤 같은 PTY 입력으로 돌아가지 못했습니다.', 160);
+  markSelectors(['#ptyFocusChildCloseBtn']);
+
+  await click(win, '#ptyFocusSurface [data-pty-focus-execution]', 'agent:pty-focus-execution-detail');
+  await waitFor(win, `!document.querySelector('#ptyFocusChildModal').classList.contains('hidden')
+    && Boolean(document.querySelector('#ptyFocusChildBody [data-execution-detail]'))
+    && document.querySelector('#ptyFocusChildBody').textContent.includes('PTY_FOCUS_FULL_EXECUTION_OUTPUT')
+    && document.querySelector('#appShell').inert
+    && window.WhiteboxTerminal.embeddedState().connected`,
+  '담당 흐름의 실행 노드가 최신 전체 output을 포함한 읽기 전용 상세 팝업으로 열리지 않았습니다.', 160);
+  markSelectors(['[data-pty-focus-execution]']);
+  await click(win, '#ptyFocusChildCloseBtn', 'agent:pty-focus-child-close');
+  await waitFor(win, `document.querySelector('#ptyFocusChildModal').classList.contains('hidden')
+    && document.activeElement === document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')
+    && window.WhiteboxTerminal.embeddedState().connected`,
+  '실행 상세 팝업을 닫은 뒤 같은 PTY 입력으로 돌아가지 못했습니다.', 160);
+
+  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'whitebox-pty-focus-interaction.png'), (await win.webContents.capturePage()).toPNG());
+  await click(win, '#ptyFocusBackBtn', 'agent:pty-focus-back');
+  try {
+    await waitFor(win, `(() => {
+      const app = window.WhiteboxApp;
+      const surface = document.querySelector('#ptyFocusSurface');
+      return !app.state.ptyFocusSessionId && surface.classList.contains('hidden') && surface.inert
+        && !document.querySelector('#mainContent').inert && !document.querySelector('.sidebar').inert
+        && window.WhiteboxTerminal.embeddedState().connected
+        && Boolean(document.querySelector('#drawerTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]'));
+    })()`, '관제 모드로 돌아오며 PTY host와 배경 상태를 복원하지 못했습니다.', 160);
+  } catch (error) {
+    const diagnostic = await win.webContents.executeJavaScript(`(() => ({
+      focusId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+      surfaceHidden: document.querySelector('#ptyFocusSurface').classList.contains('hidden'),
+      mainInert: document.querySelector('#mainContent').inert,
+      sidebarInert: document.querySelector('.sidebar').inert,
+      drawerOpen: document.querySelector('#detailDrawer').classList.contains('open'),
+      drawerPresentation: document.querySelector('#detailDrawer').dataset.presentation || '',
+      drawerMount: Boolean(document.querySelector('#drawerTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')),
+      generalMount: Boolean(document.querySelector('#terminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')),
+      focusMount: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')),
+      embedded: window.WhiteboxTerminal.embeddedState(),
+      drawerTerminal: window.WhiteboxDrawerTerminal.state(),
+      calls: window.interactionTest.getCalls().slice(-20),
+    }))()`);
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+  }
+  await sleep(80);
+  const restored = await win.webContents.executeJavaScript(`(() => {
+    const app = window.WhiteboxApp;
+    const main = document.querySelector('#mainContent');
+    const sidebar = document.querySelector('.sidebar');
+    const result = {
+      mainTop: main.scrollTop,
+      sidebarTop: sidebar.scrollTop,
+      graphFocusId: app.state.graphFocusId || '',
+      selectedId: app.state.selectedId || '',
+      expandedCompleted: [...app.state.expandedCompletedSubagents].sort(),
+      expandedExecutions: [...app.state.expandedExecutionSessions].sort(),
+      inlineSessionId: app.state.inlineTerminalSessionId || '',
+      rootVisible: Boolean(document.querySelector('[data-control-session="fixture-root"]')),
+      otherRootCount: document.querySelectorAll('[data-control-session]:not([data-control-session="fixture-root"])').length,
+      drawerOpen: document.querySelector('#detailDrawer').classList.contains('open'),
+      drawerInert: document.querySelector('#detailDrawer').inert,
+      drawerAriaHidden: document.querySelector('#detailDrawer').getAttribute('aria-hidden'),
+      drawerBackdropHidden: document.querySelector('#drawerBackdrop').classList.contains('hidden'),
+      drawerTerminalMounted: Boolean(document.querySelector('#drawerTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]')),
+    };
+    delete window.__whiteboxPtyFocusIdentity;
+    return result;
+  })()`);
+  assert(Math.abs(restored.mainTop - before.mainTop) <= 1
+    && Math.abs(restored.sidebarTop - before.sidebarTop) <= 1
+    && restored.graphFocusId === before.graphFocusId
+    && restored.selectedId === before.selectedId
+    && JSON.stringify(restored.expandedCompleted) === JSON.stringify(before.expandedCompleted)
+    && JSON.stringify(restored.expandedExecutions) === JSON.stringify(before.expandedExecutions)
+    && restored.inlineSessionId === before.inlineSessionId
+    && restored.rootVisible && restored.otherRootCount === before.otherRootCount
+    && restored.drawerOpen === before.drawerOpen
+    && restored.drawerInert === before.drawerInert
+    && restored.drawerAriaHidden === before.drawerAriaHidden
+    && restored.drawerBackdropHidden === before.drawerBackdropHidden
+    && restored.drawerTerminalMounted === before.drawerTerminalMounted,
+  `관제 복귀 시 스크롤·선택·펼침·다른 담당 노드 상태가 바뀌었습니다: ${JSON.stringify({ before, restored })}`);
+  await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
+  round.observed.ptyFocus = { hostStable: refreshed.hostIdentity, modal: modalState, restored };
+  mark('quality:pty-focus-state-restoration');
+}
+
 async function exerciseInlineTerminal(win, round) {
   win.setSize(1920, 1080);
   await prepareProjectFirstStep(win);
   await click(win, '[data-view="all"]', 'nav:all');
-  await waitFor(win, `Boolean(document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]'))`, '처리 중 화면에서 메인 AI를 찾지 못했습니다.');
+  await waitFor(win, `Boolean(document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]'))`, '처리 중 화면에서 메인 AI를 찾지 못했습니다.');
   await settleFiniteAnimations(win);
   const completedLayoutBefore = await readControlRoomCompletedLayout(win, 'fixture-root');
   assert(completedLayoutBefore?.nodes.length > 0, 'PTY 열기 전 위치를 비교할 완료 노드를 찾지 못했습니다.');
   const openTriggered = await win.webContents.executeJavaScript(`(() => {
-    const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
+    const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
     if (!trigger) return false;
-    trigger.click();
+    window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
     return true;
   })()`);
   assert(openTriggered, '처리 중 화면에서 메인 AI PTY 열기를 실행하지 못했습니다.');
@@ -4662,13 +4982,13 @@ async function exerciseInlineTerminal(win, round) {
     && diagnostic.embeddedTerminalId === 'terminal-main',
   `인라인 PTY를 열면서 완료 노드 위치가 움직였습니다: ${JSON.stringify({ diagnostic, before: completedLayoutBefore, open: completedLayoutOpen })}`);
   const layoutCloseTriggered = await win.webContents.executeJavaScript(`(() => {
-    const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
+    const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
     if (!trigger) return false;
-    trigger.click();
+    window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
     return true;
   })()`);
   assert(layoutCloseTriggered, '완료 노드 위치 검증 중 인라인 PTY를 닫지 못했습니다.');
-  await waitFor(win, `!document.querySelector('[data-inline-agent-terminal]') && !window.WhiteboxTerminal.embeddedState().connected`,
+  await waitFor(win, `!document.querySelector('#agentInlineTerminal[data-inline-agent-terminal]') && !window.WhiteboxTerminal.embeddedState().connected`,
     '완료 노드 위치 검증 중 인라인 PTY 연결을 해제하지 못했습니다.');
   await settleFiniteAnimations(win);
   const completedLayoutClosed = await readControlRoomCompletedLayout(win, 'fixture-root');
@@ -4676,9 +4996,9 @@ async function exerciseInlineTerminal(win, round) {
   assert(diagnostic.completedLayoutStableClosed,
     `인라인 PTY를 닫으면서 완료 노드 화면 위치가 움직였습니다: ${JSON.stringify({ before: completedLayoutBefore, closed: completedLayoutClosed })}`);
   const layoutReopenTriggered = await win.webContents.executeJavaScript(`(() => {
-    const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
+    const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
     if (!trigger) return false;
-    trigger.click();
+    window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
     return true;
   })()`);
   assert(layoutReopenTriggered, '완료 노드 위치 검증 뒤 인라인 PTY를 다시 열지 못했습니다.');
@@ -4810,14 +5130,14 @@ async function exerciseInlineTerminal(win, round) {
   fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
   fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'whitebox-inline-terminal-interaction.png'), (await win.webContents.capturePage(inlineCaptureRect)).toPNG());
   const closeTriggered = await win.webContents.executeJavaScript(`(() => {
-    const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
+    const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
     if (!trigger) return false;
-    trigger.click();
+    window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
     return true;
   })()`);
   assert(closeTriggered, '같은 AI를 다시 눌러 인라인 PTY 닫기를 실행하지 못했습니다.');
   markSelectors(['[data-inline-pty-trigger]']);
-  await waitFor(win, `!document.querySelector('[data-inline-agent-terminal]') && !window.WhiteboxTerminal.embeddedState().connected`, '같은 AI를 다시 눌러 인라인 PTY를 닫지 못했습니다.');
+  await waitFor(win, `!document.querySelector('#agentInlineTerminal[data-inline-agent-terminal]') && !window.WhiteboxTerminal.embeddedState().connected`, '같은 AI를 다시 눌러 인라인 PTY를 닫지 못했습니다.');
   await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root')`);
   await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')
     && document.querySelector('#detailDrawer')?.dataset.terminalChat === 'true'
@@ -5177,7 +5497,7 @@ async function exerciseInlineTerminal(win, round) {
   }
   await click(win, '[data-inline-terminal-close]', 'agent:inline-pty-close');
   await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === null
-    && !document.querySelector('[data-inline-agent-terminal]')
+    && !document.querySelector('#agentInlineTerminal[data-inline-agent-terminal]')
     && !window.WhiteboxTerminal.embeddedState().connected`,
   '지난 기록의 하단 PTY를 닫아 연결을 해제하지 못했습니다.');
   await win.webContents.executeJavaScript(`(() => {
@@ -5292,7 +5612,7 @@ async function exerciseInlineTerminal(win, round) {
   `완료된 Codex Desktop 기록의 fork PTY·결과 확인 제거 상태가 올바르지 않습니다: ${JSON.stringify(transcriptHistoryDiagnostic)}`);
   await click(win, '[data-inline-terminal-close]', 'history:completed-ai-pty-close');
   await waitFor(win, `window.WhiteboxApp.state.inlineTerminalSessionId === null
-    && !document.querySelector('[data-inline-agent-terminal]')
+    && !document.querySelector('#agentInlineTerminal[data-inline-agent-terminal]')
     && !window.WhiteboxTerminal.embeddedState().connected`,
   '완료된 AI 기록의 PTY를 닫아 연결을 해제하지 못했습니다.');
   await win.webContents.executeJavaScript(`(() => {
@@ -6297,6 +6617,7 @@ async function runRound(win, index) {
   await runStep('navigation', () => exerciseNavigation(win, round));
   await runStep('quality-enhancements', () => exerciseQualityEnhancements(win, round));
   await runStep('tab-data-routing', () => exerciseTabDataRouting(win, round));
+  await runStep('pty-focus', () => exercisePtyFocus(win, round));
   await runStep('inline-terminal', () => exerciseInlineTerminal(win, round));
   await runStep('theme-settings', () => exerciseThemeSettings(win, round));
   await runStep('language-settings', () => exerciseLanguageSettings(win, round));

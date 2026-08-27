@@ -520,6 +520,41 @@
         </div>
       </section>
     </main>
+
+    <section id="ptyFocusSurface" class="pty-focus-surface hidden" aria-labelledby="ptyFocusTitle" aria-hidden="true" inert>
+      <header class="pty-focus-header">
+        <button id="ptyFocusBackBtn" class="pty-focus-back" type="button" aria-label="관제 모드로 돌아가기" data-i18n-aria-label="pty_focus.back">
+          <span aria-hidden="true">←</span><b data-i18n="pty_focus.back">관제 모드로 돌아가기</b>
+        </button>
+        <span id="ptyFocusProviderMark" class="provider-mark" aria-hidden="true">AI</span>
+        <div class="pty-focus-heading">
+          <p data-i18n="pty_focus.eyebrow">담당 노드 터미널</p>
+          <h1 id="ptyFocusTitle" data-i18n="pty_focus.title">담당 노드 PTY</h1>
+          <span id="ptyFocusSummary"></span>
+        </div>
+        <div id="ptyFocusRootStatus" class="pty-focus-root-status" role="status"><i aria-hidden="true"></i><b></b><small></small></div>
+      </header>
+
+      <section class="pty-focus-flow-region" aria-labelledby="ptyFocusFlowTitle">
+        <header><span><b id="ptyFocusFlowTitle" data-i18n="pty_focus.flow_title">이 담당 노드의 흐름</b><small data-i18n="pty_focus.flow_hint">하위 노드는 보기 전용이며, 누르면 터미널 위에 상세 내용이 열립니다.</small></span></header>
+        <div id="ptyFocusFlow" class="pty-focus-flow" role="group"></div>
+      </section>
+
+      <section id="ptyFocusTerminalShell" class="agent-inline-terminal pty-focus-terminal" data-inline-agent-terminal="" aria-label="담당 노드 실제 PTY">
+        <header class="agent-inline-terminal-head">
+          <span id="ptyFocusTerminalMark" class="provider-mark" aria-hidden="true">AI</span>
+          <span class="agent-inline-terminal-title"><b id="ptyFocusTerminalTitle" data-i18n="pty_focus.terminal_title">실제 PTY</b><small data-i18n="pty_focus.terminal_help">담당 노드의 같은 터미널과 scrollback을 이어서 표시합니다.</small></span>
+          <span class="agent-inline-terminal-state"><i aria-hidden="true"></i><b data-inline-terminal-status data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small data-inline-terminal-meta></small></span>
+          <span class="agent-inline-terminal-actions"><button type="button" data-inline-terminal-reconnect title="PTY 새로 연결" aria-label="PTY 새로 연결" data-i18n-title="drawer.terminal_reconnect" data-i18n-aria-label="drawer.terminal_reconnect">↻</button></span>
+        </header>
+        <div id="ptyFocusTerminalViewport" class="agent-inline-terminal-viewport pty-focus-terminal-viewport" data-agent-terminal-viewport aria-label="담당 노드의 실제 PTY 출력 및 스크롤 기록" data-i18n-aria-label="pty_focus.terminal_viewport">
+          <div class="agent-inline-terminal-empty" data-inline-terminal-empty aria-live="polite">
+            <span aria-hidden="true">›_</span><b data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small data-i18n="drawer.terminal_connecting_help">같은 세션의 실행 화면과 scrollback을 불러오고 있습니다.</small>
+            <button class="primary-button hidden" type="button" data-inline-terminal-resume data-i18n="drawer.terminal_resume_action">같은 대화 이어서 열기</button>
+          </div>
+        </div>
+      </section>
+    </section>
   </div>
 
   <aside id="mobileToolsMenu" class="mobile-tools-menu hidden" role="dialog" aria-modal="true" aria-labelledby="mobileToolsTitle" aria-hidden="true" tabindex="-1" inert>
@@ -567,6 +602,17 @@
     <div id="drawerContent" class="drawer-content" role="tabpanel" aria-labelledby="drawerTabChat" tabindex="0"></div>
     <div id="drawerComposer" class="drawer-composer hidden" aria-hidden="true"></div>
   </aside>
+
+  <div id="ptyFocusChildModal" class="modal-backdrop pty-focus-child-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ptyFocusChildTitle" aria-describedby="ptyFocusChildDescription" aria-hidden="true" inert>
+    <section class="pty-focus-child-dialog">
+      <header class="pty-focus-child-head">
+        <div><p data-i18n="pty_focus.detail_eyebrow">보기 전용 노드</p><h2 id="ptyFocusChildTitle" data-i18n="pty_focus.detail_title">노드 상세 내용</h2></div>
+        <button id="ptyFocusChildCloseBtn" class="close-button" type="button" aria-label="노드 상세 내용 닫기" data-i18n-aria-label="pty_focus.close_detail">×</button>
+      </header>
+      <p id="ptyFocusChildDescription" class="pty-focus-child-description" data-i18n="pty_focus.readonly_help">이 창은 보기 전용입니다. 뒤의 PTY는 계속 실행되고 출력을 쌓습니다.</p>
+      <div id="ptyFocusChildBody" class="pty-focus-child-body" tabindex="0"></div>
+    </section>
+  </div>
 
   <div id="sessionResetModal" class="modal-backdrop session-reset-modal hidden" role="dialog" aria-modal="true"
     aria-labelledby="sessionResetTitle" aria-describedby="sessionResetDescription" aria-hidden="true" inert>
@@ -682,6 +728,7 @@
   <script src="app-session-render.js"></script>
   <script src="app-drawer-data.js"></script>
   <script src="app-drawer-content.js"></script>
+  <script src="app-pty-focus.js"></script>
   <script src="app-drawer.js"></script>
   <script src="app-run-modal.js"></script>
   <script src="app-quality.js"></script>

@@ -13,6 +13,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     moveProjectOrder = () => false,
     archiveSession = () => false,
     refreshProviderUsage = async () => null,
+    openPtyFocus = () => false,
   } = context;
 
   let sessionDragJustEnded = false;
@@ -477,6 +478,12 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
         const tab = $("#liveSessionGrid").querySelector(`[data-workflow-detail-tab="${CSS.escape(detailScroll.dataset.workflowDetailScroll || "summary")}"]`);
         tab?.click();
         $("#workflowDetail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      const ptyFocus = event.target.closest("[data-pty-focus-trigger]");
+      if (ptyFocus && !ptyFocus.hasAttribute("data-transcript-source")) {
+        event.stopPropagation();
+        openPtyFocus(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true });
         return;
       }
       const inlineTerminal = event.target.closest("[data-inline-pty-trigger]");

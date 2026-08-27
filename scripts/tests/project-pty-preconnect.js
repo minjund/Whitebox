@@ -411,6 +411,19 @@ function registerProjectPtyPreconnectTests(context) {
       ));
     }
 
+    for (const projection of [
+      { id: 'codex:read-only-reset', externalId: 'read-only-reset', provider: 'codex', readOnly: true },
+      { id: 'codex:plugin-reset', externalId: 'plugin-reset', provider: 'codex', sourcePlugin: {} },
+      { id: 'codex:authority-reset', externalId: 'authority-reset', provider: 'codex', controlAuthority: 'import' },
+      { id: 'codex:mode-reset', externalId: 'mode-reset', provider: 'codex', importMode: 'history' },
+    ]) {
+      assert.deepStrictEqual(Array.from(harness.actions.agentTargets(projection)), []);
+      await assert.rejects(
+        () => harness.actions.resetForAgent(projection),
+        error => error?.code === 'AGENT_SESSION_NOT_WRITABLE' && error?.deliveryState === 'rejected',
+      );
+    }
+
     assert.equal(harness.initCalls(), 0, '하위 AI 거절 전에 terminal init을 시작했습니다.');
     assert.deepStrictEqual(harness.ensureCalls, [], '하위 AI를 위해 terminalCreate를 호출했습니다.');
     assert.deepStrictEqual(harness.selectedSessions, [], '하위 AI PTY를 화면에서 선택했습니다.');

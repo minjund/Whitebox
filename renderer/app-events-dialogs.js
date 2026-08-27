@@ -17,6 +17,10 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
     markResultReviewComplete = () => 0,
     controlSourceSession = async () => {},
     sendSourceMessage = async () => {},
+    closePtyFocus = () => false,
+    closePtyFocusDetail = () => false,
+    isPtyFocusActive = () => false,
+    isPtyFocusDetailOpen = () => false,
   } = context;
 
   function bindRunComposerEvents() {
@@ -701,7 +705,7 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
     document.addEventListener("keydown", (event) => {
       trapDialogFocus(event);
       const editable = event.target instanceof HTMLElement && Boolean(event.target.closest("input, textarea, select, [contenteditable='true']"));
-      const dialogOpen = Boolean(currentDialog?.());
+      const dialogOpen = Boolean(currentDialog?.() || isPtyFocusActive());
       const viewShortcuts = ["all", "active", "waiting", "runtime", null, "tmux", "settings"];
       const shortcutView = viewShortcuts[Number(event.key) - 1];
       if (!editable && !dialogOpen && shortcutView && (event.metaKey || event.ctrlKey) && /^[1-7]$/.test(event.key)) {
@@ -723,14 +727,19 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
       if (event.key !== "Escape") return;
       if (!$("#mobileToolsMenu").classList.contains("hidden")) {
         $("#mobileToolsCloseBtn")?.click();
+      } else if (isPtyFocusDetailOpen()) {
+        closePtyFocusDetail();
       } else if (!$("#sessionResetModal")?.classList.contains("hidden")) {
         closeSessionResetDialog();
       } else if (!$("#runModal").classList.contains("hidden")) closeRunModal();
+      else if (isPtyFocusActive()) closePtyFocus();
       else closeDrawer();
     });
     window.addEventListener("resize", () => {
       scheduleAgentWorkflowConnections();
-      if (window.innerWidth < CONTEXT_DRAWER_MIN_WIDTH && state.drawerPresentation === "context") closeDrawer(false);
+      if (window.innerWidth < CONTEXT_DRAWER_MIN_WIDTH && state.drawerPresentation === "context") {
+        if (!isPtyFocusActive()) closeDrawer(false);
+      }
     });
   }
 

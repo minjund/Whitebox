@@ -70,6 +70,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     visibleLimit: 30,
     graphFocusId: null,
     inlineTerminalSessionId: null,
+    ptyFocusSessionId: null,
     workflowDetailTab: "summary",
     controlRoomSort: "recent",
     supervisionFocusId: null,
@@ -479,6 +480,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     else $("#mobileMoreBtn")?.removeAttribute("aria-current");
   }
   function selectView(view, options = {}) {
+    if (view !== state.view && state.ptyFocusSessionId) {
+      context.closePtyFocus?.({ restore: false });
+    }
     if (
       view !== state.view
       && $("#detailDrawer")?.classList.contains("open")
@@ -529,6 +533,8 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   }
   function currentDialog() {
     if (!$("#mobileToolsMenu")?.classList.contains("hidden")) return $("#mobileToolsMenu");
+    if (!$("#ptyFocusChildModal")?.classList.contains("hidden")) return $("#ptyFocusChildModal");
+    if (!$("#ptyFocusSurface")?.classList.contains("hidden")) return $("#ptyFocusSurface");
     if (!$("#quickPaletteModal")?.classList.contains("hidden")) return $("#quickPaletteModal");
     if (!$("#shortcutHelpModal")?.classList.contains("hidden")) return $("#shortcutHelpModal");
     if (!$("#sessionResetModal")?.classList.contains("hidden")) return $("#sessionResetModal");
@@ -652,7 +658,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     }
     dialog.setAttribute("inert", "");
     dialog.setAttribute("aria-hidden", "true");
-    const anotherDialog = [$("#mobileToolsMenu"), $("#runModal"), $("#tmuxCreateModal"), $("#detailDrawer"), $("#quickPaletteModal"), $("#shortcutHelpModal"), $("#sessionResetModal")]
+    const anotherDialog = [$("#mobileToolsMenu"), $("#ptyFocusChildModal"), $("#runModal"), $("#tmuxCreateModal"), $("#detailDrawer"), $("#quickPaletteModal"), $("#shortcutHelpModal"), $("#sessionResetModal")]
       .some((item) => item !== dialog && isBlockingDialogSurface(item));
     if (!anotherDialog) {
       shell?.removeAttribute("inert");

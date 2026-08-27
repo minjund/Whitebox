@@ -49,6 +49,11 @@ window.WhiteboxAppFactories.createDrawerData = function createDrawerData(context
         // follow-up below owns the next committed full-history value.
         if (active?.generation === generation && !active.refreshQueued && detail) {
           state.details.set(id, detail);
+          // PTY focus details do not own the drawer selection, so the drawer's
+          // selectedId-based rerender below cannot refresh their open modal.
+          // Notify that surface only after a full-history value actually
+          // commits (including the bounded queued follow-up).
+          context.renderPtyFocusDetail?.();
         }
         return detail;
       } catch (error) {

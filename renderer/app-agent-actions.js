@@ -113,6 +113,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         reason: fork?.reason || t("terminal.resume.codex_desktop_live"),
       };
     }
+    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
+      return { supported: false, reason: t("terminal.agent.no_input_target") };
+    }
     try {
       return window.WhiteboxTerminal && typeof window.WhiteboxTerminal.resumeSupport === "function"
         ? window.WhiteboxTerminal.resumeSupport(session)
@@ -856,6 +859,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const session = snapshotSession(sessionId) || state.details.get(sessionId);
     if (!session || !window.WhiteboxTerminal?.resetForAgent) return context.toast(t("agent.session_not_found"));
     if (session.parentId) return context.toast(t("terminal.resume.parent_controlled"));
+    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
+      return context.toast(t("terminal.agent.no_input_target"));
+    }
     state.agentCommandSending.add(sessionId);
     try {
       if ($("#detailDrawer").classList.contains("open")) context.closeDrawer(false);

@@ -30,6 +30,7 @@
     "createDrawerContent",
     "createDrawer",
     "createRunModal",
+    "createPtyFocusMode",
     "createQualityEnhancements",
     "createNavigationEventBindings",
     "createSessionEventBindings",

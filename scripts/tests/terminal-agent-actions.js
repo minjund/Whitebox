@@ -997,6 +997,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-deduped',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     const [first, second] = await Promise.all([
@@ -1068,6 +1069,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-unknown',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     await assert.rejects(
@@ -1139,6 +1141,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-inventory-grace',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     const created = await actions.forkForAgent(session, '', false, { focus: false });
@@ -1287,6 +1290,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-explicit',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     for (const invalidSession of [
@@ -1299,6 +1303,9 @@ function registerTerminalAgentActionTests(context) {
       { ...session, sourcePlugin: { id: 'builtin.omo' } },
       { ...session, sourcePlugin: 'builtin.omo' },
       { ...session, sourcePlugin: {} },
+      { ...session, provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...session, source: 'opencode' },
+      { ...session, status: 'running' },
       { ...session, readOnly: true },
       { ...session, controlAuthority: 'read-only-import' },
       { ...session, importMode: 'local-history' },
@@ -2093,6 +2100,20 @@ function registerTerminalAgentActionTests(context) {
     }];
     assert.deepStrictEqual(Array.from(actions.agentTargets(firstIdentity), target => target.id), ['terminal:public-signature']);
     assert.deepStrictEqual(Array.from(actions.agentTargets(secondIdentity), target => target.id), []);
+    for (const projection of [
+      { ...firstIdentity, readOnly: true },
+      { ...firstIdentity, sourcePlugin: {} },
+      { ...firstIdentity, provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...firstIdentity, source: 'opencode' },
+      { ...firstIdentity, clientKind: 'aside-browser' },
+      { ...firstIdentity, controlAuthority: 'read-only-import' },
+      { ...firstIdentity, importMode: 'local-history' },
+    ]) {
+      assert.deepStrictEqual(Array.from(actions.agentTargets(projection)), [],
+        `읽기 전용 projection이 기존 strong target을 재사용했습니다: ${JSON.stringify(projection)}`);
+      assert.throws(() => actions.requiredAgentTarget(projection, 'terminal:public-signature'),
+        /terminal\.agent\.no_input_target/);
+    }
     assert.equal(actions.bindAgentConnection(secondIdentity, {
       id: 'terminal:public-signature', kind: 'terminal', terminalId: 'terminal:public-signature',
     }), false, '공개 서명 불일치는 renderer 메모리 fallback으로 덮어쓰면 안 됩니다.');
@@ -3320,7 +3341,10 @@ function registerTerminalAgentActionTests(context) {
       window: {
         WhiteboxAppFactories: {},
         WhiteboxI18n: { t: key => key, errorText: (_error, key) => key },
-        WhiteboxRendererUtils: { reportRecoverableError: () => {} },
+        WhiteboxRendererUtils: {
+          reportRecoverableError: () => {},
+          isWritableDirectSession: () => true,
+        },
         WhiteboxTerminal: {
           agentTargets: () => [],
           resumeSupport: () => ({ supported: true, provider: 'gemini', sessionId: 'resume-unknown' }),

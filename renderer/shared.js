@@ -37,6 +37,27 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   });
 }
 
+function isWritableDirectSession(session) {
+  if (!session || session.parentId || session.readOnly === true) return false;
+  const sourcePlugin = session.sourcePlugin;
+  const sourcePluginPresent = typeof sourcePlugin === 'string'
+    || (sourcePlugin !== null && typeof sourcePlugin === 'object');
+  const sourcePluginId = String(session.sourcePluginId || '').trim();
+  const provenancePluginId = String(session.provenance?.source?.pluginId || '').trim();
+  const controlAuthority = String(session.controlAuthority || '').trim();
+  const importMode = String(session.importMode || '').trim();
+  const externalSourcePattern = /(?:^|[.:/_-])(?:opencode|omo|aside)(?:$|[.:/_-])/i;
+  const sourceMarkers = [session.source, session.clientKind, session.provenance?.source?.id]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  return !sourcePluginPresent
+    && !sourcePluginId
+    && !provenancePluginId
+    && !controlAuthority
+    && !importMode
+    && !sourceMarkers.some(value => String(value).toLowerCase() === 'whitebox-bridge' || externalSourcePattern.test(value));
+}
+
 window.WhiteboxRendererUtils = Object.freeze({
   // Intl.DateTimeFormat construction is far more expensive than format();
   // reuse one instance per locale+options combination across render passes.
@@ -64,6 +85,7 @@ window.WhiteboxRendererUtils = Object.freeze({
   providerLabel(provider) {
     return ({ claude: 'Claude', gpt: 'GPT', codex: 'GPT', gemini: 'Gemini', grok: 'Grok' })[provider] || 'AI';
   },
+  isWritableDirectSession,
   canForkCodexDesktopSession(session) {
     const sourcePlugin = session?.sourcePlugin;
     const sourcePluginId = String(session?.sourcePluginId
@@ -72,11 +94,13 @@ window.WhiteboxRendererUtils = Object.freeze({
     const importMode = String(session?.importMode || '').trim();
     if (String(session?.provider || '').toLowerCase() !== 'codex'
       || String(session?.clientKind || '').toLowerCase() !== 'codex-desktop'
+      || String(session?.status || '').toLowerCase() !== 'completed'
       || session?.parentId
       || sourcePluginId
       || session?.readOnly === true
       || controlAuthority
-      || importMode) return false;
+      || importMode
+      || !isWritableDirectSession(session)) return false;
     const externalId = String(session.externalId || '').trim();
     const sourceSessionId = String(session.id || '').trim();
     const runId = String(session.runId || '').trim();

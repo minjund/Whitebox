@@ -54,6 +54,9 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     }).format(date);
   };
   const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+  const isDirectWritablePty = session => window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
+    && session?.controlCapabilities?.pty === true
+    && session?.presentation?.conversationSurface !== "transcript";
   const statusLabel = (status, session) => session ? sessionStatusLabel(session, status) : ({
     starting: t("ui.preparing"), running: t("ui.working"), waiting: t("ui.waiting_for_review"), idle: t("ui.idle"),
     completed: t("ui.completed"), failed: t("ui.problem"), cancelled: t("ui.stopped"),
@@ -110,11 +113,11 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : t("graph.assigned_ai");
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(session);
-    const transcriptSurface = (session.presentation?.conversationSurface === "transcript" || session.controlCapabilities?.pty === false)
-      && !completedMainPty;
-    const inlinePtyAttributes = session.parentId || session.sourcePluginId
-      ? ""
-      : ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+    const writablePtySurface = !session.parentId && (completedMainPty || isDirectWritablePty(session));
+    const transcriptSurface = !writablePtySurface;
+    const inlinePtyAttributes = writablePtySurface
+      ? ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+      : "";
     const conversationAttributes = transcriptSurface ? ` data-open-session="${esc(session.id)}"` : inlinePtyAttributes;
     const conversationLabel = completedMainPty
       ? t("drawer.terminal_fork_action")
@@ -714,11 +717,10 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const unitCount = activeUnits.length;
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(root);
-    const transcriptSurface = (root.presentation?.conversationSurface === "transcript" || root.controlCapabilities?.pty === false)
-      && !completedMainPty;
+    const transcriptSurface = !completedMainPty && !isDirectWritablePty(root);
     const controlRoomPtyAttributes = root.parentId || root.sourcePluginId || transcriptSurface
       ? ""
-      : ` data-inline-pty-trigger="${esc(root.id)}" aria-expanded="${state.inlineTerminalSessionId === root.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+      : ` data-pty-focus-trigger="${esc(root.id)}" aria-expanded="${state.ptyFocusSessionId === root.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`;
     const main = `<button type="button" class="control-room-main"${controlRoomPtyAttributes}
       ${completedMainPty ? `aria-label="${esc(t("drawer.terminal_fork_action"))}" title="${esc(t("agent.codex_desktop_fork_help"))}"` : ""}
       ${transcriptSurface ? `data-open-session="${esc(root.id)}" data-transcript-source="true"` : ""}

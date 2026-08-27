@@ -285,8 +285,8 @@ async function run() {
       // if it began collapsed, the first click already performed that action.
       workspace = findWorkspace();
       if (workspace?.getAttribute('aria-expanded') === 'false') workspace.click();
-      const trigger = document.querySelector('.control-room-main[data-inline-pty-trigger="fixture-root"]');
-      trigger?.click();
+      const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
+      if (trigger) window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
       return Boolean(workspace && trigger);
     })()`);
     assert(openedInline, '실제 PTY를 열 프로젝트 또는 메인 AI 영역을 찾지 못했습니다.');
@@ -455,6 +455,7 @@ async function run() {
       externalId: codexForkExternalId,
       provider: 'codex',
       clientKind: 'codex-desktop',
+      status: 'completed',
       cwd: root,
       environment: {
         kind: process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux'),
