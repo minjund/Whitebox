@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.12 - 2026-08-31
+
+- Add a focused workspace for a responsible node that moves its existing live
+  PTY into a full-window terminal with a compact view of that node's flow.
+- Keep child execution nodes read-only in dismissible overlays while the PTY
+  continues underneath, then restore the exact monitoring view on return.
+
 ## 1.7.11 - 2026-08-26
 
 - Force a final xterm repaint after each drained PTY output burst so completed
