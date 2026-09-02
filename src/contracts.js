@@ -79,7 +79,6 @@
  * @property {{app:string,electron:string,node:string}} versions
  * @property {Object} platform
  * @property {Object|null} update
- * @property {{enabled:boolean,hookStatus?:string,hookDetail?:string}} attentionPopups Interactive bottom-right permission and question popup preference.
  */
 
 module.exports = {};

@@ -22,7 +22,7 @@ Monitor Claude, Codex, Gemini, and Grok sessions, follow parent–subagent relat
 </div>
 
 <div align="center">
-  <img src="docs/assets/whitebox-demo.gif" alt="Whitebox dashboard demo showing an AI task, its subagents, conversation, and token usage" width="960" />
+  <img src="docs/assets/whitebox-dashboard.png" alt="Whitebox showing an AI task, status-only child work, token usage, and the owning node's full PTY focus view" width="960" />
 </div>
 
 > Your agent transcripts stay on your computer. Whitebox reads the local session files created by the AI tools you already use.
@@ -79,21 +79,13 @@ On startup, Whitebox compares its package version with the newest stable GitHub 
 1. From **Home**, choose `New AI task`, describe the outcome, and select a workspace. If no supported AI is installed, follow the official setup link shown in the app first.
 2. Open **In progress** to see every AI with a green status. Expand `View detailed flow` only when you need the subagent breakdown.
 3. When **Needs your input** shows a count, handle those replies or decisions first.
-4. Open any task to inspect its **conversation, progress, and usage**, then continue a connected task from **Session terminal**.
+4. Open a task card or choose `Review complete` to enter the owning node's **exact PTY focus view**. Continue reading output and typing there.
 
 The `10-minute start guide` on Home lets you practice the same four steps. Progress is saved on this computer and the guide can be reopened at any time.
 
-### Continue a conversation and verify delivery
+### Continue in the owning node's real PTY
 
-Open a task's **Conversation** tab and use **Continue the conversation** to send another message to a supported connected session. The message stays in the same task and session instead of opening a separate chat.
-
-Whitebox shows delivery as three observable steps:
-
-1. the app dispatched the send request;
-2. the exact user message appeared in the AI session log;
-3. a new AI response-start signal appeared after that message.
-
-If the session log does not confirm receipt within 12 seconds, the app reports a delivery-confirmation delay instead of claiming that the AI is already preparing a response. Intermediate AI updates remain in chronological chat order, and only the latest completed message is marked **Final answer**. These labels describe local evidence from the session files; they do not guess what an external AI window is doing.
+Starting a new AI task or opening a task or review request now enters a full PTY focus view instead of a right-side inspector or separate conversation screen. Whitebox opens only the existing PTY attached to that task's owning root node; it does not guess another terminal or silently create a replacement shell. Child work and execution units remain status-only in the header, while output, approvals, input, and scrollback stay in that same PTY.
 
 ## What Whitebox shows
 
@@ -103,13 +95,9 @@ If the session log does not confirm receipt within 12 seconds, the app reports a
 | Relationship view | The request origin, selected agent, and every directly delegated subagent |
 | Execution units | Foreground shells, background shells, and background jobs started by an AI, including command, workspace, execution ID, and live status |
 | Operations and attention inbox | Blocking responses, optional follow-ups, and current failure, stall, or pause risks shown as separate categories |
-| Session detail | Chronological conversation, evidence-based delivery state, tool activity, lifecycle events, model, workspace, and status |
 | Management summary | Checkpoints, observation confidence, completion summary, artifacts, verification, and run controls |
 | Token view | Input, output, cached, reasoning, total, and reported context-window usage |
-| Session terminal | The selected AI's prior conversation beside its existing PTY or tmux pane, with input continuing in that exact session |
-| tmux workspace | Session → window → pane → AI process topology on macOS or Windows through WSL |
-
-Schedules and loops, Session terminal, and tmux workspace live under **Advanced tools** so the everyday monitoring flow stays focused.
+| PTY focus view | The owning node's exact existing PTY and its downstream work status in one full-screen surface |
 
 Whitebox distinguishes between a terminal it can control, a session that needs a bridge connection, a read-only session that must continue in its original app, and an ended session. It never types into an arbitrary external window.
 
@@ -130,7 +118,7 @@ Arguments after `--` are passed to the provider CLI:
 whitebox run claude -- --model claude-sonnet-4-6
 ```
 
-The external terminal and Whitebox dashboard control the same Whitebox-owned session. Opening a terminal from an AI card reuses the exact connected terminal instead of creating a new shell, keeps its output intact across UI navigation, and shows that session's prior conversation in a live side rail. Sessions started arbitrarily elsewhere remain visible but read-only unless the original app exposes a supported handoff.
+The external terminal and Whitebox dashboard control the same Whitebox-owned session. Opening PTY from an AI card reuses the exact connected terminal in a full focus view instead of creating a new shell, and keeps its output and scrollback intact when the view is reopened. Sessions started arbitrarily elsewhere remain visible but read-only unless the original app exposes a supported handoff.
 
 Persistent AI terminals on macOS and WSL run on the isolated `tmux -L whitebox` server, separate from your personal tmux server. `Close terminal view` detaches only the attached view while the AI keeps working in the background. `Reconnect existing work` attaches to that same tmux session and Whitebox session ID without starting another AI conversation. `End AI session` stops the tmux work but keeps its record for inspection; a stopped record can then be removed separately.
 

@@ -341,12 +341,6 @@ function createInlineHarness(root, options = {}) {
     setInlineOpen(sessionId) {
       app.state.inlineTerminalSessionId = sessionId == null ? null : String(sessionId);
     },
-    moveEmbeddedHostToDrawer() {
-      const host = terminalHosts.get(String(embedded.terminalId || '')) || null;
-      const drawerViewport = createViewport('drawerTerminalViewport');
-      if (host) drawerViewport.appendChild(host);
-      return drawerViewport;
-    },
     switchSession(nextSession) {
       const nextViewport = createViewport('agentInlineTerminalViewport');
       const nextEmpty = {
@@ -1149,90 +1143,71 @@ function registerInlineAgentTerminalTests(context) {
       '실제 창 blur 뒤 reconnect된 PTY가 포커스를 가져갔습니다.');
   });
 
-  test('reconnect remount는 이벤트 직전 inline viewport가 소유한 PTY에만 실행한다', async () => {
-    async function reconnectResult(mountId) {
+  test('reconnect remount는 현재 inline 또는 PTY 집중 viewport의 exact 소유권만 따른다', async () => {
+    async function reconnectResult({ focus = false, advertisedMountId }) {
       const harness = createInlineHarness(root, {
+        initialOpen: !focus,
         mountForAgent: async () => ({
           ok: true,
           target: { id: 'terminal:inline-owner', terminalId: 'terminal:inline-owner', kind: 'terminal' },
         }),
       });
+      if (focus) assert.equal(harness.enterFocus(harness.session.id), true);
+      const viewport = focus ? harness.focusViewport : harness.inlineViewport;
       harness.setEmbedded({
         connected: true,
         agentSessionId: harness.session.id,
         terminalId: 'terminal:inline-owner',
-      });
-      if (mountId === 'drawerTerminalViewport') harness.moveEmbeddedHostToDrawer();
+      }, viewport);
       harness.dispatchWindow('whitebox:terminal-reconnect-focus', {
         detail: { terminalId: 'terminal:inline-owner' },
       });
       harness.dispatchWindow('whitebox:terminal-reconnect-owner', {
-        detail: { terminalId: 'terminal:inline-owner', mountId },
+        detail: { terminalId: 'terminal:inline-owner', mountId: advertisedMountId },
       });
-      let passiveResult = null;
-      let forceResult = null;
-      let mountCountBeforeReopen = 0;
-      let focusCountBeforeReopen = 0;
-      let reopenResult = null;
-      if (mountId === 'agentInlineTerminalViewport') {
-        harness.setEmbedded({
-          connected: false,
-          agentSessionId: harness.session.id,
-          terminalId: 'terminal:inline-owner',
-        });
-      } else {
-        // The drawer disposes the old xterm before its replacement is ready.
-        // Preserve the last exact identity so neither a passive snapshot nor
-        // the reconnect force path can steal the disconnected ownership gap.
-        harness.setEmbedded({
-          connected: false,
-          agentSessionId: harness.session.id,
-          terminalId: 'terminal:inline-owner',
-        });
-        passiveResult = await harness.sync();
-        forceResult = await harness.sync({ force: true });
-        mountCountBeforeReopen = harness.mountCalls.length;
-        focusCountBeforeReopen = harness.focusCalls.length;
-      }
+      harness.setEmbedded({
+        connected: false,
+        agentSessionId: harness.session.id,
+        terminalId: 'terminal:inline-owner',
+      }, viewport);
       harness.dispatchTerminalState({
         change: 'reconnected',
         sessions: [{ id: 'terminal:inline-owner', status: 'running' }],
       });
       await new Promise(resolve => setTimeout(resolve, 5));
-      if (mountId === 'drawerTerminalViewport') {
-        assert.equal(harness.mountCalls.length, mountCountBeforeReopen,
-          'drawer reconnect listener가 disposal gap의 PTY를 inline에 remount했습니다.');
-        harness.close({ render: false });
-        harness.toggle(harness.session.id, { focus: false });
-        reopenResult = await harness.sync();
-      }
       return {
+        harness,
         focusCount: harness.focusCalls.length,
         mountCount: harness.mountCalls.length,
-        mountCountBeforeReopen,
-        focusCountBeforeReopen,
-        passiveReason: passiveResult?.reason || '',
-        forceReason: forceResult?.reason || '',
-        reopenOk: Boolean(reopenResult?.ok),
+        viewport,
       };
     }
 
-    const inlineOwner = await reconnectResult('agentInlineTerminalViewport');
+    const inlineOwner = await reconnectResult({
+      advertisedMountId: 'agentInlineTerminalViewport',
+    });
     assert.equal(inlineOwner.mountCount, 1,
       'inline viewport가 소유하던 PTY를 host reconnect 뒤 자동 remount하지 않았습니다.');
-    const drawerOwner = await reconnectResult('drawerTerminalViewport');
-    assert.equal(drawerOwner.passiveReason, 'owned-elsewhere');
-    assert.equal(drawerOwner.forceReason, 'owned-elsewhere');
-    assert.equal(drawerOwner.mountCountBeforeReopen, 0,
-      'drawer가 소유하던 disposal gap PTY를 inline sync가 가로채 remount했습니다.');
-    assert.equal(drawerOwner.reopenOk, true,
-      'drawer 종료 뒤 명시적으로 다시 펼친 inline PTY가 연결되지 않았습니다.');
-    assert.equal(drawerOwner.mountCount, 1,
-      'drawer 종료 뒤 명시적 inline 재펼침이 정확히 한 번 mount하지 않았습니다.');
-    assert.equal(drawerOwner.focusCount, 1,
-      'drawer 종료 뒤 명시적으로 다시 펼친 inline PTY에 focus가 복원되지 않았습니다.');
-    assert.equal(drawerOwner.focusCountBeforeReopen, 0,
-      'drawer가 소유하던 embedded PTY에 inline reconnect focus가 적용됐습니다.');
+    assert.strictEqual(inlineOwner.harness.mountCalls[0].options.mount, inlineOwner.viewport);
+    assert.equal(inlineOwner.focusCount, 1,
+      'inline viewport의 exact reconnect 뒤 입력 focus가 복원되지 않았습니다.');
+
+    const inlineClaimedAsFocus = await reconnectResult({
+      advertisedMountId: 'ptyFocusTerminalViewport',
+    });
+    assert.equal(inlineClaimedAsFocus.mountCount, 0,
+      'PTY 집중 viewport id가 현재 inline viewport의 reconnect 소유권을 가로챘습니다.');
+    assert.equal(inlineClaimedAsFocus.focusCount, 0,
+      '소유권이 일치하지 않는 reconnect가 inline PTY focus를 적용했습니다.');
+
+    const focusClaimedAsInline = await reconnectResult({
+      focus: true,
+      advertisedMountId: 'agentInlineTerminalViewport',
+    });
+    assert.equal(focusClaimedAsInline.mountCount, 0,
+      'inline viewport id가 현재 PTY 집중 viewport의 reconnect 소유권을 가로챘습니다.');
+    assert.equal(focusClaimedAsInline.focusCount, 0,
+      '소유권이 일치하지 않는 reconnect가 PTY 집중 mode focus를 적용했습니다.');
   });
 }
 

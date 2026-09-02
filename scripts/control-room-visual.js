@@ -147,7 +147,6 @@ app.whenReady().then(async () => {
       document.querySelector('#navAllCount').textContent = '48';
       document.querySelector('#navActiveCount').textContent = '9';
       document.querySelector('#navWaitingCount').textContent = '3';
-      document.querySelector('#advancedToolsCount').textContent = '17';
       document.querySelector('#beginnerGuide')?.classList.add('hidden');
       const primaryProjectGroup = [...document.querySelectorAll('.control-room-project-group')]
         .find(group => group.dataset.controlProject === ['Lode', 'star'].join(''));
@@ -161,6 +160,18 @@ app.whenReady().then(async () => {
       return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     })()`);
     await wait(180);
+    // The current product starts on project selection and intentionally keeps
+    // the all-project control room hidden. Expose the already-rendered fixture
+    // here only so the historical control-room layout assertions remain useful.
+    await win.webContents.executeJavaScript(`(() => {
+      document.querySelector('#projectSelectionPrompt')?.classList.add('hidden');
+      document.querySelector('#liveSection')?.classList.remove('hidden');
+      document.querySelector('#operationsOverview')?.classList.remove('hidden');
+      const root = document.querySelector('[data-control-session="fixture-root"]');
+      const status = root?.querySelector('.control-session-live');
+      if (status) status.textContent = '내 답변 대기 · 화면 밖에서 작업 중';
+      return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    })()`);
 
     const overviewMetrics = await win.webContents.executeJavaScript(`(() => {
       const stage = document.querySelector('.main-stage');
@@ -217,7 +228,7 @@ app.whenReady().then(async () => {
         projectContextTabs: [...document.querySelectorAll('#projectViewTabs > [data-view]')]
           .filter(node => node.getBoundingClientRect().width > 0)
           .map(node => node.dataset.view),
-        projectToolsVisible: Boolean(document.querySelector('#advancedToolsNav > summary')?.getBoundingClientRect().width),
+        additionalToolsRemoved: !document.querySelector('#advancedToolsNav, #automationOverview, #tmuxSection, #tmuxCreateModal, [data-view="terminal"], [data-view="tmux"], [data-view="runtime"]'),
         controlRooms: document.querySelectorAll('[data-control-session]').length,
         rootVisible: Boolean(root),
         compositeSessionLabel: root?.querySelector('.control-session-live')?.textContent.trim() || '',
@@ -307,7 +318,7 @@ app.whenReady().then(async () => {
       || !overviewMetrics.projectContextState.hidden || overviewMetrics.projectContextState.ariaHidden !== 'true'
       || !overviewMetrics.projectContextState.inert
       || overviewMetrics.projectContextTabs.length !== 0
-      || overviewMetrics.projectToolsVisible
+      || !overviewMetrics.additionalToolsRemoved
       || overviewMetrics.controlRooms < 1
       || !overviewMetrics.rootVisible || !overviewMetrics.mainNode || overviewMetrics.helperNodes < 1
       || !overviewMetrics.compositeSessionLabel.includes('내 답변 대기')
@@ -360,15 +371,24 @@ app.whenReady().then(async () => {
       document.querySelector('#navAllCount').textContent = '48';
       document.querySelector('#navActiveCount').textContent = '9';
       document.querySelector('#navWaitingCount').textContent = '3';
-      document.querySelector('#advancedToolsCount').textContent = '17';
       return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     })()`);
     const overviewOutput = await capture(win, outputDir, 'whitebox-control-room.png');
 
     await win.webContents.executeJavaScript(`(() => {
-      const project = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
-        .find(node => node.querySelector('strong')?.textContent.trim() === 'CMS_WEB');
-      project?.click();
+      const findProject = () => [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+        .find(node => node.dataset.workspace === 'D:\\\\cms-web');
+      const project = findProject();
+      if (!project) return;
+      if (project.getAttribute('aria-expanded') !== 'true') {
+        project.click();
+        return;
+      }
+      project.click();
+      return new Promise(resolve => requestAnimationFrame(() => {
+        findProject()?.click();
+        resolve();
+      }));
     })()`);
     await waitFor(
       win,
@@ -393,7 +413,7 @@ app.whenReady().then(async () => {
       sidebarProjects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
       sidebarSources: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
       sidebarNestedSessionAreas: document.querySelectorAll('#projectSidebarList .project-sidebar-sessions').length,
-      sidebarNestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session[data-open-session]').length,
+      sidebarNestedSessions: document.querySelectorAll('#projectSidebarList .project-sidebar-session[data-open-session], #projectSidebarList .project-sidebar-session[data-pty-focus-trigger]').length,
       sidebarAllProjectsVisible: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .every(node => node.getBoundingClientRect().height > 0),
       sidebarSelectedProjects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
@@ -407,8 +427,8 @@ app.whenReady().then(async () => {
         const current = document.querySelector('#liveSessionGrid');
         const railBox = rail?.getBoundingClientRect();
         const currentBox = current?.getBoundingClientRect();
-        const sessionIds = [...(rail?.querySelectorAll('[data-open-session], [data-inline-pty-trigger]') || [])]
-          .map(node => node.dataset.inlinePtyTrigger || node.dataset.openSession);
+        const sessionIds = [...(rail?.querySelectorAll('[data-open-session], [data-inline-pty-trigger], [data-pty-focus-trigger]') || [])]
+          .map(node => node.dataset.ptyFocusTrigger || node.dataset.inlinePtyTrigger || node.dataset.openSession);
         return {
           visible: Boolean(railBox && railBox.width > 0 && railBox.height > 0),
           position: rail ? getComputedStyle(rail).position : '',
@@ -471,12 +491,19 @@ app.whenReady().then(async () => {
         && document.querySelector('#projectContextName')?.textContent.trim() === '프로젝트'`,
       '프로젝트 전체 컨텍스트로 돌아오지 못했습니다.',
     );
-    const projectToolsMetrics = {
-      visible: await win.webContents.executeJavaScript(
-        `Boolean(document.querySelector('#advancedToolsNav > summary')?.getBoundingClientRect().width)`,
-      ),
-    };
-    if (projectToolsMetrics.visible) throw new Error(`프로젝트 미선택 홈에서 프로젝트 추가 기능이 숨겨지지 않았습니다: ${JSON.stringify(projectToolsMetrics)}`);
+    const removedSurfaceMetrics = await win.webContents.executeJavaScript(`(() => ({
+      additionalToolsRemoved: !document.querySelector('#advancedToolsNav, #automationOverview, #tmuxSection, #tmuxCreateModal, [data-view="terminal"], [data-view="tmux"], [data-view="runtime"]'),
+      legacyConversationRemoved: !document.querySelector('#terminalSection, #terminalHistoryPanel, #terminalViewport, #terminalCommandForm'),
+      drawerRemoved: !document.querySelector('#detailDrawer, #drawerBackdrop, #drawerContent, #drawerComposer'),
+      childModalRemoved: !document.querySelector('#ptyFocusChildModal'),
+      rightPopupRemoved: !document.querySelector('#attentionPopupSettingsCard, #attentionPopupEnabled'),
+      currentView: window.WhiteboxApp.state.view,
+    }))()`);
+    if (!removedSurfaceMetrics.additionalToolsRemoved || !removedSurfaceMetrics.legacyConversationRemoved
+      || !removedSurfaceMetrics.drawerRemoved || !removedSurfaceMetrics.childModalRemoved
+      || !removedSurfaceMetrics.rightPopupRemoved || removedSurfaceMetrics.currentView !== 'all') {
+      throw new Error(`삭제된 대화·추가 기능 surface 검증 실패: ${JSON.stringify(removedSurfaceMetrics)}`);
+    }
 
     const usageDetailMetrics = {
       removed: !await win.webContents.executeJavaScript(
@@ -487,49 +514,20 @@ app.whenReady().then(async () => {
       throw new Error(`중복 남은 사용 한도 영역이 남아 있습니다: ${JSON.stringify(usageDetailMetrics)}`);
     }
 
-    await win.webContents.executeJavaScript(`window.WhiteboxApp.selectView('terminal', { focusMain: true })`);
-    await waitFor(
-      win,
-      `window.WhiteboxApp.state.view === 'terminal'
-        && !document.querySelector('#backToProjectsBtn')?.classList.contains('hidden')`,
-      '고급 작업창에서 프로젝트로 돌아가기 버튼이 나타나지 않았습니다.',
-    );
-    const focusedToolMetrics = await win.webContents.executeJavaScript(`(() => {
-      const visible = element => Boolean(element
-        && getComputedStyle(element).display !== 'none'
-        && element.getBoundingClientRect().width > 0
-        && element.getBoundingClientRect().height > 0);
-      return {
-        title: document.querySelector('#pageTitle')?.textContent.trim() || '',
-        backVisible: visible(document.querySelector('#backToProjectsBtn')),
-        newRunHidden: !visible(document.querySelector('#newRunBtn')),
-        duplicateGuideHidden: !visible(document.querySelector('#terminalSection .terminal-section-head')),
-        answerDestinationHidden: !visible(document.querySelector('#terminalAnswerDestination')),
-        desktopGeneralEntryRemoved: !document.querySelector('.nav-item[data-view="terminal"]'),
-        mobileGeneralEntryRemoved: !document.querySelector('[data-mobile-view="terminal"]'),
-        quickGeneralEntryRemoved: !document.querySelector('[data-quick-command="terminal"]'),
-      };
-    })()`);
-    if (!focusedToolMetrics.backVisible || !focusedToolMetrics.newRunHidden
-      || !focusedToolMetrics.duplicateGuideHidden || !focusedToolMetrics.answerDestinationHidden
-      || !focusedToolMetrics.desktopGeneralEntryRemoved || !focusedToolMetrics.mobileGeneralEntryRemoved
-      || !focusedToolMetrics.quickGeneralEntryRemoved) {
-      throw new Error(`고급 작업창 단순화 검증 실패: ${JSON.stringify(focusedToolMetrics)}`);
-    }
-    const focusedToolOutput = await capture(win, outputDir, 'whitebox-focused-tool.png');
-    await win.webContents.executeJavaScript(`document.querySelector('#backToProjectsBtn')?.click()`);
-    await waitFor(
-      win,
-      `window.WhiteboxApp.state.view === 'all'
-        && document.querySelector('#backToProjectsBtn')?.classList.contains('hidden')
-        && !document.querySelector('#projectSelectionPrompt')?.classList.contains('hidden')
-        && document.querySelector('#newRunBtn')?.getBoundingClientRect().width === 0`,
-      '프로젝트로 돌아가기 버튼이 프로젝트 화면으로 복귀시키지 못했습니다.',
-    );
     await win.webContents.executeJavaScript(`(() => {
-      const project = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+      const findProject = () => [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.dataset.workspace === 'D:\\\\fixture');
-      project?.click();
+      const project = findProject();
+      if (!project) return;
+      if (project.getAttribute('aria-expanded') !== 'true') {
+        project.click();
+        return;
+      }
+      project.click();
+      return new Promise(resolve => requestAnimationFrame(() => {
+        findProject()?.click();
+        resolve();
+      }));
     })()`);
     await waitFor(
       win,
@@ -556,8 +554,14 @@ app.whenReady().then(async () => {
       const individualExpanded = Boolean(document.querySelector('.control-room-project-group')?.open);
       firstSummary?.click();
       const individualCollapsed = !document.querySelector('.control-room-project-group')?.open;
-      const cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+      let cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.querySelector('strong')?.textContent.trim().startsWith('CMS_WEB'));
+      if (cmsChip?.getAttribute('aria-expanded') === 'true') {
+        control.state.sidebarCollapsedProjects.add(cmsChip.dataset.sidebarProjectRef);
+        control.renderWorkspaces();
+        cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+          .find(node => node.querySelector('strong')?.textContent.trim().startsWith('CMS_WEB'));
+      }
       cmsChip?.click();
       const projectFiltered = control.state.workspace === 'D:\\\\cms-web'
         && document.querySelector('#projectContextName')?.textContent.trim() === 'CMS_WEB'
@@ -608,91 +612,135 @@ app.whenReady().then(async () => {
     );
     win.setContentSize(1700, 979);
     await wait(180);
-    await win.webContents.executeJavaScript(`document.querySelector('[data-open-subagent-chat="fixture-child"]')?.click()`);
+    await win.webContents.executeJavaScript(`(() => {
+      window.interactionTest.clearCalls();
+      document.querySelector('[data-open-subagent-chat="fixture-child"]')?.click();
+    })()`);
     await waitFor(
       win,
-      `document.querySelector('#detailDrawer')?.classList.contains('open')
-        && document.querySelector('#detailDrawer')?.dataset.mode === 'subagent'
-        && document.querySelector('#drawerComposer')?.classList.contains('hidden')
-        && Boolean(document.querySelector('#drawerContent .chat-row.assistant'))`,
-      '서브에이전트의 실제 응답을 보여주는 읽기 전용 상세가 열리지 않았습니다.',
+      `(() => {
+        const app = window.WhiteboxApp;
+        const surface = document.querySelector('#ptyFocusSurface');
+        const shell = document.querySelector('#ptyFocusTerminalShell');
+        const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+        const host = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]');
+        const empty = shell?.querySelector('[data-inline-terminal-empty]');
+        return app.state.ptyFocusSessionId === 'fixture-root'
+          && app.state.ptyFocusTargetId === 'terminal-main'
+          && surface && !surface.classList.contains('hidden') && !surface.inert
+          && surface.getAttribute('aria-hidden') === 'false'
+          && shell?.dataset.inlineAgentTerminal === 'fixture-root'
+          && shell?.dataset.connection === 'connected'
+          && embedded.connected && embedded.agentSessionId === 'fixture-root'
+          && embedded.terminalId === 'terminal-main'
+          && empty?.classList.contains('hidden') && getComputedStyle(empty).display === 'none'
+          && host && getComputedStyle(host).display !== 'none'
+          && host.getBoundingClientRect().width > 0 && host.getBoundingClientRect().height > 0
+          && Boolean(host.querySelector('.xterm'));
+      })()`,
+      '서브에이전트 노드가 담당 root의 정확한 full PTY focus를 열지 못했습니다.',
     );
 
-    const drawerMetrics = await win.webContents.executeJavaScript(`(() => {
-      const drawer = document.querySelector('#detailDrawer');
-      const child = window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-child');
+    const subagentPtyMetrics = await win.webContents.executeJavaScript(`(() => {
+      const app = window.WhiteboxApp;
+      const surface = document.querySelector('#ptyFocusSurface');
+      const shell = document.querySelector('#ptyFocusTerminalShell');
+      const viewport = document.querySelector('#ptyFocusTerminalViewport');
+      const host = viewport?.querySelector(':scope > .terminal-screen[data-terminal-screen="terminal-main"]');
+      const text = document.querySelector('#ptyFocusFlow')?.innerText || '';
       return {
-        mode: drawer.dataset.mode,
-        presentation: drawer.dataset.presentation,
-        contextPanelOpen: document.body.classList.contains('conversation-context-open')
-          && !document.querySelector('#appShell')?.inert
-          && document.querySelector('#drawerBackdrop')?.classList.contains('hidden'),
-        protectedAssignmentHidden: !drawer.querySelector('.subagent-assignment-card')
-          && !drawer.innerText.includes('실제로 보낸 작업 지시는')
-          && !drawer.innerText.includes('도움 AI에게 일을 맡기기 직전'),
-        conversationMessages: drawer.querySelectorAll('.chat-row').length,
-        routeControlsHidden: drawer.querySelectorAll('[data-agent-command-route]').length === 0,
-        composerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden')
-          && !drawer.querySelector('[data-agent-command-form="fixture-child"], [data-agent-command-draft="fixture-child"]'),
-        focusControlRemoved: !document.querySelector('#drawerFocusModeBtn'),
-        runtimePresence: child?.runtimePresence || [],
-        directTargets: window.WhiteboxTerminal?.agentTargets(child) || [],
-        scope: drawer.querySelector('[data-conversation-scope]')?.dataset.conversationScope || '',
-        childWorkVisible: drawer.innerText.includes('실행 구조, 대화 기록, 직접 개입'),
-        parentConversationHidden: !drawer.innerText.includes('상호작용 테스트를 진행해줘') && !drawer.innerText.includes('버튼과 입력 동작을 확인하고 있습니다.'),
-        noDrawerOverflow: drawer.scrollWidth <= drawer.clientWidth + 2,
+        sessionId: app.state.ptyFocusSessionId || '',
+        targetId: app.state.ptyFocusTargetId || '',
+        focusOpen: document.body.classList.contains('pty-focus-open'),
+        surfaceVisible: Boolean(surface && !surface.classList.contains('hidden') && !surface.inert),
+        backgroundInactive: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
+        exactEmbedded: (() => {
+          const embedded = window.WhiteboxTerminal.embeddedState();
+          return embedded.connected && embedded.agentSessionId === 'fixture-root' && embedded.terminalId === 'terminal-main';
+        })(),
+        xtermVisible: Boolean(host && host.querySelector('.xterm')
+          && getComputedStyle(host).display !== 'none'
+          && host.getBoundingClientRect().width > 0 && host.getBoundingClientRect().height > 0),
+        connectionTone: shell?.dataset.connection || '',
+        childNodeVisible: [...document.querySelectorAll('#ptyFocusFlow .pty-focus-node-copy > small')]
+          .some(node => node.textContent.trim() === window.WhiteboxI18n.t('pty_focus.readonly_node')),
+        flowControls: document.querySelector('#ptyFocusFlow')?.querySelectorAll('button, a, input, textarea, select, [contenteditable="true"]').length || 0,
+        oldUiAbsent: !document.querySelector('#detailDrawer, #drawerBackdrop, #drawerContent, #drawerComposer, #ptyFocusChildModal, #terminalSection, #advancedToolsNav, #automationOverview, #tmuxSection, #tmuxCreateModal'),
+        terminalCreates: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+        noViewportOverflow: Boolean(viewport && viewport.scrollWidth <= viewport.clientWidth + 2),
       };
     })()`);
-    if (drawerMetrics.mode !== 'subagent' || drawerMetrics.presentation !== 'context' || !drawerMetrics.contextPanelOpen
-      || !drawerMetrics.protectedAssignmentHidden || drawerMetrics.conversationMessages < 1
-      || !drawerMetrics.routeControlsHidden || !drawerMetrics.composerHidden || !drawerMetrics.focusControlRemoved
-      || drawerMetrics.scope !== 'subagent-only' || !drawerMetrics.childWorkVisible || !drawerMetrics.parentConversationHidden || !drawerMetrics.noDrawerOverflow) {
-      throw new Error(`서브에이전트 실제 응답 상세 검증 실패: ${JSON.stringify(drawerMetrics)}`);
+    if (subagentPtyMetrics.sessionId !== 'fixture-root' || subagentPtyMetrics.targetId !== 'terminal-main'
+      || !subagentPtyMetrics.focusOpen || !subagentPtyMetrics.surfaceVisible || !subagentPtyMetrics.backgroundInactive
+      || !subagentPtyMetrics.exactEmbedded || !subagentPtyMetrics.xtermVisible
+      || subagentPtyMetrics.connectionTone !== 'connected' || !subagentPtyMetrics.childNodeVisible
+      || subagentPtyMetrics.flowControls !== 0 || !subagentPtyMetrics.oldUiAbsent
+      || subagentPtyMetrics.terminalCreates !== 0 || !subagentPtyMetrics.noViewportOverflow) {
+      throw new Error(`서브에이전트 exact PTY focus 검증 실패: ${JSON.stringify(subagentPtyMetrics)}`);
     }
 
     await wait(180);
-    const drawerOutput = await capture(win, outputDir, 'whitebox-control-room-subagent.png');
+    const subagentPtyOutput = await capture(win, outputDir, 'whitebox-control-room-subagent-pty.png');
 
     await win.webContents.executeJavaScript(`(() => {
-      document.querySelector('#drawerBackToFlowBtn')?.click();
+      document.querySelector('#ptyFocusBackBtn')?.click();
       document.querySelector('[data-open-execution-id="fixture-shell-running"]')?.click();
     })()`);
     await waitFor(
       win,
-      `document.querySelector('#detailDrawer')?.classList.contains('open')
-        && document.querySelector('#detailDrawer')?.dataset.mode === 'execution'
-        && window.WhiteboxApp.state.drawerExecutionId === 'fixture-shell-running'
-        && Boolean(document.querySelector('[data-execution-detail="fixture-shell-running"]'))`,
-      'PowerShell 실행 전용 상세 화면이 열리지 않았습니다.',
+      `(() => {
+        const app = window.WhiteboxApp;
+        const surface = document.querySelector('#ptyFocusSurface');
+        const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+        return app.state.ptyFocusSessionId === 'fixture-root'
+          && app.state.ptyFocusTargetId === 'terminal-main'
+          && surface && !surface.classList.contains('hidden')
+          && embedded.connected && embedded.agentSessionId === 'fixture-root'
+          && embedded.terminalId === 'terminal-main';
+      })()`,
+      '실행 노드가 담당 root의 정확한 full PTY focus를 열지 못했습니다.',
     );
-    const executionMetrics = await win.webContents.executeJavaScript(`(() => {
-      const drawer = document.querySelector('#detailDrawer');
-      const text = drawer?.innerText || '';
+    const executionPtyMetrics = await win.webContents.executeJavaScript(`(() => {
+      const surface = document.querySelector('#ptyFocusSurface');
+      const flow = document.querySelector('#ptyFocusFlow');
+      const host = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen[data-terminal-screen="terminal-main"]');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      const text = flow?.innerText || '';
       return {
-        mode: drawer?.dataset.mode || '',
-        scope: drawer?.querySelector('[data-conversation-scope]')?.dataset.conversationScope || '',
-        tabLabel: drawer?.querySelector('.drawer-tab:not(.hidden)')?.textContent.trim() || '',
-        visibleTabs: drawer?.querySelectorAll('.drawer-tab:not(.hidden)').length || 0,
+        sessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+        targetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
+        exactEmbedded: embedded.connected && embedded.agentSessionId === 'fixture-root' && embedded.terminalId === 'terminal-main',
         commandVisible: text.includes('npm run dev'),
-        outputVisible: text.includes('화면 미리보기가 실행 중입니다.'),
-        purposeVisible: Boolean(drawer?.querySelector('.execution-purpose-card b')?.textContent.trim()),
-        parentConversationHidden: !text.includes('상호작용 테스트를 진행해줘') && !text.includes('버튼과 입력 동작을 확인하고 있습니다.'),
-        composerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden'),
-        noDrawerOverflow: drawer.scrollWidth <= drawer.clientWidth + 2,
+        executionNodeVisible: Boolean(flow?.querySelector('.pty-focus-node')),
+        xtermVisible: Boolean(host && host.querySelector('.xterm')
+          && getComputedStyle(host).display !== 'none'
+          && host.getBoundingClientRect().width > 0 && host.getBoundingClientRect().height > 0),
+        oldUiAbsent: !document.querySelector('#detailDrawer, #drawerBackdrop, #drawerContent, #drawerComposer, #ptyFocusChildModal, #terminalSection, #advancedToolsNav, #automationOverview, #tmuxSection, #tmuxCreateModal'),
+        surfaceNoOverflow: Boolean(surface && surface.scrollWidth <= surface.clientWidth + 2),
+        terminalCreates: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
       };
     })()`);
-    if (executionMetrics.mode !== 'execution' || executionMetrics.scope !== 'execution-only'
-      || executionMetrics.tabLabel !== '실행 과정' || executionMetrics.visibleTabs !== 1
-      || !executionMetrics.commandVisible || !executionMetrics.outputVisible || !executionMetrics.purposeVisible
-      || !executionMetrics.parentConversationHidden || !executionMetrics.composerHidden || !executionMetrics.noDrawerOverflow) {
-      throw new Error(`실행 단위 상세 분리 검증 실패: ${JSON.stringify(executionMetrics)}`);
+    if (executionPtyMetrics.sessionId !== 'fixture-root' || executionPtyMetrics.targetId !== 'terminal-main'
+      || !executionPtyMetrics.exactEmbedded || !executionPtyMetrics.commandVisible
+      || !executionPtyMetrics.executionNodeVisible || !executionPtyMetrics.xtermVisible
+      || !executionPtyMetrics.oldUiAbsent || !executionPtyMetrics.surfaceNoOverflow
+      || executionPtyMetrics.terminalCreates !== 0) {
+      throw new Error(`실행 노드 exact PTY focus 검증 실패: ${JSON.stringify(executionPtyMetrics)}`);
     }
-    const executionOutput = await capture(win, outputDir, 'whitebox-control-room-execution.png');
+    const executionPtyOutput = await capture(win, outputDir, 'whitebox-control-room-execution-pty.png');
+    await win.webContents.executeJavaScript(`document.querySelector('#ptyFocusBackBtn')?.click()`);
+    await waitFor(
+      win,
+      `!window.WhiteboxApp.state.ptyFocusSessionId
+        && document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')
+        && !document.querySelector('#mainContent')?.inert
+        && !document.querySelector('.sidebar')?.inert`,
+      'PTY focus 종료 후 작업현황 화면이 복원되지 않았습니다.',
+    );
 
     win.setContentSize(1224, 792);
     await wait(260);
     await win.webContents.executeJavaScript(`(() => {
-      document.querySelector('#closeDrawerBtn')?.click();
       document.querySelector('#toast')?.classList.add('hidden');
       window.WhiteboxApp.state.disclosureStates.clear();
       window.WhiteboxApp.renderSessions('filter');
@@ -792,7 +840,6 @@ app.whenReady().then(async () => {
     win.setContentSize(390, 844);
     await wait(260);
     await win.webContents.executeJavaScript(`(() => {
-      document.querySelector('#closeDrawerBtn')?.click();
       document.querySelector('#toast')?.classList.add('hidden');
       const firstProject = document.querySelector('.control-room-project-group');
       if (firstProject) {
@@ -828,7 +875,8 @@ app.whenReady().then(async () => {
         flowColumns: getComputedStyle(document.querySelector('.control-room-flow')).gridTemplateColumns,
         projectToolbarHidden: getComputedStyle(projectToolbar).display === 'none',
         listToolbarHidden: getComputedStyle(listToolbar).display === 'none',
-        mobileProjectPickerAvailable: Boolean(document.querySelector('#mobileWorkspaceList')),
+        selectedProjectContextRetained: window.WhiteboxApp.state.workspace === 'D:\\\\fixture'
+          && document.querySelector('#projectContextName')?.textContent.trim() === ['Lode', 'star'].join(''),
         firstProjectOpen: Boolean(firstProject?.open),
         firstAgentAboveFold: Boolean(firstAgentRect && stageRect
           && firstAgentRect.width > 0 && firstAgentRect.height > 0
@@ -870,7 +918,7 @@ app.whenReady().then(async () => {
       };
     })()`);
     if (!mobileMetrics.overviewVisible || !mobileMetrics.projectToolbarHidden || !mobileMetrics.listToolbarHidden
-      || !mobileMetrics.mobileProjectPickerAvailable || !mobileMetrics.firstProjectOpen
+      || !mobileMetrics.selectedProjectContextRetained || !mobileMetrics.firstProjectOpen
       || !mobileMetrics.firstAgentAboveFold || mobileMetrics.stageScrollTop > 1
       || !mobileMetrics.noOverviewOverflow || !mobileMetrics.noStageOverflow
       || mobileMetrics.usageDisclosureVisible || mobileMetrics.usageOverviewVisible
@@ -879,7 +927,7 @@ app.whenReady().then(async () => {
     }
     const mobileOutput = await capture(win, outputDir, 'whitebox-control-room-mobile.png');
 
-    process.stdout.write(`세션 관제 시각·상호작용 검증 통과\n${JSON.stringify({ initialSelectionMetrics, overviewMetrics, projectContextMetrics, projectToolsMetrics, usageDetailMetrics, focusedToolMetrics, drawerMetrics, executionMetrics, desktop1224Metrics, constrainedFlowMetrics, mobileMetrics }, null, 2)}\n${overviewOutput}\n${projectContextOutput}\n${projectHistoryOutput}\n${focusedToolOutput}\n${drawerOutput}\n${executionOutput}\n${desktop1224Output}\n${constrainedFlowOutput}\n${mobileOutput}\n`);
+    process.stdout.write(`세션 관제 시각·상호작용 검증 통과\n${JSON.stringify({ initialSelectionMetrics, overviewMetrics, projectContextMetrics, removedSurfaceMetrics, usageDetailMetrics, subagentPtyMetrics, executionPtyMetrics, desktop1224Metrics, constrainedFlowMetrics, mobileMetrics }, null, 2)}\n${overviewOutput}\n${projectContextOutput}\n${projectHistoryOutput}\n${subagentPtyOutput}\n${executionPtyOutput}\n${desktop1224Output}\n${constrainedFlowOutput}\n${mobileOutput}\n`);
   } catch (error) {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;

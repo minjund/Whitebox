@@ -4,9 +4,8 @@
 window.WhiteboxTerminalAgentActions = function createModule(context) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
-    $, state, init, notice, moveWorkbench, selectTmux, selectSession, bindAgent, queueHistoryRefresh,
-    renderTarget, fitEntry, refreshSessions, resumeSupport, resumeLaunchArgs, preferredWorkspace, providerLabel, terminalTypeLabel, esc,
-    syncComposer, tmuxTargetKey, ensureSessionTerminal,
+    state, init, notice, refreshSessions, resumeSupport, resumeLaunchArgs, preferredWorkspace,
+    providerLabel, terminalTypeLabel, esc, tmuxTargetKey, ensureSessionTerminal,
   } = context;
   const terminalLabel = typeof terminalTypeLabel === 'function'
     ? terminalTypeLabel
@@ -216,7 +215,24 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     return true;
   }
 
+  function exactAppOwnedBridgeTerminalMatches(terminal, agentSession) {
+    const identity = window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(agentSession);
+    if (!identity || !terminal) return false;
+    const status = String(terminal.status || '').trim().toLowerCase();
+    return terminal.type === 'agent'
+      && terminal.backend === 'direct'
+      && ['starting', 'running'].includes(status)
+      && String(terminal.id || '').trim() === identity.terminalId
+      && String(terminal.provider || '').trim().toLowerCase() === identity.provider
+      && (!identity.creationId || String(terminal.creationId || '').trim() === identity.creationId);
+  }
+
   function strongAgentTerminalMatches(terminal, agentSession, signature = agentConnectionSignature(agentSession)) {
+    // A just-created app-owned PTY appears briefly as a synthetic bridge
+    // before the provider transcript has a stable conversation id. Only that
+    // bridge's exact terminal + creation identity may bypass the signed
+    // conversation binding used by established sessions.
+    if (exactAppOwnedBridgeTerminalMatches(terminal, agentSession)) return true;
     if (!terminal || terminal.type !== 'agent') return false;
     if (terminal.backend !== 'direct' || terminal.conversationBound !== true) return false;
     if (String(terminal.bridgeId || '') !== String(agentSession?.id || '')) return false;
@@ -501,8 +517,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   function agentTargets(agentSession) {
     if (!agentSession || !agentSession.id) return [];
     if (agentSession.parentId) return [];
-    if (isOriginOwnedSession(agentSession)) return [];
-    if (hasNonDirectSessionMarkers(agentSession)) return [];
+    const appOwnedBridge = Boolean(window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(agentSession));
+    if (!appOwnedBridge && isOriginOwnedSession(agentSession)) return [];
+    if (!appOwnedBridge && hasNonDirectSessionMarkers(agentSession)) return [];
     const targets = [];
     const connectionSignature = agentConnectionSignature(agentSession);
     const blockedTerminalIds = new Set(state.sessions
@@ -656,30 +673,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         reportPostDeliveryError('terminal-agent-start-refresh', error);
       } catch (_reportError) {}
     }
-    let terminalSelected = false;
-    let selectionFailure = null;
-    try {
-      state.mode = 'general';
-      if (typeof moveWorkbench === 'function') moveWorkbench('general');
-      if (typeof selectSession === 'function') {
-        await selectSession(created.id, 'question');
-        terminalSelected = true;
-      }
-    } catch (error) {
-      try {
-        reportPostDeliveryError('terminal-agent-start-selection', error);
-      } catch (_reportError) {}
-      const selectionError = new Error(t('terminal.agent.resume_terminal_failed'));
-      selectionError.code = 'TERMINAL_START_SELECTION_FAILED';
-      selectionError.cause = error;
-      selectionFailure = markCreatedTerminalRetry(
-        selectionError,
-        created,
-        creationId,
-        deliveryId,
-        deliveryState,
-      );
-    }
+    // The removed standalone terminal workbench no longer owns selection.
+    // The caller opens this exact terminal in the full-screen PTY surface.
+    const terminalSelected = Boolean(created.id);
     const creationFailed = Boolean(created.creationFailed || created.status === 'failed');
     const creationUnavailable = Boolean(created.creationUnavailable
       || (createdStatus && !['starting', 'running'].includes(createdStatus))
@@ -689,7 +685,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       failedError.code = created.code || 'TERMINAL_CREATE_FAILED';
       failedError.creationFailed = creationFailed;
       failedError.creationUnavailable = creationUnavailable;
-      if (selectionFailure) failedError.selectionError = selectionFailure;
       const retry = markCreatedTerminalRetry(
         failedError,
         created,
@@ -712,11 +707,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         deliveryId,
         'unknown',
       );
-      if (selectionFailure) retry.selectionError = selectionFailure;
       retry.terminalSelected = terminalSelected;
       throw retry;
     }
-    if (selectionFailure) throw selectionFailure;
     return {
       ok: true,
       runId: created.id,
@@ -766,7 +759,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     return { ok: true, target };
   }
 
-  async function openForAgent(agentSession, targetId = '', draft = '', options = {}) {
+  async function openForAgent(agentSession, targetId = '', _draft = '', options = {}) {
     if (agentSession?.parentId) throw rejectedError(t('terminal.resume.parent_controlled'));
     const ensureCurrent = () => {
       if (!options.isCurrent || options.isCurrent()) return;
@@ -784,31 +777,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       await options.onTargetReady(target);
       ensureCurrent();
     }
-    state.mode = 'general';
-    moveWorkbench('general');
-    const selected = await selectSession(target.terminalId, 'question', {
-      focus: options.focus !== false,
-      isCurrent: options.isCurrent,
-      attentionActivation: options.attentionActivation === true,
-    });
-    if (selected === false) {
-      ensureCurrent();
-      throw rejectedError(t('terminal.agent.target_expired'));
-    }
     ensureCurrent();
-    bindAgent(agentSession, target);
-    queueHistoryRefresh(agentSession);
-    renderTarget();
-    const entry = state.terminals.get(target.terminalId);
-    fitEntry(entry, target.terminalId);
-    const input = $('#terminalCommandInput');
-    input.value = String(draft || '');
-    state.commandDrafts.set(target.id, input.value);
-    syncComposer?.();
-    ensureCurrent();
-    if (options.focus !== false) input.focus({ preventScroll: true });
     notice(t('terminal.agent.session_kept', { target: target.label }), 'success');
-    return target;
+    return { ...target, background: true };
   }
 
   function cleanupFailure(message, cause = null) {
@@ -1123,12 +1094,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       deliveryState,
       duplicate,
     };
-    if (options.focus === false) return { ...result, background: true };
-    state.mode = 'general';
-    moveWorkbench('general');
-    await selectSession(target.terminalId, 'question');
-    renderTarget();
-    return result;
+    return { ...result, background: true };
   }
 
   async function retireConnectionTarget(target, scope = 'terminal-agent-connection-cleanup') {
@@ -1266,10 +1232,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         label: reusable.title || title,
         detail: `${terminalLabel(reusable)} · ${t('session.program_pid', { pid: reusable.pid || '--' })}`,
         terminalId: reusable.id,
+        creationId: String(reusable.creationId || '').trim(),
       };
       const promptSent = Boolean(sendDraft && prompt && deliveryState === 'accepted');
       if (sendDraft && prompt) emitCommandDelivery(agentSession, target, deliveryState);
-      if (options.focus === false) return {
+      return {
         ...target,
         promptSent,
         deliveryState,
@@ -1277,31 +1244,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         reused: true,
         terminal: reusable,
       };
-      try {
-        state.mode = 'general';
-        moveWorkbench('general');
-        await selectSession(reusable.id);
-        bindAgent(agentSession, target);
-        queueHistoryRefresh(agentSession);
-        renderTarget();
-        const input = $('#terminalCommandInput');
-        if (input) {
-          input.value = promptSent ? '' : String(draft || '');
-          state.commandDrafts.set(target.id, input.value);
-          syncComposer?.();
-          input.focus({ preventScroll: true });
-        }
-      } catch (error) {
-        if (!sendDraft) throw error;
-        reportPostDeliveryError('terminal-agent-reused-focus', error);
-      }
-      deliveryNotice(deliveryState === 'unknown'
-        ? t('terminal.agent.delivery_uncertain', { target: target.label })
-        : sendDraft && prompt
-          ? t('terminal.agent.resumed_and_sent', { provider: providerLabel(agentSession.provider), sessionId: support.sessionId.slice(0, 12) })
-          : t('terminal.agent.reconnected', { provider: providerLabel(agentSession.provider), sessionId: support.sessionId.slice(0, 12) }),
-      deliveryState === 'unknown' ? 'warning' : 'success');
-      return { ...target, promptSent, deliveryState, reused: true };
     }
     // Resume arguments always contain identity only. Every user prompt is
     // delivered through terminalCommand after the prompt-free PTY exists, so
@@ -1364,10 +1306,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       label: created.title || title,
       detail: `${terminalLabel(created)} · ${t('session.program_pid', { pid: created.pid || '--' })}`,
       terminalId: created.id,
+      creationId: String(created.creationId || '').trim(),
     };
     const promptSent = Boolean(sendDraft && prompt && deliveryState === 'accepted');
     if (sendDraft && prompt) emitCommandDelivery(agentSession, target, deliveryState);
-    if (options.focus === false) return {
+    return {
       ...target,
       promptSent,
       deliveryState,
@@ -1375,31 +1318,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       reused: Boolean(created.reused),
       terminal: created,
     };
-    try {
-      state.mode = 'general';
-      moveWorkbench('general');
-      await selectSession(created.id);
-      bindAgent(agentSession, target);
-      queueHistoryRefresh(agentSession);
-      renderTarget();
-      const input = $('#terminalCommandInput');
-      if (input) {
-        input.value = promptSent ? '' : String(draft || '');
-        state.commandDrafts.set(target.id, input.value);
-        syncComposer?.();
-        input.focus({ preventScroll: true });
-      }
-    } catch (error) {
-      if (!sendDraft) throw error;
-      reportPostDeliveryError('terminal-agent-created-focus', error);
-    }
-    deliveryNotice(deliveryState === 'unknown'
-      ? t('terminal.agent.delivery_uncertain', { target: target.label })
-      : sendDraft && prompt
-        ? t('terminal.agent.resumed_and_sent', { provider: providerLabel(agentSession.provider), sessionId: support.sessionId.slice(0, 12) })
-        : t('terminal.agent.reconnected', { provider: providerLabel(agentSession.provider), sessionId: support.sessionId.slice(0, 12) }),
-    deliveryState === 'unknown' ? 'warning' : 'success');
-    return { ...target, promptSent, deliveryState, reused: Boolean(created.reused) };
   }
 
   async function discardSupersededTarget(target) {
@@ -1646,14 +1564,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       label: created.title || providerLabel(provider),
       detail: `${terminalLabel(created)} · ${t('session.program_pid', { pid: created.pid || '--' })}`,
       terminalId: created.id,
+      creationId: String(created.creationId || '').trim(),
     };
-    if (options.focus === false) return { ...target, mode: 'new-session' };
-    state.mode = 'general';
-    moveWorkbench('general');
-    await selectSession(created.id);
-    renderTarget();
-    $('#terminalCommandInput')?.focus({ preventScroll: true });
-    return { ...target, mode: 'new-session' };
+    return { ...target, mode: 'new-session', background: true };
   }
 
   return {

@@ -15,8 +15,6 @@
     focusOrigin: null,
     userFocusRevision: 0,
     reconnectOwnerTerminalId: "",
-    embeddedOwnerGeneration: 0,
-    foreignEmbeddedOwner: null,
     forkCreationGestures: new Map(),
   };
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
@@ -52,6 +50,7 @@
 
   function isFocusEligibleSession(session) {
     if (!isMainSession(session) || session.sourcePluginId) return false;
+    if (window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session)) return true;
     if (String(session.status || "").toLowerCase() === "completed"
       && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
@@ -122,12 +121,6 @@
       String(child?.dataset?.terminalScreen || "") === id
       && child.parentElement === viewport
     )) || null;
-  }
-
-  function clearForeignEmbeddedOwner(sessionId = "") {
-    if (sessionId && local.foreignEmbeddedOwner?.sessionId !== sessionId) return;
-    local.embeddedOwnerGeneration += 1;
-    local.foreignEmbeddedOwner = null;
   }
 
   function cancelInlineClaim(sessionId) {
@@ -237,7 +230,7 @@
     if (!isFocusEligibleSession(session)) {
       if (String(instance.state.ptyFocusSessionId || "") === String(session.id || "")) {
         if (typeof instance.closePtyFocus === "function") {
-          instance.closePtyFocus({ restore: true, reason: "missing" });
+          instance.closePtyFocus({ restore: true, reason: "missing", suppressManualSelection: true });
         } else closeFocus();
       } else if (String(instance.state.inlineTerminalSessionId || "") === String(session.id || "")) {
         close();
@@ -273,19 +266,13 @@
     // until a later passive sync after that PTY exits.
     local.forkCreationGestures.delete(session.id);
     const rememberedTargetId = String(local.targetIds.get(session.id) || "");
+    const focusTargetId = isFocusSurface(root, instance)
+      ? String(instance.state.ptyFocusTargetId || "")
+      : "";
+    const requestedTargetId = String(options.targetId || focusTargetId || rememberedTargetId);
+    const requireTargetId = options.requireTargetId === true || Boolean(focusTargetId);
     const embedded = terminal.embeddedState?.() || {};
     const mountedHost = mountedTerminalHost(viewport, embedded.terminalId);
-    const foreignOwner = local.foreignEmbeddedOwner;
-    const foreignOwnerMatches = foreignOwner
-      && foreignOwner.generation === local.embeddedOwnerGeneration
-      && foreignOwner.mountId === "drawerTerminalViewport"
-      && foreignOwner.sessionId === session.id
-      && foreignOwner.signature === signature
-      && foreignOwner.terminalId === String(embedded.terminalId || rememberedTargetId || "");
-    if (foreignOwnerMatches) {
-      cancelInlineClaim(session.id);
-      return { ok: false, reason: "owned-elsewhere" };
-    }
     if (embedded.connected
       && embedded.agentSessionId === session.id
       && embedded.terminalId
@@ -306,6 +293,7 @@
     if (embedded.connected
       && embedded.agentSessionId === session.id
       && mountedHost
+      && (!requestedTargetId || requestedTargetId === embedded.terminalId)
       && (verifiedEmbeddedTarget || rememberedConnectionMatches)) {
       const target = verifiedEmbeddedTarget || { id: embedded.terminalId, terminalId: embedded.terminalId };
       local.targetIds.set(session.id, embedded.terminalId);
@@ -320,7 +308,8 @@
     const pendingMount = local.pendingMount;
     const matchingPendingMount = pendingMount?.sessionId === session.id
       && pendingMount.viewport === viewport
-      && pendingMount.signature === signature;
+      && pendingMount.signature === signature
+      && String(pendingMount.targetId || "") === requestedTargetId;
     // A user PTY gesture must promote an in-flight passive mount. Reusing the
     // passive promise here would consume the one-shot gesture without ever
     // granting fork creation authority.
@@ -368,7 +357,8 @@
       try {
         const result = await terminal.mountForAgent(session, {
           mount: viewport,
-          targetId: rememberedTargetId,
+          targetId: requestedTargetId,
+          requireTargetId,
           createIfMissing,
           forkIfOriginOwned: true,
           forkCreationGesture,
@@ -421,6 +411,9 @@
         if (targetId) {
           local.targetIds.set(session.id, targetId);
           local.targetSignatures.set(session.id, signature);
+          if (isFocusSurface(root, instance) && !instance.state.ptyFocusTargetId) {
+            instance.state.ptyFocusTargetId = targetId;
+          }
         }
         local.autoFailures.delete(session.id);
         setEmpty(root, false);
@@ -439,7 +432,7 @@
         if (local.pendingMount?.promise === task) local.pendingMount = null;
       }
     })();
-    local.pendingMount = { sessionId: session.id, viewport, signature, forkCreationGesture, promise: task };
+    local.pendingMount = { sessionId: session.id, viewport, signature, targetId: requestedTargetId, forkCreationGesture, promise: task };
     return task;
   }
 
@@ -507,7 +500,6 @@
     releasePendingSurfaceControls();
     local.generation += 1;
     local.pendingMount = null;
-    clearForeignEmbeddedOwner(id);
     local.autoFailures.delete(id);
     if (options.focus !== false) requestTerminalFocus(id);
     else {
@@ -558,7 +550,6 @@
     }
     close({ render: false });
     if (options.focus !== false) instance.state.graphFocusId = id;
-    clearForeignEmbeddedOwner(id);
     local.autoFailures.delete(id);
     // `options.focus` controls whether the graph itself changes focus. The
     // user's PTY click should still place the caret in xterm after either the
@@ -622,7 +613,6 @@
           clearOwnFocusIntent();
           return;
         }
-        clearForeignEmbeddedOwner(sessionId);
         local.targetIds.set(sessionId, targetId);
         local.targetSignatures.set(sessionId, signature);
         local.autoFailures.delete(sessionId);
@@ -700,7 +690,6 @@
     if (button.getAttribute("aria-busy") === "true") return;
     const record = { sessionId, terminalId, signature, buttons: new Set(), promise: null };
     markPendingButton(record, button);
-    clearForeignEmbeddedOwner(sessionId);
     local.autoFailures.delete(sessionId);
     requestTerminalFocus(sessionId);
     setEmpty(root, true);
@@ -802,23 +791,6 @@
     const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
     const viewport = terminalViewport(root);
     const host = mountedTerminalHost(viewport, terminalId);
-    if (terminalId
-      && event.detail?.mountId === "drawerTerminalViewport"
-      && session
-      && root?.dataset.inlineAgentTerminal === session.id
-      && embedded.agentSessionId === session.id
-      && String(embedded.terminalId || "") === terminalId) {
-      const generation = ++local.embeddedOwnerGeneration;
-      local.foreignEmbeddedOwner = {
-        generation,
-        mountId: "drawerTerminalViewport",
-        sessionId: session.id,
-        signature: connectionSignature(session),
-        terminalId,
-      };
-      cancelInlineClaim(session.id);
-      return;
-    }
     if (!terminalId
       || !ownsViewportMount(viewport, event.detail?.mountId)
       || !session
@@ -826,7 +798,6 @@
       || embedded.agentSessionId !== session.id
       || String(embedded.terminalId || "") !== terminalId
       || !host) return;
-    clearForeignEmbeddedOwner(session.id);
     local.reconnectOwnerTerminalId = terminalId;
   });
 

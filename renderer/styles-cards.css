@@ -297,65 +297,6 @@
   color: #778397;
 }
 
-.token-row {
-  display: grid;
-  grid-template-columns: repeat(4,1fr);
-  gap: 0;
-  margin: 8px 16px 11px;
-  border: 1px solid #171f2b;
-  border-radius: 9px;
-  background: #0a0e15;
-  overflow: hidden;
-}
-
-.token-row>div {
-  min-width: 0;
-  padding: 7px 8px;
-  border-right: 1px solid #171f2b;
-}
-
-.token-row>div:last-child {
-  border: 0;
-  background: color-mix(in srgb,var(--provider) 5%,#0a0e15);
-}
-
-.token-row .total b {
-  color: var(--provider);
-}
-
-.token-hero {
-  padding: 17px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: linear-gradient(145deg,color-mix(in srgb,var(--drawer-provider) 6%,#111721),#0c1018);
-}
-
-.token-hero-head {
-  display: flex;
-  justify-content: space-between;
-}
-
-.token-grid {
-  display: grid;
-  grid-template-columns: repeat(2,1fr);
-  gap: 9px;
-  margin-top: 12px;
-}
-
-.token-tile {
-  padding: 13px;
-  border: 1px solid var(--line-soft);
-  border-radius: 11px;
-  background: #0b0f16;
-}
-
-.token-tile strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 17px;
-  font-weight: 620;
-}
-
 .now-strip {
   margin: 13px 16px 0;
   padding: 8px 10px;
@@ -381,54 +322,6 @@
   font-weight: 670;
   letter-spacing: -.05em;
   font-size: 25px;
-}
-
-.token-hero-head span {
-  color: #6d798d;
-  font-size: 12px;
-}
-
-.token-hero-head b {
-  font-size: 14px;
-}
-
-.token-tile span {
-  display: block;
-  color: #606c7e;
-  font-size: 12px;
-}
-
-.token-tile small {
-  display: block;
-  margin-top: 4px;
-  color: #4e596a;
-  font-size: 12px;
-}
-
-.token-note {
-  margin-top: 12px;
-  padding: 11px 12px;
-  border-left: 2px solid #344153;
-  background: #0d121a;
-  color: #697588;
-  line-height: 1.55;
-  font-size: 12px;
-}
-
-.motion-content-in .token-tile {
-  animation: motion-item-in 360ms var(--motion-ease) both;
-}
-
-.motion-content-in .token-tile:nth-child(2) {
-  animation-delay: 34ms;
-}
-
-.motion-content-in .token-tile:nth-child(3) {
-  animation-delay: 68ms;
-}
-
-.motion-content-in .token-tile:nth-child(n+4) {
-  animation-delay: 92ms;
 }
 
 .status-pill.completed {
@@ -625,12 +518,6 @@
   font-size: 12px;
 }
 
-.token-row span {
-  display: block;
-  color: #909eaf;
-  font-size: 12px;
-}
-
 .card-footer {
   height: 34px;
   display: flex;
@@ -649,12 +536,4 @@
   color: #d1d9e3;
   font-weight: 620;
   font-size: 13px;
-}
-
-.token-row b {
-  display: block;
-  margin-top: 3px;
-  color: #aeb9c7;
-  font-weight: 600;
-  font-size: 12px;
 }

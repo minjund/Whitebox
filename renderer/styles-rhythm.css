@@ -72,7 +72,7 @@ button :is(b, strong) {
 }
 
 /* Latin display text can use restrained optical tracking. CJK stays neutral. */
-html:lang(en) :is(.topbar h1, .memory-hero h2, .settings-head h2, .terminal-section-title h2, .tmux-title h2) {
+html:lang(en) :is(.topbar h1, .memory-hero h2, .settings-head h2, .terminal-section-title h2) {
   letter-spacing: -.025em;
 }
 
@@ -104,9 +104,7 @@ html:lang(ko) :is(h1, h2, h3, h4, h5, h6, p, li, button, summary, label) {
   .management-quick-actions > button,
   .management-control-buttons > button,
   .attention-card-header-actions > button,
-  .session-reset-dialog-actions > button,
   .modal-actions > button,
-  .chat-prompt-actions > button,
   .agent-command-actions > button,
   .conversation-composer button[type="submit"],
   .run-prompt-examples > button,
@@ -125,25 +123,7 @@ html:lang(ko) :is(h1, h2, h3, h4, h5, h6, p, li, button, summary, label) {
 }
 
 /* Dense toolbars stay compact, but use the same internal rhythm. */
-:is(
-  .filter-button,
-  .control-room-add-project,
-  .control-room-search button,
-  .control-room-disclosure-actions > button,
-  .control-room-page-buttons > button,
-  .terminal-create-actions > button,
-  .terminal-key-actions > button,
-  .terminal-controlbar button,
-  .terminal-resource-panel button,
-  .terminal-session-tools button,
-  .tmux-actions > button,
-  .tmux-section-actions > button,
-  .tmux-pane-actions > button,
-  .terminal-tmux-tools > button,
-  .drawer-flow-button,
-  .execution-detail-command button,
-  .execution-detail-output button
-) {
+:is(.filter-button, .control-room-add-project, .control-room-search button, .control-room-disclosure-actions > button, .control-room-page-buttons > button, .terminal-create-actions > button, .terminal-key-actions > button, .terminal-controlbar button, .terminal-resource-panel button, .terminal-session-tools button, .terminal-tmux-tools > button, .execution-detail-command button, .execution-detail-output button) {
   min-height: var(--control-height-compact);
   height: auto;
   display: inline-flex;
@@ -308,39 +288,12 @@ body[data-current-view="all"] #newRunBtn {
 }
 
 /* Related actions use one repeatable distance instead of per-screen values. */
-:is(
-  .top-actions,
-  .app-error-actions,
-  .update-actions,
-  .modal-actions,
-  .management-quick-actions,
-  .management-control-buttons,
-  .attention-card-header-actions,
-  .session-reset-dialog-actions,
-  .chat-prompt-actions,
-  .agent-command-actions,
-  .terminal-create-actions,
-  .terminal-key-actions,
-  .terminal-helper-actions,
-  .tmux-actions,
-  .tmux-section-actions,
-  .tmux-pane-actions,
-  .control-room-disclosure-actions
-) {
+:is(.top-actions, .app-error-actions, .update-actions, .modal-actions, .management-quick-actions, .management-control-buttons, .attention-card-header-actions, .agent-command-actions, .terminal-create-actions, .terminal-key-actions, .terminal-helper-actions, .control-room-disclosure-actions) {
   gap: var(--action-group-gap);
 }
 
 /* Keep labels centered when a button contains icons, shortcuts, or two lines. */
-:is(
-  .primary-button,
-  .ghost-button,
-  .new-run-cta,
-  .management-quick-actions > button,
-  .management-control-buttons > button,
-  .terminal-create-actions > button,
-  .tmux-section-actions > button,
-  .agent-command-actions > button
-) > :is(span, b, small) {
+:is(.primary-button, .ghost-button, .new-run-cta, .management-quick-actions > button, .management-control-buttons > button, .terminal-create-actions > button, .agent-command-actions > button) > :is(span, b, small) {
   line-height: inherit;
 }
 
@@ -591,45 +544,13 @@ html[data-theme="light"] body[data-current-view] :where(h1, h2, h3, h4, h5, h6, 
 }
 
 html[data-theme="light"] body :where(
-  .brand small,
-  .nav-group-label,
-  .section-title,
-  .subtitle,
-  .section-explain,
-  .field-label,
-  .home-attention-column-heading,
-  .home-attention-item small,
-  .home-attention-item em,
-  .live-count-guide,
-  .memory-review-help-desktop,
-  .memory-record-open,
-  .terminal-mode-instruction,
-  .terminal-send-disabled-hint,
-  .terminal-command-count,
-  .run-prompt-count,
-  .chat-prompt-length,
-  .chat-answer-kind,
-  .subagent-call-clock,
-  .subagent-call-timing,
-  .provider-visibility-copy > span,
-  .language-select > span,
-  .settings-help-copy > span,
-  .runtime-loop-kicker,
-  #drawerProvider
-) {
-  color: #4f5d67;
-}
-
-html[data-theme="light"] body :where(
   .nav-item b,
-  .advanced-tools-nav > summary b,
   #navUpdateBadge
 ) {
   color: #536171;
 }
 
-html[data-theme="light"] body .nav-item b :is(span, small),
-html[data-theme="light"] body .advanced-tools-nav > summary b :is(span, small) {
+html[data-theme="light"] body .nav-item b :is(span, small) {
   color: inherit;
 }
 
@@ -727,12 +648,7 @@ html[data-theme="light"] :is(.terminal-screen, .terminal-xterm, .xterm) span {
   color: inherit;
 }
 
-html[data-theme="light"] body :is(
-  .attention-now-action,
-  .runtime-loop-kicker,
-  .control-project-attention,
-  .control-session-attention
-) {
+html[data-theme="light"] body :is(.attention-now-action, .control-project-attention, .control-session-attention) {
   color: #835000;
 }
 
@@ -768,21 +684,6 @@ html[data-theme="light"] body[data-current-view="waiting"] .approval-action-effe
 html[data-theme="light"] body[data-current-view="waiting"] .recommended-choice {
   color: #ffffff;
   background: #176b50;
-}
-
-html[data-theme="light"] body[data-current-view="runtime"] .runtime-overview-counts > p {
-  border-color: #c8d8d1;
-  color: #44584f;
-  background: #f2f8f5;
-}
-
-html[data-theme="light"] body[data-current-view="runtime"] .runtime-result-next {
-  border-color: #b7d3c4;
-  background: #edf7f1;
-}
-
-html[data-theme="light"] body[data-current-view="runtime"] .runtime-result-next :is(small, b) {
-  color: #344e44;
 }
 
 html[data-theme="light"] body[data-current-view="settings"] .provider-visibility-card {
@@ -825,10 +726,6 @@ html[data-theme="light"] body[data-current-view="terminal"] .terminal-answer-des
   color: #b9d1c9;
 }
 
-html[data-theme="light"] body .drawer-composer .conversation-composer .agent-command-actions button[type="submit"]:disabled .conversation-send-label {
-  color: #52616a;
-}
-
 html[data-theme="light"] body[data-current-view="active"] .session-result-summary {
   border-color: #d4dde2;
   color: #3d4c55;
@@ -857,10 +754,6 @@ html[data-theme="light"] body[data-current-view="active"] .memory-record-open {
   border-color: #b9d1c8;
   color: #176b50;
   background: #f0f8f4;
-}
-
-html[data-theme="light"] body .chat-row.user :is(.chat-content, .user-prompt-text) {
-  color: #23364a;
 }
 
 @media (max-width: 1400px) and (min-width: 721px) {
@@ -914,14 +807,7 @@ html[data-theme="light"] body .chat-row.user :is(.chat-content, .user-prompt-tex
     grid-column: auto;
   }
 
-  :is(
-    .modal-actions,
-    .management-quick-actions,
-    .management-control-buttons,
-    .session-reset-dialog-actions,
-    .terminal-create-actions,
-    .tmux-section-actions
-  ) {
+:is(.modal-actions, .management-quick-actions, .management-control-buttons, .terminal-create-actions) {
     row-gap: var(--action-group-gap);
   }
 

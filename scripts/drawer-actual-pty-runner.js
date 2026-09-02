@@ -56,6 +56,7 @@ async function main() {
   let cleanupError = null;
   try {
     const electron = require('electron');
+    const testNodeModules = path.dirname(path.dirname(require.resolve('electron')));
     result = await runElectron(
       electron,
       path.join(__dirname, 'drawer-actual-pty-integration.js'),
@@ -64,6 +65,7 @@ async function main() {
         ...process.env,
         WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_ROOT: temporary,
         WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_NONCE: nonce,
+        WHITEBOX_TEST_NODE_MODULES: testNodeModules,
       },
     );
   } catch (error) {
@@ -78,7 +80,7 @@ async function main() {
       if (process.env.WHITEBOX_DRAWER_ACTUAL_PTY_TEST_POST_CLEANUP_FAILURE === '1') {
         throw new Error('Simulated post-Electron cleanup verification failure.');
       }
-      process.stdout.write(`✓ Electron 종료 후 임시 PTY 디렉터리 정리 검증: ${path.basename(exactRoot)}\n`);
+      process.stdout.write(`✓ PTY focus Electron 종료 후 임시 PTY 디렉터리 정리 검증: ${path.basename(exactRoot)}\n`);
     } catch (error) {
       cleanupError = error;
       process.stderr.write(`Post-Electron PTY cleanup failed: ${error.stack || error}\n`);

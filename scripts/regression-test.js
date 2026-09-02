@@ -12,7 +12,6 @@ const { registerAutomationMonitorTests } = require('./tests/automation-monitor')
 const { registerSessionIntelligenceTests } = require('./tests/session-intelligence');
 const { registerConversationDeliveryTests } = require('./tests/conversation-delivery');
 const { registerTerminalAgentActionTests } = require('./tests/terminal-agent-actions');
-const { registerTerminalComposerTests } = require('./tests/terminal-composer');
 const { registerTerminalInteractionTests } = require('./tests/terminal-interactions');
 const { registerInlineAgentTerminalTests } = require('./tests/inline-agent-terminal');
 const { registerTerminalPromptTests } = require('./tests/terminal-prompts');
@@ -22,7 +21,6 @@ const { registerTmuxControlProxyLifecycleTests } = require('./tests/tmux-control
 const { registerTerminalBoundConversationTests } = require('./tests/terminal-bound-conversation');
 const { registerBridgeBackpressureTests } = require('./tests/bridge-backpressure');
 const { registerProjectPtyPreconnectTests } = require('./tests/project-pty-preconnect');
-const { registerAttentionPopupManagerTests } = require('./tests/attention-popup-manager');
 const { registerAttentionActivationTests } = require('./tests/attention-activation');
 const { registerAttentionHookTests } = require('./tests/attention-hook');
 const { registerStructuredInputRequestTests } = require('./tests/structured-input-request');
@@ -42,7 +40,6 @@ registerAutomationMonitorTests(context);
 registerSessionIntelligenceTests(context);
 registerConversationDeliveryTests(context);
 registerTerminalAgentActionTests(context);
-registerTerminalComposerTests(context);
 registerTerminalInteractionTests(context);
 registerInlineAgentTerminalTests(context);
 registerTerminalPromptTests(context);
@@ -52,7 +49,6 @@ registerTmuxControlProxyLifecycleTests(context);
 registerTerminalBoundConversationTests(context);
 registerBridgeBackpressureTests(context);
 registerProjectPtyPreconnectTests(context);
-registerAttentionPopupManagerTests(context);
 registerAttentionActivationTests(context);
 registerAttentionHookTests(context);
 registerStructuredInputRequestTests(context);
@@ -64,8 +60,8 @@ registerAgentParserTests(context);
 registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
 
-if (harness.count() !== 413) {
-  throw new Error(`회귀 테스트 등록 수가 413개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 393) {
+  throw new Error(`회귀 테스트 등록 수가 393개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

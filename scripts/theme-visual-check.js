@@ -48,12 +48,11 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
     '.management-quick-actions > button',
     '.management-control-buttons > button',
     '.attention-card-header-actions > button',
-    '.session-reset-dialog-actions > button',
     '.modal-actions > button',
-    '.chat-prompt-actions > button',
     '.agent-command-actions > button',
     '.terminal-create-actions > button',
-    '.tmux-section-actions > button',
+    '.agent-inline-terminal-actions > button',
+    '.pty-focus-back',
   ].join(',');
   const actionGroupSelector = [
     '.top-actions',
@@ -63,20 +62,11 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
     '.management-quick-actions',
     '.management-control-buttons',
     '.attention-card-header-actions',
-    '.session-reset-dialog-actions',
-    '.chat-prompt-actions',
     '.agent-command-actions',
     '.terminal-create-actions',
-    '.tmux-section-actions',
+    '.agent-inline-terminal-actions',
   ].join(',');
   const overlaySurfaceSelector = [
-    '.detail-drawer',
-    '.drawer-head',
-    '.drawer-tabs',
-    '.drawer-content',
-    '.drawer-composer',
-    '.drawer-section',
-    '.drawer-summary-card',
     '.management-result-review',
     '.management-progress',
     '.management-health',
@@ -107,10 +97,12 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
     '.quality-command-list button',
     '.quality-command-list button > span',
     '.shortcut-help-list > div',
-    '.session-reset-dialog',
-    '.session-reset-dialog-icon',
     '.run-modal',
     '.run-modal-actions',
+    '.pty-focus-surface',
+    '.pty-focus-header',
+    '.pty-focus-flow-region',
+    '.pty-focus-flow-lane',
   ].join(',');
   const pixels = value => Number.parseFloat(value) || 0;
   const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
@@ -194,7 +186,7 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
     const ratio = foreground ? contrast(foreground, background) : 0;
     const backgroundLuminance = luminance(background);
     const semantic = button.matches('.primary-button,.new-run-cta,.conversation-send,.accent,[data-status-action],[data-result-review-complete],.stop-run,.conversation-interrupt');
-    const terminal = Boolean(button.closest('.terminal-screen,.terminal-xterm,.xterm,.xterm-viewport'));
+    const terminal = Boolean(button.closest('.terminal-screen,.terminal-xterm,.xterm,.xterm-viewport,.pty-focus-surface'));
     const trackedAction = button.matches(trackedActionSelector);
     const themeMismatch = !terminal && (
       (theme === 'light' && backgroundLuminance < .16 && !semantic)
@@ -287,6 +279,7 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
       .filter(Boolean);
     const backgroundLuminance = luminance(background);
     const darkGradient = imageColors.some(color => color.a >= .6 && luminance(color) < .55);
+    const localDarkSurface = Boolean(element.closest('.pty-focus-surface'));
     return [{
       selector: [
         element.id && '#' + element.id,
@@ -296,7 +289,7 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
       backgroundImage: style.backgroundImage,
       effectiveBackground: 'rgb(' + background.r + ', ' + background.g + ', ' + background.b + ')',
       luminance: Number(backgroundLuminance.toFixed(3)),
-      themeMismatch: theme === 'light' && (backgroundLuminance < .55 || darkGradient),
+      themeMismatch: theme === 'light' && !localDarkSurface && (backgroundLuminance < .55 || darkGradient),
     }];
   });
   const elementContract = selector => {
@@ -349,7 +342,7 @@ const BUTTON_AUDIT_EXPRESSION = `(() => {
       newRunTitle: elementContract('#newRunBtn .new-run-cta-copy b'),
       newRunShortcut: elementContract('#newRunBtn .new-run-cta-copy small'),
       newRunKey: elementContract('#newRunBtn .new-run-cta-copy kbd'),
-      terminalTargetTitle: elementContract('.terminal-target-meta b'),
+      terminalTargetTitle: elementContract('#ptyFocusTerminalTitle'),
     },
     text: {
       total: textResults.length,
@@ -424,7 +417,12 @@ app.whenReady().then(async () => {
       if (Number(audit.contracts.pageTitle?.fontWeight || 0) > 800) {
         contractFailures.push('화면 제목 글자 굵기가 800을 초과합니다.');
       }
-      if (theme === 'light' && audit.contracts.firstAttention) {
+      const firstAttentionVisible = audit.contracts.firstAttention
+        && audit.contracts.firstAttention.display !== 'none'
+        && audit.contracts.firstAttention.visibility !== 'hidden'
+        && audit.contracts.firstAttention.width >= 1
+        && audit.contracts.firstAttention.height >= 1;
+      if (theme === 'light' && firstAttentionVisible) {
         const background = audit.contracts.firstAttention.backgroundColor;
         const border = audit.contracts.firstAttention.borderColor;
         const shadow = audit.contracts.firstAttention.boxShadow;
@@ -470,7 +468,7 @@ app.whenReady().then(async () => {
       }
     }
     if (
-      label === 'terminal'
+      label === 'pty-focus'
       && theme === 'light'
       && Number(audit.contracts.terminalTargetTitle?.contrast || 0) + .02 < 4.5
     ) {
@@ -509,7 +507,7 @@ app.whenReady().then(async () => {
 
     for (const theme of ['dark', 'light']) {
       await win.webContents.executeJavaScript(`window.WhiteboxTheme.setTheme(${JSON.stringify(theme)})`);
-      for (const view of ['all', 'active', 'waiting', 'runtime', 'terminal', 'tmux', 'settings']) {
+      for (const view of ['all', 'active', 'waiting', 'settings']) {
         await win.webContents.executeJavaScript(`(() => {
           window.WhiteboxApp.selectView(${JSON.stringify(view)});
           window.WhiteboxApp.state.guideCompleted.clear();
@@ -525,47 +523,90 @@ app.whenReady().then(async () => {
       await inspect(theme, 'run-modal');
       await win.webContents.executeJavaScript(`document.querySelector('#cancelRunBtn')?.click()`);
 
+      await waitFor(win, `document.querySelector('#runModal')?.classList.contains('hidden')`, '새 작업 모달을 닫지 못했습니다.');
       await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.selectView('all');
-        const session = window.WhiteboxApp.state.snapshot.sessions.find(item => !item.parentId)
-          || window.WhiteboxApp.state.snapshot.sessions[0];
-        if (session) window.WhiteboxApp.openDrawer(session.id);
-        return Boolean(session);
-      })()`);
-      await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')`, '작업 상세 패널을 열지 못했습니다.');
-      await inspect(theme, 'drawer');
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
-
-      await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.selectView('all');
-        window.WhiteboxApp.openDrawer('fixture-failed', { tab: 'summary' });
+        const app = window.WhiteboxApp;
+        app.closePtyFocus?.({ restoreFocus: false });
+        app.selectView('all');
+        app.state.workspace = 'D:\\\\fixture';
+        app.state.workspaceSource = 'all';
+        app.state.graphFocusId = null;
+        app.state.search = '';
+        app.state.providerFilters?.clear?.();
+        app.renderWorkspaces?.();
+        app.renderSessions?.('theme-pty-focus');
         return true;
       })()`);
       await waitFor(
         win,
-        `document.querySelector('#detailDrawer')?.classList.contains('open')
-          && window.WhiteboxApp.state.selectedId === 'fixture-failed'
-          && window.WhiteboxApp.state.drawerTab === 'summary'
-          && Boolean(document.querySelector('.management-result-review [data-result-review-complete="fixture-failed"]'))`,
-        '결과 검토 요약 패널을 열지 못했습니다.',
+        `(() => {
+          const root = window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-root');
+          const target = window.WhiteboxTerminal.agentTargets(root)
+            .find(item => item.terminalId === 'terminal-main');
+          const trigger = document.querySelector('#liveSessionGrid [data-pty-focus-trigger="fixture-root"]');
+          const rect = trigger?.getBoundingClientRect();
+          return Boolean(target && rect && rect.width > 0 && rect.height > 0);
+        })()`,
+        '작업 노드와 exact PTY target이 준비되지 않았습니다.',
       );
-      await inspect(theme, 'result-review-drawer');
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
-
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.openSubagentConversation('fixture-child')`);
-      await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')`, '도움 AI 상세 패널을 열지 못했습니다.');
-      await inspect(theme, 'subagent-drawer');
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
-
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.openExecutionActivity('fixture-root', 'fixture-shell-running')`);
+      await win.webContents.executeJavaScript(
+        `document.querySelector('#liveSessionGrid [data-pty-focus-trigger="fixture-root"]')?.click()`,
+      );
+      try {
+        await waitFor(
+          win,
+          `(() => {
+            const embedded = window.WhiteboxTerminal.embeddedState();
+            return window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+              && window.WhiteboxApp.state.ptyFocusTargetId === 'terminal-main'
+              && embedded.connected && embedded.terminalId === 'terminal-main'
+              && Boolean(document.querySelector('#ptyFocusTerminalViewport .xterm'));
+          })()`,
+          '작업 노드의 exact PTY 집중 모드를 열지 못했습니다.',
+        );
+      } catch (error) {
+        const focusDebug = await win.webContents.executeJavaScript(`(() => {
+          const app = window.WhiteboxApp;
+          const root = app.state.snapshot.sessions.find(session => session.id === 'fixture-root');
+          return {
+            view: app.state.view,
+            workspace: app.state.workspace,
+            workspaceSource: app.state.workspaceSource,
+            focusSessionId: app.state.ptyFocusSessionId,
+            focusTargetId: app.state.ptyFocusTargetId,
+            embedded: window.WhiteboxTerminal.embeddedState(),
+            targets: window.WhiteboxTerminal.agentTargets(root),
+            terminals: window.interactionTest.getTerminals(),
+            calls: window.interactionTest.getCalls().slice(-12),
+            surfaceHidden: document.querySelector('#ptyFocusSurface')?.classList.contains('hidden'),
+          };
+        })()`);
+        throw new Error(`${error.message}: ${JSON.stringify(focusDebug)}`);
+      }
+      const ptyMarker = `PTY_THEME_${theme}_${Date.now()}`;
+      await win.webContents.executeJavaScript(
+        `window.interactionTest.emitTerminalData('terminal-main', ${JSON.stringify(`\r\n${ptyMarker}\r\n`)})`,
+      );
       await waitFor(
         win,
-        `document.querySelector('#detailDrawer[data-mode="execution"]')?.classList.contains('open')
-          && Boolean(document.querySelector('.execution-drawer'))`,
-        '실행 과정 상세 패널을 열지 못했습니다.',
+        `[...document.querySelectorAll('#ptyFocusTerminalViewport .xterm-rows > div')]
+          .some(row => (row.textContent || '').includes(${JSON.stringify(ptyMarker)}))`,
+        'PTY 집중 모드에 실제 xterm 출력을 표시하지 못했습니다.',
       );
-      await inspect(theme, 'execution-drawer');
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
+      const retiredUiAbsent = await win.webContents.executeJavaScript(
+        `!document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer,'
+          + '#sessionResetModal,#mobileMoreBtn,#mobileToolsMenu,#terminalSection,#terminalHistoryPanel,#terminalHistoryList,'
+          + '#automationOverview,#tmuxSection,#tmuxCreateModal')`,
+      );
+      if (!retiredUiAbsent) throw new Error('삭제된 대화·추가 기능·legacy terminal UI가 다시 노출되었습니다.');
+      await inspect(theme, 'pty-focus');
+      await win.webContents.executeJavaScript(`document.querySelector('#ptyFocusBackBtn')?.click()`);
+      await waitFor(
+        win,
+        `!window.WhiteboxApp.state.ptyFocusSessionId
+          && document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')`,
+        'PTY 집중 모드를 닫지 못했습니다.',
+      );
 
       await win.webContents.executeJavaScript(`window.WhiteboxApp.openQuickPalette()`);
       await waitFor(win, `!document.querySelector('#quickPaletteModal')?.classList.contains('hidden')`, '빠른 이동 창을 열지 못했습니다.');
@@ -576,25 +617,6 @@ app.whenReady().then(async () => {
       await waitFor(win, `!document.querySelector('#shortcutHelpModal')?.classList.contains('hidden')`, '키보드 단축키 창을 열지 못했습니다.');
       await inspect(theme, 'shortcut-help');
       await win.webContents.executeJavaScript(`window.WhiteboxApp.closeShortcutHelp()`);
-
-      await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.openDrawer('fixture-root');
-        document.querySelector('[data-session-reset="fixture-root"]')?.click();
-        return true;
-      })()`);
-      await waitFor(win, `!document.querySelector('#sessionResetModal')?.classList.contains('hidden')`, '새 대화 확인 창을 열지 못했습니다.');
-      await inspect(theme, 'session-reset');
-      await win.webContents.executeJavaScript(`document.querySelector('#cancelSessionResetBtn')?.click()`);
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer(false)`);
-
-      await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.selectView('tmux');
-        window.WhiteboxTerminal?.openTmuxModal();
-        return true;
-      })()`);
-      await waitFor(win, `!document.querySelector('#tmuxCreateModal')?.classList.contains('hidden')`, '관련 작업 만들기 창을 열지 못했습니다.');
-      await inspect(theme, 'tmux-modal');
-      await win.webContents.executeJavaScript(`document.querySelector('#closeTmuxCreateBtn')?.click()`);
 
       win.setBounds({ width: 1840, height: 900 }, false);
       await win.webContents.executeJavaScript(`(() => {

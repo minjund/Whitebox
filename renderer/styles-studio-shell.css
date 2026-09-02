@@ -656,34 +656,19 @@ body[data-current-view="all"][data-project-selected="true"] .sidebar-projects {
   max-height: none;
 }
 
-body:is(
-  [data-current-view="runtime"],
-  [data-current-view="terminal"],
-  [data-current-view="tmux"],
-  [data-current-view="settings"]
-) .sidebar-projects {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar-projects {
   flex-basis: 50px;
   min-height: 50px;
   max-height: 50px;
   padding: 6px 12px 4px;
 }
 
-body:is(
-  [data-current-view="runtime"],
-  [data-current-view="terminal"],
-  [data-current-view="tmux"],
-  [data-current-view="settings"]
-) .sidebar-projects > header {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar-projects > header {
   min-height: 34px;
   padding-bottom: 0;
 }
 
-body:is(
-  [data-current-view="runtime"],
-  [data-current-view="terminal"],
-  [data-current-view="tmux"],
-  [data-current-view="settings"]
-) .project-sidebar-list {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .project-sidebar-list {
   display: none;
 }
 
@@ -1340,7 +1325,7 @@ body:is(
 .project-sidebar-session-more {
   margin: 2px 6px 5px 13px;
   color: #7890a0;
-  font: 700 10px/1.4 var(--studio-mono);
+  font: 700 12px/1.4 var(--studio-mono);
 }
 
 .sidebar-view-label {
@@ -1361,8 +1346,7 @@ body:is(
   border-bottom: 1px solid var(--studio-line);
 }
 
-.view-nav .nav-item,
-.advanced-tools-nav > summary {
+.view-nav .nav-item {
   min-height: 36px;
   padding: 6px 9px;
   border-radius: 8px;
@@ -1387,25 +1371,6 @@ body:is(
   color: #738696;
   font-family: var(--studio-mono);
   font-size: 12px;
-}
-
-.advanced-tools-nav {
-  margin-top: 3px;
-  border: 0;
-  background: transparent;
-}
-
-.advanced-tools-list {
-  padding: 2px 0 2px 12px;
-  border-left: 1px solid #24313d;
-  background: transparent;
-}
-
-.nav-group-label {
-  margin: 8px 9px 3px;
-  color: #8395a4;
-  font: 700 12px/1.3 var(--studio-mono);
-  letter-spacing: .12em;
 }
 
 .sidebar > .sidebar-section {
@@ -1938,9 +1903,7 @@ body[data-current-view="all"] .session-token-overview {
 .sessions-section,
 .settings-section,
 .terminal-section,
-.tmux-section,
-.attention-inbox,
-.automation-overview {
+.attention-inbox {
   max-width: none;
 }
 
@@ -2222,7 +2185,7 @@ body[data-current-view="all"] .session-token-overview {
 
 .control-review-provider small {
   color: #91a4b2;
-  font: 700 11px/1.25 var(--studio-sans);
+  font: 700 12px/1.25 var(--studio-sans);
 }
 
 .control-review-provider b {
@@ -2649,9 +2612,7 @@ html[data-theme="light"] .control-review-open {
 /* History / session archive */
 body[data-current-view="active"] .topbar,
 body[data-current-view="waiting"] .topbar,
-body[data-current-view="runtime"] .topbar,
 body[data-current-view="terminal"] .topbar,
-body[data-current-view="tmux"] .topbar,
 body[data-current-view="settings"] .topbar {
   margin-bottom: 12px;
 }
@@ -2761,132 +2722,9 @@ body[data-current-view="settings"] .topbar {
   color: #171006;
 }
 
-/* Drawer becomes a stable work inspector rather than a floating consumer modal. */
-.detail-drawer {
-  width: min(640px, 92vw);
-  border-left: 1px solid var(--studio-line-strong);
-  background: #090e14;
-  box-shadow: -24px 0 70px rgba(0, 0, 0, .34);
-}
-
-.drawer-head {
-  align-items: flex-start;
-  padding: 18px 18px 14px;
-  border-bottom-color: var(--studio-line);
-  background: rgba(10, 15, 21, .96);
-}
-
-.drawer-head .drawer-title {
-  min-width: 0;
-  flex: 1 1 auto;
-  padding-top: 1px;
-}
-
-.drawer-head .drawer-title span {
-  display: block;
-  line-height: 1.3;
-}
-
-.drawer-head .drawer-title h2 {
-  margin-top: 5px;
-  font-size: 17px;
-  line-height: 1.34;
-}
-
-.drawer-head > .provider-mark {
-  margin-top: 2px;
-}
-
-.detail-drawer[data-presentation="modal"] .drawer-head {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
-  gap: 12px;
-}
-
-.detail-drawer[data-presentation="modal"] .drawer-head > .provider-mark {
-  grid-column: 1;
-}
-
-.detail-drawer[data-presentation="modal"] .drawer-head > .drawer-title {
-  grid-column: 2;
-}
-
-.detail-drawer[data-presentation="modal"] .drawer-head > .close-button {
-  grid-column: 3;
-  margin-left: 0;
-}
-
-.drawer-external-session-note {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: start;
-  gap: 11px;
-  margin-bottom: 14px;
-  padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--drawer-provider, var(--studio-cyan)) 28%, var(--studio-line));
-  border-radius: 11px;
-  background: color-mix(in srgb, var(--drawer-provider, var(--studio-cyan)) 6%, var(--studio-surface));
-}
-
-.drawer-external-session-note > span {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--drawer-provider, var(--studio-cyan)) 34%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--drawer-provider, var(--studio-cyan)) 9%, transparent);
-  color: var(--drawer-provider, var(--studio-cyan));
-  font: 800 15px/1 var(--studio-mono);
-}
-
-.drawer-external-session-note div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.drawer-external-session-note b {
-  color: var(--studio-text);
-  font-size: 12px;
-}
-
-.drawer-external-session-note small {
-  color: var(--studio-muted);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.drawer-tabs {
-  border-bottom-color: var(--studio-line);
-  background: #0b1118;
-}
-
-.drawer-tab.active {
-  color: #dff8ff;
-  box-shadow: inset 0 -2px var(--studio-cyan);
-}
-
-.drawer-body,
-.drawer-composer {
-  background: #090e14;
-}
-
-.chat-bubble,
-.drawer-section,
-.drawer-summary-card,
-.execution-detail {
-  border-color: #23313c;
-  border-radius: 9px;
-  background: #0e151d;
-  box-shadow: none;
-}
-
 /* Tool views share one IDE grammar. */
 .settings-section,
-.terminal-section,
-.tmux-section,
-.automation-overview {
+.terminal-section {
   border-color: var(--studio-line);
   border-radius: var(--studio-radius);
   background: transparent;
@@ -2894,9 +2732,7 @@ body[data-current-view="settings"] .topbar {
 }
 
 .settings-head,
-.terminal-section-head,
-.tmux-section-head,
-.runtime-overview-head {
+.terminal-section-head {
   border: 1px solid var(--studio-line);
   border-radius: var(--studio-radius);
   background: var(--studio-surface);
@@ -2908,11 +2744,7 @@ body[data-current-view="settings"] .topbar {
 .provider-visibility-card,
 .update-panel,
 .terminal-resource-panel,
-.terminal-workbench,
-.tmux-map,
-.tmux-control-section,
-.runtime-schedule-list,
-.runtime-loop-detail {
+.terminal-workbench {
   border-color: var(--studio-line);
   border-radius: var(--studio-radius);
   background: var(--studio-surface);
@@ -2925,8 +2757,7 @@ body[data-current-view="settings"] .topbar {
 
 .terminal-controlbar,
 .terminal-console-head,
-.terminal-resource-head,
-.tmux-map-toolbar {
+.terminal-resource-head {
   border-color: var(--studio-line);
   background: #0d141b;
 }
@@ -3216,21 +3047,7 @@ html[data-theme="light"] .main-stage {
   background: #edf2f5;
 }
 
-html[data-theme="light"] :is(
-  .live-section > .live-section-head,
-  .control-room-list-toolbar,
-  .control-room-project-frame,
-  .project-history-rail,
-  .memory-hero,
-  .memory-metrics,
-  .sessions-heading,
-  .session-card.memory-record,
-  .session-card.session-record,
-  .settings-head,
-  .terminal-section-head,
-  .tmux-section-head,
-  .runtime-overview-head
-) {
+html[data-theme="light"] :is(.live-section > .live-section-head, .control-room-list-toolbar, .control-room-project-frame, .project-history-rail, .memory-hero, .memory-metrics, .sessions-heading, .session-card.memory-record, .session-card.session-record, .settings-head, .terminal-section-head) {
   border-color: var(--studio-line);
   background: var(--studio-surface);
 }
@@ -3295,54 +3112,13 @@ html[data-theme="light"] :is(.control-room-main, .control-room-node, .project-hi
   }
 }
 
-@media (min-width: 721px) and (max-width: 920px) {
-  body[data-current-view="runtime"] :is(
-    .automation-overview,
-    .runtime-overview-head,
-    .runtime-overview-title,
-    .runtime-overview-counts,
-    .runtime-overview-counts > p
-  ) {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  body[data-current-view="runtime"] .runtime-overview-head {
-    align-items: stretch;
-    overflow: hidden;
-  }
-
-  body[data-current-view="runtime"] .runtime-overview-counts {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  body[data-current-view="runtime"] .runtime-overview-counts > :is(span, b, p),
-  body[data-current-view="runtime"] .runtime-schedule-card {
-    min-width: 0;
-    width: auto;
-    max-width: 100%;
-    white-space: normal;
-  }
-
-  body[data-current-view="runtime"] .runtime-schedule-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 @media (min-width: 721px) and (max-height: 720px) {
   .sidebar > .brand {
     min-height: 54px;
     padding: 10px 14px;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar-projects {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar-projects {
     display: none;
   }
 }
@@ -3402,23 +3178,8 @@ html[data-theme="light"] :is(.control-room-main, .control-room-node, .project-hi
   }
 
   .view-nav .nav-item > b,
-  .nav-group-label,
   .settings-nav-item {
     display: none !important;
-  }
-
-  .advanced-tools-nav,
-  .advanced-tools-list {
-    display: contents !important;
-  }
-
-  .advanced-tools-nav > summary,
-  .advanced-tools-list .nav-item {
-    display: none !important;
-  }
-
-  .advanced-tools-list .runtime-nav-item {
-    display: grid !important;
   }
 
   .main-stage {
@@ -3467,9 +3228,6 @@ html[data-theme="light"] :is(.control-room-main, .control-room-node, .project-hi
     grid-template-columns: 1fr;
   }
 
-  .detail-drawer {
-    width: 100%;
-  }
 }
 
 /* Final layout audit: keep the desktop terminal composer inside the viewport. */
@@ -3522,221 +3280,12 @@ html[data-theme="light"] :is(.control-room-main, .control-room-node, .project-hi
   }
 }
 
-/*
- * AI question mode still needs its conversation history. The simplified
- * question layout used to remove this panel completely, leaving a promise
- * that answers would appear above the composer without any visible history.
- */
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  #terminalHistoryPanel:not(.hidden) {
-  width: 100%;
-  min-height: 180px;
-  max-height: 190px;
-  display: grid !important;
-  grid-template-rows: auto minmax(60px, 1fr) auto;
-  border-right: 0;
-  border-bottom: 1px solid var(--studio-line);
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  #terminalHistoryPanel:not(.hidden) .terminal-history-head {
-  min-height: 54px;
-  padding: 7px 10px;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  #terminalHistoryPanel:not(.hidden) .terminal-history-head small {
-  display: none;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  #terminalHistoryPanel:not(.hidden) footer {
-  min-height: 36px;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  .terminal-stage:has(#terminalHistoryPanel:not(.hidden)) {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) !important;
-  grid-template-rows: auto auto !important;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  .terminal-stage:has(#terminalHistoryPanel:not(.hidden))
-  .terminal-console-pane {
-  display: block;
-  min-height: 0;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-  .terminal-command-form {
-  min-height: 230px;
-  padding-block: 22px;
-}
-
-/* The 721–1280px layout has no side resource rail in question mode. Collapse
- * the explanatory chrome into one compact row so the history and composer
- * remain fully visible instead of overflowing a fixed 500px workbench. */
-@media (min-width: 721px) and (max-width: 1280px) {
-  body[data-current-view="terminal"] .terminal-section-head {
-    align-items: center;
-    flex-direction: row;
-    gap: 12px;
-    padding: 10px 12px;
-  }
-
-  body[data-current-view="terminal"]
-    .terminal-section-head :is(.eyebrow, #terminalPlatformExplain, #terminalModeInstruction) {
-    display: none;
-  }
-
-  body[data-current-view="terminal"] .terminal-section-head h2 {
-    font-size: 18px;
-  }
-
-  body[data-current-view="terminal"] .terminal-logo {
-    width: 38px;
-    height: 38px;
-  }
-
-  body[data-current-view="terminal"] .terminal-mode-guide {
-    margin-top: 6px;
-  }
-
-  body[data-current-view="terminal"] .terminal-mode-guide > button {
-    min-height: 44px;
-    padding: 7px 10px;
-  }
-
-  body[data-current-view="terminal"] .terminal-mode-guide > button :is(em, small) {
-    display: none;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    #terminalSection
-    .terminal-workbench {
-    height: auto;
-    min-height: 0;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-controlbar {
-    min-height: 72px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-workspace-actions {
-    width: auto;
-    display: flex;
-    align-items: center;
-    flex-direction: row;
-    gap: 7px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    :is(.terminal-target-meta span, .terminal-answer-destination) {
-    display: none;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    #terminalHistoryPanel:not(.hidden) {
-    min-height: 150px;
-    max-height: 160px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-command-form {
-    min-height: 180px;
-    padding: 12px 14px;
-  }
-}
-
-/* Short desktop windows need a true stacked question layout. Keep the
- * conversation and composer in separate rows instead of letting their legacy
- * minimum heights overlap below the viewport. */
-@media (min-width: 1281px) and (max-height: 820px) {
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-controlbar {
-    min-height: 72px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
-    padding: 8px 12px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    :is(.terminal-target-icon, .terminal-logo) {
-    width: 36px;
-    height: 36px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    :is(.terminal-target-meta span, .terminal-connection-state, .terminal-answer-destination) {
-    display: none;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-workspace-actions {
-    width: auto;
-    align-items: center;
-    flex-direction: row;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-stage:has(#terminalHistoryPanel:not(.hidden)) {
-    height: 100%;
-    min-height: 0;
-    grid-template-rows: 112px minmax(0, 1fr) !important;
-    overflow: hidden;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    #terminalHistoryPanel:not(.hidden) {
-    height: 112px;
-    min-height: 0;
-    max-height: 112px;
-    align-self: start;
-    grid-template-rows: 44px minmax(0, 1fr);
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    #terminalHistoryPanel:not(.hidden) :is(.terminal-history-head, .terminal-history-list) {
-    min-height: 0;
-    padding: 6px 10px;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    #terminalHistoryPanel:not(.hidden) footer {
-    display: none;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-stage:has(#terminalHistoryPanel:not(.hidden)) .terminal-console-pane {
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"])
-    .terminal-command-form {
-    min-height: 0;
-    height: auto;
-    padding: 10px 12px;
-  }
-}
-
 /* Light theme polish for the studio layer, which is loaded after legacy theme rules. */
 html[data-theme="light"] :is(
   .sidebar-projects > header span,
   .project-history-rail > header span,
   .sidebar-view-label span,
   .sidebar-view-label b,
-  .nav-group-label,
   .provider-section-title
 ) {
   color: #526874;
@@ -3760,8 +3309,7 @@ html[data-theme="light"] :is(
   color: #155d74;
 }
 
-html[data-theme="light"] .view-nav .nav-item,
-html[data-theme="light"] .advanced-tools-nav > summary {
+html[data-theme="light"] .view-nav .nav-item {
   color: #4b616e;
 }
 
@@ -3777,10 +3325,6 @@ html[data-theme="light"] .view-nav .nav-item.active {
 html[data-theme="light"] .view-nav .nav-item b {
   background: #e0e9ee;
   color: #344f5d;
-}
-
-html[data-theme="light"] .advanced-tools-list {
-  border-left-color: #cbd7de;
 }
 
 html[data-theme="light"] #newRunBtn,
@@ -3835,243 +3379,14 @@ html[data-theme="light"] .control-room-session > header {
   background: rgba(247, 250, 251, .94);
 }
 
-html[data-theme="light"] :is(
-  .approval-custom-answer,
-  .attention-more-cards,
-  body[data-current-view="runtime"] .runtime-schedule-lane,
-  body[data-current-view="runtime"] .runtime-other-work
-) {
+html[data-theme="light"] :is(.approval-custom-answer, .attention-more-cards) {
   border-color: #ccd9e0;
   background: #ffffff;
 }
 
-html[data-theme="light"] :is(
-  .approval-custom-answer,
-  .attention-more-cards,
-  body[data-current-view="runtime"] .runtime-schedule-lane,
-  body[data-current-view="runtime"] .runtime-other-work
-) > summary {
+html[data-theme="light"] :is(.approval-custom-answer, .attention-more-cards) > summary {
   color: #314955;
   background: #f5f8fa;
-}
-
-html[data-theme="light"] .tmux-map-toolbar {
-  border-color: #d4dfe5;
-  background: #f6f9fa;
-  color: #435d69;
-}
-
-html[data-theme="light"] :is(
-  .detail-drawer,
-  .drawer-head,
-  .drawer-tabs,
-  .drawer-body,
-  .drawer-composer
-) {
-  border-color: #d6e0e6;
-  background: #ffffff;
-  color: #172932;
-}
-
-html[data-theme="light"] .drawer-tab {
-  color: #526673;
-  background: transparent;
-}
-
-html[data-theme="light"] .drawer-tab.active {
-  color: #155d74;
-  background: #e5f3f8;
-  box-shadow: inset 0 -2px #2d9cbe;
-}
-
-html[data-theme="light"] :is(
-  .chat-bubble,
-  .drawer-section,
-  .drawer-summary-card,
-  .execution-detail
-) {
-  border-color: #d8e2e7;
-  background: #f7fafb;
-  color: #253943;
-}
-
-html[data-theme="light"] #sidebarSettingsBtn #navUpdateBadge {
-  border: 1px solid #b9d9c8;
-  background: #eaf6ef;
-  color: #24654d;
-}
-
-html[data-theme="light"] .detail-drawer {
-  color-scheme: light;
-}
-
-html[data-theme="light"] :is(
-  .execution-purpose-card,
-  .execution-process-card,
-  .execution-code-card,
-  .execution-timeline
-) {
-  border-color: #d4e0e5;
-  background: #ffffff;
-  color: #203641;
-}
-
-html[data-theme="light"] .execution-purpose-card {
-  border-color: #b9dce7;
-  background: linear-gradient(135deg, #eef9fc, #ffffff 72%);
-}
-
-html[data-theme="light"] .execution-purpose-icon {
-  border-color: #add6e2;
-  background: #e8f6fa;
-  color: #176a82;
-}
-
-html[data-theme="light"] :is(
-  .execution-purpose-card small,
-  .execution-code-card small,
-  .execution-process-card header small
-) {
-  color: #617681;
-}
-
-html[data-theme="light"] .execution-purpose-card b {
-  color: #18323e;
-}
-
-html[data-theme="light"] .execution-purpose-card p {
-  color: #5f727c;
-}
-
-html[data-theme="light"] :is(
-  .execution-process-card > header,
-  .execution-code-card > header
-) {
-  border-bottom-color: #d8e3e7;
-  background: #f6f9fa;
-}
-
-html[data-theme="light"] :is(
-  .execution-process-card header b,
-  .execution-code-card header b
-) {
-  color: #233a45;
-}
-
-html[data-theme="light"] .execution-process-card header em {
-  color: #5f737d;
-}
-
-html[data-theme="light"] .execution-process-card header em i {
-  background: #82959d;
-}
-
-html[data-theme="light"] .execution-process-card header em.is-running {
-  color: #237552;
-}
-
-html[data-theme="light"] .execution-process-card header em.is-running i {
-  background: #2aa66f;
-  box-shadow: 0 0 0 4px rgba(42, 166, 111, .1);
-}
-
-html[data-theme="light"] .execution-process-card dl {
-  background: #dce6ea;
-}
-
-html[data-theme="light"] .execution-process-card dl div {
-  background: #f7fafb;
-}
-
-html[data-theme="light"] .execution-process-card dt {
-  color: #617681;
-}
-
-html[data-theme="light"] .execution-process-card dd {
-  color: #243a45;
-}
-
-html[data-theme="light"] .execution-code-card > header button {
-  border-color: #b8d5df;
-  background: #edf7fa;
-  color: #17677f;
-}
-
-html[data-theme="light"] .execution-code-card > header button:hover,
-html[data-theme="light"] .execution-code-card > header button:focus-visible {
-  border-color: #86bccd;
-  background: #e1f2f7;
-  color: #10556b;
-}
-
-html[data-theme="light"] :is(
-  .execution-code-card pre,
-  .execution-code-card > p
-) {
-  background: #f4f7f9;
-  color: #243945;
-}
-
-html[data-theme="light"] .execution-code-card.output-card pre {
-  background: #f1f8f4;
-  color: #24523d;
-}
-
-html[data-theme="light"] .execution-code-card > p {
-  color: #61747f;
-}
-
-html[data-theme="light"] .execution-timeline > div {
-  border-bottom-color: #dce5e9;
-}
-
-html[data-theme="light"] .execution-timeline > div > i {
-  background: #2799ba;
-  box-shadow: 0 0 0 4px rgba(39, 153, 186, .1);
-}
-
-html[data-theme="light"] .execution-timeline span b {
-  color: #2b414b;
-}
-
-html[data-theme="light"] .execution-timeline time {
-  color: #617681;
-}
-
-html[data-theme="light"] .execution-timeline em {
-  color: #237552;
-}
-
-html[data-theme="light"] .subagent-assignment-card {
-  border-color: #badce6;
-  background: linear-gradient(135deg, #eef9fc, #ffffff 72%);
-}
-
-html[data-theme="light"] .subagent-assignment-card > span {
-  border-color: #acd4e0;
-  background: #e8f6fa;
-  color: #176a82;
-}
-
-html[data-theme="light"] .subagent-assignment-card b {
-  color: #17677e;
-}
-
-html[data-theme="light"] .subagent-assignment-card small {
-  color: #637781;
-}
-
-html[data-theme="light"] .subagent-assignment-card p {
-  color: #2d424c;
-}
-
-html[data-theme="light"] .subagent-assignment-card aside {
-  border-color: #d8e4e8;
-  background: #f6f9fa;
-}
-
-html[data-theme="light"] .subagent-assignment-card aside :is(b, p) {
-  color: #60747e;
 }
 
 html[data-theme="light"] .agent-communication-panel {
@@ -4241,58 +3556,28 @@ html[data-theme="light"] .shortcut-help-list kbd {
     flex: 0 0 auto;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) {
     --sidebar: 88px;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar-projects {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar-projects {
     display: none;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar > .brand {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar > .brand {
     justify-content: center;
     padding-inline: 0;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar > .brand .brand-copy {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar > .brand .brand-copy {
     display: none;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar > .brand {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar > .brand {
     gap: 6px;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .brand-shortcut-button {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .brand-shortcut-button {
     width: 44px !important;
     min-width: 44px !important;
     height: 44px !important;
@@ -4419,13 +3704,12 @@ body[data-current-view="all"] .project-history-rail {
 .project-view-tabs {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(118px, 1fr)) minmax(130px, .9fr);
+  grid-template-columns: repeat(3, minmax(118px, 1fr));
   align-items: stretch;
   gap: 6px;
 }
 
-.project-view-tabs > .nav-item,
-.project-view-tabs > .project-tools-menu > summary {
+.project-view-tabs > .nav-item {
   width: 100%;
   height: 100%;
   min-height: 56px;
@@ -4440,8 +3724,7 @@ body[data-current-view="all"] .project-history-rail {
   padding: 7px 9px;
 }
 
-.project-view-tabs > .nav-item:hover,
-.project-view-tabs > .project-tools-menu > summary:hover {
+.project-view-tabs > .nav-item:hover {
   border-color: #2b3b47;
   background: #101821;
   color: #e4edf2;
@@ -4466,8 +3749,7 @@ body[data-current-view="all"] .project-history-rail {
   white-space: nowrap;
 }
 
-.project-view-tabs > .nav-item > b,
-.project-view-tabs > .project-tools-menu > summary b {
+.project-view-tabs > .nav-item > b {
   min-width: 28px;
   max-width: 112px;
   overflow: hidden;
@@ -4483,81 +3765,6 @@ body[data-current-view="all"] .project-history-rail {
 .project-view-tabs > .nav-item[data-view="waiting"] > b {
   color: #ffd36f;
   background: rgba(255, 194, 71, .11);
-}
-
-.project-view-tabs .project-tools-menu {
-  position: relative;
-  min-width: 0;
-  margin: 0;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-}
-
-.project-view-tabs .project-tools-menu > summary {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto 12px;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 9px;
-  list-style: none;
-  cursor: pointer;
-}
-
-.project-view-tabs .project-tools-menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.project-view-tabs .project-tools-menu.active > summary,
-.project-view-tabs .project-tools-menu[open] > summary {
-  border-color: rgba(53, 221, 160, .34);
-  color: #dcf8ee;
-  background: rgba(53, 221, 160, .07);
-  box-shadow: inset 0 -2px var(--studio-green);
-}
-
-.project-view-tabs .project-tools-menu > summary > i {
-  color: #6f8290;
-  font-style: normal;
-  transition: transform 160ms ease;
-}
-
-.project-view-tabs .project-tools-menu[open] > summary > i {
-  transform: rotate(180deg);
-}
-
-.project-view-tabs .advanced-tools-list {
-  position: absolute;
-  z-index: 80;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(330px, calc(100vw - var(--sidebar) - 48px));
-  display: grid;
-  gap: 4px;
-  padding: 7px;
-  border: 1px solid var(--studio-line-strong);
-  border-radius: 11px;
-  background: rgba(10, 15, 21, .985);
-  box-shadow: 0 22px 54px rgba(0, 0, 0, .42);
-}
-
-.project-view-tabs .project-tools-menu:not([open]) > .advanced-tools-list {
-  display: none;
-}
-
-.project-view-tabs .advanced-tools-list .nav-item {
-  min-height: 46px;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  padding: 7px 9px;
-  border: 1px solid transparent;
-}
-
-.project-view-tabs .advanced-tools-list .nav-item:hover,
-.project-view-tabs .advanced-tools-list .nav-item.active {
-  border-color: rgba(53, 221, 160, .28);
-  color: #e4f7f0;
-  background: rgba(53, 221, 160, .07);
-  box-shadow: none;
 }
 
 body[data-current-view="all"] .live-section-head {
@@ -4591,13 +3798,11 @@ html[data-theme="light"] .project-context-identity div > span {
   color: #607581;
 }
 
-html[data-theme="light"] .project-view-tabs > .nav-item,
-html[data-theme="light"] .project-view-tabs > .project-tools-menu > summary {
+html[data-theme="light"] .project-view-tabs > .nav-item {
   color: #536874;
 }
 
-html[data-theme="light"] .project-view-tabs > .nav-item:hover,
-html[data-theme="light"] .project-view-tabs > .project-tools-menu > summary:hover {
+html[data-theme="light"] .project-view-tabs > .nav-item:hover {
   border-color: #c8d8df;
   color: #274a59;
   background: #f1f7f9;
@@ -4609,92 +3814,9 @@ html[data-theme="light"] .project-view-tabs > .nav-item.active {
   background: #e8f6fa;
 }
 
-html[data-theme="light"] .project-view-tabs > .nav-item > b,
-html[data-theme="light"] .project-view-tabs > .project-tools-menu > summary b {
+html[data-theme="light"] .project-view-tabs > .nav-item > b {
   color: #405864;
   background: #e5edf1;
-}
-
-html[data-theme="light"] .project-view-tabs .advanced-tools-list {
-  border-color: #c7d5dc;
-  background: rgba(255, 255, 255, .99);
-  box-shadow: 0 20px 48px rgba(29, 61, 76, .18);
-}
-
-/* UPDATE INDICATOR */
-.project-view-tabs .project-tools-menu.has-update > summary > b {
-  display: none;
-}
-
-.project-view-tabs .update-nav-badge {
-  min-width: 0;
-  padding: 3px 6px;
-  border: 1px solid rgba(255, 194, 71, .38);
-  border-radius: 999px;
-  color: #ffd36f;
-  background: rgba(255, 194, 71, .12);
-  font: 760 10px/1.2 var(--studio-mono);
-  font-style: normal;
-  letter-spacing: .02em;
-  white-space: nowrap;
-}
-
-.project-view-tabs > #mobileMoreBtn {
-  position: relative;
-}
-
-.project-view-tabs > #mobileMoreBtn > .mobile-more-label {
-  display: block;
-  font-size: 11px;
-  line-height: 1.15;
-}
-
-.project-view-tabs .mobile-update-indicator {
-  position: absolute;
-  top: 3px;
-  right: max(3px, env(safe-area-inset-right));
-  width: 17px;
-  height: 17px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(255, 194, 71, .48);
-  border-radius: 999px;
-  color: #172028;
-  background: #ffd36f;
-  box-shadow: 0 0 0 2px #0d141c;
-  font: 850 11px/1 var(--studio-mono);
-}
-
-.project-view-tabs > #mobileMoreBtn.has-update > .mobile-update-indicator {
-  display: grid;
-}
-
-html[data-theme="light"] .project-view-tabs .update-nav-badge {
-  border-color: #c58d1e;
-  color: #805600;
-  background: #fff3d5;
-}
-
-html[data-theme="light"] .project-view-tabs .mobile-update-indicator {
-  color: #fff;
-  background: #a86c00;
-  box-shadow: 0 0 0 2px #fff;
-}
-
-@media (max-width: 1280px) {
-  .project-view-tabs > .project-tools-menu > summary > b {
-    display: none;
-  }
-
-  .project-view-tabs > .project-tools-menu > summary {
-    grid-template-columns: 18px minmax(0, 1fr) 12px;
-    gap: 5px;
-    padding-inline: 6px;
-  }
-
-  .project-view-tabs > .project-tools-menu.has-update > summary {
-    grid-template-columns: 18px minmax(0, 1fr) auto 12px;
-  }
 }
 
 html[data-theme="light"] .session-token-heading > h1,
@@ -4773,9 +3895,7 @@ body .xterm *,
 body .terminal-output,
 body .terminal-output *,
 body .execution-output,
-body .execution-output *,
-body .chat-row.tool pre,
-body .chat-row.tool pre * {
+body .execution-output * {
   font-family: var(--studio-mono) !important;
   letter-spacing: 0 !important;
 }
@@ -4811,7 +3931,6 @@ body :is(
   .sidebar-projects > header span,
   .project-history-rail > header span,
   .sidebar-view-label span,
-  .nav-group-label,
   .provider-section-title,
   .session-token-heading > p,
   .control-column-label,
@@ -4984,8 +4103,7 @@ body[data-current-view="settings"] .settings-help-card #appConnectionState {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .project-view-tabs > .nav-item,
-  .project-view-tabs > .project-tools-menu {
+  .project-view-tabs > .nav-item {
     min-width: 0;
   }
 }
@@ -5131,24 +4249,14 @@ body[data-current-view="settings"] .settings-help-card #appConnectionState {
     font-size: 11px;
   }
 
-  .project-view-tabs > .nav-item .nav-label,
-  .project-view-tabs > #mobileMoreBtn > span:last-child {
+  .project-view-tabs > .nav-item .nav-label {
     display: block;
     font-size: 11px;
     line-height: 1.15;
   }
 
-  .project-view-tabs > .nav-item > b,
-  .project-view-tabs > .project-tools-menu {
+  .project-view-tabs > .nav-item > b {
     display: none !important;
-  }
-
-  .project-view-tabs > #mobileMoreBtn {
-    display: grid;
-  }
-
-  .mobile-tools-menu {
-    bottom: max(10px, env(safe-area-inset-bottom));
   }
 
   html[data-theme="light"] .project-context-identity {

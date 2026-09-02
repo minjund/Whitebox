@@ -8,188 +8,67 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     controlRoomAgentGoal, controlRoomSummary, inferredExecutionSummary,
     executionActivityStatus, subagentWorkLabel, latestWorkCopy,
     controlRoomStatus, sessionStatusLabel, timeAgo,
-    subagentConversationHtml, executionActivityDetailHtml,
     rememberDialogTrigger = () => {}, restoreDialogTrigger = () => false,
-    discardDialogTrigger = () => false, setDialogOpenState = () => {},
-    toast = () => {}, announce = () => {}, loadSessionDetail = async () => null,
-    renderDrawer = () => {},
-    copyText = async value => navigator.clipboard.writeText(value),
-    reportRecoverableError = () => {},
+    discardDialogTrigger = () => false,
+    toast = () => {}, announce = () => {}, reportRecoverableError = () => {},
   } = context;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
 
   let returnState = null;
-  let detailState = null;
+  let focusIdentity = null;
+  let pendingFocus = null;
+  let focusSyncPromise = Promise.resolve({ ok: false, reason: "not-open" });
+  let focusOpenGeneration = 0;
   let eventsBound = false;
   let lastFlowHtml = "";
-  let lastDetailHtml = "";
-  let flowRenderRevision = 0;
-  let detailRenderRevision = 0;
 
   const snapshotSessions = () => state.snapshot?.sessions || [];
-  const snapshotSession = id => snapshotSessions().find(session => String(session.id || "") === String(id || "")) || null;
+  const snapshotSession = id => snapshotSessions()
+    .find(session => String(session.id || "") === String(id || "")) || null;
   const focusSurface = () => $("#ptyFocusSurface");
   const focusShell = () => $("#ptyFocusTerminalShell");
-  const detailModal = () => $("#ptyFocusChildModal");
 
-  function focusedControlDescriptor(container, attributes) {
-    const active = document.activeElement;
-    if (!container || !active || !container.contains(active)) return null;
-    for (const attribute of attributes) {
-      const owner = active.closest?.(`[${attribute}]`);
-      if (!owner || !container.contains(owner)) continue;
-      const value = owner.getAttribute(attribute) || "";
-      const matches = [...container.querySelectorAll(`[${attribute}]`)]
-        .filter(node => (node.getAttribute(attribute) || "") === value);
-      return { attribute, value, index: Math.max(0, matches.indexOf(owner)) };
-    }
-    return null;
+  function runtimeTerminalIdentity(session) {
+    const provisional = window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session);
+    if (provisional) return { ...provisional };
+    const provider = String(session?.provider || "").trim().toLowerCase();
+    const identities = (Array.isArray(session?.runtimePresence) ? session.runtimePresence : [])
+      .filter(item => String(item?.kind || "").trim().toLowerCase() === "bridge")
+      .map(item => ({
+        terminalId: String(item?.terminalId || "").trim(),
+        creationId: String(item?.creationId || "").trim(),
+        provider: String(item?.provider || provider).trim().toLowerCase(),
+      }))
+      .filter(item => item.terminalId && item.provider === provider);
+    const unique = [...new Map(identities.map(item => [`${item.terminalId}\u0000${item.creationId}`, item])).values()];
+    return unique.length === 1 ? unique[0] : null;
   }
 
-  function restoreFocusedControl(container, descriptor, revisionIsCurrent = () => true, activeAfterReplace = null) {
-    if (!container || !descriptor) return;
-    requestAnimationFrame(() => {
-      if (!container.isConnected || !revisionIsCurrent()) return;
-      if (activeAfterReplace && document.activeElement !== activeAfterReplace) return;
-      const matches = [...container.querySelectorAll(`[${descriptor.attribute}]`)]
-        .filter(node => (node.getAttribute(descriptor.attribute) || "") === descriptor.value);
-      (matches[descriptor.index] || matches[0])?.focus?.({ preventScroll: true });
+  function sessionForTerminal(terminalId, creationId = "") {
+    const id = String(terminalId || "").trim();
+    const creation = String(creationId || "").trim();
+    if (!id) return null;
+    const candidates = snapshotSessions().filter(session => {
+      if (session.parentId) return false;
+      const identity = runtimeTerminalIdentity(session);
+      return identity?.terminalId === id && (!creation || identity.creationId === creation);
     });
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
-  function setDetailTriggerExpanded(next, expanded) {
-    const flow = $("#ptyFocusFlow");
-    if (!flow || !next) return;
-    const attribute = next.kind === "child" ? "data-pty-focus-child" : "data-pty-focus-execution";
-    const value = String(next.kind === "child" ? next.sessionId : next.executionId || "");
-    [...flow.querySelectorAll(`[${attribute}]`)]
-      .filter(node => String(node.getAttribute(attribute) || "") === value
-        && (next.kind === "child"
-          || String(node.getAttribute("data-pty-focus-execution-owner") || "") === String(next.ownerId || "")))
-      .forEach(node => node.setAttribute("aria-expanded", expanded ? "true" : "false"));
-  }
-
-  function replaceDetailBody(body, html) {
-    if (!body || (lastDetailHtml === html && body.hasChildNodes())) return false;
-    const scrollTop = body.scrollTop;
-    const descriptor = focusedControlDescriptor(body, [
-      "data-prompt-toggle", "data-close-expanded-reader", "data-load-earlier-turns",
-      "data-scroll-latest", "data-open-subagent-chat", "data-copy-text",
-    ]);
-    const disclosureStates = new Map([...body.querySelectorAll("details[data-disclosure-key]")]
-      .map(node => [node.dataset.disclosureKey, node.open]));
-    const revision = ++detailRenderRevision;
-    body.innerHTML = html;
-    lastDetailHtml = html;
-    const activeAfterReplace = document.activeElement;
-    [...body.querySelectorAll("details[data-disclosure-key]")].forEach(node => {
-      if (disclosureStates.has(node.dataset.disclosureKey)) node.open = disclosureStates.get(node.dataset.disclosureKey);
-    });
-    body.scrollTop = scrollTop;
-    const appliedScrollTop = body.scrollTop;
-    requestAnimationFrame(() => {
-      if (revision !== detailRenderRevision || !body.isConnected || body.scrollTop !== appliedScrollTop) return;
-      body.scrollTop = scrollTop;
-    });
-    restoreFocusedControl(body, descriptor, () => revision === detailRenderRevision, activeAfterReplace);
-    return true;
-  }
-
-  function newerSession(snapshot, detail) {
-    if (!detail) return snapshot;
-    if (!snapshot) return detail;
-    const snapshotTime = Date.parse(snapshot.updatedAt || 0);
-    const detailTime = Date.parse(detail.updatedAt || 0);
-    return Number.isFinite(snapshotTime) && (!Number.isFinite(detailTime) || snapshotTime > detailTime)
-      ? snapshot
-      : detail;
-  }
-
-  function sameDetail(left, right) {
-    if (!left || !right || left.kind !== right.kind) return false;
-    return left.kind === "child"
-      ? String(left.sessionId || "") === String(right.sessionId || "")
-      : String(left.ownerId || "") === String(right.ownerId || "")
-        && String(left.executionId || "") === String(right.executionId || "");
-  }
-
-  function executionLivenessRank(activity) {
-    const status = String(activity?.status || "").toLowerCase();
-    if (["completed", "failed", "cancelled"].includes(status)) return 3;
-    if (status === "unverified") return 2;
-    if (status === "running") return 1;
-    return 0;
-  }
-
-  function newerExecutionLiveness(snapshotActivity, detailActivity) {
-    if (!detailActivity) return snapshotActivity;
-    if (!snapshotActivity) return detailActivity;
-    const snapshotTime = Date.parse(snapshotActivity.updatedAt || 0);
-    const detailTime = Date.parse(detailActivity.updatedAt || 0);
-    if (Number.isFinite(snapshotTime) && Number.isFinite(detailTime) && snapshotTime !== detailTime) {
-      return snapshotTime > detailTime ? snapshotActivity : detailActivity;
+  function ownerRootSession(value) {
+    let session = typeof value === "object" && value ? value : snapshotSession(value);
+    const visited = new Set();
+    while (session?.parentId && !visited.has(session.id)) {
+      visited.add(session.id);
+      session = snapshotSession(session.parentId);
     }
-    if (Number.isFinite(snapshotTime) !== Number.isFinite(detailTime)) {
-      return Number.isFinite(snapshotTime) ? snapshotActivity : detailActivity;
-    }
-    const snapshotRank = executionLivenessRank(snapshotActivity);
-    const detailRank = executionLivenessRank(detailActivity);
-    return snapshotRank >= detailRank ? snapshotActivity : detailActivity;
-  }
-
-  function mergedExecutionActivity(snapshotActivity, detailActivity) {
-    if (!snapshotActivity || !detailActivity) return detailActivity || snapshotActivity || null;
-    const activity = { ...detailActivity };
-    const liveness = newerExecutionLiveness(snapshotActivity, detailActivity);
-    for (const key of ["status", "statusDetail", "exitCode", "completedAt", "updatedAt"]) {
-      if (Object.prototype.hasOwnProperty.call(liveness, key)) activity[key] = liveness[key];
-    }
-    return activity;
-  }
-
-  function refreshOpenDetail(next = detailState) {
-    if (!next || !isPtyFocusDetailOpen() || !sameDetail(detailState, next)) return Promise.resolve(null);
-    const refreshId = next.kind === "child" ? next.sessionId : next.ownerId;
-    if (!refreshId) return Promise.resolve(null);
-    const snapshot = snapshotSession(refreshId);
-    const detail = state.details.get(refreshId);
-    const snapshotVersion = String(snapshot?.updatedAt || "");
-    const detailVersion = String(detail?.updatedAt || "");
-    const version = snapshotVersion || `open:${refreshId}`;
-    const snapshotTime = Date.parse(snapshotVersion || 0);
-    const detailTime = Date.parse(detailVersion || 0);
-    const detailIsCurrent = snapshotVersion && detailVersion
-      && (snapshotVersion === detailVersion
-        || (Number.isFinite(snapshotTime) && Number.isFinite(detailTime) && detailTime >= snapshotTime));
-    if (detailIsCurrent) {
-      next.refreshVersion = version;
-      return Promise.resolve(detail);
-    }
-    // A newer snapshot can arrive while drawer-data is running its single
-    // bounded follow-up for the previous version. In that case the shared
-    // promise resolves with the previous detail, so the same snapshot version
-    // must be allowed to start a fresh read on the next render instead of
-    // becoming a permanent sticky gate.
-    if (next.refreshVersion === version && next.refreshPromise) return next.refreshPromise;
-    next.refreshVersion = version;
-    const task = Promise.resolve(loadSessionDetail(refreshId, true, snapshotVersion))
-      .then(result => {
-        if (sameDetail(detailState, next)) renderPtyFocusDetail();
-        return result;
-      })
-      .catch(error => {
-        reportRecoverableError(next.kind === "child" ? "pty-focus-child-detail" : "pty-focus-execution-detail", error);
-        return null;
-      })
-      .finally(() => {
-        if (next.refreshPromise === task) next.refreshPromise = null;
-      });
-    next.refreshPromise = task;
-    return task;
+    return session || null;
   }
 
   function canOpenPtyFocus(session) {
     if (!session || session.parentId || session.sourcePluginId) return false;
+    if (window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session)) return true;
     if (String(session.status || "").toLowerCase() === "completed"
       && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
@@ -202,11 +81,6 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
   function isPtyFocusActive() {
     const surface = focusSurface();
     return Boolean(state.ptyFocusSessionId && surface && !surface.classList.contains("hidden"));
-  }
-
-  function isPtyFocusDetailOpen() {
-    const modal = detailModal();
-    return Boolean(modal && !modal.classList.contains("hidden"));
   }
 
   function descendants(root, model) {
@@ -225,7 +99,8 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     return found.sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0));
   }
 
-  const isOngoingSubagent = session => Boolean(session && ["starting", "running", "paused", "waiting"].includes(session.status));
+  const isOngoingSubagent = session => Boolean(session
+    && ["starting", "running", "paused", "waiting"].includes(session.status));
   const unitTime = unit => unit.kind === "child"
     ? unit.child.updatedAt || unit.child.completedAt || ""
     : unit.activity.updatedAt || unit.activity.startedAt || "";
@@ -248,28 +123,22 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     const current = controlRoomSummary(latestWorkCopy(child) || child.statusDetail || child.title, 58);
     const ongoing = isOngoingSubagent(child);
     const waiting = child.status === "waiting" || child.status === "paused";
-    return `<button type="button" class="pty-focus-node ${ongoing ? "is-running" : "is-complete"} ${waiting ? "is-waiting" : ""}"
-      data-pty-focus-child="${esc(child.id)}" style="${providerStyle(child.provider)}"
-      aria-haspopup="dialog" aria-controls="ptyFocusChildModal" aria-expanded="false"
-      aria-label="${esc(t("pty_focus.open_child", { title: title.text }))}">
+    return `<div class="pty-focus-node ${ongoing ? "is-running" : "is-complete"} ${waiting ? "is-waiting" : ""}" style="${providerStyle(child.provider)}">
       <span class="pty-focus-node-mark">${esc(provider.mark)}</span>
       <span class="pty-focus-node-copy"><small>${esc(t("pty_focus.readonly_node"))}</small><b title="${esc(title.full)}">${esc(title.text)}</b><em title="${esc(current.full)}">${esc(current.text)}</em></span>
       <span class="pty-focus-node-state">${esc(subagentWorkLabel(child))}</span>
-    </button>`;
+    </div>`;
   }
 
   function executionNodeHtml(owner, activity) {
     const purpose = inferredExecutionSummary(activity);
     const command = controlRoomSummary(activity.command || activity.description || activity.label || purpose.full, 58);
     const running = activity.status === "running";
-    return `<button type="button" class="pty-focus-node ${running ? "is-running" : "is-complete"}"
-      data-pty-focus-execution-owner="${esc(owner.id)}" data-pty-focus-execution="${esc(activity.id)}"
-      style="${providerStyle(owner.provider)}" aria-haspopup="dialog" aria-controls="ptyFocusChildModal" aria-expanded="false"
-      aria-label="${esc(t("pty_focus.open_execution", { title: purpose.text }))}">
+    return `<div class="pty-focus-node ${running ? "is-running" : "is-complete"}" style="${providerStyle(owner.provider)}">
       <span class="pty-focus-node-mark">${activity.kind === "shell" ? "›_" : "◌"}</span>
       <span class="pty-focus-node-copy"><small>${esc(t("pty_focus.readonly_execution"))}</small><b title="${esc(purpose.full)}">${esc(purpose.text)}</b><em title="${esc(command.full)}">${esc(command.text)}</em></span>
       <span class="pty-focus-node-state">${esc(executionActivityStatus(activity))}</span>
-    </button>`;
+    </div>`;
   }
 
   function laneHtml(label, units, emptyKey) {
@@ -305,19 +174,10 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
   function setBackgroundInactive(inactive) {
     const surface = focusSurface();
     const appChildren = [...($("#appShell")?.children || [])].filter(node => node !== surface);
-    const externalOverlays = [
-      $("#mobileToolsMenu"), $("#drawerBackdrop"), $("#detailDrawer"),
-      ...document.querySelectorAll("body > .modal-backdrop:not(#ptyFocusChildModal)"),
-    ];
-    const targets = [...new Set([...appChildren, ...externalOverlays].filter(Boolean))];
+    const overlays = [...document.querySelectorAll("body > .modal-backdrop")];
+    const targets = [...new Set([...appChildren, ...overlays].filter(Boolean))];
     if (inactive) {
-      if (returnState) {
-        returnState.background = targets.map(node => ({
-          node,
-          inert: node.hasAttribute("inert"),
-          ariaHidden: node.getAttribute("aria-hidden"),
-        }));
-      }
+      if (returnState) returnState.background = targets.map(node => ({ node, inert: node.hasAttribute("inert"), ariaHidden: node.getAttribute("aria-hidden") }));
       targets.forEach(node => {
         node.setAttribute("inert", "");
         node.setAttribute("aria-hidden", "true");
@@ -329,10 +189,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       else node.removeAttribute("inert");
       if (ariaHidden == null) node.removeAttribute("aria-hidden");
       else node.setAttribute("aria-hidden", ariaHidden);
-      const closedDrawer = node.id === "detailDrawer" && !node.classList.contains("open");
-      const hiddenDialog = (node.id === "mobileToolsMenu" || node.classList.contains("modal-backdrop"))
-        && node.classList.contains("hidden");
-      if (closedDrawer || hiddenDialog) {
+      if (node.classList.contains("modal-backdrop") && node.classList.contains("hidden")) {
         node.setAttribute("inert", "");
         node.setAttribute("aria-hidden", "true");
       }
@@ -344,12 +201,9 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     const sidebar = document.querySelector(".sidebar");
     return {
       trigger: trigger instanceof HTMLElement ? trigger : null,
-      main,
-      sidebar,
-      mainTop: main?.scrollTop || 0,
-      mainLeft: main?.scrollLeft || 0,
-      sidebarTop: sidebar?.scrollTop || 0,
-      sidebarLeft: sidebar?.scrollLeft || 0,
+      main, sidebar,
+      mainTop: main?.scrollTop || 0, mainLeft: main?.scrollLeft || 0,
+      sidebarTop: sidebar?.scrollTop || 0, sidebarLeft: sidebar?.scrollLeft || 0,
       inlineSessionId: state.inlineTerminalSessionId,
       background: [],
     };
@@ -362,54 +216,49 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       if (saved.sidebar?.isConnected) saved.sidebar.scrollTo({ top: saved.sidebarTop, left: saved.sidebarLeft, behavior: "auto" });
     };
     restore();
-    requestAnimationFrame(() => {
-      restore();
-      requestAnimationFrame(restore);
-    });
+    requestAnimationFrame(() => requestAnimationFrame(restore));
   }
 
-  function renderPtyFocusDetail() {
-    if (!detailState || !isPtyFocusDetailOpen()) return;
-    const title = $("#ptyFocusChildTitle");
-    const body = $("#ptyFocusChildBody");
-    if (!title || !body) return;
-    if (detailState.kind === "child") {
-      const session = newerSession(snapshotSession(detailState.sessionId), state.details.get(detailState.sessionId));
-      if (!session) {
-        title.textContent = t("pty_focus.detail_unavailable");
-        replaceDetailBody(body, `<div class="empty-state"><h3>${esc(t("pty_focus.detail_unavailable"))}</h3></div>`);
-        return;
-      }
-      title.textContent = session.agentName || session.taskName || session.title || t("pty_focus.detail_title");
-      replaceDetailBody(body, subagentConversationHtml(session));
-      return;
-    }
-    const snapshotOwner = snapshotSession(detailState.ownerId);
-    const detailOwner = state.details.get(detailState.ownerId);
-    const owner = newerSession(snapshotOwner, detailOwner);
-    const snapshotActivity = snapshotOwner?.executions?.find(item => String(item.id || "") === detailState.executionId) || null;
-    const detailActivity = detailOwner?.executions?.find(item => String(item.id || "") === detailState.executionId) || null;
-    const activity = mergedExecutionActivity(snapshotActivity, detailActivity);
-    const purpose = activity ? inferredExecutionSummary(activity) : null;
-    title.textContent = purpose?.text || t("pty_focus.detail_unavailable");
-    replaceDetailBody(body, executionActivityDetailHtml(owner || {}, activity));
+  function migrateFocusedSession(next) {
+    const previousId = String(state.ptyFocusSessionId || "");
+    if (!next || next.id === previousId) return next;
+    const controller = window.WhiteboxInlineTerminal;
+    const preserveTerminalFocus = Boolean(focusShell()?.contains(document.activeElement));
+    controller?.closeFocus?.({ unmount: true });
+    state.ptyFocusSessionId = null;
+    if (controller?.enterFocus?.(next.id, { focus: preserveTerminalFocus }) === false) return null;
+    focusShell().dataset.inlineAgentTerminal = next.id;
+    document.querySelectorAll(`[data-pty-focus-trigger="${CSS.escape(previousId)}"]`).forEach(trigger => trigger.setAttribute("aria-expanded", "false"));
+    focusIdentity = runtimeTerminalIdentity(next) || focusIdentity;
+    requestAnimationFrame(() => Promise.resolve(controller?.sync?.({ force: true }))
+      .then(result => {
+        if (preserveTerminalFocus && result?.ok === true) window.WhiteboxTerminal?.focusEmbedded?.();
+      })
+      .catch(error => reportRecoverableError("pty-focus-session-migration", error)));
+    return next;
+  }
+
+  function focusedRoot() {
+    const current = snapshotSession(state.ptyFocusSessionId);
+    if (canOpenPtyFocus(current)) return current;
+    if (!focusIdentity) return null;
+    const replacement = sessionForTerminal(focusIdentity.terminalId, focusIdentity.creationId);
+    return canOpenPtyFocus(replacement) ? migrateFocusedSession(replacement) : null;
   }
 
   function renderPtyFocus() {
-    if (!state.ptyFocusSessionId) return;
-    const surface = focusSurface();
-    if (!surface || surface.classList.contains("hidden")) return;
-    const root = snapshotSession(state.ptyFocusSessionId);
-    if (!canOpenPtyFocus(root)) {
-      closePtyFocus({ restore: true, reason: "missing" });
+    if (!state.ptyFocusSessionId || !isPtyFocusActive()) return;
+    const root = focusedRoot();
+    if (!root) {
+      closePtyFocus({ restore: true, reason: "missing", suppressManualSelection: true });
       toast(t("pty_focus.session_unavailable"));
       return;
     }
+    const surface = focusSurface();
     const provider = providerInfo(root.provider);
     const goal = controlRoomAgentGoal(root, 90);
     const current = controlRoomSummary(latestWorkCopy(root) || root.statusDetail || root.title, 120);
     const presentedStatus = controlRoomStatus(root);
-    const status = sessionStatusLabel(root, presentedStatus);
     surface.setAttribute("style", providerStyle(root.provider));
     surface.dataset.ptyFocusSession = root.id;
     $("#ptyFocusProviderMark").textContent = provider.mark;
@@ -419,99 +268,87 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     $("#ptyFocusTerminalTitle").textContent = `${provider.label} · PTY`;
     const rootStatus = $("#ptyFocusRootStatus");
     rootStatus.className = `pty-focus-root-status ${["running", "starting"].includes(presentedStatus) ? "is-live" : presentedStatus === "waiting" ? "is-waiting" : "is-complete"}`;
-    rootStatus.querySelector("b").textContent = status;
+    rootStatus.querySelector("b").textContent = sessionStatusLabel(root, presentedStatus);
     rootStatus.querySelector("small").textContent = timeAgo(root.updatedAt);
     const shell = focusShell();
     shell.dataset.inlineAgentTerminal = root.id;
     shell.setAttribute("style", providerStyle(root.provider));
     shell.setAttribute("aria-label", t("pty_focus.terminal_for", { provider: provider.label }));
     const flow = $("#ptyFocusFlow");
-    const nextFlowHtml = flowHtml(root);
-    if (lastFlowHtml !== nextFlowHtml || !flow.hasChildNodes()) {
-      const descriptor = focusedControlDescriptor(flow, ["data-pty-focus-child", "data-pty-focus-execution"]);
-      const laneScroll = [...flow.querySelectorAll(".pty-focus-flow-list")]
-        .map(node => ({ left: node.scrollLeft, top: node.scrollTop }));
-      const revision = ++flowRenderRevision;
-      flow.innerHTML = nextFlowHtml;
-      lastFlowHtml = nextFlowHtml;
-      const activeAfterReplace = document.activeElement;
-      [...flow.querySelectorAll(".pty-focus-flow-list")].forEach((node, index) => {
-        const saved = laneScroll[index];
-        if (!saved) return;
-        node.scrollLeft = saved.left;
-        node.scrollTop = saved.top;
-      });
-      restoreFocusedControl(flow, descriptor, () => revision === flowRenderRevision, activeAfterReplace);
+    const html = flowHtml(root);
+    if (html !== lastFlowHtml || !flow.hasChildNodes()) {
+      flow.innerHTML = html;
+      lastFlowHtml = html;
     }
-    if (detailState && isPtyFocusDetailOpen()) setDetailTriggerExpanded(detailState, true);
-    renderPtyFocusDetail();
-    void refreshOpenDetail();
   }
 
-  async function openPtyFocusDetail(next, trigger = null) {
-    if (!isPtyFocusActive() || !next) return false;
-    if (isPtyFocusDetailOpen()) closePtyFocusDetail({ restoreFocus: false });
-    detailState = { ...next, trigger: trigger instanceof HTMLElement ? trigger : null };
-    lastDetailHtml = "";
-    rememberDialogTrigger("ptyFocusChildModal", { refresh: true });
-    if (trigger instanceof HTMLElement) trigger.setAttribute("aria-expanded", "true");
-    setDetailTriggerExpanded(detailState, true);
-    const modal = detailModal();
-    modal.classList.remove("hidden");
-    setDialogOpenState(modal, true);
-    renderPtyFocusDetail();
-    requestAnimationFrame(() => $("#ptyFocusChildCloseBtn")?.focus({ preventScroll: true }));
-    await refreshOpenDetail(detailState);
-    return true;
-  }
-
-  function closePtyFocusDetail(options = {}) {
-    const modal = detailModal();
-    if (!modal || modal.classList.contains("hidden")) return false;
-    if (detailState?.trigger?.isConnected) detailState.trigger.setAttribute("aria-expanded", "false");
-    setDetailTriggerExpanded(detailState, false);
-    setDialogOpenState(modal, false);
-    modal.classList.add("hidden");
-    $("#ptyFocusChildBody").replaceChildren();
-    detailRenderRevision += 1;
-    lastDetailHtml = "";
-    detailState = null;
-    if (options.restoreFocus === false) discardDialogTrigger("ptyFocusChildModal");
-    else restoreDialogTrigger("ptyFocusChildModal");
-    if (isPtyFocusActive()) requestAnimationFrame(() => window.WhiteboxTerminal?.focusEmbedded?.());
-    return true;
+  function queueFocusSync(controller, sessionId, options = {}) {
+    const expectedSessionId = String(sessionId || "");
+    const targetId = String(options.targetId || "").trim();
+    focusSyncPromise = new Promise(resolve => requestAnimationFrame(() => {
+      if (String(state.ptyFocusSessionId || "") !== expectedSessionId) {
+        resolve({ ok: false, reason: "cancelled" });
+        return;
+      }
+      Promise.resolve(controller.sync({
+        force: true,
+        targetId,
+        requireTargetId: options.requireTargetId === true,
+      })).then(resolve, error => {
+        reportRecoverableError("pty-focus-terminal-sync", error);
+        resolve({ ok: false, reason: "error", error });
+      });
+    }));
+    return focusSyncPromise;
   }
 
   function openPtyFocus(sessionId, options = {}) {
-    const id = String(sessionId || "");
-    const session = snapshotSession(id);
-    if (!canOpenPtyFocus(session)) {
+    // A direct user/attention choice supersedes any earlier create request
+    // that is still waiting for its bridge projection. Otherwise a later
+    // snapshot could steal focus back to the stale pending terminal.
+    pendingFocus = null;
+    const root = ownerRootSession(sessionId);
+    if (!canOpenPtyFocus(root)) {
       toast(t("pty_focus.root_only"));
       return false;
     }
-    if (state.ptyFocusSessionId) {
-      if (state.ptyFocusSessionId === id) window.WhiteboxTerminal?.focusEmbedded?.();
-      else toast(t("pty_focus.return_before_switch"));
-      return state.ptyFocusSessionId === id;
+    if (options.attentionActivation !== true
+      && options.manualSelectionSignaled !== true
+      && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
     }
+    const id = String(root.id || "");
+    if (state.ptyFocusSessionId === id && isPtyFocusActive()) {
+      if (options.attentionActivation !== true) focusOpenGeneration += 1;
+      if (options.targetId) {
+        if (String(state.ptyFocusTargetId || "") !== String(options.targetId || "")) focusOpenGeneration += 1;
+        state.ptyFocusTargetId = String(options.targetId || "").trim();
+        queueFocusSync(window.WhiteboxInlineTerminal, id, {
+          targetId: options.targetId,
+          requireTargetId: options.requireTargetId,
+        });
+      }
+      window.WhiteboxTerminal?.focusEmbedded?.();
+      return true;
+    }
+    if (state.ptyFocusSessionId) closePtyFocus({ restore: false, clearPending: false, suppressManualSelection: true });
     const controller = window.WhiteboxInlineTerminal;
     if (!controller?.enterFocus || !controller?.sync) {
       toast(t("pty_focus.terminal_unavailable"));
       return false;
     }
     returnState = captureReturnState(options.trigger);
-    flowRenderRevision += 1;
-    detailRenderRevision += 1;
     lastFlowHtml = "";
-    lastDetailHtml = "";
     rememberDialogTrigger("ptyFocusSurface", { refresh: true });
-    const entered = controller.enterFocus(id, { focus: options.focus !== false });
-    if (entered === false) {
+    if (controller.enterFocus(id, { focus: options.focus !== false }) === false) {
       discardDialogTrigger("ptyFocusSurface");
       returnState = null;
       toast(t("pty_focus.terminal_unavailable"));
       return false;
     }
+    focusIdentity = options.identity || runtimeTerminalIdentity(root);
+    focusOpenGeneration += 1;
+    state.ptyFocusTargetId = String(options.targetId || focusIdentity?.terminalId || "").trim();
     const surface = focusSurface();
     surface.classList.remove("hidden");
     surface.removeAttribute("inert");
@@ -520,49 +357,161 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     document.body.classList.add("pty-focus-open");
     setBackgroundInactive(true);
     renderPtyFocus();
-    requestAnimationFrame(() => {
-      Promise.resolve(controller.sync({ force: true })).catch(error => {
-        reportRecoverableError("pty-focus-terminal-sync", error);
-        toast(window.WhiteboxI18n.errorText(error, "agent.open_terminal_failed"));
-      });
+    queueFocusSync(controller, id, {
+      targetId: options.targetId,
+      requireTargetId: options.requireTargetId,
     });
-    announce(t("pty_focus.opened", { title: session.title || providerInfo(session.provider).label }));
+    announce(t("pty_focus.opened", { title: root.title || providerInfo(root.provider).label }));
     return true;
   }
 
+  async function openPtyFocusVerified(sessionId, options = {}) {
+    const root = ownerRootSession(sessionId);
+    const terminal = window.WhiteboxTerminal;
+    const expectedTerminalId = String(options.terminalId || options.targetId || "").trim();
+    const expectedTargetId = String(options.targetId || expectedTerminalId).trim();
+    if (!canOpenPtyFocus(root) || !terminal?.agentTargets || !terminal?.embeddedState) {
+      return { opened: false, retryable: true, reason: "not-ready" };
+    }
+    if (expectedTerminalId && expectedTargetId && expectedTerminalId !== expectedTargetId) {
+      return { opened: false, retryable: true, reason: "identity-mismatch" };
+    }
+    if (options.isCurrent && !options.isCurrent()) {
+      return { opened: false, retryable: true, reason: "cancelled" };
+    }
+    let targets;
+    try {
+      targets = terminal.agentTargets(root).filter(target => target?.kind === "terminal");
+    } catch (error) {
+      reportRecoverableError("pty-focus-targets", error);
+      return { opened: false, retryable: true, reason: "target-error" };
+    }
+    const requested = expectedTargetId
+      ? targets.find(target => String(target.terminalId || target.id || "") === expectedTargetId)
+      : (targets.length === 1 ? targets[0] : null);
+    if (!requested) {
+      return {
+        opened: false,
+        retryable: true,
+        reason: expectedTargetId ? "target-expired" : "ambiguous-target",
+      };
+    }
+    const targetId = String(requested.terminalId || requested.id || "");
+    const alreadyFocusedExact = isPtyFocusActive()
+      && String(state.ptyFocusSessionId || "") === String(root.id || "")
+      && String(state.ptyFocusTargetId || "") === targetId;
+    let operationFocusGeneration = 0;
+    const closeOperationFocus = () => {
+      if (!alreadyFocusedExact
+        && focusOpenGeneration === operationFocusGeneration
+        && String(state.ptyFocusSessionId || "") === String(root.id || "")
+        && String(state.ptyFocusTargetId || "") === targetId) {
+        closePtyFocus({ restore: false, suppressManualSelection: true });
+      }
+    };
+    if (!openPtyFocus(root.id, {
+      focus: options.focus !== false,
+      targetId,
+      requireTargetId: true,
+      attentionActivation: options.attentionActivation === true,
+      manualSelectionSignaled: options.manualSelectionSignaled === true,
+      trigger: options.trigger || null,
+    })) return { opened: false, retryable: true, reason: "open-rejected" };
+    operationFocusGeneration = focusOpenGeneration;
+    const syncResult = await focusSyncPromise;
+    if (options.isCurrent && !options.isCurrent()) {
+      closeOperationFocus();
+      return { opened: false, retryable: true, reason: "cancelled" };
+    }
+    const mounted = terminal.embeddedState();
+    const mountedTargetId = String(syncResult?.target?.terminalId || syncResult?.target?.id || "");
+    const activeRoot = focusedRoot();
+    const verified = syncResult?.ok === true
+      && mounted.connected === true
+      && String(mounted.agentSessionId || "") === String(activeRoot?.id || "")
+      && String(mounted.terminalId || "") === targetId
+      && mountedTargetId === targetId;
+    if (verified) return { opened: true, retryable: false, target: syncResult.target };
+    closeOperationFocus();
+    return { opened: false, retryable: true, reason: syncResult?.reason || "mount-unverified" };
+  }
+
+  function tryPendingPtyFocus() {
+    if (!pendingFocus) return false;
+    if (Date.now() > pendingFocus.expiresAt) {
+      pendingFocus = null;
+      toast(t("pty_focus.session_unavailable"));
+      return false;
+    }
+    const session = sessionForTerminal(pendingFocus.terminalId, pendingFocus.creationId);
+    if (!canOpenPtyFocus(session)) return false;
+    const request = pendingFocus;
+    pendingFocus = null;
+    return openPtyFocus(session.id, {
+      ...request.options,
+      targetId: request.terminalId,
+      requireTargetId: true,
+      identity: { terminalId: request.terminalId, creationId: request.creationId, provider: String(session.provider || "").toLowerCase() },
+    });
+  }
+
+  function openPtyFocusForTerminal(terminalId, options = {}) {
+    const id = String(terminalId || "").trim();
+    if (!id) return false;
+    if (options.attentionActivation !== true && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    pendingFocus = {
+      terminalId: id,
+      creationId: String(options.creationId || "").trim(),
+      expiresAt: Date.now() + Math.max(5_000, Number(options.timeoutMs || 30_000)),
+      options: {
+        focus: options.focus !== false,
+        trigger: options.trigger || null,
+        attentionActivation: options.attentionActivation === true,
+        manualSelectionSignaled: options.attentionActivation !== true,
+      },
+    };
+    return tryPendingPtyFocus();
+  }
+
+  function syncPendingPtyFocus() {
+    if (isPtyFocusActive()) {
+      const root = focusedRoot();
+      if (root) renderPtyFocus();
+    }
+    return tryPendingPtyFocus();
+  }
+
   function closePtyFocus(options = {}) {
-    const active = Boolean(state.ptyFocusSessionId || isPtyFocusActive());
-    if (!active) return false;
+    if (!state.ptyFocusSessionId && !isPtyFocusActive()) return false;
+    if (options.suppressManualSelection !== true && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    focusOpenGeneration += 1;
     const activeSessionId = String(state.ptyFocusSessionId || "");
-    if (isPtyFocusDetailOpen()) closePtyFocusDetail({ restoreFocus: false });
     const saved = returnState;
     window.WhiteboxInlineTerminal?.closeFocus?.({ unmount: options.unmount !== false });
     state.ptyFocusSessionId = null;
+    state.ptyFocusTargetId = "";
     const surface = focusSurface();
     surface.classList.add("hidden");
     surface.setAttribute("inert", "");
     surface.setAttribute("aria-hidden", "true");
     delete surface.dataset.ptyFocusSession;
-    flowRenderRevision += 1;
-    detailRenderRevision += 1;
     lastFlowHtml = "";
-    lastDetailHtml = "";
     focusShell().dataset.inlineAgentTerminal = "";
     if (saved?.trigger?.isConnected) saved.trigger.setAttribute("aria-expanded", "false");
-    if (activeSessionId) {
-      document.querySelectorAll(`[data-pty-focus-trigger="${CSS.escape(activeSessionId)}"]`)
-        .forEach(trigger => trigger.setAttribute("aria-expanded", "false"));
-    }
+    if (activeSessionId) document.querySelectorAll(`[data-pty-focus-trigger="${CSS.escape(activeSessionId)}"]`).forEach(trigger => trigger.setAttribute("aria-expanded", "false"));
     setBackgroundInactive(false);
     document.body.classList.remove("pty-focus-open");
     if (options.restore !== false) restoreControlRoomPosition(saved);
     if (options.restore === false) discardDialogTrigger("ptyFocusSurface");
     else if (!restoreDialogTrigger("ptyFocusSurface") && saved?.trigger?.isConnected) saved.trigger.focus({ preventScroll: true });
     returnState = null;
-    if (saved?.inlineSessionId && state.inlineTerminalSessionId === saved.inlineSessionId) {
-      requestAnimationFrame(() => window.WhiteboxInlineTerminal?.sync?.({ force: true }));
-    }
-    if ($("#detailDrawer")?.classList.contains("open")) requestAnimationFrame(() => renderDrawer());
+    focusIdentity = null;
+    if (options.clearPending !== false) pendingFocus = null;
+    if (saved?.inlineSessionId && state.inlineTerminalSessionId === saved.inlineSessionId) requestAnimationFrame(() => window.WhiteboxInlineTerminal?.sync?.({ force: true }));
     if (options.reason !== "missing") announce(t("pty_focus.closed"));
     return true;
   }
@@ -571,99 +520,21 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     if (eventsBound) return;
     eventsBound = true;
     $("#ptyFocusBackBtn")?.addEventListener("click", () => closePtyFocus());
-    focusSurface()?.addEventListener("click", event => {
-      const child = event.target.closest("[data-pty-focus-child]");
-      if (child) {
-        event.stopPropagation();
-        openPtyFocusDetail({ kind: "child", sessionId: child.dataset.ptyFocusChild }, child);
-        return;
-      }
-      const execution = event.target.closest("[data-pty-focus-execution]");
-      if (execution) {
-        event.stopPropagation();
-        openPtyFocusDetail({
-          kind: "execution",
-          ownerId: execution.dataset.ptyFocusExecutionOwner,
-          executionId: execution.dataset.ptyFocusExecution,
-        }, execution);
-      }
-    });
-    detailModal()?.addEventListener("click", async event => {
-      if (event.target === detailModal() || event.target.closest("#ptyFocusChildCloseBtn")) {
-        closePtyFocusDetail();
-        return;
-      }
-      const nestedChild = event.target.closest("[data-open-subagent-chat]");
-      if (nestedChild) {
-        const nestedId = nestedChild.dataset.openSubagentChat;
-        if (detailState?.trigger?.isConnected) detailState.trigger.setAttribute("aria-expanded", "false");
-        setDetailTriggerExpanded(detailState, false);
-        detailState = { kind: "child", sessionId: nestedId, trigger: null };
-        lastDetailHtml = "";
-        renderPtyFocusDetail();
-        await refreshOpenDetail(detailState);
-        requestAnimationFrame(() => $("#ptyFocusChildCloseBtn")?.focus({ preventScroll: true }));
-        return;
-      }
-      const copy = event.target.closest("[data-copy-text]");
-      if (copy) {
-        const copied = await copyText(copy.dataset.copyText || "");
-        toast(copied === false ? t("quality.copy_failed") : t("quality.copy_success"));
-        return;
-      }
-      const promptToggle = event.target.closest("[data-prompt-toggle], [data-close-expanded-reader]");
-      if (promptToggle) {
-        const prompt = promptToggle.closest("[data-user-prompt]");
-        const promptKey = promptToggle.dataset.promptToggle || prompt?.dataset.userPrompt || "";
-        if (!promptKey) return;
-        const expanded = promptToggle.hasAttribute("data-close-expanded-reader")
-          || promptToggle.getAttribute("aria-expanded") === "true";
-        if (expanded) state.expandedConversationPrompts.delete(promptKey);
-        else {
-          state.expandedConversationPrompts.clear();
-          state.expandedConversationPrompts.add(promptKey);
-        }
-        renderPtyFocusDetail();
-        requestAnimationFrame(() => {
-          const nextPrompt = $("#ptyFocusChildBody")?.querySelector(`[data-user-prompt="${CSS.escape(promptKey)}"]`);
-          if (!expanded) nextPrompt?.scrollIntoView({ block: "start", behavior: "auto" });
-          nextPrompt?.querySelector(`[data-prompt-toggle="${CSS.escape(promptKey)}"]`)?.focus({ preventScroll: true });
-        });
-        return;
-      }
-      if (event.target.closest("[data-scroll-latest]")) {
-        const body = $("#ptyFocusChildBody");
-        body?.scrollTo({ top: body.scrollHeight, behavior: "smooth" });
-        return;
-      }
-      const earlierTurns = event.target.closest("[data-load-earlier-turns]");
-      if (earlierTurns) {
-        const body = $("#ptyFocusChildBody");
-        const previousHeight = body?.scrollHeight || 0;
-        const previousTop = body?.scrollTop || 0;
-        const sessionId = earlierTurns.dataset.loadEarlierTurns;
-        const nextLimit = Number(earlierTurns.dataset.nextTurnLimit || 0);
-        if (sessionId && nextLimit > 0) state.conversationTurnLimits.set(sessionId, nextLimit);
-        renderPtyFocusDetail();
-        requestAnimationFrame(() => {
-          if (!body) return;
-          body.scrollTop = previousTop + Math.max(0, body.scrollHeight - previousHeight);
-          body.querySelector("[data-load-earlier-turns]")?.focus({ preventScroll: true });
-        });
-      }
+    window.addEventListener("whitebox:terminal-manual-selection", () => {
+      pendingFocus = null;
     });
   }
 
   return {
     canOpenPtyFocus,
     isPtyFocusActive,
-    isPtyFocusDetailOpen,
+    ownerRootSession,
     openPtyFocus,
+    openPtyFocusVerified,
+    openPtyFocusForTerminal,
+    syncPendingPtyFocus,
     closePtyFocus,
-    openPtyFocusDetail,
-    closePtyFocusDetail,
     renderPtyFocus,
-    renderPtyFocusDetail,
     bindPtyFocusEvents,
   };
 };

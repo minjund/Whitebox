@@ -57,6 +57,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
   const isDirectWritablePty = session => window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
     && session?.controlCapabilities?.pty === true
     && session?.presentation?.conversationSurface !== "transcript";
+  const isAppOwnedBridgePty = session => Boolean(window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity?.(session));
   const statusLabel = (status, session) => session ? sessionStatusLabel(session, status) : ({
     starting: t("ui.preparing"), running: t("ui.working"), waiting: t("ui.waiting_for_review"), idle: t("ui.idle"),
     completed: t("ui.completed"), failed: t("ui.problem"), cancelled: t("ui.stopped"),
@@ -113,20 +114,22 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : t("graph.assigned_ai");
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(session);
-    const writablePtySurface = !session.parentId && (completedMainPty || isDirectWritablePty(session));
+    const writablePtySurface = !session.parentId && (completedMainPty || isDirectWritablePty(session) || isAppOwnedBridgePty(session));
     const transcriptSurface = !writablePtySurface;
     const inlinePtyAttributes = writablePtySurface
-      ? ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+      ? ` data-pty-focus-trigger="${esc(session.id)}" aria-expanded="${state.ptyFocusSessionId === session.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
       : "";
-    const conversationAttributes = transcriptSurface ? ` data-open-session="${esc(session.id)}"` : inlinePtyAttributes;
-    const conversationLabel = completedMainPty
+    const interactionAttributes = transcriptSurface ? ` data-open-session="${esc(session.id)}"` : inlinePtyAttributes;
+    const nodeActionLabel = completedMainPty
       ? t("drawer.terminal_fork_action")
-      : t("graph.focus_relationships", { role });
+      : writablePtySurface
+        ? t("graph.view_main_ai_conversation_for_task", { task: goalPreview.text })
+        : t("graph.focus_relationships", { role });
     return `<article class="agent-node ${running ? "running" : ""} ${session.parentId ? "child-agent" : "root-agent"} ${options.focus ? "is-focus" : ""}"
       data-motion-key="agent:${esc(session.id)}"
       data-motion-value="${esc(session.updatedAt || "")}:${usage.total || 0}:${esc(session.status || "")}"
       style="${providerStyle(session.provider)}">
-      <button class="agent-node-main" type="button" data-graph-focus="${esc(session.id)}"${conversationAttributes} aria-label="${esc(conversationLabel)}">
+      <button class="agent-node-main" type="button" data-graph-focus="${esc(session.id)}"${interactionAttributes} aria-label="${esc(nodeActionLabel)}">
         <span class="agent-node-top">
           <span class="provider-mark">${esc(provider.mark)}</span>
           <span class="agent-identity"><b>${esc(role)}</b><small>${esc(provider.label)}${session.model && session.model !== provider.label ? ` · ${esc(session.model)}` : ""}</small></span>
@@ -357,7 +360,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       style="${providerStyle(agent.provider)}"
       data-motion-key="live-tmux:${esc(pane.id)}"
       data-motion-value="${esc(agent.updatedAt || "")}:${pane.pid || 0}">
-      <button type="button" class="live-tmux-pane" data-tmux-type="pane" data-tmux-id="${esc(pane.id)}" aria-label="${esc(t("graph.open_tmux_pane", { session: tmuxSession.displayName || tmuxSession.name }))}">
+      <div class="live-tmux-pane-summary">
         <span class="live-tmux-card-head">
           <span class="live-tmux-symbol">▦</span><span><small>${esc(t("graph.tmux_session"))}</small><b>${esc(tmuxSession.displayName || tmuxSession.name)}</b></span>
           <em>${esc(stateLabel)}</em>
@@ -375,12 +378,11 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
           <span>${esc(t("graph.pane_number", { number: pane.index + 1 }))} · ${esc(pane.nativeId || pane.id)}</span>
           </span>
         <span class="live-tmux-cwd" title="${esc(pane.cwd || "")}">${esc(pane.displayFolder || pane.cwd || t("graph.workspace_unknown"))}</span>
-      </button>
+      </div>
       <footer>
         <span>${esc(linked ? t("graph.linked_to_conversation") : t("graph.detected_from_tmux"))}</span>
         <span>
           ${linked ? `<button type="button" data-graph-focus="${esc(linked.id)}">${esc(t("graph.view_ai_flow"))}</button>` : ""}
-          <button type="button" class="live-tmux-pane" data-tmux-type="pane" data-tmux-id="${esc(pane.id)}">${esc(t("graph.open_in_tmux"))}</button>
         </span>
         </footer>
     </article>`;
@@ -678,7 +680,6 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const retained = isControlRoomSession(root) && !presentationLive && !delivery;
     const descendants = controlRoomDescendants(root, model);
     const actors = [root, ...descendants];
-    const inlineSession = state.inlineTerminalSessionId === root.id ? root : null;
     const terminalReviewSources = actors.map(session => ({
       session,
       prompt: window.WhiteboxTerminal?.pendingPromptForSession?.(session) || null,
@@ -717,7 +718,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const unitCount = activeUnits.length;
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(root);
-    const transcriptSurface = !completedMainPty && !isDirectWritablePty(root);
+    const transcriptSurface = !completedMainPty && !isDirectWritablePty(root) && !isAppOwnedBridgePty(root);
     const controlRoomPtyAttributes = root.parentId || root.sourcePluginId || transcriptSurface
       ? ""
       : ` data-pty-focus-trigger="${esc(root.id)}" aria-expanded="${state.ptyFocusSessionId === root.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`;
@@ -731,7 +732,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ${sessionBadgesHtml(root, { compact: true })}
       <strong title="${esc(title.full)}">${esc(title.text)}</strong>
       <span class="control-main-now"><small>${esc(t("graph.current_work"))}</small><b title="${esc(current.full)}">${esc(current.text)}</b></span>
-      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : `PTY ${state.inlineTerminalSessionId === root.id ? "↑" : "↓"}`}</b></span>
+      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : `PTY ${state.ptyFocusSessionId === root.id ? "↑" : "↓"}`}</b></span>
     </button>`;
     const shownActiveUnits = activeUnits.slice(0, 6);
     const hiddenActiveUnits = Math.max(0, activeUnits.length - shownActiveUnits.length);
@@ -755,7 +756,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : reviewSources.length
         ? controlRoomReviewHtml(reviewSources[0], Math.max(0, attentionCount - 1))
         : "";
-    return `<article class="control-room-session ${waiting ? "is-waiting" : ""} ${waitingWithBackground ? "has-background-work" : ""} ${hasAttention ? "has-attention" : ""} ${inlineSession ? "has-inline-terminal" : ""}" data-control-session="${esc(root.id)}" data-session-sortable="${esc(root.id)}" data-attention-count="${attentionCount}"
+    return `<article class="control-room-session ${waiting ? "is-waiting" : ""} ${waitingWithBackground ? "has-background-work" : ""} ${hasAttention ? "has-attention" : ""}" data-control-session="${esc(root.id)}" data-session-sortable="${esc(root.id)}" data-attention-count="${attentionCount}"
       style="${providerStyle(root.provider)}" role="group" tabindex="0" draggable="true" aria-grabbed="false"
       aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-label="${esc(t("session.drag_label", { title: title.text }))}" aria-describedby="sessionReorderHelp">
       <header><div><span class="control-session-live"><i></i>${esc(hasReview ? t("control.causal_judgement") : t(sessionStateKey))}</span><b>${esc(title.text)}</b>${retention}</div><span class="session-drag-handle" aria-hidden="true" title="${esc(t("session.reorder_hint"))}"></span>${archive}<button type="button" class="control-session-flow" data-graph-focus="${esc(root.id)}" aria-label="${esc(t("control.open_full_flow", { title: root.title }))}">${esc(t("control.open_project_progress_short"))}</button></header>
@@ -766,7 +767,6 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
         <section class="control-room-column activity-column"><span class="control-column-label">${esc(t("control.running_work_column_counts", { delegated: activeChildren.length, executions: activeExecutions.length }))}</span><div class="control-room-node-list">${active}</div></section>
         <span class="control-flow-link complete" aria-hidden="true"><i></i></span>
         <section class="control-room-column completed-column"><span class="control-column-label">${esc(t("control.completed_work_column_counts", { done: Math.max(0, completedUnits.length - completedWaitingCount), completed: completedUnits.length, waiting: completedWaitingCount }))}</span><div class="control-room-node-list completed-list">${completed}</div></section>
-        ${inlineSession ? inlineTerminalPanel(inlineSession) : ""}
       </div>
     </article>`;
   }
@@ -1240,29 +1240,6 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     </section>`;
   }
 
-  function inlineTerminalPanel(session) {
-    if (session.parentId || state.inlineTerminalSessionId !== session.id) return "";
-    const provider = providerInfo(session.provider);
-    return `<section id="agentInlineTerminal" class="agent-inline-terminal" data-inline-agent-terminal="${esc(session.id)}" style="${providerStyle(session.provider)}" aria-label="${esc(`${provider.label} PTY`)}">
-      <span class="agent-inline-terminal-link" aria-hidden="true"></span>
-      <header class="agent-inline-terminal-head">
-        <span class="provider-mark">${esc(provider.mark)}</span>
-        <span class="agent-inline-terminal-title"><b>${esc(provider.label)} · PTY</b><small>${esc(t("graph.selected_ai"))} · ${esc(t("graph.current_work"))}</small></span>
-        <span class="agent-inline-terminal-state"><i aria-hidden="true"></i><b data-inline-terminal-status>${esc(t("drawer.terminal_connecting"))}</b><small data-inline-terminal-meta></small></span>
-        <span class="agent-inline-terminal-actions">
-          <button type="button" data-inline-terminal-reconnect title="${esc(t("drawer.terminal_reconnect"))}" aria-label="${esc(t("drawer.terminal_reconnect"))}">↻</button>
-          <button type="button" data-inline-terminal-close title="${esc(t("common.close"))}" aria-label="${esc(t("common.close"))}">×</button>
-        </span>
-      </header>
-      <div id="agentInlineTerminalViewport" class="agent-inline-terminal-viewport">
-        <div class="agent-inline-terminal-empty" data-inline-terminal-empty aria-live="polite">
-          <span aria-hidden="true">›_</span><b>${esc(t("drawer.terminal_connecting"))}</b><small>${esc(t("drawer.terminal_connecting_help"))}</small>
-          <button class="primary-button hidden" type="button" data-inline-terminal-resume>${esc(t("drawer.terminal_resume_action"))}</button>
-        </div>
-      </div>
-    </section>`;
-  }
-
   function workflowDetailPanel(session) {
     const activeTab = ["summary", "lifecycle", "tokens"].includes(state.workflowDetailTab) ? state.workflowDetailTab : "summary";
     const usage = session.usage || {};
@@ -1380,7 +1357,6 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
           <div class="agent-workflow-stack downstream-stack ${shownChildren.length > 3 ? "density-many" : ""}">${downstream}</div>
         </section>
       </div>
-      ${!focus.parentId && state.inlineTerminalSessionId === focus.id ? inlineTerminalPanel(focus) : ""}
       ${workflowDetailPanel(focus)}
       ${workflowCommunicationPanel(focus, parent, model)}
     </div>`;

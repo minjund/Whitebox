@@ -1268,19 +1268,23 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     }
   });
 
-  test('bound PTY UI는 중복 포커스 버튼 없이 xterm stdin과 전용 respond API를 노출한다', () => {
+  test('bound PTY UI는 대화창 없이 집중 xterm stdin과 전용 respond API를 노출한다', () => {
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
-    const drawer = fs.readFileSync(path.join(root, 'renderer', 'drawer-terminal.js'), 'utf8');
+    const ptyFocus = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     const drawerView = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const graph = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const messages = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const terminal = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
     const fixturePreload = fs.readFileSync(path.join(root, 'scripts', 'interaction-fixture-preload.js'), 'utf8');
     assert.match(workbench, /inputDisabled = readOnly;/u);
     assert.match(workbench, /const inputDisabled = false;/u);
     assert.match(workbench, /if \(!inputDisabled\) \{\s*terminal\.onData/u);
-    assert.equal(drawer.includes('drawerTerminalFocusBtn'), false);
-    assert.match(drawerView, /&& !actualTerminalChat/u);
+    assert.equal(fs.existsSync(path.join(root, 'renderer', 'drawer-terminal.js')), false);
+    assert.match(html, /id="ptyFocusTerminalViewport"[^>]*data-agent-terminal-viewport/u);
+    assert.match(ptyFocus, /openPtyFocusVerified/u);
+    assert.match(drawerView, /context\.openPtyFocusVerified\?\.\(root\.id,/u);
+    assert.doesNotMatch(drawerView, /actualTerminalChat|drawerTerminalSurface|drawerComposer/u);
     assert.equal(graph.includes('data-inline-terminal-composer'), false);
     assert.equal(graph.includes('data-inline-terminal-focus'), false);
     assert.equal(messages.includes('"drawer.terminal_focus"'), false);

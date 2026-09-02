@@ -9,7 +9,6 @@ const roots = ['bin', 'renderer', 'scripts', 'src'];
 const files = [
   path.join(root, 'main.js'),
   path.join(root, 'preload.js'),
-  path.join(root, 'attention-popup-preload.js'),
 ];
 
 function collect(dir) {

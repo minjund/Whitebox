@@ -3,9 +3,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { app, BrowserWindow, nativeImage } = require('electron');
+const { fileURLToPath, pathToFileURL } = require('url');
+const { app, BrowserWindow, nativeImage, session: electronSession } = require('electron');
 app.disableHardwareAcceleration();
 
+const root = path.resolve(__dirname, '..');
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-philosophy-'));
 app.setPath('userData', userData);
 app.once('quit', () => {
@@ -13,6 +15,21 @@ app.once('quit', () => {
 });
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+function installWorktreeDependencyRedirect() {
+  const configured = String(process.env.WHITEBOX_TEST_NODE_MODULES || '').trim();
+  const dependencyRoot = configured ? path.resolve(configured) : '';
+  const localRoot = path.join(root, 'node_modules');
+  if (!dependencyRoot || !fs.existsSync(dependencyRoot) || fs.existsSync(localRoot)) return;
+  electronSession.defaultSession.webRequest.onBeforeRequest({ urls: ['file:///*'] }, (details, callback) => {
+    let requested = '';
+    try { requested = fileURLToPath(details.url); } catch {}
+    const relative = requested ? path.relative(localRoot, requested) : '..';
+    const alternate = relative && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative) ? path.join(dependencyRoot, relative) : '';
+    callback(alternate && fs.existsSync(alternate) ? { redirectURL: pathToFileURL(alternate).href } : {});
+  });
+}
 
 async function waitFor(win, expression, message, attempts = 120) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -38,16 +55,6 @@ async function stabilizeView(win, view, requiredSelector) {
       item.style.setProperty('visibility', 'visible', 'important');
       item.style.setProperty('opacity', '1', 'important');
     });
-    document.querySelectorAll('.view-nav > .nav-item[data-view]').forEach(item => {
-      item.style.setProperty('display', 'grid', 'important');
-      item.style.setProperty('transform', 'none', 'important');
-    });
-    const originalSidebar = document.querySelector('.sidebar');
-    if (originalSidebar && !originalSidebar.dataset.captureClone) {
-      const sidebarClone = originalSidebar.cloneNode(true);
-      sidebarClone.dataset.captureClone = 'true';
-      originalSidebar.replaceWith(sidebarClone);
-    }
     const stage = document.querySelector('.main-stage');
     const sidebar = document.querySelector('.sidebar');
     stage?.scrollTo(0, 0);
@@ -165,6 +172,7 @@ async function capture(win, name, view, requiredSelector) {
 }
 
 app.whenReady().then(async () => {
+  installWorktreeDependencyRedirect();
   const win = new BrowserWindow({
     width: 1666,
     height: 1018,
@@ -203,6 +211,8 @@ app.whenReady().then(async () => {
 
     const nowMetrics = await win.webContents.executeJavaScript(`(() => ({
       view: document.body.dataset.currentView,
+      retiredTabsHidden: [...document.querySelectorAll('#projectViewTabs .nav-item[data-view]')]
+        .every(item => item.getClientRects().length === 0),
       nav: [...document.querySelectorAll('.view-nav .nav-item[data-view]')].slice(0, 3).map(item => item.textContent.replace(/\\s+/g, ' ').trim()),
       title: document.querySelector('#pageTitle')?.textContent || '',
       liveVisible: !document.querySelector('#liveSection')?.classList.contains('hidden'),
@@ -214,6 +224,7 @@ app.whenReady().then(async () => {
     }))()`);
     if (
       nowMetrics.view !== 'all'
+      || !nowMetrics.retiredTabsHidden
       || !nowMetrics.nav[0]?.replace(/\s+/g, '').startsWith('◆처리중')
       || !nowMetrics.nav[1]?.replace(/\s+/g, '').startsWith('○지난작업')
       || !nowMetrics.nav[2]?.replace(/\s+/g, '').startsWith('!확인대기')
@@ -312,44 +323,61 @@ app.whenReady().then(async () => {
     ) throw new Error(`기억 화면 계약 실패: ${JSON.stringify(memoryMetrics)}`);
     const memoryOutput = await capture(win, 'whitebox-philosophical-memory.png', 'active', '#sessionSection');
 
-    await win.webContents.executeJavaScript(`document.querySelector('#sessionGrid [data-session-id="fixture-ended"]')?.click()`);
-    await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')`, '기억 상세가 열리지 않았습니다.');
-    // Completed top-level conversations can legitimately open on the PTY
-    // surface, where #drawerContent stays empty. The philosophy audit is for
-    // the durable memory detail, so select its summary tab explicitly instead
-    // of treating a connecting terminal as an empty drawer.
-    await win.webContents.executeJavaScript(`document.querySelector('#drawerTabSummary')?.click()`);
-    await waitFor(
-      win,
-      `document.querySelector('#drawerTabSummary')?.classList.contains('active')
-        && !document.querySelector('.drawer-loading')
-        && (document.querySelector('#drawerContent')?.textContent.trim().length || 0) >= 50`,
-      '기억 요약 상세가 렌더링되지 않았습니다.',
-    );
-    const memoryDrawer = await win.webContents.executeJavaScript(`(() => ({
-      open: document.querySelector('#detailDrawer')?.classList.contains('open'),
-      detailText: document.querySelector('#drawerContent')?.textContent.trim().length || 0,
-      conversation: document.querySelectorAll('#detailDrawer .conversation-message, #detailDrawer .chat-message, #detailDrawer .chat-event').length,
-      tabs: document.querySelectorAll('#detailDrawer .drawer-tabs [data-tab]').length,
-      overflow: document.querySelector('#detailDrawer')?.scrollWidth > document.querySelector('#detailDrawer')?.clientWidth + 1,
+    const deletedSurfaces = await win.webContents.executeJavaScript(`(() => ({
+      drawer: Boolean(document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer')),
+      conversation: Boolean(document.querySelector('[data-conversation-shell],#terminalHistoryPanel')),
+      additionalTools: Boolean(document.querySelector('#advancedToolsNav,#mobileMoreBtn,#mobileToolsMenu,'
+        + '#automationOverview,#tmuxSection,#tmuxCreateModal')),
     }))()`);
-    if (!memoryDrawer.open || memoryDrawer.detailText < 50 || memoryDrawer.tabs < 1 || memoryDrawer.overflow) throw new Error(`기억 상세 계약 실패: ${JSON.stringify(memoryDrawer)}`);
-    await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer?.(false)`);
+    if (Object.values(deletedSurfaces).some(Boolean)) {
+      throw new Error(`삭제된 상세·대화·추가 기능 화면이 다시 노출되었습니다: ${JSON.stringify(deletedSurfaces)}`);
+    }
+
+    await win.webContents.executeJavaScript(`(() => {
+      const app = window.WhiteboxApp;
+      const session = app.state.snapshot.sessions.find(item => item.id === 'fixture-root');
+      app.state.workspace = session.originCwd || session.cwd;
+      app.state.view = 'all';
+      app.state.graphFocusId = null;
+      app.renderWorkspaces();
+      app.renderSessions('philosophy-pty-focus');
+      window.interactionTest.clearCalls();
+      document.querySelector('[data-pty-focus-trigger="fixture-root"]')?.click();
+    })()`);
+    await waitFor(win, `window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+      && window.WhiteboxApp.state.ptyFocusTargetId === 'terminal-main'
+      && Boolean(document.querySelector('#ptyFocusTerminalViewport [data-terminal-screen="terminal-main"] .xterm'))`,
+    '처리 중 작업이 담당 root의 exact PTY 집중 모드로 열리지 않았습니다.');
+    const ptyFocus = await win.webContents.executeJavaScript(`(() => ({
+      lanes: document.querySelectorAll('#ptyFocusFlow .pty-focus-flow-lane').length,
+      statusOnly: !document.querySelector('#ptyFocusFlow button,#ptyFocusFlow a,#ptyFocusFlow input,#ptyFocusFlow textarea,#ptyFocusFlow select'),
+      backgroundInert: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
+      terminalCreates: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+    }))()`);
+    if (ptyFocus.lanes !== 3 || !ptyFocus.statusOnly || !ptyFocus.backgroundInert || ptyFocus.terminalCreates !== 0) {
+      throw new Error(`PTY 집중 모드의 작업 흐름 계약 실패: ${JSON.stringify(ptyFocus)}`);
+    }
+    await win.webContents.executeJavaScript(`window.WhiteboxApp.closePtyFocus({ restoreFocus: false })`);
+    await waitFor(win, `!window.WhiteboxApp.state.ptyFocusSessionId
+      && document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')`,
+    'PTY 집중 모드에서 작업 현황으로 돌아오지 못했습니다.');
 
     const toolViews = await win.webContents.executeJavaScript(`(async () => {
       const checks = {};
-      for (const [view, selector] of [['waiting','#attentionInbox'],['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
+      for (const [view, selector] of [['waiting','#attentionInbox'],['settings','#settingsSection']]) {
         window.WhiteboxApp.selectView(view);
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         checks[view] = document.body.dataset.currentView === view && !document.querySelector(selector)?.classList.contains('hidden');
         if (view === 'waiting') checks.waitingHasNoInternalKeys = !document.querySelector(selector)?.textContent.includes('management.category.');
       }
+      checks.removedRoutesAbsent = !document.querySelector('[data-view="runtime"],[data-view="tmux"],'
+        + '#terminalSection,#automationOverview,#tmuxSection,#tmuxCreateModal');
       return checks;
     })()`);
     if (Object.values(toolViews).some(value => !value)) throw new Error(`기존 기능 화면 전환 실패: ${JSON.stringify(toolViews)}`);
 
     const auditOutputs = [];
-    for (const [view, selector] of [['waiting','#attentionInbox'],['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
+    for (const [view, selector] of [['waiting','#attentionInbox'],['settings','#settingsSection']]) {
       auditOutputs.push(await capture(win, `round43-${view}.png`, view, selector));
     }
 
@@ -360,11 +388,8 @@ app.whenReady().then(async () => {
       const card = document.querySelector('#sessionGrid .memory-record');
       const cardRect = card?.getBoundingClientRect();
       const mobileNav = document.querySelector('#projectViewTabs');
-      const mobileNavRect = mobileNav?.getBoundingClientRect();
-      const activeNavButton = mobileNav?.querySelector('[data-view].active');
-      const activeNavRect = activeNavButton?.getBoundingClientRect();
-      const moreButton = document.querySelector('#mobileMoreBtn');
-      const moreRect = moreButton?.getBoundingClientRect();
+      const navButtons = [...(mobileNav?.querySelectorAll('[data-view]') || [])];
+      const sidebar = document.querySelector('.sidebar');
       const usableBottom = window.innerHeight;
       const visibleCardHeight = cardRect ? Math.max(0, Math.min(cardRect.bottom, usableBottom) - Math.max(cardRect.top, 0)) : 0;
       return {
@@ -384,21 +409,27 @@ app.whenReady().then(async () => {
           visibility: getComputedStyle(card).visibility,
           opacity: Number(getComputedStyle(card).opacity || 1),
         } : null,
-        mobileNavVisible: Boolean(mobileNavRect && activeNavRect && moreRect
-          && getComputedStyle(mobileNav).display !== 'none'
-          && mobileNavRect.width > 0 && mobileNavRect.height >= 44
-          && activeNavRect.width >= 44 && activeNavRect.height >= 44
-          && moreRect.width >= 44 && moreRect.height >= 44
-          && mobileNavRect.top >= 0 && mobileNavRect.bottom <= window.innerHeight),
+        retiredNavigation: Boolean(mobileNav?.getAttribute('aria-label')?.trim()
+          && navButtons.length === 3
+          && navButtons.every(item => item.getClientRects().length === 0
+            && item.getAttribute('aria-label')?.trim()
+            && String(item.getAttribute('aria-controls') || '').split(/\\s+/).filter(Boolean)
+              .every(id => document.getElementById(id)))),
+        sidebarHidden: getComputedStyle(sidebar).display === 'none',
+        deletedNavigationAbsent: !document.querySelector('#mobileMoreBtn,#mobileToolsMenu,#advancedToolsNav,'
+          + '#automationOverview,#tmuxSection,#tmuxCreateModal'),
       };
     })()`);
     const mobileOutput = await capture(win, 'whitebox-philosophical-memory-mobile.png', 'active', '#sessionSection');
-    if (mobileMetrics.view !== 'active' || mobileMetrics.activeNav !== 'active' || mobileMetrics.sectionOpacity < .99 || mobileMetrics.pageOverflow || mobileMetrics.stageOverflow || !mobileMetrics.firstCardVisible || !mobileMetrics.mobileNavVisible) {
+    if (mobileMetrics.view !== 'active' || mobileMetrics.activeNav !== 'active'
+      || mobileMetrics.sectionOpacity < .99 || mobileMetrics.pageOverflow || mobileMetrics.stageOverflow
+      || !mobileMetrics.firstCardVisible || !mobileMetrics.retiredNavigation || !mobileMetrics.sidebarHidden
+      || !mobileMetrics.deletedNavigationAbsent) {
       throw new Error(`기억 모바일 계약 실패: ${JSON.stringify(mobileMetrics)}`);
     }
 
     console.log('쉬운 표현 UI 및 기능 연결 검증 통과');
-    console.log(JSON.stringify({ nowMetrics, memoryMetrics, memoryDrawer, toolViews, mobileMetrics }, null, 2));
+    console.log(JSON.stringify({ nowMetrics, memoryMetrics, deletedSurfaces, ptyFocus, toolViews, mobileMetrics }, null, 2));
     console.log(nowOutput);
     console.log(memoryOutput);
     console.log(mobileOutput);

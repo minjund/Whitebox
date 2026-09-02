@@ -159,30 +159,6 @@
     display: none!important;
   }
 
-  .nav-group-label {
-    display: none!important;
-  }
-
-  .advanced-tools-nav {
-    display: contents;
-  }
-
-  .advanced-tools-nav > summary {
-    display: none;
-  }
-
-  .advanced-tools-list {
-    display: contents!important;
-  }
-
-  .advanced-tools-list .nav-item {
-    display: none;
-  }
-
-  .advanced-tools-list .runtime-nav-item {
-    display: grid;
-  }
-
   .nav-item {
     min-width: 0;
     height: 54px;
@@ -286,41 +262,8 @@
     margin-right: 13px;
   }
 
-  .conversation-preview {
-    margin-left: 13px;
-    margin-right: 13px;
-  }
-
-  .context-meter {
-    margin-left: 13px;
-    margin-right: 13px;
-  }
-
-  .token-row {
-    margin-left: 13px;
-    margin-right: 13px;
-  }
-
   .card-footer {
     padding-inline: 13px;
-  }
-
-  .token-row>div {
-    padding-inline: 6px;
-  }
-
-  .chat-row {
-    grid-template-columns: 29px minmax(0,1fr);
-    gap: 8px;
-  }
-
-  .lifecycle-event {
-    grid-template-columns: 23px minmax(0,1fr);
-  }
-
-  .lifecycle-event time {
-    grid-column: 2;
-    margin-top: -6px;
   }
 
   .form-grid {
@@ -401,20 +344,6 @@
     grid-template-columns: 1fr;
   }
 
-  .chat-history-head {
-    align-items: flex-start;
-  }
-
-  .subagent-call-moment,
-  .subagent-call-event {
-    margin-left: 0;
-  }
-
-  .subagent-call-moment,
-  .subagent-call-event {
-    width: 100%;
-  }
-
   .json-object>div {
     grid-template-columns: 1fr;
   }
@@ -466,39 +395,6 @@
   .status-pill {
     padding-inline: 6px;
     letter-spacing: 0;
-  }
-
-  .token-row span {
-    font-size: 12px;
-  }
-
-  .token-row b {
-    font-size: 12px;
-  }
-
-  .chat-row {
-    grid-template-columns: 25px minmax(0,1fr);
-    gap: 7px;
-  }
-
-  .chat-avatar {
-    width: 25px;
-    height: 25px;
-    border-radius: 7px;
-  }
-
-  .subagent-call-event {
-    grid-template-columns: 32px minmax(0,1fr);
-  }
-
-  .subagent-call-anchor {
-    grid-template-columns: 26px minmax(0,1fr);
-    padding: 9px 10px;
-  }
-
-  .subagent-call-action {
-    grid-column: 2;
-    justify-items: start;
   }
 
   .main-stage {

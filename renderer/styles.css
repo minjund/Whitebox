@@ -42,9 +42,7 @@
   overflow: visible;
 }
 
-body[data-current-view="runtime"] .sidebar>.workspace-section,
 body[data-current-view="terminal"] .sidebar>.workspace-section,
-body[data-current-view="tmux"] .sidebar>.workspace-section,
 body[data-current-view="settings"] .sidebar>.workspace-section {
   display: none;
 }
@@ -163,14 +161,6 @@ body[data-current-view="settings"] .sidebar>.workspace-section {
   font-weight: 700;
   letter-spacing: .18em;
   font-size: 12px;
-}
-
-.nav-group-label {
-  margin: 18px 10px 6px;
-  color: #718096;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .08em;
 }
 
 html[data-motion="full"] {

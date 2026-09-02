@@ -15,22 +15,17 @@
   [
     "createCore",
     "createProviderVisibility",
-    "createAttentionPopupSettings",
     "createDashboard",
-    "createRuntimeOverview",
     "createGraphModel",
     "createGraphView",
     "createGraphLayout",
     "createGraphOrchestration",
-    "createTmuxRenderer",
     "createAgentActions",
     "createManagement",
     "createSessionRenderer",
-    "createDrawerData",
-    "createDrawerContent",
+    "createPtyFocusMode",
     "createDrawer",
     "createRunModal",
-    "createPtyFocusMode",
     "createQualityEnhancements",
     "createNavigationEventBindings",
     "createSessionEventBindings",
@@ -40,7 +35,7 @@
   ].forEach(install);
   window.WhiteboxApp = app;
 
-  const { $, esc, state, loadGuideState, loadQualityState = () => {}, saveDashboardPreferences = () => {}, loadProviderVisibility, loadAttentionPopupSettings = () => {}, bindAttentionPopupSettings = () => {}, projectVisibleSnapshot, visibleSnapshot, isProviderVisible, bindEvents, render, timeOnly, loadSessionDetail, renderUpdateSettings, syncViewChrome, selectView, openDrawer, openSubagentConversation, closeDrawer, toast, refreshProviderUsage = async () => null } = app;
+  const { $, esc, state, loadGuideState, loadQualityState = () => {}, saveDashboardPreferences = () => {}, loadProviderVisibility, projectVisibleSnapshot, visibleSnapshot, isProviderVisible, bindEvents, render, timeOnly, renderUpdateSettings, syncViewChrome, selectView, canOpenPtyFocus, isPtyFocusActive, ownerRootSession, openPtyFocusVerified, closePtyFocus, syncPendingPtyFocus = () => false, toast, refreshProviderUsage = async () => null } = app;
 
   let initializationError = "";
   const setConnectedAt = (value) => {
@@ -108,7 +103,6 @@
     state.providers = bootstrap.providers || [];
     state.providerMap = new Map(state.providers.map((provider) => [provider.id, provider]));
     loadProviderVisibility(bootstrap.providerVisibility);
-    loadAttentionPopupSettings(bootstrap.attentionPopups);
     state.availability = bootstrap.availability || {};
     state.sourcePlugins = bootstrap.sourcePlugins || [];
     state.sourcePluginSettings = bootstrap.sourcePluginSettings || state.sourcePluginSettings;
@@ -119,66 +113,47 @@
     state.platform = bootstrap.platform || state.platform;
     state.versions = bootstrap.versions || {};
     state.update = latestUpdateState || bootstrap.update || { status: "idle", currentVersion: state.versions.app || "" };
-    const safeAttentionDrawerOptions = {
-      createTerminalIfMissing: false,
-      mountTerminal: false,
-      attentionActivation: true,
-      acknowledge: false,
-      focus: false,
-    };
-    const showAttentionSession = (session) => {
+    // A failed or non-PTY activation falls back to the existing work-status
+    // queue. It must not guess another terminal just to show context.
+    let passiveFocusGeneration = 0;
+    const showAttentionSession = (session = null) => {
+      if (isPtyFocusActive?.()) return false;
+      const root = ownerRootSession?.(session);
+      if (root && String(state.ptyFocusSessionId || "") === String(root.id || "")) {
+        closePtyFocus?.({ restore: false, suppressManualSelection: true });
+      }
       selectView("waiting");
-      if (session.parentId) openSubagentConversation(session.id, safeAttentionDrawerOptions);
-      else openDrawer(session.id, safeAttentionDrawerOptions);
+      return true;
     };
     const attentionActivation = window.WhiteboxAttentionActivation?.createAttentionActivationController({
       getSessions: () => state.snapshot?.sessions || [],
       isProviderVisible,
+      canOpenPty: session => canOpenPtyFocus?.(ownerRootSession?.(session)) === true,
       acknowledge: result => window.whitebox.ackAttentionActivation?.(result),
       showSession: showAttentionSession,
       openPty: async (session, activation, operation) => {
-        const terminal = window.WhiteboxTerminal;
-        if (!terminal?.agentTargets || !terminal?.openForAgent) return { opened: false, retryable: true };
         try {
           if (!operation?.isCurrent?.()) return { opened: false, retryable: true };
-          const opened = await terminal.openForAgent(
-            session,
-            activation.targetId,
-            "",
-            {
-              focus: activation.preservePopupFocus !== true,
-              isCurrent: operation.isCurrent,
-              attentionActivation: true,
-              onTargetReady: target => {
-                if (!operation.isCurrent()) return;
-                if (activation.terminalId && target?.terminalId !== activation.terminalId) {
-                  throw new Error("The requested AI terminal changed before it could be opened.");
-                }
-                if ($("#detailDrawer")?.classList.contains("open")) closeDrawer?.(false);
-                selectView("terminal");
-              },
-            },
-          );
+          const outcome = await openPtyFocusVerified?.(session.id, {
+            targetId: activation.targetId,
+            terminalId: activation.terminalId,
+            focus: true,
+            attentionActivation: true,
+            isCurrent: operation.isCurrent,
+          }) || { opened: false, retryable: true };
           if (!operation.isCurrent()) return { opened: false, retryable: true };
-          if (activation.terminalId && opened?.terminalId !== activation.terminalId) {
-            throw new Error("The requested AI terminal changed before it could be opened.");
-          }
-          document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
-          return { opened: true, retryable: false };
+          if (outcome.opened) document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
+          return outcome;
         } catch (error) {
           if (!["DELIVERY_REJECTED", "ATTENTION_ACTIVATION_CANCELLED"].includes(error?.code)) {
             window.WhiteboxRendererUtils.reportRecoverableError("attention-activation-open-pty", error);
           }
-          const refreshedTargets = terminal.agentTargets(session);
-          return {
-            opened: false,
-            retryable: Boolean(activation.targetId || activation.terminalId || refreshedTargets.length === 0),
-          };
+          return { opened: false, retryable: true };
         }
       },
       onError: (scope, error) => window.WhiteboxRendererUtils.reportRecoverableError(scope, error),
     });
-    const handleAttentionRequested = (payload) => {
+    const handleAttentionRequested = async (payload) => {
       if (payload?.activationId && attentionActivation) {
         attentionActivation.handle(payload);
         return;
@@ -186,52 +161,51 @@
       const sessionId = String(payload && payload.sessionId || '');
       const event = payload?.event === 'completed' ? 'completed' : payload?.event === 'terminal' ? 'terminal' : 'attention';
       const session = (state.snapshot && state.snapshot.sessions || []).find(item => item.id === sessionId);
-      if (session && !session.sourcePluginId && !isProviderVisible(session.provider)) return;
-      if (event === 'terminal') {
-        if (!session) {
-          toast(t('bootstrap.opened_attention_list'));
-          return;
-        }
-        const terminal = window.WhiteboxTerminal;
-        if (session.parentId || session.sourcePluginId || session.controlCapabilities?.pty === false
-          || session.presentation?.conversationSurface === 'transcript'
-          || !terminal?.openForAgent) {
-          showAttentionSession(session);
-          return;
-        }
-        Promise.resolve(terminal.openForAgent(session, '', '', {
-          focus: true,
-          attentionActivation: true,
-          onTargetReady: () => {
-            if ($('#detailDrawer')?.classList.contains('open')) closeDrawer?.(false);
-            selectView('terminal');
-          },
-        })).catch(error => {
-          window.WhiteboxRendererUtils.reportRecoverableError('attention-popup-open-terminal', error);
-          showAttentionSession(session);
-          toast(window.WhiteboxI18n.errorText(error, 'agent.open_terminal_failed'));
-        });
+      if (session && !isProviderVisible(session.provider)) return;
+      if (!session) {
+        selectView(event === 'completed' ? 'active' : 'waiting');
+        toast(t("bootstrap.opened_attention_list"));
         return;
       }
-      selectView(event === 'completed' ? 'active' : 'waiting');
-      if (session) {
-        const options = event === 'attention'
-          ? safeAttentionDrawerOptions
-          : { tab: 'summary' };
-        if (session.parentId) openSubagentConversation(session.id, options);
-        else openDrawer(session.id, options);
-      } else toast(t("bootstrap.opened_attention_list"));
+      const generation = ++passiveFocusGeneration;
+      const isCurrent = () => generation === passiveFocusGeneration;
+      try {
+        // Old/native notifications do not carry a delivery token or a target
+        // identity. They may reuse the sole existing PTY, but must never guess
+        // among terminals or create/fork a new one as a side effect of opening.
+        const outcome = await openPtyFocusVerified?.(session.id, {
+          focus: true,
+          attentionActivation: true,
+          isCurrent,
+        });
+        if (outcome?.opened) return;
+      } catch (error) {
+        window.WhiteboxRendererUtils.reportRecoverableError("legacy-attention-open-pty", error);
+      }
+      if (!isCurrent() || isPtyFocusActive?.()) return;
+      showAttentionSession(session);
+      if (event === 'completed') selectView('active');
+      toast(t("agent.open_terminal_failed"));
     };
-    const handleTerminalPromptResolved = (payload) => {
+    const handleTerminalPromptResolved = async (payload) => {
+      const generation = ++passiveFocusGeneration;
+      const isCurrent = () => generation === passiveFocusGeneration;
       const resolution = window.WhiteboxTerminal?.resolveAttentionPrompt?.(payload);
       if (!resolution?.ok || !resolution.requiresText) return;
       const session = (state.snapshot?.sessions || []).find(item => item.id === resolution.sessionId);
       if (!session || session.parentId || !isProviderVisible(session.provider)) return;
-      selectView("terminal");
-      Promise.resolve(window.WhiteboxTerminal.openForAgent(session, resolution.targetId)).catch(error => {
-        window.WhiteboxRendererUtils.reportRecoverableError("terminal-prompt-follow-up-focus", error);
-        toast(window.WhiteboxI18n.errorText(error, "agent.open_terminal_failed"));
+      const outcome = await openPtyFocusVerified?.(session.id, {
+        targetId: resolution.targetId,
+        terminalId: resolution.terminalId,
+        focus: true,
+        attentionActivation: true,
+        isCurrent,
       });
+      if (!isCurrent()) return;
+      if (!outcome?.opened && !isPtyFocusActive?.()) {
+        showAttentionSession();
+        toast(t("agent.open_terminal_failed"));
+      }
     };
     if (window.whitebox.onAttentionRequested) window.whitebox.onAttentionRequested(handleAttentionRequested);
     if (window.whitebox.onTerminalPromptResolved) window.whitebox.onTerminalPromptResolved(handleTerminalPromptResolved);
@@ -240,9 +214,9 @@
       showInitializationError(detail);
       toast(detail);
     });
-    bindAttentionPopupSettings();
     bindEvents();
     render();
+    syncPendingPtyFocus();
     updateRenderingReady = true;
     if (latestUpdateState) {
       state.update = latestUpdateState;
@@ -257,6 +231,7 @@
     app.initialized = true;
     setConnectedAt(state.snapshot && state.snapshot.generatedAt);
     let snapshotRenderFrame = 0;
+    let terminalInventoryRenderFrame = 0;
     let latestSnapshot = null;
     window.whitebox.onSnapshot((snapshot) => {
       state.rawSnapshot = snapshot;
@@ -270,22 +245,26 @@
       snapshotRenderFrame = requestAnimationFrame(() => {
         snapshotRenderFrame = 0;
         const renderedSnapshot = latestSnapshot;
+        syncPendingPtyFocus();
         render();
         saveDashboardPreferences();
-        if (state.selectedId && $("#detailDrawer").classList.contains("open")) {
-          const card = (renderedSnapshot.sessions || []).find((session) => session.id === state.selectedId);
-          const detail = state.details.get(state.selectedId);
-          // Queue a follow-up even during the very first full-history read.
-          // With no cached detail yet, a newer snapshot is still evidence that
-          // the in-flight response can be stale.
-          if (card && (!detail || card.updatedAt !== detail.updatedAt)) {
-            loadSessionDetail(state.selectedId, true, card.updatedAt);
-          }
-        }
+        syncPendingPtyFocus();
       });
     });
-    window.addEventListener("whitebox:terminal-inventory-changed", () => attentionActivation?.retry());
-    window.addEventListener("whitebox:terminal-manual-selection", () => attentionActivation?.userNavigated());
+    window.addEventListener("whitebox:terminal-inventory-changed", () => {
+      attentionActivation?.retry();
+      if (!state.snapshot || terminalInventoryRenderFrame) return;
+      terminalInventoryRenderFrame = requestAnimationFrame(() => {
+        terminalInventoryRenderFrame = 0;
+        syncPendingPtyFocus();
+        render("terminal-inventory");
+        syncPendingPtyFocus();
+      });
+    });
+    window.addEventListener("whitebox:terminal-manual-selection", () => {
+      passiveFocusGeneration += 1;
+      attentionActivation?.userNavigated();
+    });
     if (window.whitebox.rendererReady) await window.whitebox.rendererReady();
   }
 

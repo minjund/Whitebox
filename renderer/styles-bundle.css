@@ -1,4 +1,4 @@
-@layer theme-critical, vendor, foundation, components, cards, overlays, features, product, management, quality, responsive, readability, control-room, philosophical, novice, rhythm, studio, polish, theme, drawer-terminal;
+@layer theme-critical, vendor, foundation, components, cards, overlays, features, product, management, quality, responsive, readability, control-room, philosophical, novice, rhythm, studio, polish, theme;
 
 @import url("styles-theme-critical.css") layer(theme-critical);
 @import url("../node_modules/@xterm/xterm/css/xterm.css") layer(vendor);
@@ -16,7 +16,6 @@
 @import url("styles-run-composer.css") layer(features);
 @import url("styles-product.css") layer(product);
 @import url("styles-management.css") layer(management);
-@import url("styles-runtime-overview.css") layer(management);
 @import url("styles-onboarding.css") layer(product);
 @import url("styles-settings.css") layer(product);
 @import url("styles-quality.css") layer(quality);
@@ -32,7 +31,6 @@
 @import url("styles-studio-shell.css") layer(studio);
 @import url("styles-polish.css") layer(polish);
 @import url("styles-theme.css") layer(theme);
-@import url("styles-drawer-terminal.css") layer(drawer-terminal);
 
 @layer control-room {
   .downstream-stack .child-session .agent-flow-session-title,
@@ -72,7 +70,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--provider, #8fa2b7) 8%, transparent);
     color: var(--text-muted, #a9b4c2);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -80,7 +78,7 @@
 
   .session-dimension.source { color: var(--text, #eef3f8); font-weight: 700; }
   .session-dimension.provider { border-style: dashed; }
-  .session-dimensions.compact .session-dimension { max-width: 150px; min-height: 19px; padding: 1px 6px; font-size: 10px; }
+  .session-dimensions.compact .session-dimension { max-width: 150px; min-height: 20px; padding: 1px 6px; font-size: 12px; }
   .memory-record-intent .session-dimensions { margin-top: 6px; }
 }
 

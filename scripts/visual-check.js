@@ -1,1185 +1,401 @@
 'use strict';
 
+// Visual coverage for the current project-first shell and full PTY focus UX.
+// The old drawer/conversation/tmux-detail screenshots were intentionally
+// retired with those product surfaces.
+const { app, BrowserWindow, session: electronSession } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const localTerminalType = process.platform === 'win32' ? 'powershell' : 'shell';
+const { fileURLToPath, pathToFileURL } = require('url');
 
-function markerCommand(marker) {
-  return process.platform === 'win32' ? `Write-Output ${marker}` : `printf '${marker}\\n'`;
-}
-
-function javascriptLiteral(value) {
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) throw new TypeError('JavaScript 리터럴로 직렬화할 수 없는 값입니다.');
-  return serialized.replace(/[<>/\u2028\u2029]/g, character => (
-    `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
-  ));
-}
-
-const isolatedBridgeHome = fs.mkdtempSync(path.join(os.tmpdir(), `whitebox-visual-${process.pid}-`));
-const isolatedUserData = fs.mkdtempSync(path.join(os.tmpdir(), `whitebox-visual-user-${process.pid}-`));
-process.env.WHITEBOX_TEST_INSTANCE = '1';
-process.env.WHITEBOX_BRIDGE_HOME = isolatedBridgeHome;
-const { app, BrowserWindow } = require('electron');
 app.disableHardwareAcceleration();
-app.setPath('userData', isolatedUserData);
-app.once('quit', () => {
-  try { fs.rmSync(isolatedBridgeHome, { recursive: true, force: true }); } catch {}
-  try { fs.rmSync(isolatedUserData, { recursive: true, force: true }); } catch {}
+app.on('window-all-closed', () => {});
+
+const root = path.resolve(__dirname, '..');
+const outputDir = path.join(root, 'artifacts');
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-visual-pty-'));
+const removedSelectors = [
+  '#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer',
+  '#drawerTerminalSurface', '#ptyFocusChildModal', '#mobileMoreBtn',
+  '#mobileToolsMenu', '#advancedToolsNav',
+  '#terminalSection', '#terminalHistoryPanel', '#terminalHistoryList',
+  '#automationOverview', '#tmuxSection', '#tmuxCreateModal',
+];
+fs.mkdirSync(outputDir, { recursive: true });
+app.setPath('userData', userData);
+
+function assert(value, message) {
+  if (!value) throw new Error(message);
+}
+
+function wait(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function value(win, expression) {
+  return win.webContents.executeJavaScript(expression);
+}
+
+async function waitFor(win, expression, message, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      if (await value(win, expression)) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(50);
+  }
+  throw new Error(message + (lastError ? ' (' + lastError.message + ')' : ''));
+}
+
+async function capture(win, name) {
+  const output = path.join(outputDir, name);
+  fs.writeFileSync(output, (await win.webContents.capturePage()).toPNG());
+  return output;
+}
+
+function installWorktreeDependencyRedirect() {
+  const configured = String(process.env.WHITEBOX_TEST_NODE_MODULES || '').trim();
+  const dependencyRoot = configured ? path.resolve(configured) : '';
+  const localRoot = path.join(root, 'node_modules');
+  if (!dependencyRoot || !fs.existsSync(dependencyRoot) || fs.existsSync(localRoot)) return;
+  electronSession.defaultSession.webRequest.onBeforeRequest({ urls: ['file:///*'] }, (details, callback) => {
+    let requested = '';
+    try { requested = fileURLToPath(details.url); } catch {}
+    const relative = requested ? path.relative(localRoot, requested) : '..';
+    const alternate = relative && relative !== '..' && !relative.startsWith('..' + path.sep)
+      && !path.isAbsolute(relative) ? path.join(dependencyRoot, relative) : '';
+    callback(alternate && fs.existsSync(alternate) ? { redirectURL: pathToFileURL(alternate).href } : {});
+  });
+}
+
+async function selectProject(win) {
+  await value(win, "(()=>{const app=window.WhiteboxApp;"
+    + "const root=(app.state.snapshot?.sessions||[]).find(item=>item.id==='fixture-root');"
+    + "app.state.workspace=root?.originCwd||root?.cwd||'D:\\\\fixture';app.state.view='all';"
+    + "app.state.graphFocusId=null;app.state.search='';app.state.providerFilters?.clear?.();"
+    + "app.renderWorkspaces?.();app.renderSessions?.('visual-project');})()");
+  await waitFor(win, "Boolean(document.querySelector('[data-pty-focus-trigger=\"fixture-root\"]'))",
+    '선택한 프로젝트의 PTY 진입점이 표시되지 않았습니다.');
+}
+
+async function run() {
+  installWorktreeDependencyRedirect();
+  const rendererErrors = [];
+  const outputs = [];
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 940,
+    show: false,
+    backgroundColor: '#08111b',
+    webPreferences: {
+      preload: path.join(__dirname, 'interaction-fixture-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  win.webContents.on('console-message', (_event, details, legacyMessage) => {
+    const level = typeof details === 'object' ? details.level : details;
+    const message = typeof details === 'object' ? details.message : String(legacyMessage || '');
+    if (Number(level) >= 3) rendererErrors.push(message);
+  });
+
+  try {
+    await win.loadFile(path.join(root, 'renderer', 'index.html'));
+    await waitFor(win,
+      "Boolean(window.WhiteboxApp?.initialized&&window.WhiteboxTerminal&&window.interactionTest)",
+      'visual renderer가 준비되지 않았습니다.', 20000);
+
+    await value(win, "(()=>{const app=window.WhiteboxApp;app.state.workspace='all';"
+      + "app.state.view='all';app.renderWorkspaces?.();app.renderSessions?.('visual-project-selection');})()");
+    await wait(250);
+    const projectSelection = await value(win, "(()=>{"
+      + "const prompt=document.querySelector('#projectSelectionPrompt');const rect=prompt?.getBoundingClientRect();"
+      + "return{visible:Boolean(rect&&rect.width>0&&rect.height>0),"
+        + "title:prompt?.querySelector('h2')?.textContent.trim()||'',"
+        + "motion:[...(prompt?.querySelectorAll('.project-selection-orbit,.project-selection-stack,"
+          + ".project-selection-scan')||[])].filter(node=>getComputedStyle(node).animationName!=='none').length,"
+        + "noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2,"
+        + "removedAbsent:" + JSON.stringify(removedSelectors)
+          + ".every(selector=>!document.querySelector(selector))};})()");
+    assert(projectSelection.visible && projectSelection.motion >= 3 && projectSelection.noOverflow
+      && projectSelection.removedAbsent,
+    '프로젝트 선택 화면 시각 계약이 올바르지 않습니다: ' + JSON.stringify(projectSelection));
+    outputs.push(await capture(win, 'whitebox-dashboard.png'));
+
+    await selectProject(win);
+    await wait(250);
+    const dashboard = await value(win, "(()=>{const overview=document.querySelector('#liveSection');"
+      + "const rect=overview?.getBoundingClientRect();return{"
+        + "visible:Boolean(rect&&rect.width>0&&rect.height>0),"
+        + "rootCards:document.querySelectorAll('[data-control-session]').length,"
+        + "visibleRootCards:[...document.querySelectorAll('[data-control-session]')]"
+          + ".filter(card=>card.getBoundingClientRect().width>0&&card.getBoundingClientRect().height>0).length,"
+        + "rootTrigger:Boolean(document.querySelector('[data-pty-focus-trigger=\"fixture-root\"]')),"
+        + "helperNodes:document.querySelectorAll('[data-open-subagent-chat]').length,"
+        + "noOverflow:overview?overview.scrollWidth<=overview.clientWidth+2:false,"
+        + "noConversationComposer:!document.querySelector('#operationsOverview [data-conversation-shell],"
+          + "#operationsOverview .conversation-composer'),"
+        + "removedNavigationAbsent:!document.querySelector('[data-view=\"runtime\"],"
+          + "[data-view=\"tmux\"],#advancedToolsNav')};})()");
+    assert(dashboard.visible && dashboard.rootCards >= 1 && dashboard.visibleRootCards >= 1 && dashboard.rootTrigger
+      && dashboard.helperNodes >= 1 && dashboard.noOverflow && dashboard.noConversationComposer
+      && dashboard.removedNavigationAbsent,
+    '작업 현황 시각 계약이 올바르지 않습니다: ' + JSON.stringify(dashboard));
+    outputs.push(await capture(win, 'whitebox-control-room.png'));
+
+    await value(win, "(()=>{const app=window.WhiteboxApp;"
+      + "const base=app.state.snapshot.sessions.find(session=>session.id==='fixture-waiting');"
+      + "const input={...base,id:'fixture-input-required',externalId:'fixture-input-required-external',"
+        + "provider:'claude',title:'배포 방식 선택이 필요한 작업',status:'waiting',"
+        + "statusDetail:'내 선택을 기다리는 중',"
+        + "attention:{category:'required',required:true,actionable:true,kind:'question',"
+          + "summary:'안전한 배포 방식을 선택해 주세요.',requestText:'검증 후 배포할까요?',"
+          + "requestedAt:new Date().toISOString(),source:'input-tool',confidence:'high'},"
+        + "responseIntent:{category:'required',required:true,optional:false,"
+          + "requestText:'검증 후 배포할까요?',confidence:'high',source:'structured-input'},"
+        + "controlCapabilities:{...(base?.controlCapabilities||{}),sendInstruction:true}};"
+      + "const sessions=app.state.snapshot.sessions.filter(session=>session.id!==input.id).map(session=>{"
+        + "if(session.id==='fixture-failed')return{...session,attention:{category:'required',required:true,"
+          + "actionable:true,kind:'error',summary:session.statusDetail,requestText:'실패한 작업을 처리해 주세요.',"
+          + "requestedAt:new Date().toISOString(),source:'input-tool',confidence:'high'}};"
+        + "if(session.id==='fixture-paused-run')return{...session,attention:{category:'required',required:true,"
+          + "actionable:true,kind:'paused',summary:session.statusDetail,requestText:'멈춘 작업을 처리해 주세요.',"
+          + "requestedAt:new Date().toISOString(),source:'input-tool',confidence:'high'}};return session;});"
+      + "app.state.snapshot.sessions=[...sessions,input];"
+      + "app.selectViewFromUser?.('waiting',{motionKind:'filter'});"
+      + "if(app.state.view!=='waiting')app.selectView('waiting');else app.renderSessions?.('visual-waiting-states');})()");
+    await waitFor(win,
+      "window.WhiteboxApp.state.view==='waiting'"
+        + "&&!document.querySelector('#attentionInbox')?.classList.contains('hidden')",
+      '확인 대기 화면이 표시되지 않았습니다.');
+    const waitingCardIds = await value(win,
+      "[...document.querySelectorAll('#attentionInbox [data-management-session]')]"
+        + ".map(card=>card.dataset.managementSession)");
+    assert(['fixture-waiting', 'fixture-input-required', 'fixture-failed', 'fixture-paused-run']
+      .every(id => waitingCardIds.includes(id)),
+    '확인 대기 approval/input/failed/paused 카드가 모두 표시되지 않았습니다: '
+      + JSON.stringify(waitingCardIds));
+    await value(win, "(()=>{const details=document.querySelector('#attentionInbox .attention-more-cards');"
+      + "if(details)details.open=true;return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));})()");
+    const waiting = await value(win, "(()=>{const inbox=document.querySelector('#attentionInbox');"
+      + "const card=id=>inbox?.querySelector('[data-management-session=\"'+id+'\"]');"
+      + "const approval=card('fixture-waiting'),input=card('fixture-input-required'),"
+        + "failed=card('fixture-failed'),paused=card('fixture-paused-run');"
+      + "const quick=[...(approval?.querySelectorAll('[data-attention-quick]')||[])];"
+      + "const failedPrimary=failed?.querySelector('.attention-primary-action[data-open-session=\"fixture-failed\"]');"
+      + "const pausedPrimary=paused?.querySelector('.attention-primary-action[data-open-session=\"fixture-paused-run\"]');"
+      + "const hiddenControls=[...inbox.querySelectorAll('.management-control-buttons')].flatMap(group=>"
+        + "[...group.querySelectorAll('button')].map(button=>{const rect=button.getBoundingClientRect();"
+          + "return{display:getComputedStyle(group).display,width:rect.width,height:rect.height};}));"
+      + "const visibleActions=[approval?.querySelector('[data-attention-quick].approve'),failedPrimary,pausedPrimary];"
+      + "const inside=element=>{const item=element?.getBoundingClientRect(),host=element?.closest('.attention-card')"
+        + "?.getBoundingClientRect();return Boolean(item&&host&&item.width>0&&item.height>0"
+          + "&&item.left>=host.left-1&&item.right<=host.right+1);};"
+      + "return{visible:[approval,input,failed,paused].every(item=>{const rect=item?.getBoundingClientRect();"
+        + "return rect&&rect.width>0&&rect.height>0;}),quickActions:quick.length,"
+        + "approve:Boolean(approval?.querySelector('[data-attention-quick].approve')),"
+        + "named:quick.every(button=>button.textContent.trim()&&button.dataset.attentionQuick),"
+        + "inputComposer:Boolean(input?.querySelector('[data-agent-command-form]')"
+          + "&&input?.querySelector('[data-agent-command-draft]')),"
+        + "failurePtyActions:Boolean(failedPrimary&&pausedPrimary),"
+        + "legacyControlsHidden:hiddenControls.length>=4&&hiddenControls.every(control=>"
+          + "control.display==='none'&&control.width===0&&control.height===0),"
+        + "controlsInside:visibleActions.every(inside),"
+        + "states:[approval,input,failed,paused].map(item=>[...item.classList]),"
+        + "inboxLabelled:Boolean(inbox?.getAttribute('aria-label')?.trim()"
+          + "||(inbox?.getAttribute('aria-labelledby')"
+            + "&&document.getElementById(inbox.getAttribute('aria-labelledby')))),"
+        + "noOverflow:Boolean(inbox&&inbox.scrollWidth<=inbox.clientWidth+2),"
+        + "removedAbsent:" + JSON.stringify(removedSelectors)
+          + ".every(selector=>!document.querySelector(selector))};})()");
+    assert(waiting.visible && waiting.quickActions >= 2 && waiting.approve && waiting.named
+      && waiting.inputComposer && waiting.failurePtyActions && waiting.legacyControlsHidden
+      && waiting.controlsInside && waiting.inboxLabelled && waiting.noOverflow && waiting.removedAbsent,
+    '확인 대기/관리 카드 시각 계약이 올바르지 않습니다: ' + JSON.stringify(waiting));
+    outputs.push(await capture(win, 'whitebox-review-waiting.png'));
+    await value(win, "document.querySelector('[data-management-session=\"fixture-input-required\"]')"
+      + "?.scrollIntoView({block:'center',behavior:'auto'})");
+    await wait(120);
+    outputs.push(await capture(win, 'whitebox-review-input.png'));
+    await value(win, "document.querySelector('[data-management-session=\"fixture-failed\"]')"
+      + "?.scrollIntoView({block:'center',behavior:'auto'})");
+    await wait(120);
+    outputs.push(await capture(win, 'whitebox-review-management.png'));
+
+    await selectProject(win);
+    win.setContentSize(480, 720);
+    await wait(300);
+    const compactDashboard = await value(win, "(()=>{const nav=document.querySelector('#projectContextNav');"
+      + "const cards=[...document.querySelectorAll('[data-control-session]')];"
+      + "const buttons=[...document.querySelectorAll('#projectViewTabs [data-view]')];"
+      + "const newRun=document.querySelector('#newRunBtn');const rootPty=[...document.querySelectorAll("
+        + "'[data-pty-focus-trigger=\"fixture-root\"]')].find(node=>node.getBoundingClientRect().height>0);"
+      + "return{width:innerWidth,height:innerHeight,navPosition:getComputedStyle(nav).position,"
+        + "sidebarHidden:getComputedStyle(document.querySelector('.sidebar')).display==='none',"
+        + "buttons:buttons.length,retiredTabsHidden:buttons.every(button=>getComputedStyle(button).display==='none'),"
+        + "primaryTouchTargets:Boolean(newRun?.getBoundingClientRect().height>=44"
+          + "&&rootPty?.getBoundingClientRect().height>=38),"
+        + "rootCards:cards.length,visibleRootCards:cards.filter(card=>card.getBoundingClientRect().width>0"
+          + "&&card.getBoundingClientRect().height>0).length,"
+        + "noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2,"
+        + "removedAbsent:" + JSON.stringify(removedSelectors)
+          + ".every(selector=>!document.querySelector(selector))};})()");
+    assert(compactDashboard.width === 480 && compactDashboard.navPosition === 'sticky'
+      && compactDashboard.sidebarHidden && compactDashboard.buttons === 3
+      && compactDashboard.retiredTabsHidden && compactDashboard.primaryTouchTargets
+      && compactDashboard.rootCards >= 1
+      && compactDashboard.visibleRootCards >= 1 && compactDashboard.noOverflow
+      && compactDashboard.removedAbsent,
+    'compact 작업 현황 시각 계약이 올바르지 않습니다: ' + JSON.stringify(compactDashboard));
+    outputs.push(await capture(win, 'whitebox-control-room-compact.png'));
+    win.setContentSize(1440, 940);
+    await wait(300);
+
+    await value(win, "document.querySelector('[data-view=\"settings\"]')?.click()");
+    await waitFor(win, "window.WhiteboxApp.state.view==='settings'", '설정 화면을 열지 못했습니다.');
+    const settings = await value(win, "(()=>{const section=document.querySelector('#settingsSection');"
+      + "const rect=section?.getBoundingClientRect();return{visible:Boolean(rect&&rect.width>0&&rect.height>0),"
+        + "language:Boolean(document.querySelector('#languageSelect')),"
+        + "themes:document.querySelectorAll('[data-theme-choice]').length,"
+        + "providers:document.querySelectorAll('[data-provider-visibility]').length,"
+        + "update:Boolean(document.querySelector('#updatePanel,#checkUpdateBtn')),"
+        + "noPopupSettings:!document.querySelector('#attentionPopupSettingsCard,#attentionPopupEnabled'),"
+        + "noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2};})()");
+    assert(settings.visible && settings.language && settings.themes >= 2 && settings.providers >= 1
+      && settings.update && settings.noPopupSettings && settings.noOverflow,
+    '설정 화면 시각 계약이 올바르지 않습니다: ' + JSON.stringify(settings));
+    outputs.push(await capture(win, 'whitebox-language-settings.png'));
+
+    await selectProject(win);
+    await value(win, "window.interactionTest.clearCalls();"
+      + "document.querySelector('[data-pty-focus-trigger=\"fixture-root\"]')?.click()");
+    await waitFor(win, "(()=>{const embedded=window.WhiteboxTerminal.embeddedState();"
+      + "return window.WhiteboxApp.state.ptyFocusSessionId==='fixture-root'"
+        + "&&window.WhiteboxApp.state.ptyFocusTargetId==='terminal-main'"
+        + "&&embedded.connected&&embedded.agentSessionId==='fixture-root'"
+        + "&&embedded.terminalId==='terminal-main'"
+        + "&&document.querySelector('#ptyFocusTerminalViewport .xterm');})()",
+    'full PTY focus 화면에 exact fixture PTY가 mount되지 않았습니다.');
+    const marker = 'PTY_VISUAL_' + Date.now();
+    await value(win, "window.interactionTest.emitTerminalData('terminal-main',"
+      + JSON.stringify('\r\n' + marker + '\r\n') + ")");
+    await value(win, "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+    await waitFor(win, "(()=>{const shell=document.querySelector('#ptyFocusTerminalShell');"
+      + "const empty=shell?.querySelector('[data-inline-terminal-empty]');"
+      + "const host=document.querySelector('#ptyFocusTerminalViewport>"
+        + ".terminal-screen[data-terminal-screen=\"terminal-main\"]');"
+      + "const style=host?getComputedStyle(host):null;return shell?.dataset.connection==='connected'"
+        + "&&empty?.classList.contains('hidden')&&getComputedStyle(empty).display==='none'"
+        + "&&style?.display!=='none'&&style?.visibility!=='hidden'"
+        + "&&host?.getBoundingClientRect().width>0&&host?.getBoundingClientRect().height>0"
+        + "&&[...(host?.querySelectorAll('.xterm-rows>div')||[])]"
+          + ".some(row=>(row.textContent||'').includes(" + JSON.stringify(marker) + "));})()",
+    'PTY focus 시각 화면이 live 출력을 표시하지 못했습니다.');
+
+    const focusMetrics = await value(win, "(()=>{const surface=document.querySelector('#ptyFocusSurface');"
+      + "const shell=document.querySelector('#ptyFocusTerminalShell');"
+      + "const empty=shell?.querySelector('[data-inline-terminal-empty]');"
+      + "const host=document.querySelector('#ptyFocusTerminalViewport>"
+        + ".terminal-screen[data-terminal-screen=\"terminal-main\"]');"
+      + "const hostStyle=host?getComputedStyle(host):null;"
+      + "const rect=surface?.getBoundingClientRect();const helper=document.querySelector("
+        + "'#ptyFocusTerminalViewport .xterm-helper-textarea');helper?.focus({preventScroll:true});"
+      + "return{fullViewport:Boolean(rect&&Math.abs(rect.left)<=1&&Math.abs(rect.top)<=1"
+        + "&&Math.abs(rect.right-innerWidth)<=1&&Math.abs(rect.bottom-innerHeight)<=1),"
+        + "surfaceInteractive:Boolean(surface&&!surface.inert"
+          + "&&surface.getAttribute('aria-hidden')==='false'),"
+        + "backgroundInert:Boolean(document.querySelector('#mainContent')?.inert"
+          + "&&document.querySelector('.sidebar')?.inert),"
+        + "flowLanes:surface?.querySelectorAll('.pty-focus-flow-lane').length||0,"
+        + "statusOnly:!document.querySelector('#ptyFocusFlow button,#ptyFocusFlow a,"
+          + "#ptyFocusFlow input,#ptyFocusFlow textarea,#ptyFocusFlow select'),"
+        + "xtermMounted:Boolean(host?.querySelector('.xterm')),"
+        + "connectionTone:shell?.dataset.connection||'',"
+        + "emptyHidden:Boolean(empty?.classList.contains('hidden')"
+          + "&&getComputedStyle(empty).display==='none'),"
+        + "hostVisible:Boolean(hostStyle?.display!=='none'&&hostStyle?.visibility!=='hidden'"
+          + "&&host?.getBoundingClientRect().width>0&&host?.getBoundingClientRect().height>0),"
+        + "markerVisible:[...(host?.querySelectorAll('.xterm-rows>div')||[])]"
+          + ".some(row=>(row.textContent||'').includes(" + JSON.stringify(marker) + ")),"
+        + "focused:document.activeElement===helper,"
+        + "terminalCreates:window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length,"
+        + "removedAbsent:" + JSON.stringify(removedSelectors)
+          + ".every(selector=>!document.querySelector(selector)),"
+        + "noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2};})()");
+    assert(focusMetrics.fullViewport && focusMetrics.surfaceInteractive && focusMetrics.backgroundInert
+      && focusMetrics.flowLanes === 3 && focusMetrics.statusOnly && focusMetrics.xtermMounted
+      && focusMetrics.connectionTone === 'connected' && focusMetrics.emptyHidden
+      && focusMetrics.hostVisible && focusMetrics.markerVisible
+      && focusMetrics.focused && focusMetrics.terminalCreates === 0
+      && focusMetrics.removedAbsent && focusMetrics.noOverflow,
+    'PTY focus 시각/accessibility 계약이 올바르지 않습니다: ' + JSON.stringify(focusMetrics));
+    win.show();
+    win.focus();
+    win.webContents.invalidate();
+    await wait(250);
+    await waitFor(win, "(()=>{const shell=document.querySelector('#ptyFocusTerminalShell');"
+      + "const empty=shell?.querySelector('[data-inline-terminal-empty]');"
+      + "const host=document.querySelector('#ptyFocusTerminalViewport>"
+        + ".terminal-screen[data-terminal-screen=\"terminal-main\"]');"
+      + "const style=host?getComputedStyle(host):null;return shell?.dataset.connection==='connected'"
+        + "&&empty?.classList.contains('hidden')&&getComputedStyle(empty).display==='none'"
+        + "&&style?.display!=='none'&&style?.visibility!=='hidden'"
+        + "&&host?.getBoundingClientRect().width>0&&host?.getBoundingClientRect().height>0"
+        + "&&[...(host?.querySelectorAll('.xterm-rows>div')||[])]"
+          + ".some(row=>(row.textContent||'').includes(" + JSON.stringify(marker) + "));})()",
+    'capture 직전 PTY focus 연결 상태가 유지되지 않았습니다.');
+    win.webContents.invalidate();
+    await wait(100);
+    outputs.push(await capture(win, 'whitebox-pty-focus-visual.png'));
+
+    win.setContentSize(900, 700);
+    await wait(300);
+    const compact = await value(win, "(()=>{const surface=document.querySelector('#ptyFocusSurface');"
+      + "const flow=document.querySelector('.pty-focus-flow-region');"
+      + "const terminal=document.querySelector('#ptyFocusTerminalShell');"
+      + "const back=document.querySelector('#ptyFocusBackBtn');"
+      + "const rect=surface?.getBoundingClientRect();const backRect=back?.getBoundingClientRect();"
+      + "return{width:innerWidth,height:innerHeight,"
+        + "fullViewport:Boolean(rect&&Math.abs(rect.left)<=1&&Math.abs(rect.top)<=1"
+          + "&&Math.abs(rect.right-innerWidth)<=1&&Math.abs(rect.bottom-innerHeight)<=1),"
+        + "backVisible:Boolean(backRect&&backRect.width>=38&&backRect.height>=38),"
+        + "flowScrollable:Boolean(flow&&flow.scrollWidth>=flow.clientWidth),"
+        + "terminalVisible:Boolean(terminal&&terminal.getBoundingClientRect().height>180),"
+        + "xtermVisible:Boolean(document.querySelector('#ptyFocusTerminalViewport .xterm')),"
+        + "noBodyOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2};})()");
+    assert(compact.fullViewport && compact.backVisible && compact.flowScrollable
+      && compact.terminalVisible && compact.xtermVisible && compact.noBodyOverflow,
+    'compact PTY focus 시각 계약이 올바르지 않습니다: ' + JSON.stringify(compact));
+    outputs.push(await capture(win, 'whitebox-session-terminal-compact.png'));
+
+    await value(win, "document.querySelector('#ptyFocusBackBtn')?.click()");
+    await waitFor(win, "!window.WhiteboxApp.state.ptyFocusSessionId"
+      + "&&document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')",
+    'PTY focus에서 작업 현황으로 돌아오지 못했습니다.');
+    assert(rendererErrors.length === 0, 'renderer 오류가 발생했습니다: ' + rendererErrors.join(' | '));
+    process.stdout.write(outputs.join('\n') + '\n'
+      + JSON.stringify({ projectSelection, dashboard, waiting, compactDashboard,
+        settings, focus: focusMetrics, compact }) + '\n');
+  } catch (error) {
+    process.stderr.write(String(error.stack || error) + '\n');
+    process.exitCode = 1;
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+    app.exit(process.exitCode || 0);
+  }
+}
+
+app.whenReady().then(run).catch(error => {
+  process.stderr.write(String(error.stack || error) + '\n');
+  app.exit(1);
 });
 
-require('../main');
-
-async function waitForRenderer(win, expression, attempts = 40, intervalMs = 200) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const value = await win.webContents.executeJavaScript(expression);
-    if (value) return value;
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  return null;
-}
-
-async function captureStableState(win, setupExpression, verifyExpression, attempts = 10) {
-  let lastBeforeCapture = null;
-  let lastAfterCapture = null;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await win.webContents.executeJavaScript(setupExpression);
-    await new Promise(resolve => setTimeout(resolve, 480));
-    lastBeforeCapture = await win.webContents.executeJavaScript(verifyExpression);
-    if (!lastBeforeCapture) continue;
-    await win.webContents.executeJavaScript(`(() => { for (const animation of document.getAnimations()) { try { animation.finish(); } catch {} } void document.body.offsetHeight; return true; })()`);
-    await new Promise(resolve => setTimeout(resolve, 80));
-    const image = await win.webContents.capturePage();
-    lastAfterCapture = await win.webContents.executeJavaScript(verifyExpression);
-    if (lastAfterCapture) return image;
-  }
-  const diagnostics = await win.webContents.executeJavaScript(`(() => {
-    const composer = document.querySelector('#terminalCommandForm')?.getBoundingClientRect();
-    return {
-      view: document.body.dataset.currentView || '',
-      sectionHidden: document.querySelector('#terminalSection')?.classList.contains('hidden'),
-      historyClass: document.querySelector('#terminalHistoryPanel')?.className || '',
-      backdropClass: document.querySelector('#drawerBackdrop')?.className || '',
-      composer: composer ? { top: composer.top, bottom: composer.bottom, height: composer.height } : null,
-      viewportHeight: window.innerHeight,
-    };
-  })()`);
-  throw new Error(`검증할 화면 상태가 유지되는 동안 캡처하지 못했습니다: ${JSON.stringify({ lastBeforeCapture, lastAfterCapture, diagnostics })}`);
-}
-
-function setTestWindowSize(win, width, height) {
-  if (win.isFullScreen()) win.setFullScreen(false);
-  if (win.isMaximized()) win.unmaximize();
-  win.restore();
-  win.setBounds({ width, height }, false);
-}
-
-app.whenReady().then(() => {
-  const timeout = setTimeout(async () => {
-    let exitCode = 0;
-    try {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (!win) throw new Error('Whitebox 창을 찾을 수 없습니다.');
-      const executeJavaScript = win.webContents.executeJavaScript.bind(win.webContents);
-      let executionStep = 0;
-      win.webContents.executeJavaScript = async expression => {
-        executionStep += 1;
-        try {
-          return await executeJavaScript(expression);
-        } catch (error) {
-          const preview = String(expression).replace(/\s+/g, ' ').slice(0, 180);
-          throw new Error(`visual execute step ${executionStep} failed (${preview}): ${error.message}`);
-        }
-      };
-      setTestWindowSize(win, 1600, 980);
-      for (let attempt = 0; attempt < 25; attempt += 1) {
-        const tmuxReady = await win.webContents.executeJavaScript(`(() => {
-          const summary = window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.tmux && window.WhiteboxApp.state.snapshot.tmux.summary || {};
-          const totals = window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.summary && window.WhiteboxApp.state.snapshot.summary.totals || {};
-          return Number(summary.aiPanes || 0) > 0
-            && Number(summary.linked || 0) === Number(summary.aiPanes || 0)
-            && Number(totals.sessions || 0) > 0;
-        })()`);
-        if (tmuxReady) break;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      await win.webContents.executeJavaScript("document.fonts.ready.then(() => { window.WhiteboxI18n?.setLocale('ko'); window.WhiteboxApp.state.view = 'all'; window.WhiteboxApp.state.workspace = 'all'; window.WhiteboxApp.state.graphFocusId = null; window.WhiteboxApp.state.guideExpanded = false; window.WhiteboxApp.renderWorkspaces(); window.WhiteboxApp.renderSessions(); document.querySelector('.main-stage')?.scrollTo(0, 0); })");
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const bridgeInfo = await win.webContents.executeJavaScript(`(async () => {
-        const bootstrap = await window.whitebox.bootstrap();
-        const command = await window.whitebox.bridgeCommand('codex');
-        return { launcher: bootstrap.bridgeCli, command };
-      })()`);
-      if (!bridgeInfo.launcher || !bridgeInfo.launcher.path || !fs.existsSync(bridgeInfo.launcher.path) || !bridgeInfo.command || !bridgeInfo.command.ok || !bridgeInfo.command.command.includes('run codex')) throw new Error(`외부 터미널 브리지 실행기가 준비되지 않았습니다: ${JSON.stringify(bridgeInfo)}`);
-      const image = await win.webContents.capturePage();
-      const outputDir = path.join(__dirname, '..', 'artifacts');
-      fs.mkdirSync(outputDir, { recursive: true });
-      const output = path.join(outputDir, 'whitebox-dashboard.png');
-      fs.writeFileSync(output, image.toPNG());
-      const beginnerMetrics = await win.webContents.executeJavaScript(`(() => {
-        const guide = document.querySelector('#beginnerGuide');
-        const prompt = document.querySelector('#projectSelectionPrompt');
-        const stage = document.querySelector('.main-stage');
-        const visibleText = document.body.innerText;
-        const promptStyle = prompt && getComputedStyle(prompt);
-        const promptRect = prompt?.getBoundingClientRect();
-        return {
-          guideHidden: Boolean(guide?.classList.contains('hidden')),
-          promptText: prompt?.querySelector('h2')?.textContent.trim() || '',
-          promptVisible: Boolean(promptRect && promptRect.width > 0 && promptRect.height > 0 && promptStyle.display !== 'none'),
-          promptUnboxed: Boolean(promptStyle && promptStyle.borderTopWidth === '0px' && promptStyle.backgroundColor === 'rgba(0, 0, 0, 0)'),
-          promptDesignReady: Boolean(prompt?.querySelector('.project-selection-visual') && !prompt?.querySelector('.project-selection-flow')),
-          promptMotionActive: [...(prompt?.querySelectorAll('.project-selection-orbit, .project-selection-stack, .project-selection-scan') || [])]
-            .filter(element => getComputedStyle(element).animationName !== 'none').length >= 3,
-          projectToolbarHidden: document.querySelector('#projectTaskToolbar')?.classList.contains('hidden') || false,
-          visiblePrimaryNavControls: [...document.querySelectorAll('#projectContextNav button, #projectContextNav summary')]
-            .filter(item => item.getBoundingClientRect().width > 0 && item.getBoundingClientRect().height > 0).length,
-          oldJargonVisible: ['AI AGENT OBSERVATORY', 'SESSION STREAM', 'AGENT MIND MAP', 'NEW TMUX SESSION'].filter(label => visibleText.includes(label)),
-          noHorizontalOverflow: stage ? stage.scrollWidth <= stage.clientWidth + 2 : false,
-        };
-      })()`);
-      if (!beginnerMetrics.guideHidden || beginnerMetrics.promptText !== '프로젝트를 선택해주세요'
-        || !beginnerMetrics.promptVisible || !beginnerMetrics.promptUnboxed || !beginnerMetrics.promptDesignReady || !beginnerMetrics.promptMotionActive || !beginnerMetrics.projectToolbarHidden
-        || beginnerMetrics.visiblePrimaryNavControls !== 0 || beginnerMetrics.oldJargonVisible.length || !beginnerMetrics.noHorizontalOverflow) {
-        throw new Error(`프로젝트 선택 기본 화면이 올바르지 않습니다: ${JSON.stringify(beginnerMetrics)}`);
-      }
-      setTestWindowSize(win, 1080, 700);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      await win.webContents.executeJavaScript("document.querySelector('.main-stage')?.scrollTo(0, 0)");
-      await new Promise(resolve => setTimeout(resolve, 100));
-      const compactMetrics = await win.webContents.executeJavaScript(`(() => {
-        const prompt = document.querySelector('#projectSelectionPrompt');
-        const rect = prompt?.getBoundingClientRect();
-        return {
-          width: window.innerWidth,
-          promptVisible: Boolean(rect && rect.width > 0 && rect.height > 0),
-          promptInsideViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight),
-          noBodyOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
-          noPromptOverflow: prompt ? prompt.scrollWidth <= prompt.clientWidth + 2 : false,
-        };
-      })()`);
-      if (!compactMetrics.promptVisible || !compactMetrics.promptInsideViewport || !compactMetrics.noBodyOverflow || !compactMetrics.noPromptOverflow) throw new Error(`최소 창 크기에서 프로젝트 선택 안내가 올바르지 않습니다: ${JSON.stringify(compactMetrics)}`);
-      const compactImage = await win.webContents.capturePage();
-      const compactOutput = path.join(outputDir, 'whitebox-beginner-compact.png');
-      fs.writeFileSync(compactOutput, compactImage.toPNG());
-      setTestWindowSize(win, 1600, 980);
-      await new Promise(resolve => setTimeout(resolve, 350));
-
-      await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.selectView('settings');
-        const select = document.querySelector('#languageSelect');
-        select.value = 'zh-CN';
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        document.querySelector('.main-stage')?.scrollTo(0, 0);
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const settingsMetrics = await win.webContents.executeJavaScript(`(() => {
-        const section = document.querySelector('#settingsSection');
-        const card = document.querySelector('.language-settings-card');
-        const themeCard = document.querySelector('.theme-settings-card');
-        const select = document.querySelector('#languageSelect');
-        const sectionRect = section?.getBoundingClientRect();
-        const cardRect = card?.getBoundingClientRect();
-        const themeRect = themeCard?.getBoundingClientRect();
-        const isHidden = element => !element || getComputedStyle(element).display === 'none' || element.getBoundingClientRect().height === 0;
-        return {
-          visible: Boolean(section && !section.classList.contains('hidden')),
-          locale: window.WhiteboxI18n?.getLocale(),
-          language: document.documentElement.lang,
-          title: document.querySelector('#settingsTitle')?.textContent || '',
-          options: select?.options.length || 0,
-          cardVisible: Boolean(card && card.getBoundingClientRect().height > 0),
-          noOverflow: Boolean(section && section.scrollWidth <= section.clientWidth + 2),
-          focusedChrome: isHidden(document.querySelector('.topbar'))
-            && !isHidden(document.querySelector('#projectContextNav'))
-            && document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') === 'false',
-          headerVisible: !isHidden(document.querySelector('.settings-head')),
-          noDiagnosticCards: !document.querySelector('.settings-meta-grid'),
-          noProviderCompanyLabels: !document.querySelector('.provider-visibility-name small'),
-          readableWidth: Boolean(sectionRect && sectionRect.width <= 1042),
-          primaryCardsAligned: Boolean(cardRect && themeRect && Math.abs(cardRect.top - themeRect.top) <= 2),
-        };
-      })()`);
-      if (!settingsMetrics.visible || settingsMetrics.locale !== 'zh-CN' || settingsMetrics.language !== 'zh-CN' || !settingsMetrics.title.includes('设置') || settingsMetrics.options !== 3 || !settingsMetrics.cardVisible || !settingsMetrics.noOverflow || !settingsMetrics.focusedChrome || !settingsMetrics.headerVisible || !settingsMetrics.noDiagnosticCards || !settingsMetrics.noProviderCompanyLabels || !settingsMetrics.readableWidth || !settingsMetrics.primaryCardsAligned) throw new Error(`다국어 설정 화면이 올바르지 않습니다: ${JSON.stringify(settingsMetrics)}`);
-      const settingsImage = await win.webContents.capturePage();
-      const settingsOutput = path.join(outputDir, 'whitebox-language-settings.png');
-      fs.writeFileSync(settingsOutput, settingsImage.toPNG());
-      await win.webContents.executeJavaScript("window.WhiteboxI18n.setLocale('ko')");
-      await new Promise(resolve => setTimeout(resolve, 150));
-
-      await win.webContents.executeJavaScript("window.WhiteboxApp.selectView('terminal'); document.querySelector('.terminal-session-tools')?.setAttribute('open', ''); document.querySelector('.main-stage')?.scrollTo(0, 0)");
-      await new Promise(resolve => setTimeout(resolve, 300));
-      await win.webContents.executeJavaScript("document.querySelector('#newPowerShellBtn')?.click()");
-      const firstTerminalId = await waitForRenderer(win, "document.querySelector('.terminal-session-item.active')?.dataset.terminalId || ''", 50, 200);
-      if (!firstTerminalId) throw new Error('로컬 PTY 터미널이 생성되지 않았습니다.');
-      await win.webContents.executeJavaScript(`(() => { const input = document.querySelector('#terminalCommandInput'); input.value = ${javascriptLiteral(markerCommand('WHITEBOX_PTY_OK'))}; document.querySelector('#terminalCommandForm').requestSubmit(); })()`);
-      const firstTerminalReplay = await waitForRenderer(win, `(async () => { const value = await window.whitebox.terminalGet(${javascriptLiteral(firstTerminalId)}); return value && value.replay.includes('WHITEBOX_PTY_OK') ? value.replay : ''; })()`, 50, 200);
-      if (!firstTerminalReplay) throw new Error('로컬 PTY에 보낸 명령 결과를 수신하지 못했습니다.');
-
-      await win.webContents.executeJavaScript("document.querySelector('#newPowerShellBtn')?.click()");
-      const secondTerminalId = await waitForRenderer(win, `(() => { const id = document.querySelector('.terminal-session-item.active')?.dataset.terminalId || ''; return id && id !== ${javascriptLiteral(firstTerminalId)} ? id : ''; })()`, 50, 200);
-      if (!secondTerminalId) throw new Error('두 번째 로컬 PTY 터미널이 생성되지 않았습니다.');
-      await win.webContents.executeJavaScript(`(() => { const input = document.querySelector('#terminalCommandInput'); input.value = ${javascriptLiteral(markerCommand('WHITEBOX_SECOND_PTY_OK'))}; document.querySelector('#terminalCommandForm').requestSubmit(); })()`);
-      const secondTerminalReplay = await waitForRenderer(win, `(async () => { const value = await window.whitebox.terminalGet(${javascriptLiteral(secondTerminalId)}); return value && value.replay.includes('WHITEBOX_SECOND_PTY_OK') ? value.replay : ''; })()`, 50, 200);
-      if (!secondTerminalReplay) throw new Error('두 번째 로컬 PTY에 보낸 명령 결과를 수신하지 못했습니다.');
-      const terminalMetrics = await win.webContents.executeJavaScript(`(async () => {
-        const terminalSessions = await window.whitebox.terminalList();
-        const bounds = selector => {
-          const element = document.querySelector(selector);
-          if (!element) return null;
-          const rect = element.getBoundingClientRect();
-          return {
-            top: Number(rect.top.toFixed(1)),
-            bottom: Number(rect.bottom.toFixed(1)),
-            height: Number(rect.height.toFixed(1)),
-          };
-        };
-        return {
-          sectionVisible: !document.querySelector('#terminalSection')?.classList.contains('hidden'),
-          appView: window.WhiteboxApp.state.view,
-          activeNav: document.querySelector('.view-nav .nav-item.active')?.dataset.view || '',
-          sectionClass: document.querySelector('#terminalSection')?.className || '',
-          sessions: document.querySelectorAll('.terminal-session-item').length,
-          duplicateTabs: document.querySelectorAll('.terminal-tab').length,
-          xterms: document.querySelectorAll('.terminal-screen .xterm').length,
-          selectedTitle: document.querySelector('#terminalTargetMeta b')?.textContent || '',
-          workbenchInGeneral: document.querySelector('#terminalSection')?.contains(document.querySelector('#terminalWorkbench')) || false,
-          tmuxSectionHidden: document.querySelector('#tmuxSection')?.classList.contains('hidden') || false,
-          tmuxControlsMixedIn: Boolean(document.querySelector('#terminalSection #terminalTmuxList') || document.querySelector('#terminalSection #newTmuxSessionBtn')),
-          onlyGeneralSessions: [...document.querySelectorAll('.terminal-session-item')].every(item => terminalSessions.find(session => session.id === item.dataset.terminalId)?.type !== 'tmux'),
-          composerVisible: (() => { const rect = document.querySelector('#terminalCommandForm')?.getBoundingClientRect(); return Boolean(rect && rect.top >= 0 && rect.bottom <= window.innerHeight + 2); })(),
-          consolePaneVisible: Boolean(document.querySelector('.terminal-console-pane')),
-          viewportHeight: window.innerHeight,
-          mainStageBounds: bounds('.main-stage'),
-          sectionBounds: bounds('#terminalSection'),
-          layoutBounds: bounds('#terminalSection .terminal-layout'),
-          workbenchBounds: bounds('#terminalWorkbench'),
-          stageBounds: bounds('#terminalStage'),
-          composerBounds: bounds('#terminalCommandForm'),
-        };
-      })()`);
-      if (!terminalMetrics.sectionVisible || terminalMetrics.sessions < 2 || terminalMetrics.duplicateTabs !== 0 || terminalMetrics.xterms < 2 || !terminalMetrics.workbenchInGeneral || !terminalMetrics.tmuxSectionHidden || terminalMetrics.tmuxControlsMixedIn || !terminalMetrics.onlyGeneralSessions || !terminalMetrics.composerVisible || !terminalMetrics.consolePaneVisible) throw new Error(`일반 명령창 UX가 불완전합니다: ${JSON.stringify(terminalMetrics)}`);
-      const terminalImage = await captureStableState(win,
-        `(() => {
-          document.querySelector('#runModal')?.classList.add('hidden');
-          document.querySelector('#drawerBackdrop')?.classList.add('hidden');
-          document.querySelector('.main-stage')?.scrollTo(0, 0);
-        })()`,
-        `(() => {
-          const section = document.querySelector('#terminalSection');
-          const composer = document.querySelector('#terminalCommandForm')?.getBoundingClientRect();
-          return Boolean(section && !section.classList.contains('hidden')
-            && document.querySelector('.terminal-session-item.active')
-            && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')
-            && composer && composer.top >= 0 && composer.bottom <= window.innerHeight + 2);
-        })()`, 12);
-      const terminalOutput = path.join(outputDir, 'whitebox-terminal-control.png');
-      fs.writeFileSync(terminalOutput, terminalImage.toPNG());
-      await win.webContents.executeJavaScript("window.whitebox.terminalList().then(items => Promise.all(items.map(item => window.whitebox.terminalClose(item.id))))");
-      await new Promise(resolve => setTimeout(resolve, 250));
-
-      await win.webContents.executeJavaScript("window.WhiteboxApp.selectView('tmux'); document.querySelector('.main-stage')?.scrollTo(0, 0)");
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const tmuxImage = await win.webContents.capturePage();
-      const tmuxOutput = path.join(outputDir, 'whitebox-tmux-map.png');
-      fs.writeFileSync(tmuxOutput, tmuxImage.toPNG());
-      const tmuxControlReady = await waitForRenderer(win, `Boolean(document.querySelector('.tmux-pane-node.has-agent [data-control-tmux]'))`, 80, 100);
-      let tmuxControlOutput = '';
-      let tmuxFocusOutput = '';
-      let tmuxDetailOutput = '';
-      let tmuxControlMetrics = { skipped: !tmuxControlReady };
-      let tmuxDetailMetrics = { skipped: !tmuxControlReady };
-      if (!tmuxControlReady) process.stdout.write('ℹ 실행 중인 tmux AI 칸이 없어 실제 제어 화면 캡처를 건너뜁니다. fixture 상호작용 검사는 별도로 수행됩니다.\n');
-      if (tmuxControlReady) {
-      await win.webContents.executeJavaScript("document.querySelector('.tmux-pane-node.has-agent [data-control-tmux]')?.click()");
-      await waitForRenderer(win, `(() => document.querySelector('#runModal')?.classList.contains('hidden') && document.querySelector('#drawerBackdrop')?.classList.contains('hidden') && !document.querySelector('#terminalTmuxTools')?.classList.contains('hidden'))()`, 60, 100);
-      tmuxControlMetrics = await win.webContents.executeJavaScript(`(() => ({
-        tmuxSectionVisible: !document.querySelector('#tmuxSection')?.classList.contains('hidden'),
-        generalSectionHidden: document.querySelector('#terminalSection')?.classList.contains('hidden') || false,
-        workbenchInTmux: document.querySelector('#tmuxSection')?.contains(document.querySelector('#terminalWorkbench')) || false,
-        tmuxListInTmux: document.querySelector('#tmuxSection')?.contains(document.querySelector('#terminalTmuxList')) || false,
-        generalListMixedIn: Boolean(document.querySelector('#tmuxSection #terminalSessionList')),
-        tmuxCreateInTmux: document.querySelector('#tmuxSection')?.contains(document.querySelector('#newTmuxSessionBtn')) || false,
-        targetSelected: !document.querySelector('#terminalTargetMeta b')?.textContent.includes('아직 선택'),
-        toolsVisible: !document.querySelector('#terminalTmuxTools')?.classList.contains('hidden'),
-        controlButtons: document.querySelectorAll('[data-control-tmux]').length,
-      }))()`);
-      if (!tmuxControlMetrics.tmuxSectionVisible || !tmuxControlMetrics.generalSectionHidden || !tmuxControlMetrics.workbenchInTmux || !tmuxControlMetrics.tmuxListInTmux || tmuxControlMetrics.generalListMixedIn || !tmuxControlMetrics.tmuxCreateInTmux || !tmuxControlMetrics.targetSelected || !tmuxControlMetrics.toolsVisible || tmuxControlMetrics.controlButtons < 1) throw new Error(`tmux 전용 묶음이 불완전합니다: ${JSON.stringify(tmuxControlMetrics)}`);
-      const tmuxControlImage = await win.webContents.capturePage();
-      tmuxControlOutput = path.join(outputDir, 'whitebox-tmux-control.png');
-      fs.writeFileSync(tmuxControlOutput, tmuxControlImage.toPNG());
-      await win.webContents.executeJavaScript("document.querySelector('.main-stage')?.scrollTo(0, 0)");
-      await new Promise(resolve => setTimeout(resolve, 200));
-      await win.webContents.executeJavaScript("document.querySelector('.tmux-pane-node.has-agent [data-tmux-type=\"pane\"]')?.click()");
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const tmuxFocusImage = await win.webContents.capturePage();
-      tmuxFocusOutput = path.join(outputDir, 'whitebox-tmux-focus.png');
-      fs.writeFileSync(tmuxFocusOutput, tmuxFocusImage.toPNG());
-      await win.webContents.executeJavaScript("document.querySelector('.tmux-pane-node.has-agent [data-open-session]')?.click()");
-      const tmuxDetailReady = await waitForRenderer(win, `(() => document.querySelector('#detailDrawer')?.classList.contains('open') && !document.querySelector('.drawer-loading'))()`, 120, 250);
-      if (!tmuxDetailReady) throw new Error('여러 창 작업에서 연결된 AI의 대화 상세를 불러오지 못했습니다.');
-      const tmuxDetailImage = await win.webContents.capturePage();
-      tmuxDetailOutput = path.join(outputDir, 'whitebox-tmux-detail.png');
-      fs.writeFileSync(tmuxDetailOutput, tmuxDetailImage.toPNG());
-      tmuxDetailMetrics = await win.webContents.executeJavaScript(`(() => ({
-        drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open'),
-        title: document.querySelector('#drawerTitle')?.textContent || '',
-        loading: Boolean(document.querySelector('.drawer-loading')),
-      }))()`);
-      await win.webContents.executeJavaScript("document.querySelector('#closeDrawerBtn')?.click()");
-      }
-      const tmuxMetrics = await win.webContents.executeJavaScript(`(() => ({
-        summary: window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.tmux && window.WhiteboxApp.state.snapshot.tmux.summary,
-        distroNodes: document.querySelectorAll('.tmux-distro-node').length,
-        sessionNodes: document.querySelectorAll('.tmux-session-node').length,
-        windowNodes: document.querySelectorAll('.tmux-window-node').length,
-        paneNodes: document.querySelectorAll('.tmux-pane-node').length,
-        aiPaneNodes: document.querySelectorAll('.tmux-pane-node.has-agent').length,
-        breadcrumbSteps: document.querySelectorAll('#tmuxBreadcrumbs button').length,
-        focused: Boolean(window.WhiteboxApp.state.tmuxFocus),
-        linkedCommandTargets: (window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.sessions || []).filter(session => window.WhiteboxTerminal.agentTargets(session).some(target => target.kind === 'tmux')).length,
-      }))()`);
-      if (Number(tmuxMetrics.summary?.linked || 0) > 0 && tmuxMetrics.linkedCommandTargets < 1) throw new Error(`연결된 tmux AI를 직접 지시 대상으로 찾지 못했습니다: ${JSON.stringify(tmuxMetrics)}`);
-      await win.webContents.executeJavaScript("window.WhiteboxApp.selectView('all'); document.querySelector('.main-stage')?.scrollTo(0, 0)");
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const structuredSessionId = await win.webContents.executeJavaScript(`(() => {
-        const base = (window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.sessions || []).find(item => item.provider === 'claude') || {};
-        const id = 'visual-check:structured-detail';
-        const fixture = {
-          ...base,
-          id,
-          provider: 'claude',
-          parentId: 'visual-check:structured-parent',
-          title: '지난 작업 내용 확인',
-          model: base.model || 'claude',
-          status: 'idle',
-          updatedAt: new Date().toISOString(),
-          messages: [{ id: 'memory', role: 'assistant', timestamp: new Date().toISOString(), text: JSON.stringify([
-            { target: 'MEMORY.md', category: 'decision', content: '터미널 명령은 PTY 세션을 통해 전달한다.' },
-            { target: 'terminal', category: 'pattern', content: 'tmux 대상과 입력 본문을 구조적으로 분리한다.' },
-          ]) }],
-          lifecycle: [],
-          usage: base.usage || { input: 0, cachedInput: 0, output: 0, total: 0 },
-          context: base.context || { used: 0, window: 0, percent: 0 },
-        };
-        window.WhiteboxApp.state.details.set(id, fixture);
-        window.WhiteboxApp.state.selectedId = id;
-        window.WhiteboxApp.state.drawerMode = 'subagent';
-        window.WhiteboxApp.state.detailLoading = false;
-        window.WhiteboxApp.state.drawerTab = 'chat';
-        window.WhiteboxApp.state.drawerForceLatest = true;
-        document.querySelector('#drawerBackdrop').classList.remove('hidden');
-        document.querySelector('#detailDrawer').classList.add('open');
-        document.querySelector('#detailDrawer').setAttribute('aria-hidden', 'false');
-        window.WhiteboxApp.renderDrawer();
-        return id;
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const structuredMetrics = await win.webContents.executeJavaScript(`(() => {
-        const content = document.querySelector('#drawerContent');
-        const rows = [...document.querySelectorAll('.chat-row')];
-        const latest = rows[rows.length - 1];
-        const contentBounds = content?.getBoundingClientRect();
-        const latestBounds = latest?.getBoundingClientRect();
-        const latestIsTall = Boolean(content && latest && latest.offsetHeight > content.clientHeight - 90);
-        const latestStartsVisible = Boolean(contentBounds && latestBounds
-          && latestBounds.top >= contentBounds.top - 2
-          && latestBounds.top <= contentBounds.top + 72);
-        const atBottom = content ? Math.abs(content.scrollHeight - content.scrollTop - content.clientHeight) < 60 : false;
-        return {
-          sessionId: ${JSON.stringify(structuredSessionId)},
-          candidates: document.querySelectorAll('.memory-candidate').length,
-          rawPreBlocks: document.querySelectorAll('.chat-bubble pre').length,
-          bottomGap: content ? Math.abs(content.scrollHeight - content.scrollTop - content.clientHeight) : null,
-          atBottom,
-          latestIsTall,
-          latestStartsVisible,
-          positionedAtLatest: latestIsTall ? latestStartsVisible : atBottom,
-          messageCount: rows.length,
-        };
-      })()`);
-      const structuredImage = await win.webContents.capturePage();
-      const structuredOutput = path.join(outputDir, 'whitebox-structured-detail.png');
-      fs.writeFileSync(structuredOutput, structuredImage.toPNG());
-      await win.webContents.executeJavaScript("document.querySelector('#closeDrawerBtn')?.click()");
-      if (structuredSessionId && structuredMetrics.candidates === 0) throw new Error('구조화 JSON 메시지가 읽기 쉬운 카드로 렌더링되지 않았습니다.');
-      if (structuredSessionId && !structuredMetrics.positionedAtLatest)
-        throw new Error(`상세 대화가 최신 메시지 위치로 이동하지 않았습니다: ${JSON.stringify(structuredMetrics)}`);
-      const deliveryMetrics = await win.webContents.executeJavaScript(`(() => {
-        const app = window.WhiteboxApp;
-        const base = app.state.details.get(${JSON.stringify(structuredSessionId)}) || {};
-        const id = 'visual-check:delivery-status';
-        const now = Date.now();
-        const messages = [
-          { id: 'delivery-old-user', role: 'user', text: '이전 요청', timestamp: new Date(now - 30000).toISOString() },
-          { id: 'delivery-old-answer', role: 'assistant', text: '이전 요청을 완료했습니다.', timestamp: new Date(now - 25000).toISOString() },
-        ];
-        const fixture = {
-          ...base,
-          id,
-          parentId: null,
-          title: '메시지 전달 상태 확인',
-          status: 'idle',
-          statusDetail: '다음 요청 대기',
-          updatedAt: new Date(now - 25000).toISOString(),
-          messages,
-          lifecycle: [],
-        };
-        const entry = {
-          id: 'local:visual-delivery',
-          text: '그래? 된 거야?',
-          timestamp: new Date(now).toISOString(),
-          dispatchedAt: new Date(now - 64000).toISOString(),
-          status: 'awaiting',
-          phase: 'confirming',
-          presented: false,
-          baselineMessageKeys: new Set(messages.map(app.conversationMessageKey)),
-        };
-        app.state.details.set(id, fixture);
-        app.state.pendingConversationMessages.set(id, [entry]);
-        app.state.selectedId = id;
-        app.state.drawerMode = 'session';
-        app.state.drawerTab = 'chat';
-        app.state.drawerForceLatest = true;
-        document.querySelector('#drawerBackdrop').classList.remove('hidden');
-        document.querySelector('#detailDrawer').classList.add('open');
-        document.querySelector('#detailDrawer').setAttribute('aria-hidden', 'false');
-        app.renderDrawer();
-        const drawer = document.querySelector('#detailDrawer');
-        return {
-          conversationSurface: drawer?.dataset.conversationSurface || '',
-          terminalChat: drawer?.dataset.terminalChat || '',
-          terminalVisible: Boolean(document.querySelector('#drawerTerminalSurface:not(.hidden)')?.getClientRects().length),
-          contentHidden: document.querySelector('#drawerContent')?.classList.contains('hidden'),
-          composerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden'),
-          composerEmpty: !document.querySelector('#drawerComposer')?.children.length,
-          transcriptAbsent: !document.querySelector('.drawer-terminal-transcript'),
-          hasDeliveryCard: Boolean(document.querySelector('.chat-delivery-progress')),
-          noPtyEmptyVisible: Boolean(document.querySelector('#drawerTerminalEmpty:not(.hidden)')?.getClientRects().length),
-        };
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 250));
-      const deliveryImage = await win.webContents.capturePage();
-      const deliveryOutput = path.join(outputDir, 'whitebox-message-delivery-status.png');
-      fs.writeFileSync(deliveryOutput, deliveryImage.toPNG());
-      await win.webContents.executeJavaScript("document.querySelector('#closeDrawerBtn')?.click()");
-      if (deliveryMetrics.conversationSurface !== 'pty' || deliveryMetrics.terminalChat !== 'true'
-        || !deliveryMetrics.terminalVisible || !deliveryMetrics.contentHidden
-        || !deliveryMetrics.composerHidden || !deliveryMetrics.composerEmpty
-        || !deliveryMetrics.transcriptAbsent || deliveryMetrics.hasDeliveryCard || !deliveryMetrics.noPtyEmptyVisible) {
-        throw new Error(`PTY가 없는 상위 작업에 별도 대화·전달 상태 화면이 렌더링됐습니다: ${JSON.stringify(deliveryMetrics)}`);
-      }
-      const densitySetup = await win.webContents.executeJavaScript(`(async () => {
-        const sessions = window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.sessions || [];
-        const base = sessions.find(item => !item.parentId && window.WhiteboxApp.isLiveSession(item)) || sessions[0];
-        if (!base) return { focusId: '', terminalId: '' };
-        const directTerminal = await window.whitebox.terminalCreate({ type: ${JSON.stringify(localTerminalType)}, title: 'AI 직접 지시 검증', cols: 120, rows: 32 });
-        const alternateTerminal = await window.whitebox.terminalCreate({ type: ${JSON.stringify(localTerminalType)}, title: 'AI 지시 대상 선택 검증', cols: 120, rows: 32 });
-        await window.WhiteboxTerminal.refresh();
-        const providerIds = window.WhiteboxApp.state.providers.map(item => item.id);
-        const now = Date.now();
-        const roots = Array.from({ length: 32 }, (_, index) => ({
-          ...base,
-          id: 'visual-density:root:' + index,
-          externalId: 'visual-density-root-' + index,
-          provider: providerIds[index % providerIds.length],
-          parentId: null,
-          depth: 0,
-          agentName: '',
-          agentRole: '',
-          title: '대규모 병렬 작업 흐름 ' + String(index + 1).padStart(2, '0'),
-          status: 'running',
-          statusDetail: '밀도 적응형 에이전트 지도 검증 중',
-          updatedAt: new Date(now - index * 1000).toISOString(),
-          childIds: index === 0 ? Array.from({ length: 10 }, (_, childIndex) => 'visual-density:child:' + childIndex) : [],
-          context: { used: 54000 + index * 100, window: 258400, percent: 21 + index / 10, source: 'session' },
-          usage: { input: 70000 + index * 100, cachedInput: 42000, output: 3200, reasoning: 900, total: 116100 + index * 100 },
-          messages: [{ role: 'assistant', text: '동시에 실행되는 작업의 상태를 확인하고 있습니다.', timestamp: new Date(now - index * 1000).toISOString() }],
-          lifecycle: [],
-          runtimePresence: index === 0 ? [
-            { id: 'visual-terminal:' + directTerminal.id, kind: 'windows', label: directTerminal.title, provider: base.provider, pid: directTerminal.pid, parentPid: directTerminal.pid, terminalId: directTerminal.id },
-            { id: 'visual-terminal:' + alternateTerminal.id, kind: 'windows', label: alternateTerminal.title, provider: base.provider, pid: alternateTerminal.pid, parentPid: alternateTerminal.pid, terminalId: alternateTerminal.id },
-          ] : [],
-        }));
-        const children = Array.from({ length: 10 }, (_, index) => ({
-          ...roots[0],
-          id: 'visual-density:child:' + index,
-          externalId: 'visual-density-child-' + index,
-          parentId: roots[0].id,
-          depth: 1,
-          agentName: ['Atlas', 'Nova', 'Echo', 'Iris', 'Orion', 'Sage', 'Flux', 'Luna', 'Pico', 'Gauss'][index],
-          agentRole: index % 2 ? 'reviewer' : 'explorer',
-          title: '연결된 서브에이전트 작업 ' + (index + 1),
-          provider: index === 1 ? 'codex' : roots[0].provider,
-          clientKind: index === 1 ? 'codex-desktop' : 'external-cli',
-          status: 'completed',
-          statusDetail: '작업 완료',
-          taskName: 'accuracy_check_' + String(index + 1).padStart(2, '0'),
-          agentPath: '/root/accuracy_check_' + String(index + 1).padStart(2, '0'),
-          sharedGoal: '10개 서브에이전트의 정확도 결과를 합산해줘',
-          result: String(index + 1) + '번 검사 완료',
-          completionObserved: true,
-          completedAt: new Date(now - index * 700).toISOString(),
-          childIds: [],
-          runtimePresence: index === 9 ? [{
-            id: 'visual-tmux-pane-9',
-            kind: 'tmux',
-            label: 'density-team:%9',
-            distro: 'FixtureLinux',
-            sessionName: 'density-team',
-            paneNativeId: '%9',
-            paneId: 'visual-pane-9',
-          }] : [],
-          updatedAt: new Date(now - index * 700).toISOString(),
-        }));
-        children.forEach((child, index) => {
-          child.delegation = {
-            taskName: child.taskName,
-            assignment: index % 2 ? '버튼과 화면 전환의 실제 동작을 독립적으로 검사해줘' : '',
-            assignmentObserved: Boolean(index % 2),
-            assignmentProtected: !Boolean(index % 2),
-            sharedGoal: child.sharedGoal,
-            result: child.result,
-            currentlyRetained: index >= 7,
-          };
-        });
-        const grandchild = {
-          ...children[0],
-          id: 'visual-density:grandchild:0',
-          externalId: 'visual-density-grandchild-0',
-          parentId: children[0].id,
-          depth: 2,
-          agentName: 'Nested',
-          taskName: 'nested_accuracy_check',
-          agentPath: children[0].agentPath + '/nested_accuracy_check',
-          title: '중첩 서브에이전트 정확도 검사',
-          result: '중첩 연결 정상',
-          childIds: [],
-          delegation: { taskName: 'nested_accuracy_check', result: '중첩 연결 정상', assignmentObserved: true, assignment: '하위 연결을 검사해줘' },
-        };
-        children[0].childIds = [grandchild.id];
-        children[0].collaboration = { communications: [
-          { id: 'nested-assignment', kind: 'assignment', label: '새 작업 배정', from: children[0].agentPath, to: grandchild.agentPath, taskName: grandchild.taskName, childId: grandchild.id, text: '하위 연결을 검사해줘', timestamp: new Date(now - 28000).toISOString() },
-          { id: 'nested-started', kind: 'started', label: '서브에이전트 실행 시작', from: 'Codex 런타임', to: grandchild.agentPath, taskName: grandchild.taskName, childId: grandchild.id, text: 'started', timestamp: new Date(now - 27500).toISOString() },
-          { id: 'nested-result', kind: 'result', label: '결과 반환', from: grandchild.agentPath, to: children[0].agentPath, taskName: grandchild.taskName, childId: grandchild.id, text: grandchild.result, timestamp: new Date(now - 27000).toISOString() },
-        ], metrics: { cumulativeCreated: 1, simultaneousCapacity: 3, currentlyRunning: 0, completedRecords: 1, retainedCount: 1, capacitySource: 'runtime-instruction' } };
-        const spawns = children.map((child, index) => ({ callId: 'visual-spawn-' + index, taskName: child.taskName, agentPath: child.agentPath, childId: child.id, status: 'completed', result: child.result, currentlyRetained: index >= 7 }));
-        const communications = children.flatMap((child, index) => ([
-          { id: 'visual-assignment-' + index, kind: 'assignment', label: '새 작업 배정', from: '/root', to: child.agentPath, taskName: child.taskName, childId: child.id, text: child.delegation.assignment, protected: child.delegation.assignmentProtected, timestamp: new Date(now - 30000 + index * 1000).toISOString() },
-          { id: 'visual-started-' + index, kind: 'started', label: '서브에이전트 실행 시작', from: 'Codex 런타임', to: child.agentPath, taskName: child.taskName, childId: child.id, text: 'started', timestamp: new Date(now - 29500 + index * 1000).toISOString() },
-          { id: 'visual-result-' + index, kind: 'result', label: '결과 반환', from: child.agentPath, to: '/root', taskName: child.taskName, childId: child.id, text: child.result, timestamp: new Date(now - 29000 + index * 1000).toISOString() },
-        ]));
-        roots[0].collaboration = {
-          capacity: { totalThreads: 4, subagents: 3, source: 'runtime-instruction' },
-          spawns,
-          communications,
-          retainedAgents: children.slice(7).map(child => ({ path: child.agentPath, taskName: child.taskName, name: child.agentName, status: 'completed' })),
-          retainedObserved: true,
-          metrics: { cumulativeCreated: 10, simultaneousCapacity: 3, currentlyRunning: 0, completedRecords: 10, retainedCount: 3, capacitySource: 'runtime-instruction', cumulativeSource: 'spawn-events' },
-        };
-        const fixtures = [...roots, ...children, grandchild];
-        window.__whiteboxDensityFixture = { fixtures, focusId: roots[0].id, terminalId: directTerminal.id };
-        window.__ensureWhiteboxDensityFixture = () => {
-          const current = window.WhiteboxApp.state.snapshot && window.WhiteboxApp.state.snapshot.sessions || [];
-          const ids = new Set(current.map(item => item.id));
-          for (const fixture of fixtures) if (!ids.has(fixture.id)) current.unshift(fixture);
-        };
-        window.__ensureWhiteboxDensityFixture();
-        window.WhiteboxApp.state.workspace = roots[0].originCwd || roots[0].cwd || '';
-        window.WhiteboxApp.state.graphFocusId = null;
-        window.WhiteboxApp.state.graphExpandedProviders.clear();
-        window.WhiteboxApp.renderWorkspaces();
-        window.WhiteboxApp.renderSessions();
-        document.querySelector('.main-stage')?.scrollTo(0, 0);
-        return { focusId: roots[0].id, terminalId: directTerminal.id, alternateTerminalId: alternateTerminal.id };
-      })()`);
-      const densityFocusId = densitySetup.focusId;
-      const commandTerminalId = densitySetup.terminalId;
-      const alternateCommandTerminalId = densitySetup.alternateTerminalId;
-      await new Promise(resolve => setTimeout(resolve, 250));
-      const treeImage = await win.webContents.capturePage();
-      const treeOutput = path.join(outputDir, 'whitebox-agent-tree.png');
-      fs.writeFileSync(treeOutput, treeImage.toPNG());
-      const managementMetrics = await win.webContents.executeJavaScript(`(() => {
-        const app = window.WhiteboxApp;
-        const sessions = app.state.snapshot?.sessions || [];
-        const base = sessions.find(item => !item.parentId) || sessions[0];
-        if (!base) return { cards: 0 };
-        const now = new Date().toISOString();
-        const make = (id, status, kind, level, title) => ({
-          ...base, id, externalId: id + '-external', parentId: null, childIds: [], title, status,
-          updatedAt: now, statusDetail: title, runId: id + '-run', runtimePresence: [],
-          messages: [{ id: id + '-user', role: 'user', text: '다음 단계까지 진행해 주세요.', timestamp: now }, { id: id + '-assistant', role: 'assistant', text: title + ' 상태입니다. 다음 단계로 가기 전에 사용자의 확인이 필요합니다.', timestamp: now }],
-          attention: { required: true, kind, summary: title + '에 대한 사용자 조치가 필요합니다.', requestedAt: now, source: 'observed-status', confidence: 'high' },
-          progress: { stage: status, percent: status === 'failed' ? 64 : 42, completedSteps: 3, failedSteps: status === 'failed' ? 1 : 0, totalSteps: 6, currentStep: '검증 결과 확인', blocker: title, lastActivityAt: now, checkpoints: [] },
-          health: { level, score: level === 'critical' ? 35 : 68, lastActivityAt: now, signals: [{ code: status === 'failed' ? 'run-failed' : status === 'paused' ? 'run-paused' : 'waiting-too-long', severity: level === 'critical' ? 'critical' : 'warning', detail: title }] },
-          evidence: { confidence: 'high', status: 'observed', hierarchy: 'observed', completion: 'unverified', sources: ['runtime-event'] },
-          outcome: { status: status === 'failed' ? 'failed' : 'in-progress', summary: title, verified: false, artifacts: [], checks: [] },
-          controlCapabilities: { managed: true, respond: ['approval', 'decision', 'input', 'response'].includes(kind), approve: kind === 'approval', deny: kind === 'approval', sendInstruction: ['approval', 'decision', 'input', 'response'].includes(kind), stop: status === 'paused', pause: false, resume: status === 'paused', retry: status === 'failed', reassign: true },
-        });
-        const fixtures = [
-          make('visual-management-approval', 'waiting', 'approval', 'attention', '배포 승인 요청'),
-          make('visual-management-input', 'waiting', 'input', 'attention', '배포 환경 값 입력 요청'),
-          make('visual-management-failed', 'failed', 'error', 'critical', '회귀 테스트 실패'),
-          make('visual-management-paused', 'paused', 'paused', 'warning', '사용자가 일시정지한 실행'),
-        ];
-        for (const fixture of fixtures) {
-          const index = sessions.findIndex(item => item.id === fixture.id);
-          if (index >= 0) sessions[index] = fixture;
-          else sessions.unshift(fixture);
-        }
-        app.state.view = 'waiting';
-        app.state.search = '';
-        app.state.workspace = base.originCwd || base.cwd || '';
-        app.state.providerFilters.clear();
-        app.renderSessions('view');
-        const section = document.querySelector('#attentionInbox');
-        return {
-          cards: section?.querySelectorAll('.attention-card').length || 0,
-          progress: section?.querySelectorAll('[role="progressbar"]').length || 0,
-          health: section?.querySelectorAll('.management-health').length || 0,
-          controls: section?.querySelectorAll('[data-managed-run-action], [data-reassign-session]').length || 0,
-          quickActions: section?.querySelectorAll('[data-attention-quick]').length || 0,
-          flows: section?.querySelectorAll('.attention-decision-flow').length || 0,
-          flowSteps: section?.querySelectorAll('.attention-decision-flow > section').length || 0,
-          replyTemplates: section?.querySelectorAll('[data-attention-draft]').length || 0,
-          answerComposers: section?.querySelectorAll('.attention-card.question .conversation-composer').length || 0,
-          evidenceDetails: section?.querySelectorAll('.attention-evidence-details').length || 0,
-          visible: Boolean(section && !section.classList.contains('hidden')),
-          noHorizontalOverflow: Boolean(section && section.scrollWidth <= section.clientWidth + 2),
-          scrollWidth: section?.scrollWidth || 0,
-          clientWidth: section?.clientWidth || 0,
-          overflowingElements: section ? [...section.querySelectorAll('*')]
-            .filter(element => element.getBoundingClientRect().right > section.getBoundingClientRect().right + 2)
-            .slice(0, 8)
-            .map(element => ({ tag: element.tagName, className: element.className, text: String(element.textContent || '').trim().slice(0, 80) })) : [],
-        };
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 250));
-      const managementImage = await win.webContents.capturePage();
-      const managementOutput = path.join(outputDir, 'whitebox-management-inbox.png');
-      fs.writeFileSync(managementOutput, managementImage.toPNG());
-      if (!managementMetrics.visible || managementMetrics.cards < 4 || managementMetrics.progress < managementMetrics.cards || managementMetrics.health < managementMetrics.cards || managementMetrics.controls < 5 || managementMetrics.quickActions < 2 || managementMetrics.flows !== managementMetrics.cards || managementMetrics.flowSteps !== managementMetrics.cards * 3 || managementMetrics.answerComposers < 1 || managementMetrics.evidenceDetails !== managementMetrics.cards || !managementMetrics.noHorizontalOverflow) {
-        throw new Error(`관리 확인함 시각 구성이 올바르지 않습니다: ${JSON.stringify(managementMetrics)}`);
-      }
-      await win.webContents.executeJavaScript(`(() => { window.WhiteboxApp.state.view = 'all'; window.WhiteboxApp.renderSessions('view'); document.querySelector('.main-stage')?.scrollTo(0, 0); })()`);
-      const densityMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = null;
-        window.WhiteboxApp.state.graphExpandedProviders.clear();
-        window.WhiteboxApp.state.disclosureStates.clear();
-        document.querySelectorAll('.control-room-project-group').forEach((group, index) => {
-          group.open = index === 0;
-        });
-        window.WhiteboxApp.renderSessions();
-        const defaultRooms = document.querySelectorAll('[data-control-session]').length;
-        const grid = document.querySelector('#liveSessionGrid');
-        const densityRoom = document.querySelector('[data-control-session="visual-density:root:0"]');
-        const groups = [...document.querySelectorAll('.control-room-project-group')];
-        const metrics = {
-          defaultRooms,
-          rooms: document.querySelectorAll('[data-control-session]').length,
-          mains: document.querySelectorAll('.control-room-main').length,
-          densityRoom: Boolean(densityRoom),
-          completedPreview: densityRoom?.querySelectorAll('.completed-list .helper-node').length || 0,
-          mainWorkColumn: Boolean(densityRoom?.querySelector('.main-column .control-room-main')),
-          legends: document.querySelectorAll('#graphBreadcrumbs .control-room-legend > span').length,
-          projectGroups: document.querySelectorAll('.control-room-project-group').length,
-          primaryExpandedByDefault: Boolean(groups[0]?.open) && groups.slice(1).every(group => !group.open),
-          openProjectGroups: groups.filter(group => group.open).length,
-          expandStateValid: groups.length === groups.filter(group => group.open).length
-            ? Boolean(document.querySelector('#controlRoomExpandAll')?.disabled)
-            : !document.querySelector('#controlRoomExpandAll')?.disabled,
-          collapseDisabled: Boolean(document.querySelector('#controlRoomCollapseAll')?.disabled),
-          pagerRemoved: !document.querySelector('#controlRoomPageSummary, #controlRoomPagePrev, #controlRoomPageNext'),
-          structureVisibleWithoutFocus: Boolean(document.querySelector('[data-control-room-overview]')),
-          noHorizontalOverflow: grid ? grid.scrollWidth <= grid.clientWidth + 2 : false,
-          subagentTabRemoved: !document.querySelector('[data-view="subagents"]'),
-        };
-        return metrics;
-      })()`);
-      if (!densityMetrics.subagentTabRemoved || densityMetrics.defaultRooms < 32
-        || densityMetrics.rooms < 32 || densityMetrics.mains !== densityMetrics.rooms
-        || !densityMetrics.densityRoom || densityMetrics.completedPreview !== 3 || !densityMetrics.mainWorkColumn
-        || densityMetrics.legends !== 0 || densityMetrics.projectGroups < 1
-        || !densityMetrics.primaryExpandedByDefault || !densityMetrics.expandStateValid || densityMetrics.collapseDisabled || !densityMetrics.pagerRemoved
-        || !densityMetrics.structureVisibleWithoutFocus || !densityMetrics.noHorizontalOverflow) {
-        throw new Error(`대규모 세션 관제 밀도 조절이 올바르지 않습니다: ${JSON.stringify(densityMetrics)}`);
-      }
-      if (densityFocusId) {
-        await win.webContents.executeJavaScript(`(() => {
-          window.__ensureWhiteboxDensityFixture?.();
-          window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-          window.WhiteboxApp.renderSessions();
-        })()`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-      const commandUiMetrics = await win.webContents.executeJavaScript(`(async () => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.openDrawer(${JSON.stringify(densityFocusId)});
-        for (let attempt = 0; attempt < 40 && !window.WhiteboxTerminal.embeddedState().connected; attempt += 1) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        const session = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(densityFocusId)});
-        const targets = window.WhiteboxTerminal.agentTargets(session);
-        const embedded = window.WhiteboxTerminal.embeddedState();
-        return {
-          progressPanelVisible: Boolean(document.querySelector('[data-workflow-progress="${densityFocusId}"]')),
-          workScreenComposerAbsent: !document.querySelector('.agent-workflow-canvas [data-agent-command-form]'),
-          drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
-          ptySurface: document.querySelector('#detailDrawer')?.dataset.conversationSurface === 'pty'
-            && !document.querySelector('#drawerTerminalSurface')?.classList.contains('hidden'),
-          contentHidden: document.querySelector('#drawerContent')?.classList.contains('hidden'),
-          drawerComposerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden')
-            && !document.querySelector('#drawerComposer')?.children.length,
-          transcriptAbsent: !document.querySelector('.drawer-terminal-transcript'),
-          connected: embedded.connected,
-          terminalId: embedded.terminalId,
-          targetCount: targets.length,
-          targetIds: targets.map(target => target.terminalId).filter(Boolean),
-        };
-      })()`);
-      if (!commandUiMetrics.progressPanelVisible || !commandUiMetrics.workScreenComposerAbsent || !commandUiMetrics.drawerOpen
-        || !commandUiMetrics.ptySurface || !commandUiMetrics.contentHidden || !commandUiMetrics.drawerComposerHidden
-        || !commandUiMetrics.transcriptAbsent || !commandUiMetrics.connected
-        || commandUiMetrics.targetCount !== 2 || !commandUiMetrics.targetIds.includes(commandTerminalId)
-        || !commandUiMetrics.targetIds.includes(alternateCommandTerminalId)
-        || !commandUiMetrics.targetIds.includes(commandUiMetrics.terminalId)) {
-        throw new Error(`진행 화면과 PTY 전용 대화 연결이 올바르지 않습니다: ${JSON.stringify(commandUiMetrics)}`);
-      }
-      const sessionTerminalMetrics = { ...commandUiMetrics, presentation: 'drawer-pty' };
-      const continuityMetrics = { connected: commandUiMetrics.connected, terminalId: commandUiMetrics.terminalId };
-      const sessionTerminalImage = await win.webContents.capturePage();
-      const sessionTerminalOutput = path.join(outputDir, 'whitebox-session-terminal.png');
-      fs.writeFileSync(sessionTerminalOutput, sessionTerminalImage.toPNG());
-      setTestWindowSize(win, 1180, 900);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const terminalCompactMetrics = await win.webContents.executeJavaScript(`(() => ({
-        conversationSurface: document.querySelector('#detailDrawer')?.dataset.conversationSurface || '',
-        terminalVisible: Boolean(document.querySelector('#drawerTerminalSurface:not(.hidden)')?.getClientRects().length),
-        contentHidden: document.querySelector('#drawerContent')?.classList.contains('hidden'),
-        composerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden')
-          && !document.querySelector('#drawerComposer')?.children.length,
-        noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
-      }))()`);
-      if (terminalCompactMetrics.conversationSurface !== 'pty' || !terminalCompactMetrics.terminalVisible
-        || !terminalCompactMetrics.contentHidden || !terminalCompactMetrics.composerHidden
-        || !terminalCompactMetrics.noHorizontalOverflow) {
-        throw new Error(`중간 너비 PTY 대화창 배치가 올바르지 않습니다: ${JSON.stringify(terminalCompactMetrics)}`);
-      }
-      const terminalCompactImage = await win.webContents.capturePage();
-      const terminalCompactOutput = path.join(outputDir, 'whitebox-session-terminal-compact.png');
-      fs.writeFileSync(terminalCompactOutput, terminalCompactImage.toPNG());
-      setTestWindowSize(win, 1600, 980);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.state.agentCommandDrafts.delete(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.selectView('all');
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions();
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const motionMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions('focus');
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const path = document.querySelector('.agent-workflow-edge');
-        window.WhiteboxApp.openRunModal();
-        const modalOpening = document.querySelector('.run-modal')?.getAnimations().some(animation => animation.animationName === 'motion-modal-in') || false;
-        window.WhiteboxApp.closeRunModal();
-        window.WhiteboxApp.openDrawer(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.closeDrawer();
-        return {
-          reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
-          preferenceMatches: document.documentElement.dataset.motion === (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'full'),
-          lastMotion: document.documentElement.dataset.lastMotion,
-          keyedElements: document.querySelectorAll('[data-motion-key]').length,
-          workflowAnimated: document.querySelector('.agent-workflow-canvas')?.classList.contains('motion-connect') || false,
-          pathLength: path?.getAttribute('pathLength') || '',
-          edgeAnimation: path?.getAnimations().some(animation => animation.animationName === 'motion-edge-draw') || false,
-          modalOpening,
-          modalClosingDeferred: document.querySelector('#runModal')?.classList.contains('closing') && !document.querySelector('#runModal')?.classList.contains('hidden'),
-          drawerClosingDeferred: document.querySelector('#drawerBackdrop')?.classList.contains('closing') && !document.querySelector('#drawerBackdrop')?.classList.contains('hidden'),
-        };
-      })()`);
-      const refreshMotionMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.WhiteboxApp.renderSessions('refresh');
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const canvas = document.querySelector('.agent-workflow-canvas');
-        const path = canvas?.querySelector('.agent-workflow-edge');
-        return {
-          workflowAnimatedAfterRefresh: canvas?.classList.contains('motion-connect') || false,
-          edgeAnimationAfterRefresh: path?.getAnimations().some(animation => animation.animationName === 'motion-edge-draw') || false,
-        };
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 950));
-      const motionClosedMetrics = await win.webContents.executeJavaScript(`(() => ({
-        modalHidden: document.querySelector('#runModal')?.classList.contains('hidden') || false,
-        drawerBackdropHidden: document.querySelector('#drawerBackdrop')?.classList.contains('hidden') || false,
-      }))()`);
-      if (!motionMetrics.preferenceMatches || motionMetrics.lastMotion !== 'focus' || motionMetrics.keyedElements < 10 || !motionMetrics.workflowAnimated || motionMetrics.pathLength !== '1' || (!motionMetrics.reduced && (!motionMetrics.edgeAnimation || !refreshMotionMetrics.edgeAnimationAfterRefresh)) || !refreshMotionMetrics.workflowAnimatedAfterRefresh || !motionMetrics.modalOpening || !motionMetrics.modalClosingDeferred || !motionMetrics.drawerClosingDeferred || !motionClosedMetrics.modalHidden || !motionClosedMetrics.drawerBackdropHidden) {
-        throw new Error(`부드러운 화면 전환 모션이 올바르지 않습니다: ${JSON.stringify({ ...motionMetrics, ...refreshMotionMetrics, ...motionClosedMetrics })}`);
-      }
-      const focusImage = await captureStableState(win, `(() => {
-        document.querySelector('#closeDrawerBtn')?.click();
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.delete(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        document.querySelector('.main-stage')?.scrollTo(0, 0);
-      })()`, `window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(densityFocusId)} && document.querySelectorAll('.downstream-column .agent-workflow-node').length === 0 && document.querySelector('[data-subagent-completed-toggle]') && document.querySelector('[data-workflow-progress="${densityFocusId}"]') && !document.querySelector('.agent-workflow-canvas [data-agent-command-form]') && !document.querySelector('[data-completed-subagent-list]') && !document.querySelector('[data-subagent-search], [data-subagent-provider], [data-subagent-status]') && !document.querySelector('#detailDrawer')?.classList.contains('open') && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')`);
-      const focusOutput = path.join(outputDir, 'whitebox-agent-focus.png');
-      fs.writeFileSync(focusOutput, focusImage.toPNG());
-      const metrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        if (window.__whiteboxDensityFixture) window.WhiteboxApp.state.graphFocusId = window.__whiteboxDensityFixture.focusId;
-        window.WhiteboxApp.state.expandedCompletedSubagents.add(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.renderSessions();
-        const start = performance.now();
-        for (let index = 0; index < 5; index += 1) window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const grid = document.querySelector('#liveSessionGrid');
-        const upstream = document.querySelector('.upstream-column .agent-workflow-origin, .upstream-column .agent-workflow-node')?.getBoundingClientRect();
-        const selected = document.querySelector('.agent-workflow-selected')?.getBoundingClientRect();
-        const downstream = document.querySelector('.downstream-column .agent-workflow-node')?.getBoundingClientRect();
-        const downstreamCards = [...document.querySelectorAll('.downstream-column .agent-workflow-node')].map(node => node.getBoundingClientRect());
-        const upstreamPort = document.querySelector('[data-workflow-port="upstream-output"]')?.getBoundingClientRect();
-        const focusInputPort = document.querySelector('[data-workflow-port="focus-input"]')?.getBoundingClientRect();
-        const groupPort = document.querySelector('[data-workflow-port="children-group-input"]')?.getBoundingClientRect();
-        const downstreamColumns = new Set(downstreamCards.map(rect => Math.round(rect.left / 8))).size;
-        const canvasRect = document.querySelector('.agent-workflow-canvas')?.getBoundingClientRect();
-        let routeCollisions = 0;
-        const routeCollisionDetails = [];
-        if (canvasRect) {
-          const localCards = downstreamCards.map(rect => ({ left: rect.left - canvasRect.left + 4, right: rect.right - canvasRect.left - 4, top: rect.top - canvasRect.top + 4, bottom: rect.bottom - canvasRect.top - 4 }));
-          for (const path of document.querySelectorAll('.agent-workflow-edge.downstream')) {
-            const length = path.getTotalLength();
-            for (let sample = 1; sample < 20; sample += 1) {
-              const point = path.getPointAtLength(length * sample / 20);
-              const cardIndex = localCards.findIndex(rect => point.x > rect.left && point.x < rect.right && point.y > rect.top && point.y < rect.bottom);
-              if (cardIndex >= 0) { routeCollisions += 1; routeCollisionDetails.push({ kind: path.dataset.workflowEdgeKind, cardIndex, x: Math.round(point.x), y: Math.round(point.y) }); break; }
-            }
-          }
-        }
-        return {
-          averageRenderMs: (performance.now() - start) / 5,
-          renderedCards: document.querySelectorAll('.session-card').length,
-          liveNodes: document.querySelectorAll('.live-session-grid .agent-node').length,
-          graphFocused: Boolean(window.WhiteboxApp.state.graphFocusId),
-          breadcrumbSteps: document.querySelectorAll('#graphBreadcrumbs button').length,
-          workflowCanvas: document.querySelectorAll('.agent-workflow-canvas').length,
-          progressOwner: document.querySelector('[data-workflow-progress]')?.dataset.workflowProgress || '',
-          progressStage: document.querySelector('[data-workflow-progress]')?.dataset.progressStage || '',
-          progressEvents: document.querySelectorAll('.workflow-progress-events > li').length,
-          progressBasisVisible: Boolean(document.querySelector('.workflow-progress-panel > footer small')?.textContent.trim()),
-          workScreenComposerCount: document.querySelectorAll('.agent-workflow-canvas [data-agent-command-form]').length,
-          upstreamNodes: document.querySelectorAll('.upstream-column .agent-workflow-origin, .upstream-column .agent-workflow-node').length,
-          selectedNodes: document.querySelectorAll('.selected-column .agent-node').length,
-          downstreamNodes: document.querySelectorAll('.downstream-column .agent-workflow-node').length,
-          connectionPaths: document.querySelectorAll('.agent-workflow-edge').length,
-          downstreamGroups: document.querySelectorAll('.agent-workflow-edge.downstream.group').length,
-          downstreamColumns,
-          summaryChips: document.querySelectorAll('.workflow-summary-chip').length,
-          routeCollisions,
-          routeCollisionDetails,
-          ports: document.querySelectorAll('.agent-workflow-port').length,
-          groupArrowheads: document.querySelectorAll('.agent-workflow-edge.downstream.group[marker-end]').length,
-          upstreamAligned: Boolean(upstreamPort && focusInputPort && Math.abs((upstreamPort.top + upstreamPort.height / 2) - (focusInputPort.top + focusInputPort.height / 2)) <= 12),
-          groupPortInsideCanvas: Boolean(canvasRect && groupPort && groupPort.left >= canvasRect.left && groupPort.right <= canvasRect.right && groupPort.top >= canvasRect.top && groupPort.bottom <= canvasRect.bottom),
-          collaborationMetrics: [...document.querySelectorAll('[data-collaboration-metric]')].reduce((out, node) => { out[node.dataset.collaborationMetric] = node.querySelector('b')?.textContent?.trim(); return out; }, {}),
-          collaborationCommunications: Number(document.querySelector('[data-collaboration-communications]')?.dataset.collaborationCommunications || 0),
-          collaborationAssignments: document.querySelectorAll('[data-communication-kind="assignment"]').length,
-          collaborationResults: document.querySelectorAll('[data-communication-kind="result"]').length,
-          delegatedTaskCards: document.querySelectorAll('.downstream-column .agent-flow-outcome').length,
-          readableSessionCards: document.querySelectorAll('.downstream-column .child-session .agent-flow-session-title').length,
-          sessionAgentRows: document.querySelectorAll('.downstream-column .child-session .agent-flow-agent').length,
-          workingSubagents: document.querySelectorAll('.downstream-column .child-session.work-working').length,
-          restingSubagents: document.querySelectorAll('.downstream-column .child-session.work-resting').length,
-          conversationCards: document.querySelectorAll('.downstream-column [data-open-subagent-chat]').length,
-          nestedFlowCards: document.querySelectorAll('.downstream-column [data-graph-focus]').length,
-          completedToggle: Boolean(document.querySelector('[data-subagent-completed-toggle]')),
-          completedExpanded: Boolean(document.querySelector('[data-completed-subagent-list]')),
-          legacyFilters: document.querySelectorAll('[data-subagent-status], [data-subagent-provider], [data-subagent-search]').length,
-          tmuxBadges: document.querySelectorAll('.downstream-column .execution-mode-badge.tmux').length,
-          standardBadges: document.querySelectorAll('.downstream-column .execution-mode-badge.standard').length,
-          recentSubagents: [...document.querySelectorAll('#sessionGrid [data-session-id]')].filter(node => window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === node.dataset.sessionId)?.parentId).length,
-          desktopDirectionFixed: Boolean(upstream && selected && downstream && upstream.right < selected.left && selected.right < downstream.left),
-          noHorizontalOverflow: grid ? grid.scrollWidth <= grid.clientWidth + 2 : false,
-        };
-      })()`);
-      if (!metrics.graphFocused || metrics.liveNodes !== 1 || metrics.workflowCanvas !== 1 || metrics.progressOwner !== densityFocusId || metrics.progressStage !== 'running' || metrics.progressEvents < 1 || metrics.progressEvents > 5 || !metrics.progressBasisVisible || metrics.workScreenComposerCount !== 0 || metrics.upstreamNodes !== 1 || metrics.selectedNodes !== 1 || metrics.downstreamNodes !== 10 || metrics.connectionPaths !== 2 || metrics.downstreamGroups !== 1 || metrics.groupArrowheads !== 1 || metrics.downstreamColumns < 2 || metrics.summaryChips < 1 || metrics.routeCollisions !== 0 || metrics.ports !== 4 || !metrics.upstreamAligned || !metrics.groupPortInsideCanvas || metrics.collaborationMetrics.created !== '10' || metrics.collaborationMetrics.capacity !== '3' || metrics.collaborationMetrics.running !== '0' || metrics.collaborationMetrics.completed !== '10' || metrics.collaborationCommunications !== 30 || metrics.collaborationAssignments !== 10 || metrics.collaborationResults !== 10 || metrics.delegatedTaskCards !== 10 || metrics.readableSessionCards !== 10 || metrics.sessionAgentRows !== 10 || metrics.workingSubagents !== 0 || metrics.restingSubagents !== 10 || metrics.conversationCards !== 9 || metrics.nestedFlowCards !== 1 || !metrics.completedToggle || !metrics.completedExpanded || metrics.legacyFilters !== 0 || metrics.tmuxBadges !== 1 || metrics.standardBadges !== 9 || metrics.recentSubagents !== 0 || !metrics.desktopDirectionFixed || !metrics.noHorizontalOverflow || metrics.averageRenderMs > 250) throw new Error(`연결형 에이전트 작업 흐름이 올바르지 않습니다: ${JSON.stringify(metrics)}`);
-
-      const communicationImage = await captureStableState(win, `(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        document.querySelector('.agent-communication-panel')?.scrollIntoView({ block: 'start' });
-      })()`, `window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(densityFocusId)} && document.querySelectorAll('.agent-communication-event').length === 30 && (() => { const rect = document.querySelector('.agent-communication-panel')?.getBoundingClientRect(); return rect && rect.bottom > 0 && rect.top < innerHeight; })()`);
-      const communicationOutput = path.join(outputDir, 'whitebox-agent-communication.png');
-      fs.writeFileSync(communicationOutput, communicationImage.toPNG());
-
-      const childClick = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const child = document.querySelector('.downstream-column [data-graph-focus]');
-        child?.click();
-        return { childId: child?.dataset.graphFocus || '', immediateFocusId: window.WhiteboxApp.state.graphFocusId };
-      })()`);
-      const childFocusId = childClick.childId;
-      if (!childFocusId || childClick.immediateFocusId !== childFocusId) throw new Error(`나눠 맡긴 AI 선택 이벤트가 적용되지 않았습니다: ${JSON.stringify(childClick)}`);
-      await new Promise(resolve => setTimeout(resolve, 450));
-      const childMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(childFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.add(${JSON.stringify(childFocusId)});
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const focusedSession = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(childFocusId)});
-        const upstream = document.querySelector('.upstream-column .agent-workflow-node')?.getBoundingClientRect();
-        const selected = document.querySelector('.agent-workflow-selected')?.getBoundingClientRect();
-        return {
-          focusId: window.WhiteboxApp.state.graphFocusId,
-          progressOwner: document.querySelector('[data-workflow-progress]')?.dataset.workflowProgress || '',
-          progressVisible: Boolean(document.querySelector('[data-workflow-progress]')),
-          workScreenComposerAbsent: !document.querySelector('.agent-workflow-canvas [data-agent-command-form]'),
-          parentId: document.querySelector('.upstream-column [data-graph-focus]')?.dataset.graphFocus || '',
-          parentOnLeft: Boolean(upstream && selected && upstream.right < selected.left),
-          downstreamNodes: document.querySelectorAll('.downstream-column .agent-workflow-node').length,
-          emptyShown: Boolean(document.querySelector('.downstream-column .agent-workflow-empty')),
-          connectionPaths: document.querySelectorAll('.agent-workflow-edge').length,
-          communicationEvents: Number(document.querySelector('[data-collaboration-communications]')?.dataset.collaborationCommunications || 0),
-          provider: focusedSession?.provider || '',
-          externalId: focusedSession?.externalId || '',
-          resumeSupport: window.WhiteboxTerminal.resumeSupport(focusedSession),
-          targets: window.WhiteboxTerminal.agentTargets(focusedSession).map(item => ({ id: item.id, kind: item.kind })),
-        };
-      })()`);
-      const childFocusImage = await captureStableState(win, `(() => {
-        document.querySelector('#closeDrawerBtn')?.click();
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(childFocusId)};
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        document.querySelector('.main-stage')?.scrollTo(0, 0);
-      })()`, `window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(childFocusId)} && document.querySelector('.upstream-column [data-graph-focus]')?.dataset.graphFocus === ${JSON.stringify(densityFocusId)} && !document.querySelector('#detailDrawer')?.classList.contains('open') && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')`);
-      const childFocusOutput = path.join(outputDir, 'whitebox-agent-child-focus.png');
-      fs.writeFileSync(childFocusOutput, childFocusImage.toPNG());
-      if (childMetrics.focusId !== childFocusId || !childMetrics.progressVisible || childMetrics.progressOwner !== childFocusId || !childMetrics.workScreenComposerAbsent || childMetrics.parentId !== densityFocusId || !childMetrics.parentOnLeft
-        || childMetrics.downstreamNodes !== 1 || !childMetrics.emptyShown || childMetrics.connectionPaths !== 2
-        || !childMetrics.resumeSupport?.parentControlled || childMetrics.communicationEvents !== 3) {
-        throw new Error(`중첩 도움 AI 선택 후 부모 방향·메인 관리 상태·하위 통신 기록이 올바르지 않습니다: ${JSON.stringify(childMetrics)}`);
-      }
-
-      const returnClick = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(childFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.add(${JSON.stringify(childFocusId)});
-        window.WhiteboxApp.renderSessions();
-        const parent = document.querySelector('.upstream-column [data-graph-focus]');
-        parent?.click();
-        return { parentId: parent?.dataset.graphFocus || '', immediateFocusId: window.WhiteboxApp.state.graphFocusId };
-      })()`);
-      if (returnClick.parentId !== densityFocusId || returnClick.immediateFocusId !== densityFocusId) throw new Error(`메인 AI로 돌아가기 이벤트가 적용되지 않았습니다: ${JSON.stringify(returnClick)}`);
-      await new Promise(resolve => setTimeout(resolve, 450));
-      const returnMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        if (window.WhiteboxApp.state.graphFocusId !== ${JSON.stringify(densityFocusId)}) { window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)}; window.WhiteboxApp.renderSessions(); }
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        return {
-          focusId: window.WhiteboxApp.state.graphFocusId,
-          originVisible: Boolean(document.querySelector('.upstream-column .agent-workflow-origin')),
-          downstreamNodes: document.querySelectorAll('.downstream-column .agent-workflow-node').length,
-          connectionPaths: document.querySelectorAll('.agent-workflow-edge').length,
-          downstreamGroups: document.querySelectorAll('.agent-workflow-edge.downstream.group').length,
-        };
-      })()`);
-      if (returnMetrics.focusId !== densityFocusId || !returnMetrics.originVisible || returnMetrics.downstreamNodes !== 10 || returnMetrics.downstreamGroups !== 1 || returnMetrics.connectionPaths !== 2) throw new Error(`메인 AI로 돌아온 뒤 연결 흐름이 복원되지 않았습니다: ${JSON.stringify(returnMetrics)}`);
-
-      const subagentStateImage = await captureStableState(win, `(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        const child = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'visual-density:child:9');
-        if (child) { child.status = 'running'; child.statusDetail = '추가 검증 작업 수행 중'; child.completionObserved = false; child.completedAt = null; }
-        const root = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(densityFocusId)});
-        if (root?.collaboration?.metrics) { root.collaboration.metrics.currentlyRunning = 1; root.collaboration.metrics.completedRecords = 9; }
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.delete(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        document.querySelector('.main-stage')?.scrollTo(0, 0);
-      })()`, `document.querySelectorAll('.child-session.work-working').length === 1 && document.querySelectorAll('.child-session.work-resting').length === 0 && document.querySelector('[data-subagent-completed-toggle]') && document.querySelector('.child-session.work-working .execution-mode-badge.tmux') && !document.querySelector('[data-completed-subagent-list]')`);
-      const subagentStateOutput = path.join(outputDir, 'whitebox-subagent-work-states.png');
-      fs.writeFileSync(subagentStateOutput, subagentStateImage.toPNG());
-      await win.webContents.executeJavaScript(`(() => {
-        const child = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'visual-density:child:9');
-        if (child) { child.status = 'completed'; child.statusDetail = '작업 완료'; child.completionObserved = true; child.completedAt = child.updatedAt; }
-        const root = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(densityFocusId)});
-        if (root?.collaboration?.metrics) { root.collaboration.metrics.currentlyRunning = 0; root.collaboration.metrics.completedRecords = 10; }
-        window.WhiteboxApp.renderSessions();
-      })()`);
-
-      const subagentConversationImage = await captureStableState(win, `(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.add(${JSON.stringify(densityFocusId)});
-        const child = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'visual-density:child:2');
-        if (child) window.WhiteboxApp.state.details.set(child.id, child);
-        window.WhiteboxApp.renderSessions();
-        document.querySelector('.downstream-column [data-open-subagent-chat="visual-density:child:2"]')?.click();
-      })()`, `window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(densityFocusId)}
-        && window.WhiteboxApp.state.drawerMode === 'subagent'
-        && document.querySelector('#drawerComposer')?.classList.contains('hidden')
-        && !document.querySelector('.subagent-assignment-card')
-        && document.querySelector('#drawerContent .chat-row.assistant')?.innerText.includes('3번 검사 완료')`);
-      const subagentConversationOutput = path.join(outputDir, 'whitebox-subagent-conversation.png');
-      fs.writeFileSync(subagentConversationOutput, subagentConversationImage.toPNG());
-      const subagentConversationMetrics = await win.webContents.executeJavaScript(`(() => {
-        const app = window.WhiteboxApp;
-        window.__ensureWhiteboxDensityFixture?.();
-        const root = app.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(densityFocusId)});
-        const child = app.state.snapshot.sessions.find(item => item.id === 'visual-density:child:2');
-        if (root) app.state.details.set(root.id, root);
-        if (child) app.state.details.set(child.id, child);
-        app.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        app.state.selectedId = child?.id || app.state.selectedId;
-        app.state.drawerMode = 'subagent';
-        app.renderDrawer();
-        return {
-          focusId: app.state.graphFocusId,
-          drawerMode: app.state.drawerMode,
-          workMessages: Number(document.querySelector('[data-subagent-work-messages]')?.dataset.subagentWorkMessages || 0),
-          coordinationEvents: document.querySelectorAll('[data-subagent-communication]').length,
-          coordinationCollapsed: !document.querySelector('.subagent-coordination')?.open,
-          visibleTabs: document.querySelectorAll('.drawer-tab:not(.hidden)').length,
-          composerHidden: document.querySelector('#drawerComposer')?.classList.contains('hidden')
-            && !document.querySelector('#drawerComposer [data-agent-command-form], #drawerComposer [data-agent-command-draft]'),
-          actualResponseVisible: document.querySelector('#drawerContent .chat-row.assistant')?.innerText.includes('3번 검사 완료'),
-          protectedAssignmentHidden: !document.querySelector('.subagent-assignment-card')
-            && !document.querySelector('#drawerContent')?.innerText.includes('실제로 보낸 작업 지시는')
-            && !document.querySelector('#drawerContent')?.innerText.includes('도움 AI에게 일을 맡기기 직전'),
-          placeholderNoise: /보호된 메시지|내용 없이 통신 상태|서브에이전트 실행이 시작/.test(document.querySelector('#drawerContent')?.innerText || ''),
-          drawerOverflow: document.querySelector('#detailDrawer')?.scrollWidth > document.querySelector('#detailDrawer')?.clientWidth + 2,
-        };
-      })()`);
-      if (subagentConversationMetrics.focusId !== densityFocusId || subagentConversationMetrics.drawerMode !== 'subagent' || subagentConversationMetrics.workMessages !== 1 || subagentConversationMetrics.coordinationEvents !== 1 || !subagentConversationMetrics.coordinationCollapsed || subagentConversationMetrics.visibleTabs !== 1 || !subagentConversationMetrics.composerHidden || !subagentConversationMetrics.actualResponseVisible || !subagentConversationMetrics.protectedAssignmentHidden || subagentConversationMetrics.placeholderNoise || subagentConversationMetrics.drawerOverflow) throw new Error(`서브에이전트 실제 응답 상세가 올바르지 않습니다: ${JSON.stringify(subagentConversationMetrics)}`);
-      await win.webContents.executeJavaScript("document.querySelector('#closeDrawerBtn')?.click()");
-
-      setTestWindowSize(win, 1080, 700);
-      await new Promise(resolve => setTimeout(resolve, 450));
-      const workflowCompactMetrics = await win.webContents.executeJavaScript(`(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.state.expandedCompletedSubagents.add(${JSON.stringify(densityFocusId)});
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const stage = document.querySelector('.main-stage');
-        const selectedTarget = document.querySelector('.agent-workflow-selected');
-        if (stage && selectedTarget) {
-          const stageTop = stage.getBoundingClientRect().top;
-          stage.scrollTo(0, Math.max(0, stage.scrollTop + selectedTarget.getBoundingClientRect().top - stageTop - 12));
-        }
-        const upstream = document.querySelector('.upstream-column')?.getBoundingClientRect();
-        const selected = document.querySelector('.selected-column')?.getBoundingClientRect();
-        const downstream = document.querySelector('.downstream-column')?.getBoundingClientRect();
-        const selectedCard = document.querySelector('.agent-workflow-selected')?.getBoundingClientRect();
-        const selectedCurrent = document.querySelector('.agent-workflow-selected .agent-current')?.getBoundingClientRect();
-        const providerRows = [...document.querySelectorAll('.provider-rail-item')];
-        const lastProvider = providerRows[providerRows.length - 1]?.getBoundingClientRect();
-        const sidebarFooterElement = document.querySelector('.sidebar-footer');
-        const sidebarFooter = sidebarFooterElement?.getBoundingClientRect();
-        const sidebarFooterVisible = Boolean(
-          sidebarFooterElement
-          && getComputedStyle(sidebarFooterElement).display !== 'none'
-          && sidebarFooter
-          && sidebarFooter.width > 0
-          && sidebarFooter.height > 0
-        );
-        const grid = document.querySelector('#liveSessionGrid');
-        const canvasRect = document.querySelector('.agent-workflow-canvas')?.getBoundingClientRect();
-        let routeCollisions = 0;
-        if (canvasRect) {
-          const cards = [...document.querySelectorAll('.downstream-column .agent-workflow-node')].map(node => {
-            const rect = node.getBoundingClientRect();
-            return { left: rect.left - canvasRect.left + 4, right: rect.right - canvasRect.left - 4, top: rect.top - canvasRect.top + 4, bottom: rect.bottom - canvasRect.top - 4 };
-          });
-          for (const path of document.querySelectorAll('.agent-workflow-edge.downstream')) {
-            const length = path.getTotalLength();
-            for (let sample = 1; sample < 20; sample += 1) {
-              const point = path.getPointAtLength(length * sample / 20);
-              if (cards.some(rect => point.x > rect.left && point.x < rect.right && point.y > rect.top && point.y < rect.bottom)) { routeCollisions += 1; break; }
-            }
-          }
-        }
-        return {
-          compactDirection: Boolean(upstream && selected && downstream && upstream.right < selected.left && downstream.top > Math.min(upstream.top, selected.top)),
-          selectedVisible: Boolean(selectedCard && selectedCard.top < window.innerHeight && selectedCurrent && selectedCurrent.bottom <= window.innerHeight),
-          guideHidden: document.querySelector('#beginnerGuide')?.classList.contains('hidden') || false,
-          sidebarNoOverlap: Boolean(
-            lastProvider
-            && sidebarFooter
-            && (!sidebarFooterVisible || lastProvider.bottom <= sidebarFooter.top + 1)
-          ),
-          routeCollisions,
-          groupArrowheads: document.querySelectorAll('.agent-workflow-edge.downstream.group[marker-end]').length,
-          groupPortInsideCanvas: Boolean(canvasRect && (() => { const rect = document.querySelector('[data-workflow-port="children-group-input"]')?.getBoundingClientRect(); return rect && rect.left >= canvasRect.left && rect.right <= canvasRect.right && rect.top >= canvasRect.top && rect.bottom <= canvasRect.bottom; })()),
-          connectionPaths: document.querySelectorAll('.agent-workflow-edge').length,
-          downstreamGroups: document.querySelectorAll('.agent-workflow-edge.downstream.group').length,
-          downstreamColumns: new Set([...document.querySelectorAll('.downstream-column .agent-workflow-node')].map(node => Math.round(node.getBoundingClientRect().left / 8))).size,
-          noHorizontalOverflow: grid ? grid.scrollWidth <= grid.clientWidth + 2 : false,
-          noBodyOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
-        };
-      })()`);
-      if (!workflowCompactMetrics.compactDirection || !workflowCompactMetrics.selectedVisible || !workflowCompactMetrics.guideHidden || !workflowCompactMetrics.sidebarNoOverlap || workflowCompactMetrics.routeCollisions !== 0 || workflowCompactMetrics.connectionPaths !== 2 || workflowCompactMetrics.downstreamGroups !== 1 || workflowCompactMetrics.groupArrowheads !== 1 || !workflowCompactMetrics.groupPortInsideCanvas || workflowCompactMetrics.downstreamColumns < 1 || !workflowCompactMetrics.noHorizontalOverflow || !workflowCompactMetrics.noBodyOverflow) throw new Error(`최소 창 크기의 연결형 작업 흐름이 올바르지 않습니다: ${JSON.stringify(workflowCompactMetrics)}`);
-      const workflowCompactImage = await captureStableState(win, `(() => {
-        window.__ensureWhiteboxDensityFixture?.();
-        window.WhiteboxApp.state.graphFocusId = ${JSON.stringify(densityFocusId)};
-        window.WhiteboxApp.renderSessions();
-        window.WhiteboxApp.drawAgentWorkflowConnections();
-        const stage = document.querySelector('.main-stage');
-        const selectedTarget = document.querySelector('.agent-workflow-selected');
-        if (stage && selectedTarget) {
-          const stageTop = stage.getBoundingClientRect().top;
-          stage.scrollTo(0, Math.max(0, stage.scrollTop + selectedTarget.getBoundingClientRect().top - stageTop - 12));
-        }
-      })()`, `(() => {
-        const current = document.querySelector('.agent-workflow-selected .agent-current')?.getBoundingClientRect();
-        return window.WhiteboxApp.state.graphFocusId === ${JSON.stringify(densityFocusId)} && document.querySelector('#beginnerGuide')?.classList.contains('hidden') && current && current.bottom <= window.innerHeight;
-      })()`, 8);
-      const workflowCompactOutput = path.join(outputDir, 'whitebox-agent-workflow-compact.png');
-      fs.writeFileSync(workflowCompactOutput, workflowCompactImage.toPNG());
-      setTestWindowSize(win, 1600, 980);
-      await new Promise(resolve => setTimeout(resolve, 400));
-      await win.webContents.executeJavaScript("(() => { const target = document.querySelector('[data-open-session]') || document.querySelector('.session-card'); if (target) target.click(); })()");
-      await new Promise(resolve => setTimeout(resolve, 1200));
-      const drawerImage = await win.webContents.capturePage();
-      const drawerOutput = path.join(outputDir, 'whitebox-session-detail.png');
-      fs.writeFileSync(drawerOutput, drawerImage.toPNG());
-      await win.webContents.executeJavaScript(`window.whitebox.terminalList().then(items => Promise.all(items.map(item => window.whitebox.terminalClose(item.id).catch(() => null))))`);
-      await new Promise(resolve => setTimeout(resolve, 250));
-      process.stdout.write(`${output}\n${compactOutput}\n${settingsOutput}\n${terminalOutput}\n${sessionTerminalOutput}\n${terminalCompactOutput}\n${tmuxOutput}\n${tmuxControlOutput}\n${tmuxFocusOutput}\n${tmuxDetailOutput}\n${structuredOutput}\n${deliveryOutput}\n${treeOutput}\n${managementOutput}\n${focusOutput}\n${communicationOutput}\n${childFocusOutput}\n${subagentStateOutput}\n${subagentConversationOutput}\n${workflowCompactOutput}\n${drawerOutput}\n${JSON.stringify({ bridge: bridgeInfo, beginner: beginnerMetrics, compact: compactMetrics, settings: settingsMetrics, terminal: terminalMetrics, sessionTerminal: sessionTerminalMetrics, terminalCompact: terminalCompactMetrics, terminalContinuity: continuityMetrics, drawerCommand: commandUiMetrics, tmuxControl: tmuxControlMetrics, dashboard: metrics, density: densityMetrics, management: managementMetrics, motion: { ...motionMetrics, ...refreshMotionMetrics, ...motionClosedMetrics }, workflowChild: childMetrics, workflowReturn: returnMetrics, subagentConversation: subagentConversationMetrics, workflowCompact: workflowCompactMetrics, tmux: tmuxMetrics, tmuxDetail: tmuxDetailMetrics, structuredDetail: structuredMetrics, deliveryStatus: deliveryMetrics })}\n`);
-    } catch (error) {
-      const detail = `${error.stack || error.message}\n`;
-      process.stderr.write(detail);
-      await new Promise(resolve => setTimeout(resolve, 120));
-      exitCode = 1;
-    } finally {
-      try {
-        if (win && !win.isDestroyed()) {
-          await win.webContents.executeJavaScript(`window.whitebox.terminalList()
-            .then(items => Promise.all(items.map(item => window.whitebox.terminalClose(item.id).catch(() => null))))`);
-        }
-      } catch {}
-      process.exitCode = exitCode;
-      app.quit();
-    }
-  }, 9000);
-  timeout.unref?.();
+app.on('quit', () => {
+  try { fs.rmSync(userData, { recursive: true, force: true }); } catch {}
 });

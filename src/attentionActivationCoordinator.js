@@ -1,6 +1,6 @@
 'use strict';
 
-const TERMINAL_STATUSES = new Set(['opened-pty', 'opened-session', 'ignored']);
+const TERMINAL_STATUSES = new Set(['opened-pty', 'opened-session', 'user-navigated', 'ignored']);
 
 function boundedText(value, limit = 1_000) {
   return String(value == null ? '' : value)
@@ -250,9 +250,30 @@ class AttentionActivationCoordinator {
     }
     entry.handled = true;
     entry.phase = 'handled';
+    const suppressedActivationIds = [];
+    // There is only one foreground PTY surface. Once the renderer has either
+    // opened that surface or deliberately returned to work status, older
+    // superseded alerts must stay in work status instead of being promoted and
+    // stealing the user's terminal. Their underlying session data is not
+    // removed; only automatic foreground activation is suppressed.
+    if (['opened-pty', 'opened-session', 'user-navigated'].includes(status)) {
+      for (const candidate of this.entries.values()) {
+        if (candidate === entry || !candidate.active || candidate.handled) continue;
+        this.cancel(candidate, status === 'user-navigated' ? 'user-navigated' : 'foreground-settled');
+        candidate.handled = true;
+        candidate.phase = 'suppressed';
+        suppressedActivationIds.push(candidate.record.activationId);
+      }
+    }
     this.promoteLatestUnhandled();
     this.deliverLatest();
-    return { ok: true, acknowledged: true, activationId, status };
+    return {
+      ok: true,
+      acknowledged: true,
+      activationId,
+      status,
+      ...(suppressedActivationIds.length ? { suppressedActivationIds } : {}),
+    };
   }
 
   snapshot() {

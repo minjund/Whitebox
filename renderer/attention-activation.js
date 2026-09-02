@@ -33,26 +33,60 @@
   function createAttentionActivationController(options = {}) {
     const pending = new Map();
     let sequence = 0;
+    const retryDelaysMs = (Array.isArray(options.retryDelaysMs)
+      ? options.retryDelaysMs
+      : [150, 400, 900, 1_800, 3_200])
+      .map(value => Number(value))
+      .filter(value => Number.isFinite(value) && value >= 0)
+      .slice(0, 20);
 
     const report = (scope, error) => {
       try { options.onError?.(scope, error); } catch {}
     };
 
     const sessionFor = activation => {
-      const sessions = options.getSessions?.() || [];
-      const preferredId = activation.agentId || activation.sessionId;
-      const fallbackId = activation.agentId ? '' : activation.rawSessionId;
-      return sessions.find(session => {
-        if (activation.provider && String(session?.provider || '').toLowerCase() !== activation.provider) return false;
-        const ids = [session?.id, session?.externalId].map(String);
-        return (preferredId && ids.includes(preferredId)) || (fallbackId && ids.includes(fallbackId));
-      }) || null;
+      const sessions = (options.getSessions?.() || []).filter(session => (
+        !activation.provider
+        || String(session?.provider || '').toLowerCase() === activation.provider
+      ));
+      const internalId = activation.sessionId;
+      const internalMatches = internalId
+        ? sessions.filter(session => String(session?.id || '') === internalId)
+        : [];
+      if (internalMatches.length === 1) return internalMatches[0];
+      if (internalMatches.length > 1) return null;
+      const fallbackIds = [...new Set([
+        activation.agentId,
+        activation.rawSessionId,
+        internalId,
+      ].filter(Boolean))];
+      const fallbackMatches = sessions.filter(session => fallbackIds.some(id => (
+        String(session?.id || '') === id || String(session?.externalId || '') === id
+      )));
+      return fallbackMatches.length === 1 ? fallbackMatches[0] : null;
     };
 
     const isCurrent = entry => pending.get(entry.activation.activationId) === entry;
 
+    const clearRetryTimer = entry => {
+      if (entry?.retryTimer == null) return;
+      clearTimeout(entry.retryTimer);
+      entry.retryTimer = null;
+    };
+
+    const clearAcknowledgeRetryTimer = entry => {
+      if (entry?.ackRetryTimer == null) return;
+      clearTimeout(entry.ackRetryTimer);
+      entry.ackRetryTimer = null;
+    };
+
     const acknowledge = async (entry, status) => {
-      if (!isCurrent(entry) || entry.acknowledging) return false;
+      if (!isCurrent(entry)) return false;
+      if (entry.acknowledging) {
+        if (status === 'user-navigated') entry.ackStatus = status;
+        entry.retryQueued = true;
+        return false;
+      }
       entry.ackStatus = status;
       entry.acknowledging = true;
       try {
@@ -63,13 +97,21 @@
         });
         if (!isCurrent(entry)) return false;
         const accepted = result === true || result?.acknowledged === true;
-        if (accepted) pending.delete(entry.activation.activationId);
+        if (accepted && entry.ackStatus === status) {
+          clearRetryTimer(entry);
+          clearAcknowledgeRetryTimer(entry);
+          pending.delete(entry.activation.activationId);
+        } else if (!accepted) {
+          scheduleAcknowledgeRetry(entry);
+        }
         return accepted;
       } catch (error) {
         report('attention-activation-ack', error);
+        scheduleAcknowledgeRetry(entry);
         return false;
       } finally {
         entry.acknowledging = false;
+        if (isCurrent(entry) && entry.ackStatus !== status) entry.retryQueued = true;
       }
     };
 
@@ -82,6 +124,34 @@
     };
 
     const latest = () => [...pending.values()].sort((left, right) => right.order - left.order)[0] || null;
+
+    const scheduleAcknowledgeRetry = entry => {
+      if (!isCurrent(entry) || entry.ackRetryTimer != null) return true;
+      if (entry.ackRetryIndex >= retryDelaysMs.length) return false;
+      const delay = retryDelaysMs[entry.ackRetryIndex];
+      entry.ackRetryIndex += 1;
+      entry.ackRetryTimer = setTimeout(() => {
+        entry.ackRetryTimer = null;
+        void attempt(entry);
+      }, delay);
+      return true;
+    };
+
+    // The former popup gave a person a way to release a provider hook when a
+    // terminal disappeared. With that UI gone, keep exact-terminal retries
+    // short and bounded, then hand the user back to work status and acknowledge
+    // the hook instead of leaving the provider blocked until its long timeout.
+    const scheduleRetry = entry => {
+      if (!isCurrent(entry) || entry.retryTimer != null) return true;
+      if (entry.retryIndex >= retryDelaysMs.length) return false;
+      const delay = retryDelaysMs[entry.retryIndex];
+      entry.retryIndex += 1;
+      entry.retryTimer = setTimeout(() => {
+        entry.retryTimer = null;
+        void attempt(entry);
+      }, delay);
+      return true;
+    };
 
     const attempt = async entry => {
       if (!isCurrent(entry)) return;
@@ -99,13 +169,21 @@
       const operationCurrent = () => isCurrent(entry) && entry.operationEpoch === operationEpoch;
       try {
       const session = sessionFor(entry.activation);
-      if (!session) return;
+      if (!session) {
+        if (scheduleRetry(entry)) return;
+        showSession(entry, null);
+        await acknowledge(entry, 'opened-session');
+        return;
+      }
       if (options.isProviderVisible?.(session.provider) === false) {
         await acknowledge(entry, 'ignored');
         return;
       }
-      if (session.parentId || session.sourcePluginId || session.controlCapabilities?.pty === false
-        || session.presentation?.conversationSurface === 'transcript') {
+      const ptyEligible = typeof options.canOpenPty === 'function'
+        ? options.canOpenPty(session) === true
+        : !(session.parentId || session.sourcePluginId || session.controlCapabilities?.pty === false
+          || session.presentation?.conversationSurface === 'transcript');
+      if (!ptyEligible) {
         showSession(entry, session);
         await acknowledge(entry, 'opened-session');
         return;
@@ -125,7 +203,9 @@
         return;
       }
       showSession(entry, session);
-      if (outcome.retryable === false) await acknowledge(entry, 'opened-session');
+      if (outcome.retryable === false || !scheduleRetry(entry)) {
+        await acknowledge(entry, 'opened-session');
+      }
       } finally {
         entry.inFlight = false;
         if (isCurrent(entry) && entry.retryQueued) {
@@ -145,18 +225,30 @@
       if (!activation) return { ok: false };
       if (activation.cancelled) {
         const entry = pending.get(activation.activationId);
-        if (entry) entry.operationEpoch += 1;
+        if (entry) {
+          entry.operationEpoch += 1;
+          clearRetryTimer(entry);
+          clearAcknowledgeRetryTimer(entry);
+        }
         pending.delete(activation.activationId);
         return { ok: true, cancelled: true };
       }
       const existing = pending.get(activation.activationId);
       if (existing) {
+        clearRetryTimer(existing);
+        clearAcknowledgeRetryTimer(existing);
         existing.activation = activation;
         existing.operationEpoch += 1;
         existing.ackStatus = '';
+        existing.retryIndex = 0;
+        existing.ackRetryIndex = 0;
       }
       else {
-        for (const entry of pending.values()) entry.operationEpoch += 1;
+        for (const entry of pending.values()) {
+          entry.operationEpoch += 1;
+          clearRetryTimer(entry);
+          clearAcknowledgeRetryTimer(entry);
+        }
         pending.clear();
         pending.set(activation.activationId, {
           activation,
@@ -167,6 +259,10 @@
           retryQueued: false,
           acknowledging: false,
           ackStatus: '',
+          retryIndex: 0,
+          retryTimer: null,
+          ackRetryIndex: 0,
+          ackRetryTimer: null,
         });
       }
       retryLatest();
@@ -176,8 +272,11 @@
     const userNavigated = () => {
       for (const entry of pending.values()) {
         entry.operationEpoch += 1;
-        entry.ackStatus = 'opened-session';
-        void acknowledge(entry, 'opened-session');
+        clearRetryTimer(entry);
+        clearAcknowledgeRetryTimer(entry);
+        entry.ackStatus = 'user-navigated';
+        if (entry.inFlight || entry.acknowledging) entry.retryQueued = true;
+        else void acknowledge(entry, 'user-navigated');
       }
     };
 
@@ -188,7 +287,11 @@
       pendingCount: () => pending.size,
       pendingIds: () => [...pending.keys()],
       dispose: () => {
-        for (const entry of pending.values()) entry.operationEpoch += 1;
+        for (const entry of pending.values()) {
+          entry.operationEpoch += 1;
+          clearRetryTimer(entry);
+          clearAcknowledgeRetryTimer(entry);
+        }
         pending.clear();
       },
     };
