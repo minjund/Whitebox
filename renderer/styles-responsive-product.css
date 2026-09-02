@@ -45,18 +45,6 @@
     justify-content: center;
   }
 
-  .runtime-segment>header {
-    flex-wrap: wrap;
-  }
-
-  .runtime-segment>header em {
-    display: none;
-  }
-
-  .runtime-segment .agent-flow-overview {
-    grid-template-columns: 1fr;
-  }
-
   .language-settings-card {
     grid-template-columns: 48px minmax(0,1fr);
   }
@@ -115,37 +103,6 @@
   .child-row {
     margin-left: 13px;
     margin-right: 13px;
-  }
-
-  .detail-drawer {
-    width: 100vw;
-    height: 100vh;
-    height: 100dvh;
-    border-left: 0;
-  }
-
-  .drawer-head {
-    padding: 16px 14px 13px;
-  }
-
-  .drawer-meta {
-    padding: 0 14px 13px;
-  }
-
-  .drawer-tabs {
-    padding: 0 8px;
-    overflow-x: auto;
-  }
-
-  .drawer-tab {
-    min-width: 0;
-    flex: 1;
-    padding-inline: 8px;
-    white-space: nowrap;
-  }
-
-  .drawer-content {
-    padding: 15px 14px calc(24px + env(safe-area-inset-bottom));
   }
 
   .modal-backdrop {
@@ -311,164 +268,6 @@
     display: none;
   }
 
-  .mobile-more-nav {
-    display: grid;
-  }
-
-  .mobile-tools-menu {
-    position: fixed;
-    z-index: 45;
-    right: 10px;
-    bottom: calc(76px + env(safe-area-inset-bottom));
-    left: 10px;
-    max-width: 430px;
-    margin-left: auto;
-    max-height: calc(100dvh - 96px - env(safe-area-inset-bottom));
-    overflow-y: auto;
-    padding: 12px;
-    border: 1px solid #324456;
-    border-radius: 16px;
-    background: #111925;
-    scrollbar-width: thin;
-    scrollbar-color: #516272 #111925;
-    box-shadow: 0 0 0 100vmax rgba(3,7,12,.62), 0 24px 70px rgba(0,0,0,.62);
-  }
-
-  .mobile-tools-menu::-webkit-scrollbar { width: 7px; }
-  .mobile-tools-menu::-webkit-scrollbar-track { background: #111925; border-radius: 999px; }
-  .mobile-tools-menu::-webkit-scrollbar-thumb { border: 2px solid #111925; border-radius: 999px; background: #607181; }
-
-  .mobile-tools-menu:not(.hidden) {
-    display: grid;
-    gap: 7px;
-  }
-
-  .mobile-tools-menu>.mobile-tools-head {
-    min-height: 48px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
-    align-items: center;
-    gap: 10px;
-    padding: 0 2px 6px 5px;
-  }
-
-  .mobile-tools-menu>.mobile-tools-head>span { min-width: 0; margin: 0; }
-
-  .mobile-tools-menu>.mobile-tools-head b {
-    display: block;
-    font-size: 14px;
-  }
-
-  .mobile-tools-menu>.mobile-tools-head small {
-    display: block;
-    margin-top: 3px;
-    color: #9ba9b8;
-    font-size: 12px;
-  }
-
-  #mobileToolsCloseBtn {
-    width: 44px;
-    min-height: 44px;
-    border: 1px solid #304557;
-    border-radius: 10px;
-    background: #0d1620;
-    color: #c9d7df;
-    font-size: 20px;
-    cursor: pointer;
-  }
-
-  #mobileToolsCloseBtn:hover { border-color: #5b778c; background: #172532; color: #fff; }
-
-  .mobile-tools-menu>button {
-    min-height: 58px;
-    display: grid;
-    grid-template-columns: 40px minmax(0,1fr);
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border: 1px solid #263646;
-    border-radius: 12px;
-    background: #0d141e;
-    color: #dce6ee;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .mobile-tools-menu>button:hover {
-    border-color: #45647a;
-    background: #152230;
-  }
-
-  .mobile-project-picker {
-    border: 1px solid #2b4050;
-    border-radius: 12px;
-    background: #0d161f;
-    overflow: hidden;
-  }
-
-  .mobile-project-picker>summary {
-    min-height: 58px;
-    display: grid;
-    grid-template-columns: 40px minmax(0,1fr) 18px;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    color: #dce6ee;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .mobile-project-picker>summary::-webkit-details-marker { display: none; }
-  .mobile-project-picker>summary:hover { background: #152230; }
-  .mobile-project-picker>summary em { color: #94a8b6; font-style: normal; transition: transform .18s ease; }
-  .mobile-project-picker[open]>summary em { transform: rotate(180deg); }
-
-  .mobile-project-picker-body {
-    padding: 8px;
-    border-top: 1px solid #263947;
-    background: #0a111a;
-  }
-
-  .mobile-project-picker .workspace-list { max-height: none; overflow: visible; padding-right: 0; }
-  .mobile-project-picker .workspace-item { min-height: 44px; }
-  .mobile-project-picker .workspace-item[aria-pressed="true"],
-  .mobile-project-picker .workspace-row:has(.workspace-item[aria-pressed="true"]) { display: none; }
-  .mobile-project-picker-body>#mobileAddWorkspaceBtn {
-    width: 100%;
-    min-height: 44px;
-    margin-top: 8px;
-    border: 1px dashed #3a5668;
-    border-radius: 9px;
-    background: #111e29;
-    color: #9edff2;
-  }
-
-  .mobile-tools-menu > button > i,
-  .mobile-project-picker > summary > i {
-    width: 38px;
-    height: 38px;
-    display: grid;
-    place-items: center;
-    border-radius: 10px;
-    background: #172736;
-    color: #87def7;
-    font-style: normal;
-  }
-
-  .mobile-tools-menu > button > span > b,
-  .mobile-project-picker > summary > span > b {
-    display: block;
-    font-size: 12px;
-  }
-
-  .mobile-tools-menu > button > span > small,
-  .mobile-project-picker > summary > span > small {
-    display: block;
-    margin-top: 4px;
-    color: #94a3b3;
-    font-size: 12px;
-  }
-
   .guide-toggle {
     order: 0;
     grid-column: 1/-1;
@@ -542,6 +341,15 @@
     scroll-padding-bottom: 88px;
     background: #0b131c;
   }
+
+  .modal-backdrop:not(.hidden) .run-modal {
+    transform-origin: bottom center;
+    animation-name: motion-modal-sheet-in;
+  }
+
+  .modal-backdrop.closing .run-modal {
+    animation-name: motion-modal-sheet-out;
+  }
 }
 
 /* Compact screens ≤ 640px: use edge-to-edge dialogs and single-column task forms. */
@@ -550,47 +358,9 @@
     grid-template-columns: repeat(2,1fr);
   }
 
-  .runtime-strip {
-    grid-template-columns: auto 1fr;
-  }
-
-  .runtime-strip>span:last-child {
-    grid-column: 1/-1;
-  }
 }
 
 /* Compact screens ≤ 520px: keep compact forms and dialog actions inside the safe area. */
-@media (max-width:520px) {
-  .runtime-segment>header {
-    display: grid;
-    grid-template-columns: 39px minmax(0,1fr) auto;
-    align-items: center;
-    gap: 9px;
-  }
-
-  .runtime-segment>header>.runtime-segment-icon {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .runtime-segment>header>span:nth-child(2) {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-  }
-
-  .runtime-segment>header>strong {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .runtime-segment>header>.live-tmux-overview-open {
-    grid-column: 1/4;
-    grid-row: 2;
-    width: 100%;
-    margin: 0;
-  }
-}
 
 /* Compact screens ≤ 430px: keep compact forms and dialog actions inside the safe area. */
 @media (max-width:430px) {
@@ -650,20 +420,6 @@
   .beginner-guide li>i {
     width: 24px;
     height: 24px;
-  }
-
-  .drawer-content {
-    padding-inline: 11px;
-  }
-
-  .drawer-head {
-    padding-right: 11px;
-    padding-left: 11px;
-  }
-
-  .drawer-meta {
-    padding-right: 11px;
-    padding-left: 11px;
   }
 
   .run-modal {
@@ -756,15 +512,30 @@
     border-radius: 0;
   }
 
-  .detail-drawer {
-    height: 100vh;
-    height: 100dvh;
-  }
 }
 
 /* Reduced motion: preserve state changes while removing decorative movement. */
-@media (prefers-reduced-motion:reduce) {
-  .runtime-pulse {
-    animation: none!important;
+
+@keyframes motion-modal-sheet-in {
+  from {
+    opacity: 0;
+    transform: scale(.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes motion-modal-sheet-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(.985);
   }
 }

@@ -4,7 +4,7 @@ window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEventBindings(context = {}) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
-  const { $, state, setProviderVisible = () => {}, isSourcePluginVisible = () => true, isDesktopSessionVisible = () => true, projectVisibleSnapshot = snapshot => snapshot, visibleSnapshot = () => state.snapshot, closeDrawer = () => {}, openDrawer = () => {}, openRunModal = () => {}, syncRunComposer = () => {}, saveRunDraft = () => {}, renderSessions, render, renderWorkspaces, renderGlobalStats = () => {}, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, filteredSessions, resultReviewTargets = () => [], performUiAction, toast, announce, selectView = () => {}, normalizedSearch = (value) => String(value || "").trim(), saveDashboardPreferences = () => {}, saveProjectDismissals = () => {}, moveProjectOrder = () => false, acknowledgeProjectNotices = () => 0, discardDialogTrigger = () => {}, setDialogOpenState = () => {}, syncControlRoomDisclosureButtons = () => {}, preconnectProjectAgentTerminals = () => Promise.resolve([]) } = context;
+  const { $, state, setProviderVisible = () => {}, isSourcePluginVisible = () => true, isDesktopSessionVisible = () => true, projectVisibleSnapshot = snapshot => snapshot, visibleSnapshot = () => state.snapshot, closeDrawer = () => {}, openDrawer = () => {}, openRunModal = () => {}, syncRunComposer = () => {}, saveRunDraft = () => {}, renderSessions, render, renderWorkspaces, renderGlobalStats = () => {}, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, filteredSessions, resultReviewTargets = () => [], performUiAction, toast, announce, selectView = () => {}, selectViewFromUser = selectView, normalizedSearch = (value) => String(value || "").trim(), saveDashboardPreferences = () => {}, saveProjectDismissals = () => {}, moveProjectOrder = () => false, acknowledgeProjectNotices = () => 0, syncControlRoomDisclosureButtons = () => {}, preconnectProjectAgentTerminals = () => Promise.resolve([]) } = context;
 
   let sidebarProjectDragEndedAt = 0;
 
@@ -157,7 +157,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       cards[Math.min(previousCount, cards.length - 1)]?.focus({ preventScroll: true });
       announce(window.WhiteboxI18n.t("filter.more_loaded", { count: Math.max(0, cards.length - previousCount) }));
     });
-    const workspaceLists = [$("#workspaceList"), $("#mobileWorkspaceList"), $("#projectSidebarList")].filter(Boolean);
+    const workspaceLists = [$("#workspaceList"), $("#projectSidebarList")].filter(Boolean);
     const handleWorkspaceClick = async (event) => {
       const activeList = event.currentTarget;
       if (activeList.id === "projectSidebarList" && Date.now() - sidebarProjectDragEndedAt < 250) {
@@ -204,7 +204,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         return;
       }
       const inlinePty = activeList.id === "projectSidebarList"
-        ? event.target.closest("[data-inline-pty-trigger]")
+        ? event.target.closest("[data-pty-focus-trigger]")
         : null;
       if (inlinePty) {
         // A sidebar task opens its project workspace with the PTY attached —
@@ -219,9 +219,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           state.visibleLimit = 30;
           renderWorkspaces();
         }
-        if (state.view !== "all") selectView("all", { motionKind: "filter" });
-        if ($("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
-        window.WhiteboxInlineTerminal?.toggle?.(inlinePty.dataset.inlinePtyTrigger);
+        if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
+        await openDrawer(inlinePty.dataset.ptyFocusTrigger, { trigger: inlinePty, focus: true });
         saveDashboardPreferences();
         return;
       }
@@ -313,7 +312,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         state.visibleLimit = 30;
         renderWorkspaces();
         renderGlobalStats();
-        if (activeList.id === "projectSidebarList" && state.view !== "all") selectView("all", { motionKind: "filter" });
+        if (activeList.id === "projectSidebarList" && state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
         else renderSessions("filter");
         preconnectSelectedWorkspace();
         if (activeList.id === "projectSidebarList" && state.workspace !== "all") {
@@ -334,21 +333,6 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
             result?.focus({ preventScroll: true });
             if (document.activeElement !== result) $("#mainContent")?.focus({ preventScroll: true });
           });
-        }
-        if (activeList.id === "mobileWorkspaceList") {
-          const menu = $("#mobileToolsMenu");
-          setDialogOpenState(menu, false);
-          menu?.classList.add("hidden");
-          $("#mobileMoreBtn")?.setAttribute("aria-expanded", "false");
-          const focusResults = () => {
-            const result = $("#liveSessionGrid")?.querySelector("[data-graph-focus], [data-open-session]")
-              || $("#sessionGrid")?.querySelector("[data-session-id]");
-            result?.focus({ preventScroll: true });
-            if (document.activeElement !== result) $("#mainContent")?.focus({ preventScroll: true });
-          };
-          discardDialogTrigger("mobileToolsMenu");
-          focusResults();
-          requestAnimationFrame(focusResults);
         }
       }
     };
@@ -446,12 +430,11 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       });
     });
     $("#projectHistoryRail")?.addEventListener("click", (event) => {
-      const inlineTerminal = event.target.closest("[data-inline-pty-trigger]");
+      const inlineTerminal = event.target.closest("[data-pty-focus-trigger]");
       if (inlineTerminal) {
         event.preventDefault();
         event.stopPropagation();
-        if ($("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
-        window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger);
+        void openDrawer(inlineTerminal.dataset.ptyFocusTrigger, { trigger: inlineTerminal, focus: true });
         return;
       }
       const open = event.target.closest("[data-open-session]");
@@ -462,7 +445,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         });
         return;
       }
-      if (event.target.closest("#openProjectHistoryBtn")) selectView("active", { motionKind: "view" });
+      if (event.target.closest("#openProjectHistoryBtn")) selectViewFromUser("active", { motionKind: "view" });
     });
     const controlProjectSelect = $("#controlRoomProjectSelect");
     controlProjectSelect?.addEventListener("change", (event) => {
@@ -740,7 +723,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         provider: provider?.label || "선택한 AI",
       }));
     });
-    const addWorkspaceButtons = [$("#sidebarNewProjectBtn"), $("#addWorkspaceBtn"), $("#mobileAddWorkspaceBtn")].filter(Boolean);
+    const addWorkspaceButtons = [$("#sidebarNewProjectBtn"), $("#addWorkspaceBtn")].filter(Boolean);
     const addWorkspace = async (event) => {
       const trigger = event.currentTarget;
       const response = await performUiAction(() => window.whitebox.addWorkspaces(), t("workspace.add_failed"), trigger);
@@ -770,7 +753,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       state.workspace = selected.path;
       state.workspaceSource = "direct";
       state.visibleLimit = 30;
-      if (state.view !== "all") selectView("all", { motionKind: "filter" });
+      if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
       else render();
       preconnectSelectedWorkspace();
       syncFilterResetButton();
@@ -778,9 +761,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       toast(t(response.alreadyAdded ? "control.project_already_ready" : "control.project_added_ready"));
       announce(t(response.alreadyAdded ? "control.project_already_ready" : "control.project_added_ready"));
       requestAnimationFrame(() => {
-        const targetList = trigger.id === "mobileAddWorkspaceBtn"
-          ? $("#mobileWorkspaceList")
-          : trigger.id === "sidebarNewProjectBtn"
+        const targetList = trigger.id === "sidebarNewProjectBtn"
             ? $("#projectSidebarList")
             : $("#workspaceList");
         const workspaceAttribute = trigger.id === "sidebarNewProjectBtn" ? "data-source-workspace" : "data-workspace";

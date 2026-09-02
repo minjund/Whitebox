@@ -6,7 +6,8 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
     $, state, rememberDialogTrigger, restoreDialogTrigger, setDialogOpenState, currentDialog,
-    announce, selectView, openRunModal, performUiAction,
+    announce, selectView, selectViewFromUser = selectView,
+    signalManualTerminalSelection = () => {}, openRunModal, performUiAction,
   } = context;
   const DASHBOARD_STORAGE_KEY = "whitebox:dashboard-preferences:v2";
   const RUN_DRAFT_STORAGE_KEY = "whitebox:run-draft:v2";
@@ -176,6 +177,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.workspace = "all";
       state.workspaceSource = "all";
       state.sort = "recent";
+      state.controlRoomSort = "recent";
       state.sessionOrder = [];
       state.projectOrder = [];
       state.sidebarCollapsedProjects = new Set();
@@ -342,12 +344,10 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
 
   function commandDefinitions() {
     return [
-      ["all", "⌂", t("app.nav.home"), t("quality.command.view"), () => selectView("all", { focusMain: true })],
-      ["active", "●", t("app.nav.active"), t("quality.command.view"), () => selectView("active", { focusMain: true })],
-      ["waiting", "!", t("app.nav.needs_review"), t("quality.command.view"), () => selectView("waiting", { focusMain: true })],
-      ["runtime", "↻", t("app.nav.runtime"), t("quality.command.view"), () => selectView("runtime", { focusMain: true })],
-      ["tmux", "▦", t("app.nav.tmux"), t("quality.command.view"), () => selectView("tmux", { focusMain: true })],
-      ["settings", "⚙", t("app.nav.settings"), t("quality.command.view"), () => selectView("settings", { focusMain: true })],
+      ["all", "⌂", t("app.nav.home"), t("quality.command.view"), () => selectViewFromUser("all", { focusMain: true })],
+      ["active", "●", t("app.nav.active"), t("quality.command.view"), () => selectViewFromUser("active", { focusMain: true })],
+      ["waiting", "!", t("app.nav.needs_review"), t("quality.command.view"), () => selectViewFromUser("waiting", { focusMain: true })],
+      ["settings", "⚙", t("app.nav.settings"), t("quality.command.view"), () => selectViewFromUser("settings", { focusMain: true })],
       ["new-task", "+", t("ui.new_ai_task"), t("quality.command.action"), () => openRunModal()],
       ["probe", "↻", t("ui.check_ai_connections_again"), t("quality.command.action"), () => $("#probeBtn")?.click()],
       ["workspace", "⌘", t("control.add_project"), t("quality.command.action"), () => $("#sidebarNewProjectBtn")?.click()],
@@ -373,6 +373,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
 
   function openQuickPalette() {
     if (currentDialog?.()) return;
+    signalManualTerminalSelection();
     if (!quickFocusToken) quickFocusToken = rememberDialogTrigger("quickPaletteModal");
     const modal = $("#quickPaletteModal");
     setDialogOpenState(modal, true);
@@ -402,6 +403,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
 
   function openShortcutHelp() {
     if (currentDialog?.()) return;
+    signalManualTerminalSelection();
     if (!shortcutFocusToken) shortcutFocusToken = rememberDialogTrigger("shortcutHelpModal");
     const modal = $("#shortcutHelpModal");
     setDialogOpenState(modal, true);
@@ -601,7 +603,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
     document.addEventListener("blur", (event) => {
       const field = event.target;
       if (!(field instanceof HTMLInputElement)) return;
-      if (field.matches("#runModel, #tmuxCreateName, #tmuxCreateCwd")) field.value = field.value.trim();
+      if (field.matches("#runModel")) field.value = field.value.trim();
     }, true);
   }
 

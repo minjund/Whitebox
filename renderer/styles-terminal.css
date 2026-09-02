@@ -359,18 +359,6 @@
   padding: 10px;
 }
 
-#terminalSection .terminal-section-head {
-  margin-bottom: 16px;
-}
-
-#terminalSection .terminal-layout {
-  height: clamp(520px,calc(100vh - 238px),780px);
-  min-height: 520px;
-  grid-template-columns: 270px minmax(0,1fr);
-  border-color: #263945;
-  box-shadow: 0 24px 80px rgba(0,0,0,.3),0 0 0 1px rgba(90,218,255,.025);
-}
-
 .terminal-resource-panel {
   min-width: 0;
   border-right: 1px solid #1c2a34;
@@ -1889,17 +1877,6 @@ body[data-current-view="terminal"] .topbar h1 {
   font-size: 22px;
 }
 
-/* Mission-control terminal readability */
-#terminalSection .terminal-layout {
-  height: clamp(620px,calc(100vh - 196px),900px);
-  min-height: 620px;
-  grid-template-columns: 340px minmax(0,1fr);
-  border-color: #304653;
-  border-radius: 15px;
-  background: #070c11;
-  box-shadow: 0 20px 60px rgba(0,0,0,.34);
-}
-
 .terminal-resource-head {
   min-height: 76px;
   padding: 14px 16px;
@@ -2043,12 +2020,6 @@ body[data-current-view="terminal"] .topbar h1 {
 .terminal-command-form textarea { min-height: 64px; color: #edf3f7; font-size: 15px; line-height: 1.62; }
 .terminal-command-submit,.terminal-command-clear { height: 44px; font-size: 12px; }
 .terminal-notice { min-height: 30px; color: #8293a0; font-size: 12px; }
-
-#terminalSection.terminal-focus-mode .terminal-layout { display: grid!important; grid-template-columns: minmax(0,1fr)!important; }
-#terminalSection.terminal-focus-mode .terminal-resource-panel,
-#terminalSection.terminal-focus-mode .terminal-history-panel { display: none!important; }
-#terminalSection.terminal-focus-mode .terminal-stage { grid-template-columns: minmax(0,1fr)!important; grid-template-rows: minmax(0,1fr)!important; }
-#terminalSection.terminal-focus-mode .terminal-workbench { height: 100%!important; min-height: 0!important; }
 
 body[data-current-view="terminal"] .main-stage { padding-top: 20px; padding-bottom: 28px; }
 body[data-current-view="terminal"] .terminal-section { margin-top: 14px; }

@@ -40,6 +40,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   const hasWritablePtySurface = session => !session?.parentId && (
     (String(session.status || "").toLowerCase() === "completed" && canForkCodexDesktopSession(session))
     || isDirectWritablePty(session)
+    || Boolean(window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session))
   );
 
   function latestSessionSort(sessions = []) {
@@ -64,28 +65,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const update = state.update || {};
     const available = ["available", "downloading", "downloaded"].includes(update.status);
     const latest = update.latestVersion || "—";
-    const advancedCount = 2;
-    const advancedBaseLabel = t("quality.nav_count_detailed", {
-      label: t("management.advanced_tools"),
-      count: advancedCount,
-      unit: t("quality.unit.types"),
-    });
     const updateLabel = t("update.available_version", { version: latest });
-    const advancedLabel = advancedBaseLabel;
-    const mobileBaseLabel = t("management.advanced_tools");
-    const mobileLabel = available ? `${mobileBaseLabel} · ${updateLabel}` : mobileBaseLabel;
-    const details = $("#advancedToolsNav");
-    const summary = details?.querySelector("summary");
-    const mobileMore = $("#mobileMoreBtn");
-    const mobileIndicator = $("#mobileMoreUpdateIndicator");
     const settingsNav = $("#sidebarSettingsBtn");
-
-    mobileMore?.classList.toggle("has-update", available);
-    mobileIndicator?.classList.toggle("hidden", !available);
-    summary?.setAttribute("aria-label", advancedLabel);
-    summary?.setAttribute("title", advancedLabel);
-    mobileMore?.setAttribute("aria-label", mobileLabel);
-    mobileMore?.setAttribute("title", mobileLabel);
     if (settingsNav) {
       const settingsLabel = available ? `${t("app.nav.settings")} · ${updateLabel}` : t("app.nav.settings");
       settingsNav.setAttribute("aria-label", settingsLabel);
@@ -647,11 +628,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         : live ? t("project.in_progress") : t("studio.sidebar.waiting");
       const title = shortText(session.title || session.workspace || t("studio.session.untitled"), 48);
       // Clicking a task jumps to its project workflow and opens the PTY, the
-      // same action as the agent node's PTY button; transcript-only records
-      // (plugin imports, Claude desktop conversations) keep the drawer.
+      // same action as the agent node's PTY button. Transcript-only imports
+      // stay in work status because the retired detail drawer has no replacement.
       const ptyCapable = hasWritablePtySurface(session);
       const interaction = ptyCapable
-        ? `data-inline-pty-trigger="${esc(session.id)}"`
+        ? `data-pty-focus-trigger="${esc(session.id)}" aria-expanded="${state.ptyFocusSessionId === session.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
         : `data-open-session="${esc(session.id)}"`;
       return `<button type="button" class="project-sidebar-session ${attention ? "attention" : live ? "live" : ""}"
         ${interaction} role="treeitem" aria-level="3" tabindex="-1"
@@ -867,7 +848,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           const provider = state.providerMap.get(session.provider);
           const providerLabel = provider?.label || String(session.provider || "AI").toUpperCase();
           const historyInteraction = hasWritablePtySurface(session)
-            ? `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+            ? `data-pty-focus-trigger="${esc(session.id)}" aria-expanded="${state.ptyFocusSessionId === session.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
             : `data-open-session="${esc(session.id)}"`;
           const updatedAt = new Date(session.updatedAt || 0);
           const updatedLabel = Number.isNaN(updatedAt.getTime())
@@ -1075,41 +1056,24 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     }
     const navWaitingUnit = $("#navWaitingUnit");
     if (navWaitingUnit) navWaitingUnit.textContent = window.WhiteboxI18n.t("quality.unit.tasks");
-    const scheduledCount = (state.snapshot?.automations || [])
-      .filter((item) => isProviderVisible(item.provider || "codex")).length;
-    const loopCount = sessions.filter(isRuntimeLoopSession).length;
-    const runtimeNavCount = $("#navRuntimeCount");
-    runtimeNavCount.dataset.total = String(scheduledCount + loopCount);
-    runtimeNavCount.textContent = t("runtime.nav_count", { schedules: scheduledCount, running: loopCount });
-    const tmuxSessionCount = Number(state.snapshot?.tmux?.summary?.sessions || 0);
-    $("#navTmuxCount").textContent = t("tmux.nav_group_count", { count: Number(state.snapshot?.tmux?.summary?.windows || 0) });
-    $("#advancedToolsCount").textContent = 2;
     const navCounts = {
       all: activeRootCount,
       active: memoryRootCount,
       waiting: reviewCount,
-      runtime: scheduledCount + loopCount,
-      terminal: undefined,
-      tmux: undefined,
     };
     document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
       const key = {
-        all: "app.nav.home", active: "app.nav.active", waiting: "app.nav.needs_review", runtime: "app.nav.runtime",
-        terminal: "app.nav.session_terminal", tmux: "app.nav.tmux", settings: "app.nav.settings",
+        all: "app.nav.home", active: "app.nav.active", waiting: "app.nav.needs_review", settings: "app.nav.settings",
       }[button.dataset.view];
       const label = t(key);
       const count = navCounts[button.dataset.view];
-      const unitKey = { all: "tasks", active: "records", waiting: "items", runtime: "runs", terminal: "sessions", tmux: "groups" }[button.dataset.view];
+      const unitKey = { all: "tasks", active: "records", waiting: "items" }[button.dataset.view];
       const unit = unitKey ? t(`quality.unit.${unitKey}`) : "";
       const accessibleLabel = Number.isFinite(count) ? t("quality.nav_count_detailed", { label, count, unit }) : label;
       button.setAttribute("aria-label", accessibleLabel);
       button.setAttribute("title", accessibleLabel);
     });
     syncUpdateNavigationStatus();
-    const tmuxShortcut = $("#openTmuxFromAgentWork");
-    $("#agentWorkTmuxCount").textContent = `${tmuxSessionCount}건`;
-    tmuxShortcut.dataset.i18nParams = JSON.stringify({ count: tmuxSessionCount });
-    tmuxShortcut.setAttribute("aria-label", t("graph.open_tmux_workspace_count", { count: tmuxSessionCount }));
   }
 
   function formatBytes(value) {

@@ -58,6 +58,30 @@ function isWritableDirectSession(session) {
     && !sourceMarkers.some(value => String(value).toLowerCase() === 'whitebox-bridge' || externalSourcePattern.test(value));
 }
 
+function appOwnedBridgeTerminalIdentity(session) {
+  if (!session || session.parentId || session.readOnly === true) return null;
+  if (String(session.source || '').trim().toLowerCase() !== 'whitebox-bridge'
+    || String(session.clientKind || '').trim().toLowerCase() !== 'whitebox-bridge'
+    || session.sourcePlugin
+    || String(session.sourcePluginId || '').trim()
+    || String(session.provenance?.source?.pluginId || '').trim()) return null;
+  const presences = (Array.isArray(session.runtimePresence) ? session.runtimePresence : [])
+    .filter(item => String(item?.kind || '').trim().toLowerCase() === 'bridge')
+    .map(item => ({
+      terminalId: String(item?.terminalId || '').trim(),
+      creationId: String(item?.creationId || '').trim(),
+      provider: String(item?.provider || '').trim().toLowerCase(),
+    }))
+    .filter(item => item.terminalId);
+  if (presences.length !== 1) return null;
+  const [identity] = presences;
+  const provider = String(session.provider || '').trim().toLowerCase();
+  if (!provider || identity.provider !== provider
+    || String(session.id || '').trim() !== `bridge:${identity.terminalId}`
+    || String(session.externalId || '').trim() !== identity.terminalId) return null;
+  return Object.freeze({ terminalId: identity.terminalId, creationId: identity.creationId, provider });
+}
+
 window.WhiteboxRendererUtils = Object.freeze({
   // Intl.DateTimeFormat construction is far more expensive than format();
   // reuse one instance per locale+options combination across render passes.
@@ -86,6 +110,7 @@ window.WhiteboxRendererUtils = Object.freeze({
     return ({ claude: 'Claude', gpt: 'GPT', codex: 'GPT', gemini: 'Gemini', grok: 'Grok' })[provider] || 'AI';
   },
   isWritableDirectSession,
+  appOwnedBridgeTerminalIdentity,
   canForkCodexDesktopSession(session) {
     const sourcePlugin = session?.sourcePlugin;
     const sourcePluginId = String(session?.sourcePluginId

@@ -46,7 +46,7 @@ async function reloadApp(win) {
 async function prepareProject(win, workspace = 'D:\\fixture') {
   await win.webContents.executeJavaScript(`(() => {
     const app = window.WhiteboxApp;
-    for (const selector of ['#cancelSessionResetBtn', '#cancelRunBtn', '#closeDrawerBtn', '#closeShortcutHelpBtn', '#closeQuickPaletteBtn', '#cancelTmuxCreateBtn', '#mobileToolsCloseBtn']) {
+    for (const selector of ['#ptyFocusBackBtn', '#cancelRunBtn', '#closeShortcutHelpBtn', '#closeQuickPaletteBtn', '#cancelTmuxCreateBtn']) {
       const button = document.querySelector(selector);
       if (button && button.getClientRects().length) button.click();
     }
@@ -106,15 +106,12 @@ async function inspectLayout(win, label) {
     });
     const openSurfaces = [
       ['run', document.querySelector('#runModal'), document.querySelector('#runModal .run-modal')],
-      ['drawer', document.querySelector('#detailDrawer'), document.querySelector('#detailDrawer')],
-      ['session-reset', document.querySelector('#sessionResetModal'), document.querySelector('#sessionResetModal .session-reset-dialog')],
+      ['pty-focus', document.querySelector('#ptyFocusSurface'), document.querySelector('#ptyFocusSurface')],
       ['shortcuts', document.querySelector('#shortcutHelpModal'), document.querySelector('#shortcutHelpModal .quality-modal')],
       ['quick-palette', document.querySelector('#quickPaletteModal'), document.querySelector('#quickPaletteModal .quality-modal')],
       ['tmux-create', document.querySelector('#tmuxCreateModal'), document.querySelector('#tmuxCreateModal .modal')],
     ].filter(([name, host, surface]) => {
-      const explicitlyOpen = name === 'drawer'
-        ? host?.classList.contains('open')
-        : host && !host.classList.contains('hidden') && host.getAttribute('aria-hidden') !== 'true';
+      const explicitlyOpen = host && !host.classList.contains('hidden') && host.getAttribute('aria-hidden') !== 'true';
       return explicitlyOpen && isRendered(host) && isRendered(surface);
     });
     const surfacesOutsideViewport = openSurfaces.map(([name, , surface]) => {
@@ -127,6 +124,7 @@ async function inspectLayout(win, label) {
       const surfaceRect = surface.getBoundingClientRect();
       return [...document.querySelectorAll('#appShell button, #appShell summary, #appShell a[href], #appShell [role="button"]')]
         .filter(isRendered)
+        .filter(element => !surface.contains(element))
         .map(element => {
           const rect = element.getBoundingClientRect();
           const left = Math.max(rect.left, surfaceRect.left);
@@ -226,7 +224,7 @@ async function visibleControlCount(win, scope) {
 
 async function closeTransientSurfaces(win) {
   await win.webContents.executeJavaScript(`(() => {
-    for (const selector of ['#cancelSessionResetBtn', '#cancelRunBtn', '#closeDrawerBtn', '#closeShortcutHelpBtn', '#closeQuickPaletteBtn', '#cancelTmuxCreateBtn', '#mobileToolsCloseBtn']) {
+    for (const selector of ['#ptyFocusBackBtn', '#cancelRunBtn', '#closeShortcutHelpBtn', '#closeQuickPaletteBtn', '#cancelTmuxCreateBtn']) {
       const button = document.querySelector(selector);
       if (button && button.getClientRects().length) button.click();
     }
@@ -276,22 +274,26 @@ app.whenReady().then(async () => {
     await installGuards(win);
     if (process.env.WHITEBOX_PROJECT_CAPTURE_ONLY === '1') {
       await prepareProject(win);
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-      await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, '상세 패널 단독 캡처 준비 실패');
+      await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root')`);
+      await waitFor(win, `window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+        && !document.querySelector('#ptyFocusSurface').classList.contains('hidden')`, 'PTY 집중 화면 단독 캡처 준비 실패');
       win.show();
       await wait(420);
-      const output = path.join(__dirname, '..', 'artifacts', 'whitebox-project-detail-drawer-verified-visible.png');
+      const output = path.join(__dirname, '..', 'artifacts', 'whitebox-project-pty-focus-verified-visible.png');
       fs.mkdirSync(path.dirname(output), { recursive: true });
       await capture(win, output);
-      const drawer = await win.webContents.executeJavaScript(`(() => {
-        const element = document.querySelector('#detailDrawer');
+      const ptyFocus = await win.webContents.executeJavaScript(`(() => {
+        const element = document.querySelector('#ptyFocusSurface');
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
-        const close = document.querySelector('#closeDrawerBtn');
+        const close = document.querySelector('#ptyFocusBackBtn');
         const closeRect = close?.getBoundingClientRect();
         const point = document.elementFromPoint(Math.min(window.innerWidth - 20, rect.left + 100), 300);
         return {
-          open: element.classList.contains('open'),
+          open: !element.classList.contains('hidden'),
+          sessionId: window.WhiteboxApp.state.ptyFocusSessionId,
+          oldUiAbsent: !document.querySelector('#detailDrawer,#drawerBackdrop,#drawerComposer,#mobileMoreBtn'),
+          xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport .xterm')),
           left: rect.left,
           right: rect.right,
           width: rect.width,
@@ -306,7 +308,7 @@ app.whenReady().then(async () => {
           point: point ? { tag: point.tagName, id: point.id, className: point.className } : null,
         };
       })()`);
-      process.stdout.write(`${JSON.stringify({ ok: true, drawer, output }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: true, ptyFocus, output }, null, 2)}\n`);
       return;
     }
 
@@ -314,6 +316,12 @@ app.whenReady().then(async () => {
     const projectPaths = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].map(item => item.dataset.workspace)`);
     report.projectCount = projectPaths.length;
     for (const workspace of projectPaths) {
+      await win.webContents.executeJavaScript(`(() => {
+        const item = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
+        if (item?.getAttribute('aria-expanded') === 'true') item.click();
+      })()`);
+      await waitFor(win, `[...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+        .find(node => node.dataset.workspace === ${JSON.stringify(workspace)})?.getAttribute('aria-expanded') === 'false'`, `프로젝트 접기 실패: ${workspace}`);
       await win.webContents.executeJavaScript(`(() => {
         const item = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
         item?.click();
@@ -336,7 +344,7 @@ app.whenReady().then(async () => {
         || projectState.expandedProjects !== projectState.projects
         || projectState.expandedSources !== projectState.sources
         || projectState.nestedSessionAreas !== projectState.sources
-        || projectState.nestedSessions < projectState.sources
+        || projectState.nestedSessions < projectState.projects
         || projectState.mainProjects.length > 1) {
         throw new Error(`프로젝트 선택 격리 실패: ${workspace} · ${JSON.stringify(projectState)}`);
       }
@@ -389,58 +397,29 @@ app.whenReady().then(async () => {
     }
 
     await prepareProject(win);
-    await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-    await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, '상세 패널 열기 실패');
-    report.layouts.drawer = await inspectLayout(win, '상세 패널');
-    const drawerOutput = path.join(__dirname, '..', 'artifacts', 'whitebox-project-detail-drawer-fixed.png');
-    fs.mkdirSync(path.dirname(drawerOutput), { recursive: true });
-    await capture(win, drawerOutput);
-    report.screenshots.push(drawerOutput);
-    report.layouts.drawerAfterCapture = await inspectLayout(win, '상세 패널 캡처 후');
-
-    for (const tab of ['summary', 'chat', 'lifecycle', 'tokens']) {
-      await prepareProject(win);
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-      await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, `상세 ${tab} 탭 준비 실패`);
-      await win.webContents.executeJavaScript(`document.querySelector('[data-tab="${tab}"]')?.click()`);
-      await waitFor(win, `document.querySelector('[data-tab="${tab}"]')?.getAttribute('aria-selected') === 'true'`, `상세 ${tab} 탭 클릭 실패`);
-      report.clicked.push(`상세 탭: ${tab}`);
-      await inspectLayout(win, `상세 탭: ${tab}`);
-      const contentControls = await visibleControlCount(win, '#drawerContent');
-      report.drawerControls += contentControls;
-      for (let index = 0; index < contentControls; index += 1) {
-        await reloadApp(win);
-        await prepareProject(win);
-        await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-        await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, `상세 ${tab} 내용 준비 실패`);
-        await win.webContents.executeJavaScript(`document.querySelector('[data-tab="${tab}"]')?.click()`);
-        await waitFor(win, `document.querySelector('[data-tab="${tab}"]')?.getAttribute('aria-selected') === 'true'`, `상세 ${tab} 내용 탭 클릭 실패`);
-        const clicked = await clickIndexedControl(win, '#drawerContent', index);
-        if (!clicked.ok) throw new Error(`상세 ${tab} 탭 ${index + 1}번째 버튼을 찾지 못했습니다.`);
-        report.clicked.push(`상세 ${tab}: ${clicked.name}`);
-        await wait(160);
-        await inspectLayout(win, `상세 ${tab} 버튼: ${clicked.name}`);
-        await closeTransientSurfaces(win);
-      }
+    await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-root')`);
+    await waitFor(win, `window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+      && !document.querySelector('#ptyFocusSurface').classList.contains('hidden')
+      && Boolean(document.querySelector('#ptyFocusTerminalViewport .xterm'))`, 'PTY 집중 화면 열기 실패');
+    report.layouts.ptyFocus = await inspectLayout(win, 'PTY 집중 화면');
+    const ptyOutput = path.join(__dirname, '..', 'artifacts', 'whitebox-project-pty-focus.png');
+    fs.mkdirSync(path.dirname(ptyOutput), { recursive: true });
+    await capture(win, ptyOutput);
+    report.screenshots.push(ptyOutput);
+    report.drawerControls = await visibleControlCount(win, '#ptyFocusSurface');
+    const ptyContract = await win.webContents.executeJavaScript(`(() => ({
+      oldUiAbsent: !document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer,#mobileMoreBtn,#mobileToolsMenu'),
+      backgroundInactive: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
+      exactSession: window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root',
+      exactTerminal: window.WhiteboxTerminal.embeddedState().terminalId === 'terminal-main',
+    }))()`);
+    if (!ptyContract.oldUiAbsent || !ptyContract.backgroundInactive || !ptyContract.exactSession || !ptyContract.exactTerminal) {
+      throw new Error(`PTY 집중 화면 계약 실패: ${JSON.stringify(ptyContract)}`);
     }
-
-    await prepareProject(win);
-    await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-    await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, '상세 버튼 순회 준비 실패');
-    const drawerControls = await visibleControlCount(win, '#detailDrawer');
-    report.drawerControls += drawerControls;
-    for (let index = 0; index < drawerControls; index += 1) {
-      await reloadApp(win);
-      await prepareProject(win);
-      await win.webContents.executeJavaScript(`window.WhiteboxApp.openDrawer('fixture-ended')`);
-      await waitFor(win, `document.querySelector('#detailDrawer').classList.contains('open')`, '상세 버튼 순회 재열기 실패');
-      const clicked = await clickIndexedControl(win, '#detailDrawer', index);
-      if (!clicked.ok) throw new Error(`상세 패널 ${index + 1}번째 버튼을 찾지 못했습니다.`);
-      report.clicked.push(`상세 패널: ${clicked.name}`);
-      await wait(160);
-      await inspectLayout(win, `상세 패널 버튼: ${clicked.name}`);
-      await closeTransientSurfaces(win);
-    }
+    await win.webContents.executeJavaScript(`document.querySelector('#ptyFocusBackBtn')?.click()`);
+    await waitFor(win, `!window.WhiteboxApp.state.ptyFocusSessionId
+      && document.querySelector('#ptyFocusSurface').classList.contains('hidden')`, 'PTY 집중 화면 닫기 실패');
+    report.clicked.push('담당 노드 PTY 집중 화면 열기/닫기');
 
     await win.reload();
     await waitFor(win, `Boolean(window.WhiteboxApp?.initialized && document.querySelector('#projectSidebarList [data-remove-workspace]'))`, '삭제 버튼 검증용 화면 재초기화 실패');

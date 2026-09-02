@@ -22,6 +22,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     visibleProviders = () => state.providers,
     isProviderVisible = () => true,
     selectView = () => {},
+    signalManualTerminalSelection = () => {},
   } = context;
   let runFocusToken = null;
   let pendingRunCreation = null;
@@ -320,6 +321,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
   }
 
   function openRunModal() {
+    signalManualTerminalSelection();
     const projectPath = selectedProjectPath();
     if (!projectPath) {
       toast(t("run.select_project_first"));
@@ -327,8 +329,6 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
       const projectTarget = [
         ...document.querySelectorAll("#projectSidebarList [data-workspace]"),
         $("#sidebarNewProjectBtn"),
-        $("#mobileAddWorkspaceBtn"),
-        $("#mobileMoreBtn"),
       ].find((element) => element
         && !element.disabled
         && !element.closest("[hidden], [inert], [aria-hidden='true'], .hidden")
@@ -496,10 +496,16 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
       closeRunModal(true);
       clearRunDraft({ silent: true, focus: false });
       syncRunComposer();
-      // startAgent preselects the newly-created PTY. Open that workbench now so
-      // provider output, approval prompts, and failures are visible instead of
-      // leaving the user on a stale dashboard card.
-      selectView(state.runSource === "direct" ? "terminal" : "active");
+      if (state.runSource === "direct") {
+        // The monitor may first expose this as a provisional bridge node. Keep
+        // the exact creation identity and open that same PTY in focus mode as
+        // soon as its snapshot projection is available.
+        selectView("all");
+        context.openPtyFocusForTerminal?.(result.terminalId, {
+          creationId: result.creationId,
+          focus: true,
+        });
+      } else selectView("active");
       toast(result.creationFailed
         ? (result.error || window.WhiteboxI18n.t("ui.could_not_start_the_task"))
         : result.creationUnavailable
@@ -520,11 +526,14 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
         && error?.terminalSelected === true
         && Boolean(error?.terminalId);
       if (revealUncertainTerminal) {
-        // The command may already be running. Keep the full draft and the
-        // idempotent creation ID, but uncover the selected PTY so live output
-        // and approval prompts are not hidden behind the run dialog.
+        // The command may already be running. Preserve its exact idempotent
+        // creation identity and reveal only that PTY in focus mode.
         closeRunModal(true);
-        selectView("terminal");
+        selectView("all");
+        context.openPtyFocusForTerminal?.(error.terminalId, {
+          creationId: error.creationId || pendingRunCreation?.id || "",
+          focus: true,
+        });
         toast(window.WhiteboxI18n.t("agent.delivery_uncertain"));
       } else {
         $("#runError").textContent = window.WhiteboxI18n.errorText(error, "ui.could_not_start_the_task");

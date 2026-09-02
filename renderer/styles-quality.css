@@ -248,22 +248,6 @@ body.quality-keyboard-mode :focus-visible {
   margin-bottom: 9px;
 }
 
-.drawer-meta .meta-copy {
-  font: inherit;
-  cursor: pointer;
-}
-
-.drawer-meta .meta-copy:hover,
-.drawer-meta .meta-copy:focus-visible {
-  border-color: #3e6d61;
-  background: #13251f;
-  color: #c5f4e4;
-}
-
-.drawer-meta .meta-copy > span {
-  color: #72d8b8;
-}
-
 .clipboard-fallback {
   position: fixed;
   left: -10000px;

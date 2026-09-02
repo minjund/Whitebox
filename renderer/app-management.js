@@ -49,7 +49,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
   const needsDirectResultReview = session => {
     const sessionId = String(session?.id || "");
     const completed = String(session?.status || "") === "completed";
-    return Boolean(completed && sessionId && resultReviewTargets(session)
+    return Boolean(completed && sessionId && resultReviewTargets(session, { allowPtyCreation: true })
       .some(target => String(target?.id || "") === sessionId));
   };
   const hasOptionalFollowup = session => Boolean(
@@ -374,12 +374,17 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     const resultReviewAttribute = displayType === "result" && pendingResultReview
       ? ' data-result-review="true"'
       : "";
-    const primaryAction = displayType === "result" || displayType === "failure"
+    const primaryAction = pendingResultReview && displayType === "result"
+      ? `<button type="button" class="attention-primary-action" data-result-review-complete="${esc(session.id)}">${esc(t("management.result_review_complete"))}</button>`
+      : displayType === "result" || displayType === "failure"
         ? `<button type="button" class="attention-primary-action" data-open-session="${esc(session.id)}"${resultReviewAttribute}>${esc(t(`management.action.${displayType}`))}</button>`
         : "";
+    const secondaryActionLabel = pendingResultReview && displayType === "result"
+      ? t("pty_focus.title")
+      : t("management.review_detail");
     return `<article class="attention-card ${index === 0 ? "priority-card" : ""} ${esc(category)} ${esc(attention.kind || "response")} ${esc(displayType)}" data-management-session="${esc(session.id)}" data-attention-category="${esc(category)}" style="--management-provider:${provider.accent}">
       <p class="attention-now-action">${esc(index === 0 ? "가장 먼저 확인" : displayLabel)}</p>
-      <header><span class="provider-mark">${esc(provider.mark)}</span><div><small>${esc(providerRequestLabel)}</small><h3>${esc(visibleTitle)}</h3></div><div class="attention-card-header-actions"><em class="confidence ${esc(evidence.confidence || "low")}">${esc(evidence.confidence === "medium" ? t("management.last_status_check", { time: absoluteTime(session.updatedAt) }) : evidenceLabel(evidence.confidence))}</em>${primaryAction}<button type="button" data-open-session="${esc(session.id)}"${resultReviewAttribute}>${esc(t("management.review_detail"))}</button></div></header>
+      <header><span class="provider-mark">${esc(provider.mark)}</span><div><small>${esc(providerRequestLabel)}</small><h3>${esc(visibleTitle)}</h3></div><div class="attention-card-header-actions"><em class="confidence ${esc(evidence.confidence || "low")}">${esc(evidence.confidence === "medium" ? t("management.last_status_check", { time: absoluteTime(session.updatedAt) }) : evidenceLabel(evidence.confidence))}</em>${primaryAction}<button type="button" data-open-session="${esc(session.id)}"${resultReviewAttribute}>${esc(secondaryActionLabel)}</button></div></header>
       ${quickActionsHtml(session, displayType === "question")}
       ${pendingResultReview && !responseRequired ? "" : `<div class="attention-category-banner ${esc(category)}"><i aria-hidden="true"></i><span><b>${esc(attention.kind === "approval" ? t("management.attention.approval_short") : t(`management.category.${category}`))}</b><small>${esc(attention.kind === "approval" ? t("management.category.approval_detail", { provider: provider.label }) : t(`management.category.${category}_detail`))}</small></span></div>
       <div class="attention-decision-flow" data-attention-flow="${esc(flow.kind)}" aria-label="${esc(t("management.flow_label"))}">
@@ -478,7 +483,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
       const { session, sources } = entry;
       const provider = providerInfo(session.provider);
       const strongest = [...sources].sort((a, b) => score(b) - score(a))[0] || session;
-      const reviewTargets = resultReviewTargets(session);
+      const reviewTargets = resultReviewTargets(session, { allowPtyCreation: true });
       const canCompleteReview = reviewTargets.length > 0;
       const tone = matchesManagementFilter(strongest, "critical") ? "critical" : matchesManagementFilter(strongest, "attention") ? "attention" : "warning";
       const directReview = sources.includes(session);
@@ -808,7 +813,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     const outcome = session.outcome || { artifacts: [], checks: [] };
     const evidence = session.evidence || { sources: [] };
     const controls = session.controlCapabilities || {};
-    const pendingReviewTargets = resultReviewTargets(session);
+    const pendingReviewTargets = resultReviewTargets(session, { allowPtyCreation: true });
     const browserTabs = Array.isArray(session.resources?.browserTabs) ? session.resources.browserTabs : [];
     return `<div class="management-detail">
       ${pendingReviewTargets.length ? `<section class="management-result-review" aria-labelledby="managementResultReviewTitle">

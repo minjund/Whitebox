@@ -1341,9 +1341,6 @@
   background: #030609;
 }
 
-#agentInlineTerminalViewport > .terminal-screen { position: absolute; z-index: 1; inset: 0; overflow: hidden; }
-#agentInlineTerminalViewport > .terminal-screen .xterm { height: 100%; padding: 12px 14px; }
-#agentInlineTerminalViewport > .terminal-screen .xterm-viewport { background: transparent !important; }
 
 .agent-inline-terminal-empty {
   position: absolute;

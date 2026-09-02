@@ -88,6 +88,10 @@ async function capture(win, outputDir, name, repaint = false) {
 }
 
 async function auditVisibleText(win, view) {
+  await win.webContents.executeJavaScript(`document.fonts.ready.then(() => {
+    for (const animation of document.getAnimations()) { try { animation.finish(); } catch {} }
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  })`);
   return win.webContents.executeJavaScript(`(() => {
     const withinViewport = rect => rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
     const visibleAtCenter = element => {
@@ -180,18 +184,10 @@ async function auditVisibleText(win, view) {
       '.management-quick-actions',
       '.management-control-buttons',
       '.terminal-create-actions',
-      '.terminal-workspace-actions',
-      '.terminal-key-actions',
-      '.terminal-tmux-tools',
-      '.tmux-section-actions',
-      '.tmux-pane-actions',
+      '.agent-inline-terminal-actions',
       '.run-modal-actions',
       '.modal-actions',
-      '.detail-meta-actions',
-      '.drawer-meta',
-      '.chat-prompt-actions',
       '.agent-command-actions',
-      '.mobile-bottom-nav',
     ];
     const crowdedGroups = spacingGroups.flatMap(selector => [...document.querySelectorAll(selector)].flatMap(group => {
       const rect = group.getBoundingClientRect();
@@ -253,8 +249,6 @@ app.whenReady().then(async () => {
     await wait(260);
     const outputDir = path.join(__dirname, '..', 'artifacts');
     fs.mkdirSync(outputDir, { recursive: true });
-    const reviewOutputDir = path.join(__dirname, '..', '.planning', 'ui-reviews', '1.4.0-current');
-    fs.mkdirSync(reviewOutputDir, { recursive: true });
 
     await win.webContents.executeJavaScript(`(async () => {
       const bootstrap = await window.whitebox.bootstrap();
@@ -295,7 +289,6 @@ app.whenReady().then(async () => {
     await waitFor(win, `Boolean(document.querySelector('.execution-activity-panel') && document.querySelector('[data-execution-mode="foreground"]'))`);
     await forceRepaint(win);
     await win.webContents.executeJavaScript(`(() => {
-      window.WhiteboxApp.closeDrawer(false);
       document.querySelector('#mainContent')?.focus({ preventScroll: true });
       const foreground = document.querySelector('[data-execution-mode="foreground"]');
       if (foreground) foreground.open = true;
@@ -304,14 +297,12 @@ app.whenReady().then(async () => {
       if (stage && panel) stage.scrollTop = Math.max(0, panel.offsetTop - 90);
       return true;
     })()`);
-    await waitFor(win, `!document.querySelector('#detailDrawer')?.classList.contains('open')
-      && document.querySelector('#detailDrawer')?.getAttribute('aria-hidden') === 'true'
-      && document.querySelector('#detailDrawer')?.inert
-      && document.querySelector('#drawerBackdrop')?.classList.contains('hidden')
+    await waitFor(win, `!document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer,#sessionResetModal,#mobileMoreBtn,#mobileToolsMenu,'
+      + '#terminalSection,#terminalHistoryPanel,#terminalHistoryList,#automationOverview,#tmuxSection,#tmuxCreateModal')
       && !document.querySelector('#appShell')?.inert
       && !document.body.classList.contains('dialog-open')`);
-    // Recreate the native compositor surface after removing the backdrop-filter
-    // layer; capturePage can otherwise retain the closed drawer's dimmed frame.
+    // Recreate the native compositor surface before checking the expanded
+    // read-only execution status panel.
     win.hide();
     await wait(100);
     win.show();
@@ -359,39 +350,38 @@ app.whenReady().then(async () => {
     })()`);
     await capture(win, outputDir, 'whitebox-control-room-360.png', true);
 
-    await win.webContents.executeJavaScript(`(() => {
-      document.querySelector('#mobileMoreBtn')?.click();
-      const picker = document.querySelector('.mobile-project-picker');
-      if (picker) picker.open = true;
-      return true;
-    })()`);
-    await waitFor(win, `!document.querySelector('#mobileToolsMenu')?.classList.contains('hidden') && document.querySelector('.mobile-project-picker')?.open && document.querySelector('#mobileWorkspaceList [aria-pressed="true"]')`);
+    await waitFor(win, `!document.querySelector('#mobileMoreBtn,#mobileToolsMenu')
+      && Boolean([...document.querySelectorAll('[data-pty-focus-trigger="fixture-root"]')]
+        .find(node => node.getBoundingClientRect().height > 0))`);
     const mobileProjectStatusMetrics = await win.webContents.executeJavaScript(`(() => {
-      const dot = [...document.querySelectorAll('#mobileWorkspaceList .workspace-live-state i')]
-        .find(candidate => candidate.getClientRects().length > 0);
-      const label = dot?.closest('.workspace-live-state')?.querySelector('b');
-      const rect = dot?.getBoundingClientRect();
+      const card = [...document.querySelectorAll('[data-control-session="fixture-root"]')]
+        .find(candidate => candidate.getBoundingClientRect().height > 0);
+      const status = card?.querySelector('.control-room-main .control-main-top > em,.control-session-live,.status-pill');
+      const trigger = [...document.querySelectorAll('[data-pty-focus-trigger="fixture-root"]')]
+        .find(candidate => candidate.getBoundingClientRect().height > 0);
+      const rect = trigger?.getBoundingClientRect();
       return {
-        found: Boolean(dot),
+        found: Boolean(card && trigger),
         width: rect?.width || 0,
         height: rect?.height || 0,
-        round: dot ? getComputedStyle(dot).borderRadius : '',
-        labelHidden: label ? getComputedStyle(label).display === 'none' : true,
-        accessibleLabel: dot?.closest('.workspace-live-state')?.getAttribute('aria-label') || '',
+        noOverflow: Boolean(card && card.scrollWidth <= card.clientWidth + 2),
+        statusText: status?.textContent.trim() || '',
+        accessibleLabel: trigger?.getAttribute('aria-label') || trigger?.textContent.trim() || '',
+        oldMobileUiAbsent: !document.querySelector('#mobileMoreBtn,#mobileToolsMenu'),
       };
     })()`);
     if (!mobileProjectStatusMetrics.found
-      || mobileProjectStatusMetrics.width > 9 || mobileProjectStatusMetrics.height > 9
-      || !mobileProjectStatusMetrics.round.includes('50')
-      || !mobileProjectStatusMetrics.labelHidden || !mobileProjectStatusMetrics.accessibleLabel) {
-      throw new Error(`모바일 프로젝트 상태 표시가 아이콘 CSS와 충돌합니다: ${JSON.stringify(mobileProjectStatusMetrics)}`);
+      || mobileProjectStatusMetrics.width < 44 || mobileProjectStatusMetrics.height < 44
+      || !mobileProjectStatusMetrics.noOverflow || !mobileProjectStatusMetrics.statusText
+      || !mobileProjectStatusMetrics.accessibleLabel || !mobileProjectStatusMetrics.oldMobileUiAbsent) {
+      throw new Error(`모바일 작업 현황·PTY 진입 가독성 계약 미달: ${JSON.stringify(mobileProjectStatusMetrics)}`);
     }
-    await capture(win, outputDir, 'whitebox-responsive-projects-360.png');
+    await capture(win, outputDir, 'whitebox-responsive-control-room-360.png');
 
     win.setContentSize(1440, 900);
     await wait(250);
     const viewReports = [];
-    for (const view of ['all', 'active', 'waiting', 'runtime', 'terminal', 'tmux', 'settings']) {
+    for (const view of ['all', 'active', 'waiting', 'settings']) {
       await win.webContents.executeJavaScript(`(() => {
         const app = window.WhiteboxApp;
         app.state.view = ${JSON.stringify(view)};
@@ -409,561 +399,120 @@ app.whenReady().then(async () => {
       await capture(win, outputDir, `whitebox-readability-${view}.png`);
     }
 
-    await win.webContents.executeJavaScript(`(async () => {
-      const app = window.WhiteboxApp;
-      app.state.view = 'terminal';
-      app.syncViewChrome();
-      app.render('view');
-      await window.WhiteboxTerminal.activate(app.state.snapshot, app.state.workspaces, 'general');
-      document.querySelector('[data-terminal-id="terminal-managed"]')?.click();
-      document.querySelector('.main-stage')?.scrollTo(0, 0);
-      return true;
-    })()`);
-    await waitFor(win, `document.querySelector('.terminal-session-item.active')?.dataset.terminalId === 'terminal-managed'
-      && !document.querySelector('#terminalCommandInput')?.disabled`);
-    const emptyTerminalSubmitMetrics = await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#terminalCommandInput');
-      const submit = document.querySelector('#terminalCommandForm button[type="submit"]');
-      input.value = '   ';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      const whitespaceDisabled = submit.disabled;
-      input.value = '';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return { whitespaceDisabled, emptyDisabled: submit.disabled };
-    })()`);
-    if (!emptyTerminalSubmitMetrics.whitespaceDisabled || !emptyTerminalSubmitMetrics.emptyDisabled) {
-      throw new Error(`빈 터미널 입력의 전송 버튼이 활성화되어 있습니다: ${JSON.stringify(emptyTerminalSubmitMetrics)}`);
-    }
-    await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#terminalCommandInput');
-      input.value = '/';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.focus({ preventScroll: true });
-      return true;
-    })()`);
-    await waitFor(win, `!document.querySelector('#terminalSlashMenu')?.classList.contains('hidden')
-      && document.querySelectorAll('#terminalSlashMenuList [role="option"]').length === 6`);
-    const slashComposerMetrics = await win.webContents.executeJavaScript(`(() => {
-      const form = document.querySelector('#terminalCommandForm');
-      const menu = document.querySelector('#terminalSlashMenu');
-      const input = document.querySelector('#terminalCommandInput');
-      const options = [...document.querySelectorAll('#terminalSlashMenuList [role="option"]')];
-      const submitLabel = form.querySelector('.terminal-command-submit > span');
-      return {
-        aiTarget: form.dataset.aiTarget,
-        menuVisible: !menu.classList.contains('hidden'),
-        optionCount: options.length,
-        optionHeights: options.map(option => option.getBoundingClientRect().height),
-        allOptionsReadable: options.every(option => option.getBoundingClientRect().height >= 48),
-        noOverflow: form.scrollWidth <= form.clientWidth + 2 && menu.scrollWidth <= menu.clientWidth + 2,
-        ariaExpanded: input.getAttribute('aria-expanded'),
-        activeDescendant: input.getAttribute('aria-activedescendant') || '',
-        sendLabelNoWrap: Boolean(submitLabel && getComputedStyle(submitLabel).whiteSpace === 'nowrap'
-          && submitLabel.getBoundingClientRect().height < 24),
-      };
-    })()`);
-    if (slashComposerMetrics.aiTarget !== 'true' || !slashComposerMetrics.menuVisible
-      || slashComposerMetrics.optionCount !== 6 || !slashComposerMetrics.allOptionsReadable
-      || !slashComposerMetrics.noOverflow || slashComposerMetrics.ariaExpanded !== 'true'
-      || !slashComposerMetrics.activeDescendant || !slashComposerMetrics.sendLabelNoWrap) {
-      throw new Error(`슬래시 composer 가독성 계약 미달: ${JSON.stringify(slashComposerMetrics)}`);
-    }
-    viewReports.push(await auditVisibleText(win, 'terminal-slash-composer'));
-    await capture(win, outputDir, 'whitebox-terminal-composer-slash.png', true);
-
-    const longDraftSetup = await win.webContents.executeJavaScript(`(() => {
-      try {
-        const input = document.querySelector('#terminalCommandInput');
-        if (!input) return { ok: false, error: 'terminalCommandInput missing' };
-        input.value = Array.from({ length: 22 }, (_, index) => \`요청 \${index + 1}. 긴 구현 지시도 문장과 줄바꿈을 유지하면서 화면을 과도하게 밀어내지 않게 정리해줘.\`).join('\\n');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.focus({ preventScroll: true });
-        return { ok: true };
-      } catch (error) {
-        return { ok: false, error: String(error?.stack || error) };
-      }
-    })()`);
-    if (!longDraftSetup.ok) throw new Error(`긴 입력 준비 실패: ${JSON.stringify(longDraftSetup)}`);
-    await waitFor(win, `document.querySelector('#terminalCommandForm')?.dataset.longDraft === 'true'
-      && document.querySelector('#terminalCommandForm')?.dataset.longDraftExpanded === 'false'
-      && document.querySelector('#terminalCommandInput')?.scrollHeight > document.querySelector('#terminalCommandInput')?.clientHeight`);
-    const longComposerMetrics = await win.webContents.executeJavaScript(`(() => {
-      try {
-        const form = document.querySelector('#terminalCommandForm');
-        const input = document.querySelector('#terminalCommandInput');
-        const footer = document.querySelector('.terminal-command-footer');
-        const toggle = document.querySelector('#terminalLongDraftToggle');
-        return {
-          ok: true,
-          height: input.clientHeight,
-          scrollHeight: input.scrollHeight,
-          formNoOverflow: form.scrollWidth <= form.clientWidth + 2,
-          inputNoHorizontalOverflow: input.scrollWidth <= input.clientWidth + 2,
-          footerNoOverflow: footer.scrollWidth <= footer.clientWidth + 2,
-          toggleHeight: toggle.getBoundingClientRect().height,
-          summary: document.querySelector('#terminalLongDraftSummary')?.textContent || '',
-        };
-      } catch (error) {
-        return { ok: false, error: String(error?.stack || error) };
-      }
-    })()`);
-    if (!longComposerMetrics.ok || longComposerMetrics.height > 114 || longComposerMetrics.scrollHeight <= longComposerMetrics.height
-      || !longComposerMetrics.formNoOverflow || !longComposerMetrics.inputNoHorizontalOverflow
-      || !longComposerMetrics.footerNoOverflow || longComposerMetrics.toggleHeight < 40
-      || !longComposerMetrics.summary.includes('긴 입력')) {
-      throw new Error(`긴 입력 composer 가독성 계약 미달: ${JSON.stringify(longComposerMetrics)}`);
-    }
-    viewReports.push(await auditVisibleText(win, 'terminal-long-composer'));
-    await capture(win, outputDir, 'whitebox-terminal-composer-long.png', true);
-
-    win.setContentSize(420, 760);
-    await wait(280);
-    await win.webContents.executeJavaScript(`(() => {
-      if (!document.querySelector('#mobileToolsMenu')?.classList.contains('hidden')) {
-        document.querySelector('#mobileToolsCloseBtn')?.click();
-      }
-      document.querySelector('#terminalCommandInput')?.focus({ preventScroll: true });
-      return true;
-    })()`);
-    await wait(180);
-    const compactComposerMetrics = await win.webContents.executeJavaScript(`(() => {
-      const form = document.querySelector('#terminalCommandForm');
-      const input = document.querySelector('#terminalCommandInput');
-      const footer = document.querySelector('.terminal-command-footer');
-      const submitLabel = form.querySelector('.terminal-command-submit > span');
-      const bounds = form.getBoundingClientRect();
-      const ancestors = [];
-      for (let node = form.parentElement; node && ancestors.length < 8; node = node.parentElement) {
-        const style = getComputedStyle(node);
-        ancestors.push({
-          name: node.id || node.className || node.tagName,
-          transform: style.transform,
-          filter: style.filter,
-          contain: style.contain,
-        });
-      }
-      return {
-        formVisible: bounds.bottom <= innerHeight + 2,
-        formTop: Math.round(bounds.top),
-        formBottom: Math.round(bounds.bottom),
-        viewport: [innerWidth, innerHeight],
-        position: getComputedStyle(form).position,
-        currentView: document.body.dataset.currentView || '',
-        ancestors,
-        formNoOverflow: form.scrollWidth <= form.clientWidth + 2,
-        inputNoOverflow: input.scrollWidth <= input.clientWidth + 2,
-        footerNoOverflow: footer.scrollWidth <= footer.clientWidth + 2,
-        overflowItems: [...form.querySelectorAll('*')]
-          .filter(element => element.scrollWidth > element.clientWidth + 2)
-          .slice(0, 12)
-          .map(element => ({
-            tag: element.tagName,
-            id: element.id || '',
-            className: element.className || '',
-            scrollWidth: element.scrollWidth,
-            clientWidth: element.clientWidth,
-          })),
-        textareaHeight: input.clientHeight,
-        sendLabelNoWrap: Boolean(submitLabel && getComputedStyle(submitLabel).whiteSpace === 'nowrap'
-          && submitLabel.getBoundingClientRect().height < 24),
-      };
-    })()`);
-    if (!compactComposerMetrics.formVisible || !compactComposerMetrics.formNoOverflow
-      || !compactComposerMetrics.inputNoOverflow || !compactComposerMetrics.footerNoOverflow
-      || compactComposerMetrics.textareaHeight > 114 || !compactComposerMetrics.sendLabelNoWrap) {
-      throw new Error(`작은 화면 composer 가독성 계약 미달: ${JSON.stringify(compactComposerMetrics)}`);
-    }
-    await capture(win, outputDir, 'whitebox-terminal-composer-compact.png', true);
-    win.setContentSize(1440, 900);
-    await wait(250);
-    await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#terminalCommandInput');
-      input.value = '';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()`);
-
-    await win.webContents.executeJavaScript(`(() => { document.querySelector('#newRunBtn')?.click(); return true; })()`);
-    await waitFor(win, `!document.querySelector('#runModal')?.classList.contains('hidden') && !document.querySelector('#runModal')?.inert`);
-    await wait(400);
-    await win.webContents.executeJavaScript(`(() => { for (const animation of document.getAnimations()) { try { animation.finish(); } catch {} } return true; })()`);
-    viewReports.push(await auditVisibleText(win, 'run-modal'));
-    await win.webContents.executeJavaScript(`(() => { document.querySelector('#cancelRunBtn')?.click(); return true; })()`);
-    await waitFor(win, `document.querySelector('#runModal')?.classList.contains('hidden') && document.querySelector('#runModal')?.inert`);
-
+    // Conversation drawers, the legacy terminal page, session reset, and the
+    // mobile-more menu no longer exist. Their former readability cases are
+    // represented by the only writable task surface: exact full-screen PTY
+    // focus, at both desktop and compact sizes.
     await win.webContents.executeJavaScript(`(() => {
       const app = window.WhiteboxApp;
-      app.state.view = 'active';
-      app.syncViewChrome();
-      app.render('view');
-      document.querySelector('#sessionGrid [data-session-id]')?.click();
-      return true;
-    })()`);
-    await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open') && !document.querySelector('#detailDrawer')?.inert && document.querySelector('#drawerContent')?.innerText.length > 20`);
-    await wait(400);
-    await win.webContents.executeJavaScript(`(() => { for (const animation of document.getAnimations()) { try { animation.finish(); } catch {} } return true; })()`);
-    viewReports.push(await auditVisibleText(win, 'detail-drawer'));
-    await win.webContents.executeJavaScript(`(() => { document.querySelector('#closeDrawerBtn')?.click(); return true; })()`);
-
-    await win.webContents.executeJavaScript(`(async () => {
-      const app = window.WhiteboxApp;
-      app.state.view = 'terminal';
-      app.syncViewChrome();
-      app.render('view');
-      await window.WhiteboxTerminal.activate(app.state.snapshot, app.state.workspaces, 'general');
-      document.querySelector('#newTmuxSessionBtn')?.click();
-      return true;
-    })()`);
-    await waitFor(win, `!document.querySelector('#tmuxCreateModal')?.classList.contains('hidden') && !document.querySelector('#tmuxCreateModal')?.inert`);
-    await wait(400);
-    await win.webContents.executeJavaScript(`(() => { for (const animation of document.getAnimations()) { try { animation.finish(); } catch {} } return true; })()`);
-    viewReports.push(await auditVisibleText(win, 'tmux-create-modal'));
-    await win.webContents.executeJavaScript(`(() => { document.querySelector('#cancelTmuxCreateBtn')?.click(); return true; })()`);
-
-    win.setContentSize(1440, 900);
-    await wait(250);
-    const auditPrompt = `${'긴 사용자 요청은 문단, URL, 코드 기호가 섞여도 원문 그대로 읽혀야 합니다. '.repeat(11)}
-
-\`\`\`text
-잘리지 않아야 하는 코드 펜스와 https://example.test/really/long/path?with=query&and=values
-\`\`\`
-
-200자를 넘긴 뒤에도 전체 내용 보기와 요청 복사가 안정적으로 동작해야 합니다.`;
-    const longDraftLength = 7900;
-    await win.webContents.executeJavaScript(`(() => {
-      const app = window.WhiteboxApp;
-      if (!document.querySelector('#mobileToolsMenu')?.classList.contains('hidden')) {
-        document.querySelector('#mobileToolsCloseBtn')?.click();
-      }
-      window.interactionTest.appendSessionMessages('fixture-root', [
-        { id: 'audit-long-user', role: 'user', text: ${JSON.stringify(auditPrompt)}, timestamp: new Date().toISOString() },
-        { id: 'audit-long-assistant', role: 'assistant', text: '긴 요청을 원문 그대로 확인했습니다. 줄바꿈과 코드 기호를 보존해 처리하겠습니다.', timestamp: new Date(Date.now() + 1).toISOString() },
-      ]);
-      window.interactionTest.emitSnapshot();
+      app.closePtyFocus?.({ restoreFocus: false });
       app.state.view = 'all';
-      app.state.drawerTab = 'chat';
-      app.state.expandedConversationPrompts.clear();
+      app.state.workspace = 'D:\\\\fixture';
+      app.state.graphFocusId = null;
       app.syncViewChrome();
-      app.render('view');
-      app.openDrawer('fixture-root');
-      return true;
+      app.render('pty-readability');
+      const trigger = [...document.querySelectorAll('[data-pty-focus-trigger="fixture-root"]')]
+        .find(node => node.getBoundingClientRect().height > 0);
+      trigger?.click();
+      return Boolean(trigger);
     })()`);
-    await waitFor(win, `document.querySelector('#detailDrawer')?.classList.contains('open')
-      && Boolean(document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]'))
-      && Boolean(document.querySelector('#drawerComposer:not(.hidden) [data-agent-command-form="fixture-root"]'))
-      && !document.querySelector('[data-session-model-form]')`);
-    await wait(400);
-    await win.webContents.executeJavaScript(`(() => {
-      for (const animation of document.getAnimations()) {
-        try { animation.finish(); } catch {}
-      }
-      return true;
+    await waitFor(win, `(() => {
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+        && window.WhiteboxApp.state.ptyFocusTargetId === 'terminal-main'
+        && embedded.connected && embedded.terminalId === 'terminal-main'
+        && Boolean(document.querySelector('#ptyFocusTerminalViewport .xterm'));
     })()`);
-    await win.webContents.executeJavaScript(`(() => {
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      prompt?.scrollIntoView({ block: 'start', behavior: 'auto' });
-      return true;
-    })()`);
-    await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      input.value = '가'.repeat(${longDraftLength});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()`);
-    await wait(180);
-    const conversationMetrics = await win.webContents.executeJavaScript(`(() => {
-      const drawer = document.querySelector('#detailDrawer');
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      const content = prompt?.querySelector('.chat-content');
-      const actions = [...(prompt?.querySelectorAll('.chat-prompt-actions button') || [])];
-      const composer = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      const composerPanel = composer?.closest('.agent-command-panel');
-      const counter = document.querySelector('#drawerComposer [data-agent-command-count]');
-      const reset = document.querySelector('[data-session-reset="fixture-root"]');
-      const promptActions = prompt?.querySelector('.chat-prompt-actions');
-      const composerActions = composerPanel?.querySelector('.agent-command-actions');
-      const promptRect = prompt?.getBoundingClientRect();
-      const probeX = Math.max(0, Math.min(innerWidth - 1, (promptRect?.left || 0) + 20));
-      const probeY = Math.max(0, Math.min(innerHeight - 1, (promptRect?.top || 0) + 3));
-      const topAtPrompt = document.elementsFromPoint(probeX, probeY)[0];
-      const rect = element => element?.getBoundingClientRect();
-      const drawerRect = rect(drawer);
-      const gap = element => {
-        const style = getComputedStyle(element);
-        return Math.min(Number.parseFloat(style.rowGap) || 0, Number.parseFloat(style.columnGap) || 0);
-      };
+    const ptyMarker = `PTY_READABILITY_${Date.now()}`;
+    await win.webContents.executeJavaScript(`window.interactionTest.emitTerminalData('terminal-main', ${JSON.stringify(`\r\n${ptyMarker}\r\n`)})`);
+    await waitFor(win, `[...document.querySelectorAll('#ptyFocusTerminalViewport .xterm-rows > div')]
+      .some(row => (row.textContent || '').includes(${JSON.stringify(ptyMarker)}))`);
+    const ptyDesktopMetrics = await win.webContents.executeJavaScript(`(() => {
+      const surface = document.querySelector('#ptyFocusSurface');
+      const flow = document.querySelector('#ptyFocusFlow');
+      const terminal = document.querySelector('#ptyFocusTerminalShell');
+      const viewport = document.querySelector('#ptyFocusTerminalViewport');
+      const back = document.querySelector('#ptyFocusBackBtn');
+      const rect = surface?.getBoundingClientRect();
       return {
-        drawerInsideViewport: Boolean(drawerRect && drawerRect.left >= -1 && drawerRect.right <= innerWidth + 1),
-        drawerBounds: drawerRect ? [Math.round(drawerRect.left), Math.round(drawerRect.right)] : [],
-        viewport: [innerWidth, innerHeight],
-        promptNoOverflow: Boolean(prompt && prompt.scrollWidth <= prompt.clientWidth + 2 && content.scrollWidth <= content.clientWidth + 2),
-        promptFontSize: Number.parseFloat(getComputedStyle(content).fontSize),
-        promptLineHeight: Number.parseFloat(getComputedStyle(content).lineHeight),
-        actionHeights: actions.map(button => rect(button).height),
-        composerNoOverflow: Boolean(composer && composer.scrollWidth <= composer.clientWidth + 2),
-        composerMinHeight: rect(composer)?.height || 0,
-        composerScrollable: Boolean(composer && composer.scrollHeight > composer.clientHeight + 2),
-        composerPanelNoOverflow: Boolean(composerPanel && composerPanel.scrollWidth <= composerPanel.clientWidth + 2),
-        promptActionGap: gap(promptActions),
-        composerActionGap: gap(composerActions),
-        counterRemoved: !counter,
-        modelFormRemoved: !document.querySelector('[data-session-model-form]'),
-        resetVisible: Boolean(reset && rect(reset).width > 0 && rect(reset).height > 0),
-        resetHeight: rect(reset)?.height || 0,
-        commandHelpRemoved: !composerPanel?.querySelector('.agent-command-actions > small'),
-        slashMenuReady: Boolean(composerPanel?.querySelector('[data-conversation-slash-menu]')),
-        promptNotCovered: Boolean(topAtPrompt && (prompt?.contains(topAtPrompt) || topAtPrompt.contains(prompt))),
-        tabLabels: [...document.querySelectorAll('.drawer-tab:not(.hidden)')].map(tab => tab.textContent.trim()),
+        fullViewport: Boolean(rect && Math.abs(rect.left) <= 1 && Math.abs(rect.top) <= 1
+          && Math.abs(rect.right - innerWidth) <= 1 && Math.abs(rect.bottom - innerHeight) <= 1),
+        labelled: surface?.getAttribute('aria-labelledby') === 'ptyFocusTitle'
+          && Boolean(document.querySelector('#ptyFocusTitle')?.textContent.trim())
+          && Boolean(viewport?.getAttribute('aria-label')),
+        backTarget: back?.getBoundingClientRect().width >= 44 && back?.getBoundingClientRect().height >= 44,
+        flowLanes: flow?.querySelectorAll('.pty-focus-flow-lane').length || 0,
+        statusOnly: !flow?.querySelector('button,a,input,textarea,select,[contenteditable="true"]'),
+        terminalVisible: terminal?.getBoundingClientRect().height > 180,
+        viewportNoOverflow: Boolean(viewport && viewport.scrollWidth <= viewport.clientWidth + 2),
+        backgroundInert: Boolean(document.querySelector('#mainContent')?.inert
+          && document.querySelector('.sidebar')?.inert),
+        oldUiAbsent: !document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer,'
+          + '#sessionResetModal,#mobileMoreBtn,#mobileToolsMenu,#terminalSection,#terminalHistoryPanel,#terminalHistoryList,'
+          + '#automationOverview,#tmuxSection,#tmuxCreateModal'),
       };
     })()`);
-    if (!conversationMetrics.drawerInsideViewport || !conversationMetrics.promptNoOverflow
-      || conversationMetrics.promptFontSize < 15 || conversationMetrics.promptLineHeight < 25
-      || conversationMetrics.actionHeights.some(height => height < 43.5)
-      || !conversationMetrics.composerNoOverflow || conversationMetrics.composerMinHeight < 50
-      || !conversationMetrics.composerScrollable || !conversationMetrics.composerPanelNoOverflow
-      || conversationMetrics.promptActionGap < 9.5 || conversationMetrics.composerActionGap < 9.5
-      || !conversationMetrics.counterRemoved
-      || !conversationMetrics.modelFormRemoved || !conversationMetrics.resetVisible
-      || conversationMetrics.resetHeight < 43.5 || !conversationMetrics.commandHelpRemoved || !conversationMetrics.slashMenuReady
-      || !conversationMetrics.promptNotCovered
-      || conversationMetrics.tabLabels.join('|') !== '요약|대화|진행 과정|사용량') {
-      throw new Error(`대화창 긴 요청·입력 가독성 기준 미달: ${JSON.stringify(conversationMetrics)}`);
+    if (!ptyDesktopMetrics.fullViewport || !ptyDesktopMetrics.labelled || !ptyDesktopMetrics.backTarget
+      || ptyDesktopMetrics.flowLanes !== 3 || !ptyDesktopMetrics.statusOnly
+      || !ptyDesktopMetrics.terminalVisible || !ptyDesktopMetrics.viewportNoOverflow
+      || !ptyDesktopMetrics.backgroundInert || !ptyDesktopMetrics.oldUiAbsent) {
+      throw new Error(`PTY 집중 모드 데스크톱 가독성 계약 미달: ${JSON.stringify(ptyDesktopMetrics)}`);
     }
-    win.show();
-    win.focus();
-    await wait(120);
-    await win.webContents.executeJavaScript(`(() => {
-      const button = document.querySelector('[data-session-reset="fixture-root"]');
-      button?.focus({ preventScroll: true });
-      button?.click();
-      return Boolean(button);
-    })()`);
-    await waitFor(win, `!document.querySelector('#sessionResetModal')?.classList.contains('hidden')
-      && document.activeElement === document.querySelector('#cancelSessionResetBtn')`);
-    const resetDialogMetrics = await win.webContents.executeJavaScript(`(() => {
-      const modal = document.querySelector('#sessionResetModal');
-      const buttons = [...modal.querySelectorAll('button')];
-      return {
-        drawerInert: document.querySelector('#detailDrawer').inert,
-        describedBy: modal.getAttribute('aria-describedby') === 'sessionResetDescription',
-        focusInside: modal.contains(document.activeElement),
-        buttonHeights: buttons.map(button => button.getBoundingClientRect().height),
-      };
-    })()`);
-    if (!resetDialogMetrics.drawerInert || !resetDialogMetrics.describedBy || !resetDialogMetrics.focusInside
-      || resetDialogMetrics.buttonHeights.some(height => height < 43.5)) {
-      throw new Error(`세션 초기화 확인창 접근성 기준 미달: ${JSON.stringify(resetDialogMetrics)}`);
-    }
-    viewReports.push(await auditVisibleText(win, 'reset-dialog'));
-    await capture(win, reviewOutputDir, 'conversation-reset-confirm.png', true);
-    await win.webContents.executeJavaScript(`document.querySelector('#cancelSessionResetBtn')?.click()`);
-    await waitFor(win, `document.querySelector('#sessionResetModal')?.classList.contains('hidden')`);
-    viewReports.push(await auditVisibleText(win, 'conversation-desktop'));
-    await capture(win, reviewOutputDir, 'conversation-desktop-collapsed.png', true);
-    await win.webContents.executeJavaScript(`document.querySelector('[data-message-id="audit-long-user"] [data-prompt-toggle]')?.click()`);
-    await waitFor(win, `document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.dataset.promptExpanded === 'true'`);
-    const desktopExpandedMetrics = await win.webContents.executeJavaScript(`(() => {
-      const close = document.querySelector('[data-message-id="audit-long-user"] [data-close-expanded-reader]');
-      return {
-        readerCloseHidden: Boolean(close && getComputedStyle(close).display === 'none'
-          && close.getClientRects().length === 0),
-        headerCloseVisible: Boolean(document.querySelector('#closeDrawerBtn')?.getClientRects().length),
-      };
-    })()`);
-    if (!desktopExpandedMetrics.readerCloseHidden || !desktopExpandedMetrics.headerCloseVisible) {
-      throw new Error(`데스크톱 펼친 요청 닫기 동작이 중복됩니다: ${JSON.stringify(desktopExpandedMetrics)}`);
-    }
-    await capture(win, reviewOutputDir, 'conversation-desktop-expanded.png', true);
-    await win.webContents.executeJavaScript(`document.querySelector('[data-message-id="audit-long-user"] [data-prompt-toggle]')?.click()`);
+    viewReports.push(await auditVisibleText(win, 'pty-focus-desktop'));
+    await capture(win, outputDir, 'whitebox-readability-pty-focus.png', true);
 
     win.setContentSize(390, 760);
-    await wait(260);
-    await win.webContents.executeJavaScript(`(() => {
-      if (!document.querySelector('#mobileToolsMenu')?.classList.contains('hidden')) {
-        document.querySelector('#mobileToolsCloseBtn')?.click();
-      }
-      window.WhiteboxApp.renderDrawer();
-      document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.scrollIntoView({ block: 'end', behavior: 'auto' });
-      return true;
-    })()`);
-    await wait(120);
-    await win.webContents.executeJavaScript(`(() => {
-      const content = document.querySelector('#drawerContent');
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      if (content && prompt) {
-        content.scrollTop += prompt.getBoundingClientRect().bottom - content.getBoundingClientRect().bottom + 4;
-      }
-      return true;
-    })()`);
-    await wait(80);
-    await capture(win, reviewOutputDir, 'conversation-mobile-ko-collapsed.png', true);
-    await win.webContents.executeJavaScript(`document.querySelector('[data-message-id="audit-long-user"] [data-prompt-toggle]')?.click()`);
-    await waitFor(win, `document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.dataset.promptExpanded === 'true'`);
-    await capture(win, reviewOutputDir, 'conversation-mobile-ko-expanded.png', true);
-    await win.webContents.executeJavaScript(`document.querySelector('[data-message-id="audit-long-user"] [data-prompt-toggle]')?.click()`);
-    await waitFor(win, `document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.dataset.promptExpanded === 'false'`);
-    await win.webContents.executeJavaScript(`(() => {
-      window.WhiteboxI18n.setLocale('en');
-      window.WhiteboxApp.renderDrawer();
-      document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.scrollIntoView({ block: 'end', behavior: 'auto' });
-      return true;
-    })()`);
-    await wait(120);
-    await win.webContents.executeJavaScript(`(() => {
-      const content = document.querySelector('#drawerContent');
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      if (content && prompt) {
-        content.scrollTop += prompt.getBoundingClientRect().bottom - content.getBoundingClientRect().bottom + 4;
-      }
-      return true;
-    })()`);
-    await wait(80);
-    const mobileConversationMetrics = await win.webContents.executeJavaScript(`(() => {
-      const drawer = document.querySelector('#detailDrawer');
-      const content = document.querySelector('#drawerContent');
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      const composer = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      const help = document.querySelector('#drawerComposer .agent-command-actions > small');
-      const slashMenu = document.querySelector('#drawerComposer [data-conversation-slash-menu]');
-      const actions = [...(prompt?.querySelectorAll('.chat-prompt-actions button') || [])];
-      const stop = document.querySelector('#drawerMeta .stop-run');
-      const reset = document.querySelector('#drawerMeta .session-reset-button');
-      const promptRect = prompt.getBoundingClientRect();
-      const contentRect = content.getBoundingClientRect();
-      const probeX = Math.max(0, Math.min(innerWidth - 1, promptRect.left + Math.min(20, promptRect.width / 2)));
-      const probeY = Math.max(0, Math.min(innerHeight - 1, promptRect.top + 3));
-      const topAtPrompt = document.elementsFromPoint(probeX, probeY)[0];
+    await wait(280);
+    const ptyCompactMetrics = await win.webContents.executeJavaScript(`(() => {
+      const surface = document.querySelector('#ptyFocusSurface');
+      const flow = document.querySelector('.pty-focus-flow-region');
+      const terminal = document.querySelector('#ptyFocusTerminalShell');
+      const viewport = document.querySelector('#ptyFocusTerminalViewport');
+      const back = document.querySelector('#ptyFocusBackBtn');
+      const title = document.querySelector('#ptyFocusTitle');
+      const rect = surface?.getBoundingClientRect();
       return {
-        drawerInsideViewport: drawer.getBoundingClientRect().left >= -1 && drawer.getBoundingClientRect().right <= innerWidth + 1,
-        drawerNoOverflow: drawer.scrollWidth <= drawer.clientWidth + 2,
-        promptNoOverflow: prompt.scrollWidth <= prompt.clientWidth + 2,
-        composerNoOverflow: composer.scrollWidth <= composer.clientWidth + 2,
-        transcriptVisibleHeight: contentRect.height,
-        promptNotCovered: Boolean(topAtPrompt && (prompt.contains(topAtPrompt) || topAtPrompt.contains(prompt))),
-        chromeRemoved: !help && !document.querySelector('#drawerComposer [data-agent-command-count], #drawerComposer .conversation-terminal-toggle'),
-        slashMenuReady: Boolean(slashMenu),
-        tabLabels: [...document.querySelectorAll('.drawer-tab:not(.hidden)')].map(tab => tab.textContent.trim()),
-        actionHeights: actions.map(button => button.getBoundingClientRect().height),
-        headerActionsDistinct: Boolean(stop && reset
-          && getComputedStyle(stop).backgroundColor !== getComputedStyle(reset).backgroundColor
-          && getComputedStyle(stop).borderColor !== getComputedStyle(reset).borderColor),
+        fullViewport: Boolean(rect && Math.abs(rect.left) <= 1 && Math.abs(rect.top) <= 1
+          && Math.abs(rect.right - innerWidth) <= 1 && Math.abs(rect.bottom - innerHeight) <= 1),
+        noBodyOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2,
+        flowContained: Boolean(flow && flow.getBoundingClientRect().left >= -1
+          && flow.getBoundingClientRect().right <= innerWidth + 1),
+        terminalHeight: terminal?.getBoundingClientRect().height || 0,
+        viewportNoOverflow: Boolean(viewport && viewport.scrollWidth <= viewport.clientWidth + 2),
+        titleFontSize: Number.parseFloat(getComputedStyle(title).fontSize),
+        backTarget: back?.getBoundingClientRect().width >= 44 && back?.getBoundingClientRect().height >= 44,
+        xtermVisible: Boolean(viewport?.querySelector('.xterm')?.getBoundingClientRect().height),
       };
     })()`);
-    if (!mobileConversationMetrics.drawerInsideViewport || !mobileConversationMetrics.drawerNoOverflow
-      || !mobileConversationMetrics.promptNoOverflow || !mobileConversationMetrics.composerNoOverflow
-      || mobileConversationMetrics.transcriptVisibleHeight < 240 || !mobileConversationMetrics.promptNotCovered
-      || !mobileConversationMetrics.chromeRemoved || !mobileConversationMetrics.slashMenuReady
-      || !mobileConversationMetrics.headerActionsDistinct
-      || mobileConversationMetrics.tabLabels.join('|') !== 'Summary|Chat|Steps|Usage'
-      || mobileConversationMetrics.actionHeights.some(height => height < 43.5)) {
-      throw new Error(`모바일 대화창 가독성 기준 미달: ${JSON.stringify(mobileConversationMetrics)}`);
+    if (!ptyCompactMetrics.fullViewport || !ptyCompactMetrics.noBodyOverflow
+      || !ptyCompactMetrics.flowContained || ptyCompactMetrics.terminalHeight < 180
+      || !ptyCompactMetrics.viewportNoOverflow || ptyCompactMetrics.titleFontSize < 15.9
+      || !ptyCompactMetrics.backTarget || !ptyCompactMetrics.xtermVisible) {
+      throw new Error(`PTY 집중 모드 작은 화면 가독성 계약 미달: ${JSON.stringify(ptyCompactMetrics)}`);
     }
-    viewReports.push(await auditVisibleText(win, 'conversation-mobile'));
-    await capture(win, reviewOutputDir, 'conversation-mobile-en-collapsed.png', true);
-    await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      input.value = '';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()`);
-    const emptyConversationSubmitMetrics = await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      const submit = input?.closest('form')?.querySelector('button[type="submit"]');
-      input.value = '   ';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      const whitespaceDisabled = submit?.disabled;
-      input.value = '';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return { whitespaceDisabled, emptyDisabled: submit?.disabled };
-    })()`);
-    if (!emptyConversationSubmitMetrics.whitespaceDisabled || !emptyConversationSubmitMetrics.emptyDisabled) {
-      throw new Error(`빈 대화 입력의 전송 버튼이 활성화되어 있습니다: ${JSON.stringify(emptyConversationSubmitMetrics)}`);
-    }
-    await capture(win, reviewOutputDir, 'conversation-mobile-en-empty-composer.png', true);
-    await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      input.value = ${JSON.stringify('가'.repeat(7900))};
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()`);
-    const nearLimitComposerMetrics = await win.webContents.executeJavaScript(`(() => {
-      const input = document.querySelector('#drawerComposer [data-agent-command-draft="fixture-root"]');
-      const form = input?.closest('form');
-      const submit = form?.querySelector('button[type="submit"]');
-      const count = form?.querySelector('[data-conversation-draft-count]');
-      return {
-        submitEnabled: Boolean(submit && !submit.disabled),
-        countVisible: Boolean(count && !count.classList.contains('hidden')),
-        countWarning: Boolean(count && count.classList.contains('limit-near')),
-        countText: count?.textContent.trim() || '',
-      };
-    })()`);
-    if (!nearLimitComposerMetrics.submitEnabled || !nearLimitComposerMetrics.countVisible
-      || !nearLimitComposerMetrics.countWarning || !nearLimitComposerMetrics.countText.includes('7,900')) {
-      throw new Error(`대화 입력 한도 피드백이 명확하지 않습니다: ${JSON.stringify(nearLimitComposerMetrics)}`);
-    }
-    await win.webContents.executeJavaScript(`document.querySelector('[data-message-id="audit-long-user"] [data-prompt-toggle]')?.click()`);
-    await waitFor(win, `document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]')?.dataset.promptExpanded === 'true'`);
-    const expandedMobileMetrics = await win.webContents.executeJavaScript(`(() => {
-      const prompt = document.querySelector('[data-message-id="audit-long-user"] [data-user-prompt]');
-      const body = prompt?.querySelector('.user-prompt-text');
-      const topActions = prompt?.querySelector('.chat-prompt-actions.is-top');
-      const controls = topActions?.querySelector('[data-prompt-toggle]')?.getAttribute('aria-controls') || '';
-      const actionButtons = [...(topActions?.querySelectorAll('button') || [])];
-      const actionTops = actionButtons.map(button => button.getBoundingClientRect().top);
-      return {
-        promptNoOverflow: prompt.scrollWidth <= prompt.clientWidth + 2 && body.scrollWidth <= body.clientWidth + 2,
-        promptWidth: [prompt.clientWidth, prompt.scrollWidth],
-        bodyWidth: [body.clientWidth, body.scrollWidth],
-        topActionsVisible: Boolean(topActions && topActions.getBoundingClientRect().height > 0),
-        topActionsNoOverflow: Boolean(topActions && topActions.scrollWidth <= topActions.clientWidth + 2),
-        closeVisible: Boolean(topActions?.querySelector('[data-close-expanded-reader]')?.getBoundingClientRect().height > 0),
-        controlsBody: Boolean(controls && document.getElementById(controls) === body),
-        visibleBodyLines: Math.floor(Math.max(0, Math.min(innerHeight, body.getBoundingClientRect().bottom)
-          - Math.max(0, body.getBoundingClientRect().top)) / parseFloat(getComputedStyle(body).lineHeight)),
-        actionHeights: actionButtons.map(button => button.getBoundingClientRect().height),
-        singleActionRow: actionTops.length === 3 && Math.max(...actionTops) - Math.min(...actionTops) < 2,
-      };
-    })()`);
-    if (!expandedMobileMetrics.promptNoOverflow || !expandedMobileMetrics.topActionsVisible
-      || !expandedMobileMetrics.topActionsNoOverflow || !expandedMobileMetrics.closeVisible
-      || !expandedMobileMetrics.controlsBody || !expandedMobileMetrics.singleActionRow
-      || expandedMobileMetrics.visibleBodyLines < 6
-      || expandedMobileMetrics.actionHeights.some(height => height < 43.5)) {
-      throw new Error(`영문 모바일 펼친 요청 가독성 기준 미달: ${JSON.stringify(expandedMobileMetrics)}`);
-    }
-    await capture(win, reviewOutputDir, 'conversation-mobile-en-expanded.png', true);
+    viewReports.push(await auditVisibleText(win, 'pty-focus-compact'));
+    await capture(win, outputDir, 'whitebox-readability-pty-focus-compact.png', true);
+    await win.webContents.executeJavaScript(`document.querySelector('#ptyFocusBackBtn')?.click()`);
+    await waitFor(win, `!window.WhiteboxApp.state.ptyFocusSessionId
+      && document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')`);
 
-    const familyEmoji = '👨‍👩‍👧‍👦';
-    await win.webContents.executeJavaScript(`(() => {
-      window.WhiteboxI18n.setLocale('ko');
-      window.interactionTest.appendSessionMessages('fixture-ended', [
-        { id: 'audit-boundary-200', role: 'user', text: ${JSON.stringify('가'.repeat(200))}, timestamp: new Date(Date.now() + 10).toISOString() },
-        { id: 'audit-boundary-201', role: 'user', text: ${JSON.stringify('가'.repeat(201))}, timestamp: new Date(Date.now() + 11).toISOString() },
-        { id: 'audit-grapheme-201', role: 'user', text: ${JSON.stringify(familyEmoji.repeat(201))}, timestamp: new Date(Date.now() + 12).toISOString() },
-      ]);
-      window.interactionTest.emitSnapshot();
-      window.WhiteboxApp.state.expandedConversationPrompts.clear();
-      window.WhiteboxApp.openDrawer('fixture-ended');
-      return true;
-    })()`);
-    await waitFor(win, `Boolean(document.querySelector('[data-message-id="audit-grapheme-201"] [data-user-prompt]'))`);
-    const truncationBoundary = await win.webContents.executeJavaScript(`(() => ({
-      exact200: document.querySelector('[data-message-id="audit-boundary-200"] [data-user-prompt]')?.dataset.promptTruncated,
-      over200: document.querySelector('[data-message-id="audit-boundary-201"] [data-user-prompt]')?.dataset.promptTruncated,
-      graphemeOver200: document.querySelector('[data-message-id="audit-grapheme-201"] [data-user-prompt]')?.dataset.promptTruncated,
-      graphemePreview: document.querySelector('[data-message-id="audit-grapheme-201"] .user-prompt-text')?.textContent || '',
-    }))()`);
-    if (truncationBoundary.exact200 !== 'false' || truncationBoundary.over200 !== 'true'
-      || truncationBoundary.graphemeOver200 !== 'true'
-      || truncationBoundary.graphemePreview !== familyEmoji.repeat(200) + '…') {
-      throw new Error(`200자·이모지 경계 축약 오류: ${JSON.stringify(truncationBoundary)}`);
-    }
+    win.setContentSize(1440, 900);
+    await wait(250);
+    await win.webContents.executeJavaScript(`document.querySelector('#newRunBtn')?.click()`);
+    await waitFor(win, `!document.querySelector('#runModal')?.classList.contains('hidden')
+      && !document.querySelector('#runModal')?.inert`);
+    viewReports.push(await auditVisibleText(win, 'run-modal'));
+    await capture(win, outputDir, 'whitebox-readability-run-modal.png', true);
+    await win.webContents.executeJavaScript(`document.querySelector('#cancelRunBtn')?.click()`);
+    await waitFor(win, `document.querySelector('#runModal')?.classList.contains('hidden')
+      && document.querySelector('#runModal')?.inert`);
 
-    const failures = viewReports.filter(report => report.tooSmall.length || report.lowContrast.length || report.tooSmallTargets.length || report.overlaps.length || report.crowdedGroups.length);
-    if (failures.length) throw new Error(`전 화면 텍스트 가독성 기준 미달: ${JSON.stringify(failures)}`);
-
-    process.stdout.write(`readability visual check passed ${JSON.stringify(viewReports)}\n`);
+    const ptyReadabilityFailures = viewReports.filter(report => report.tooSmall.length || report.lowContrast.length
+      || report.tooSmallTargets.length || report.overlaps.length || report.crowdedGroups.length);
+    if (ptyReadabilityFailures.length) throw new Error(`전 화면 텍스트 가독성 기준 미달: ${JSON.stringify(ptyReadabilityFailures)}`);
+    process.stdout.write(`readability visual check passed ${JSON.stringify({
+      views: viewReports.map(report => report.view), ptyDesktopMetrics, ptyCompactMetrics,
+    })}\n`);
   } catch (error) {
     exitCode = 1;
     process.stderr.write(`${error.stack || error.message}\n`);

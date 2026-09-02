@@ -1,6 +1,6 @@
 'use strict';
 
-function registerAppIpc({ handleTrusted, bootstrap, rendererReady, backgroundState, show, setLocale, setThemeAppearance, setProviderVisibility, setAttentionPopups, ackAttentionActivation, syncAttentionPrompts, notifyAttentionPrompt, updateManager, installUpdate }) {
+function registerAppIpc({ handleTrusted, bootstrap, rendererReady, backgroundState, show, setLocale, setThemeAppearance, setProviderVisibility, ackAttentionActivation, syncAttentionPrompts, notifyAttentionPrompt, updateManager, installUpdate }) {
   handleTrusted('app:bootstrap', bootstrap);
   handleTrusted('app:renderer-ready', rendererReady);
   handleTrusted('app:background-state', backgroundState);
@@ -8,7 +8,6 @@ function registerAppIpc({ handleTrusted, bootstrap, rendererReady, backgroundSta
   handleTrusted('app:set-locale', setLocale);
   handleTrusted('app:set-theme-appearance', setThemeAppearance);
   handleTrusted('app:set-provider-visibility', setProviderVisibility);
-  handleTrusted('app:set-attention-popups', setAttentionPopups);
   handleTrusted('app:ack-attention-activation', ackAttentionActivation);
   handleTrusted('app:sync-attention-prompts', syncAttentionPrompts);
   handleTrusted('app:notify-attention-prompt', notifyAttentionPrompt);

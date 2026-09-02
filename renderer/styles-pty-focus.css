@@ -1,4 +1,18 @@
 .pty-focus-surface {
+  /* PTY focus is a terminal workspace in every app theme. Keep its chrome on
+   * the same dark palette as xterm so light-theme tokens never become dark
+   * text on a dark terminal surface. */
+  --bg: #071016;
+  --panel: #0b141b;
+  --panel-2: #101b23;
+  --line: #344752;
+  --line-soft: #263943;
+  --text: #f1f5f8;
+  --muted: #b8c7d1;
+  --dim: #a9b7c1;
+  --green: #4dd2a2;
+  --amber: #f1b95f;
+  --red: #ff7b91;
   position: fixed;
   z-index: 60;
   inset: 0;
@@ -18,7 +32,7 @@
 body.pty-focus-open { overflow: hidden; }
 body.pty-focus-open #appShell { z-index: 40; }
 body.pty-focus-open #appShell > :not(#ptyFocusSurface),
-body.pty-focus-open > :is(#mobileToolsMenu, #drawerBackdrop, #detailDrawer, .modal-backdrop:not(#ptyFocusChildModal)) {
+body.pty-focus-open > .modal-backdrop {
   visibility: hidden !important;
   pointer-events: none !important;
 }
@@ -64,9 +78,9 @@ body.pty-focus-open #toast { z-index: 90; }
 .pty-focus-heading p,
 .pty-focus-heading h1,
 .pty-focus-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pty-focus-heading p { margin: 0 0 2px; color: var(--provider, var(--green)); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.pty-focus-heading p { margin: 0 0 2px; color: var(--provider, var(--green)); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .pty-focus-heading h1 { margin: 0; color: var(--text); font-size: 16px; }
-.pty-focus-heading > span { display: block; margin-top: 2px; color: var(--dim); font-size: 11px; }
+.pty-focus-heading > span { display: block; margin-top: 2px; color: var(--dim); font-size: 12px; }
 
 .pty-focus-root-status {
   display: grid;
@@ -78,8 +92,8 @@ body.pty-focus-open #toast { z-index: 90; }
   text-align: right;
 }
 .pty-focus-root-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.pty-focus-root-status b { color: var(--text); font-size: 11px; }
-.pty-focus-root-status small { grid-column: 1 / -1; max-width: 260px; overflow: hidden; color: var(--dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.pty-focus-root-status b { color: var(--text); font-size: 12px; }
+.pty-focus-root-status small { grid-column: 1 / -1; max-width: 260px; overflow: hidden; color: var(--dim); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .pty-focus-root-status.is-live { color: var(--green); }
 .pty-focus-root-status.is-waiting { color: var(--amber); }
 .pty-focus-root-status.is-complete { color: var(--muted); }
@@ -103,7 +117,7 @@ body.pty-focus-open #toast { z-index: 90; }
 .pty-focus-flow-region > header b,
 .pty-focus-flow-region > header small { display: block; }
 .pty-focus-flow-region > header b { color: var(--text); font-size: 12px; }
-.pty-focus-flow-region > header small { margin-top: 2px; color: var(--dim); font-size: 10px; }
+.pty-focus-flow-region > header small { margin-top: 2px; color: var(--dim); font-size: 12px; }
 
 .pty-focus-flow {
   display: grid;
@@ -121,8 +135,8 @@ body.pty-focus-open #toast { z-index: 90; }
   background: color-mix(in srgb, var(--panel-2, #101b23) 88%, transparent);
 }
 .pty-focus-flow-lane > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.pty-focus-flow-lane > header b { color: var(--muted); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
-.pty-focus-flow-lane > header span { color: var(--dim); font: 700 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.pty-focus-flow-lane > header b { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+.pty-focus-flow-lane > header span { color: var(--dim); font: 700 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .pty-focus-flow-list { display: flex; gap: 7px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .pty-focus-flow-arrow { align-self: center; color: var(--provider, var(--green)); font: 800 20px/1 ui-monospace, SFMono-Regular, Consolas, monospace; opacity: .72; }
 
@@ -141,21 +155,18 @@ body.pty-focus-open #toast { z-index: 90; }
   color: inherit;
   text-align: left;
 }
-button.pty-focus-node { cursor: pointer; }
-button.pty-focus-node:hover,
-button.pty-focus-node:focus-visible { border-color: var(--node-provider, var(--provider, var(--green))); outline: none; background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 10%, #091118); }
-.pty-focus-node-mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 14%, #0a1319); color: var(--node-provider, var(--provider, var(--green))); font: 800 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.pty-focus-node-mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 14%, #0a1319); color: var(--node-provider, var(--provider, var(--green))); font: 800 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .pty-focus-node-copy { min-width: 0; }
 .pty-focus-node-copy small,
 .pty-focus-node-copy b,
 .pty-focus-node-copy em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pty-focus-node-copy small { color: var(--dim); font-size: 9px; }
-.pty-focus-node-copy b { margin-top: 2px; color: var(--text); font-size: 11px; }
-.pty-focus-node-copy em { margin-top: 2px; color: var(--muted); font-size: 9px; font-style: normal; }
-.pty-focus-node-state { align-self: start; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.pty-focus-node-copy small { color: var(--dim); font-size: 12px; }
+.pty-focus-node-copy b { margin-top: 2px; color: var(--text); font-size: 12px; }
+.pty-focus-node-copy em { margin-top: 2px; color: var(--muted); font-size: 12px; font-style: normal; }
+.pty-focus-node-state { align-self: start; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .pty-focus-node.is-running .pty-focus-node-state { color: var(--green); }
 .pty-focus-node.is-waiting .pty-focus-node-state { color: var(--amber); }
-.pty-focus-flow-empty { display: grid; place-items: center; min-width: 170px; min-height: 54px; color: var(--dim); font-size: 10px; }
+.pty-focus-flow-empty { display: grid; place-items: center; min-width: 170px; min-height: 54px; color: var(--dim); font-size: 12px; }
 
 .pty-focus-terminal {
   display: grid;
@@ -167,31 +178,17 @@ button.pty-focus-node:focus-visible { border-color: var(--node-provider, var(--p
   border-color: color-mix(in srgb, var(--provider, var(--green)) 48%, var(--line));
   border-radius: 13px;
 }
-.pty-focus-terminal .agent-inline-terminal-head { min-height: 48px; }
+.pty-focus-terminal .agent-inline-terminal-head { min-height: 52px; }
+.pty-focus-terminal .agent-inline-terminal-title b,
+.pty-focus-terminal .agent-inline-terminal-state b { color: var(--text); font-size: 12px; }
+.pty-focus-terminal .agent-inline-terminal-title small,
+.pty-focus-terminal .agent-inline-terminal-state small { color: var(--dim); font-size: 12px; }
+.pty-focus-terminal .agent-inline-terminal-actions button { width: 44px; height: 44px; }
 .pty-focus-terminal-viewport { min-width: 0; min-height: 0; height: 100%; }
 #ptyFocusTerminalViewport > .terminal-screen { position: absolute; z-index: 1; inset: 0; overflow: hidden; }
 #ptyFocusTerminalViewport > .terminal-screen .xterm { height: 100%; padding: 12px 14px; }
 #ptyFocusTerminalViewport > .terminal-screen .xterm-viewport { background: transparent !important; }
 
-.pty-focus-child-modal { z-index: 70; padding: 18px; }
-.pty-focus-child-modal:not(.hidden) { animation: none; opacity: 1; }
-.pty-focus-child-dialog {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  width: min(920px, calc(100vw - 36px));
-  max-height: min(820px, calc(100dvh - 36px));
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--provider, var(--green)) 28%, var(--line));
-  border-radius: 15px;
-  background: var(--panel, #0b141b);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, .55);
-}
-.pty-focus-child-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.pty-focus-child-head p { margin: 0 0 3px; color: var(--provider, var(--green)); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-.pty-focus-child-head h2 { margin: 0; color: var(--text); font-size: 17px; }
-.pty-focus-child-description { margin: 0; padding: 9px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--provider, var(--green)) 5%, transparent); color: var(--muted); font-size: 11px; }
-.pty-focus-child-body { min-height: 180px; padding: 16px; overflow: auto; outline: none; }
-.pty-focus-child-body:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--provider, var(--green)) 56%, transparent); }
 
 @media (max-width: 840px) {
   .pty-focus-surface { gap: 8px; padding: 8px; }

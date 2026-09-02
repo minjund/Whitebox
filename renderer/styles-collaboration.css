@@ -20,10 +20,6 @@
   letter-spacing: .15em;
 }
 
-.chat-row.assistant .memory-candidates {
-  background: color-mix(in srgb,var(--drawer-provider) 3%,#0b0f16);
-}
-
 .memory-candidates {
   border: 1px solid var(--line-soft);
   border-radius: 11px;
@@ -334,55 +330,6 @@
 .subagent-filter-result b {
   color: #87d9bc;
   font-size: 12px;
-}
-
-.subagent-work-source {
-  display: grid;
-  gap: 5px;
-  margin: 0 0 14px;
-  padding: 11px 13px;
-  border: 1px solid color-mix(in srgb,var(--drawer-provider) 28%,#263844);
-  border-radius: 11px;
-  background: color-mix(in srgb,var(--drawer-provider) 6%,#0c151d);
-}
-
-.subagent-work-source b {
-  color: #dbe8e9;
-  font-size: 12px;
-}
-
-.subagent-work-source span {
-  color: #78909a;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.subagent-coordination {
-  margin-top: 16px;
-}
-
-.subagent-coordination .subagent-message-preview p {
-  margin: 0;
-}
-
-.subagent-message-preview {
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.subagent-message-preview p {
-  display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
-}
-
-.subagent-message-preview.is-truncated p {
-  color: #a9bac2;
 }
 
 .completed-subagent-disclosure {
