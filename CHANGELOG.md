@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.13 - 2026-09-03
+
+- Open new AI work, active nodes, and completed-result reviews in the exact
+  owning PTY's full-window focus view.
+- Remove the retired conversation drawer, right-side detail popups, child
+  modals, and additional runtime controls while retaining workflow status.
+
 ## 1.7.12 - 2026-08-31
 
 - Add a focused workspace for a responsible node that moves its existing live
