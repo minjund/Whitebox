@@ -41,17 +41,14 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app.js',
   'renderer/app-provider-visibility.js',
   'renderer/app-dashboard.js',
-  'renderer/app-runtime-overview.js',
   'renderer/app-graph-model.js',
   'renderer/app-graph-view.js',
   'renderer/app-graph-layout.js',
   'renderer/app-graph-orchestration.js',
-  'renderer/app-tmux-render.js',
   'renderer/app-agent-actions.js',
   'renderer/app-management.js',
   'renderer/app-session-render.js',
-  'renderer/app-drawer-data.js',
-  'renderer/app-drawer-content.js',
+  'renderer/app-pty-focus.js',
   'renderer/app-drawer.js',
   'renderer/app-run-modal.js',
   'renderer/app-quality.js',
@@ -60,16 +57,15 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app-events-filters.js',
   'renderer/app-events-dialogs.js',
   'renderer/app-events.js',
+  'renderer/attention-activation.js',
   'renderer/app-bootstrap.js',
   'renderer/terminal-workbench.js',
   'renderer/terminal-agent.js',
-  'renderer/terminal-composer.js',
   'renderer/terminal-events.js',
+  'renderer/terminal-prompt.js',
   'renderer/terminal.js',
   'renderer/inline-agent-terminal.js',
-  'renderer/drawer-terminal.js',
   'scripts/bridge-integration-test.js',
-  'scripts/runtime-overview-visual.js',
   'scripts/organize-css.js',
 ];
 
@@ -79,14 +75,9 @@ const REQUIRED_UI_IDS = [
   'guideBtn',
   'guideProgressBar',
   'dismissGuideBtn',
-  'mobileMoreBtn',
-  'mobileToolsMenu',
-  'advancedToolsNav',
   'operationsOverview',
   'attentionInbox',
-  'navRuntimeCount',
   'providerOverview',
-  'automationOverview',
   'liveSection',
   'controlRoomProjectToolbar',
   'workspaceList',
@@ -104,29 +95,14 @@ const REQUIRED_UI_IDS = [
   'activeEmptyState',
   'graphBreadcrumbs',
   'graphResetBtn',
-  'terminalSection',
-  'terminalWorkbench',
-  'terminalWorkbenchMount',
-  'terminalStage',
-  'terminalHistoryPanel',
-  'terminalHistoryList',
-  'terminalViewport',
-  'terminalCommandForm',
-  'terminalSessionList',
-  'terminalTmuxList',
-  'tmuxCreateModal',
-  'tmuxSection',
-  'tmuxControlSection',
-  'tmuxWorkbenchMount',
-  'tmuxStats',
-  'tmuxBreadcrumbs',
-  'tmuxResetBtn',
-  'tmuxMap',
+  'terminalRuntimeMount',
   'sessionGrid',
   'loadMoreBtn',
-  'detailDrawer',
-  'drawerResizeHandle',
-  'drawerBackToFlowBtn',
+  'ptyFocusSurface',
+  'ptyFocusBackBtn',
+  'ptyFocusFlow',
+  'ptyFocusTerminalShell',
+  'ptyFocusTerminalViewport',
   'runModal',
   'quickPaletteModal',
   'quickPaletteInput',
@@ -135,25 +111,6 @@ const REQUIRED_UI_IDS = [
   'sessionResultSummary',
   'emptyClearFiltersBtn',
   'clearRunDraftBtn',
-  'terminalCommandClearBtn',
-  'terminalSlashMenu',
-  'terminalSlashMenuList',
-  'terminalSlashTrigger',
-  'terminalLongDraftMeta',
-  'terminalLongDraftToggle',
-  'terminalFontDecreaseBtn',
-  'terminalFontIncreaseBtn',
-  'terminalFontSizeLabel',
-  'terminalFocusBtn',
-  'drawerContent',
-  'drawerComposer',
-  'drawerTerminalSurface',
-  'drawerTerminalViewport',
-  'drawerTerminalStatus',
-  'drawerTerminalReconnectBtn',
-  'drawerTerminalResumeBtn',
-  'drawerTabSummary',
-  'drawerTabChat',
   'sidebarAppVersion',
   'backToProjectsBtn',
   'projectSelectionPrompt',
@@ -167,36 +124,83 @@ const REQUIRED_UI_IDS = [
   'updateStateTitle',
 ];
 
+const REMOVED_UI_IMPLEMENTATIONS = [
+  'renderer/attention-popup.html',
+  'renderer/attention-popup.js',
+  'renderer/attention-popup.css',
+  'renderer/app-attention-popup-settings.js',
+  'src/attentionPopupManager.js',
+  'src/attentionPopupPreferenceStore.js',
+  'renderer/app-drawer-data.js',
+  'renderer/app-drawer-content.js',
+  'renderer/drawer-terminal.js',
+  'renderer/styles-drawer-terminal.css',
+  'renderer/app-runtime-overview.js',
+  'renderer/app-tmux-render.js',
+  'renderer/styles-runtime-overview.css',
+  'renderer/terminal-composer.js',
+];
+
+const REMOVED_UI_IDS = [
+  'mobileMoreBtn',
+  'mobileToolsMenu',
+  'advancedToolsNav',
+  'detailDrawer',
+  'drawerBackdrop',
+  'drawerContent',
+  'drawerComposer',
+  'ptyFocusChildModal',
+  'ptyFocusChildBody',
+  'attentionPopupSettingsCard',
+  'attentionPopupEnabled',
+  'automationOverview',
+  'tmuxSection',
+  'tmuxCreateModal',
+  'tmuxControlSection',
+  'tmuxWorkbenchMount',
+  'tmuxStats',
+  'tmuxBreadcrumbs',
+  'tmuxResetBtn',
+  'tmuxMap',
+  'terminalTmuxList',
+  'newTmuxSessionBtn',
+  'tmuxCreateForm',
+  'tmuxCreateName',
+  'tmuxCreateCwd',
+  'tmuxCreateCommand',
+  'terminalSection',
+  'terminalWorkbench',
+  'terminalWorkbenchMount',
+  'terminalStage',
+  'terminalHistoryPanel',
+  'terminalHistoryList',
+  'terminalViewport',
+  'terminalCommandForm',
+  'terminalSessionList',
+  'terminalCommandClearBtn',
+  'terminalSlashMenu',
+  'terminalSlashMenuList',
+  'terminalSlashTrigger',
+  'terminalLongDraftMeta',
+  'terminalLongDraftToggle',
+  'terminalFontDecreaseBtn',
+  'terminalFontIncreaseBtn',
+  'terminalFontSizeLabel',
+  'terminalFocusBtn',
+];
+
 const RUN_COMPOSER_IDS = [
   'runPromptCount', 'runWorkspaceSuggestions',
   'runClaudePermissionModeField', 'runClaudePermissionMode', 'runClaudePermissionModeHelp',
 ];
-const TMUX_ONLY_IDS = ['newTmuxSessionBtn', 'terminalTmuxList', 'tmuxControlSection'];
-
 const BEGINNER_GUIDE_LABELS = [
   '첫 10분 코스',
   '이 네 가지만 익히면 충분해요',
   '새 AI 작업',
   '진행 중인 작업 확인',
   '확인할 일 보기',
-  '작업 자세히 보기',
-  '>처리 중<',
-  '>지난 작업<',
-  '>확인 대기<',
-  '>추가 기능<',
-  '>반복 일정<',
-  '>다른 컴퓨터의 작업<',
-  '내 컴퓨터',
-  'AI 대화 기록',
-  '이 AI 대화는 오른쪽 입력칸에서 이어갈 수 있습니다',
-  '선택한 컴퓨터에 작업 추가',
-  'Enter(엔터): 보내기 · Shift+Enter(시프트+엔터): 줄 바꿈',
-  '관련 작업에서 결과를 볼 항목 선택',
-  '새 AI 작업 시작',
-  '처리 중인 작업',
-  '에서 함께 볼 새 작업 시작',
-  '실행 중인 버전과 최신 버전 비교',
-  '최신 버전 다시 확인',
+  '담당 노드 PTY',
+  'PTY 열어보기',
 ];
 
 const DISALLOWED_UI_JARGON = [
@@ -334,17 +338,14 @@ const APP_MODULES = [
   'app.js',
   'app-provider-visibility.js',
   'app-dashboard.js',
-  'app-runtime-overview.js',
   'app-graph-model.js',
   'app-graph-view.js',
   'app-graph-layout.js',
   'app-graph-orchestration.js',
-  'app-tmux-render.js',
   'app-agent-actions.js',
   'app-management.js',
   'app-session-render.js',
-  'app-drawer-data.js',
-  'app-drawer-content.js',
+  'app-pty-focus.js',
   'app-drawer.js',
   'app-run-modal.js',
   'app-quality.js',
@@ -353,6 +354,7 @@ const APP_MODULES = [
   'app-events-filters.js',
   'app-events-dialogs.js',
   'app-events.js',
+  'attention-activation.js',
   'app-bootstrap.js',
 ];
 
@@ -383,9 +385,6 @@ const APP_READABILITY_CONTRACTS = [
   'function markGuideStep',
   'function trapDialogFocus',
   'function selectView',
-  'function phaseStatusLabel',
-  'runtime-now-strip',
-  'runtime-active-phase',
   'sidebarAppVersion',
   'ui.you_are_up_to_date',
 ];
@@ -417,11 +416,9 @@ const AGENT_GRAPH_CONTRACTS = [
   'function controlRoomProject',
   'function runtimeSeparatedOverview',
   'function inferredExecutionSummary',
-  'function executionActivityDetailHtml',
   'function openExecutionActivity',
   'data-control-summary',
   'data-open-execution-id',
-  'data-conversation-scope="execution-only"',
   'data-control-room-overview',
   'data-control-project',
   'control-room-project-group',
@@ -432,8 +429,6 @@ const AGENT_GRAPH_CONTRACTS = [
   'is-unverified',
   'function archiveSession',
   'function isRuntimeLoopSession',
-  'function subagentTextPreview',
-  'function subagentConversationHtml',
   'function openSubagentConversation',
   'function resumeAgentTerminal',
 ];
@@ -441,23 +436,9 @@ const AGENT_GRAPH_CONTRACTS = [
 const COLLABORATION_VIEW_CONTRACTS = [
   'data-collaboration-metric',
   'data-collaboration-communications',
-  'function subagentCallEvents',
-  'function subagentCallHtml',
-  'data-subagent-call-event',
-  'data-subagent-call-sequence',
-  'data-subagent-call-elapsed-ms',
-  'function subagentCallElapsed',
-  'function turnWithSubagentCallsHtml',
-  'subagent-call-anchor',
   'data-open-subagent-chat',
   'openSubagentConversation(subagentChat.dataset.openSubagentChat, { context: true })',
   'data-subagent-completed-toggle',
-  'data-resume-agent',
-  'data-subagent-message-preview',
-  'data-truncated',
-  'assignmentProtected',
-  'drawer.assignment_source_claude',
-  'drawer.assignment_source_codex',
   'graph.created_in_task',
   'graph.simultaneous_capacity',
   'graph.currently_running',
@@ -477,8 +458,6 @@ const COLLABORATION_VIEW_CONTRACTS = [
 ];
 
 const WORKFLOW_INTERACTION_CONTRACTS = [
-  'CONTEXT_DRAWER_MIN_WIDTH',
-  'CONTEXT_WORKSPACE_MIN_WIDTH',
   'function drawAgentWorkflowConnections',
   'function workflowCurve',
   'data-workflow-edge-kind',
@@ -497,13 +476,11 @@ const WORKFLOW_INTERACTION_CONTRACTS = [
   'data-conversation-interrupt',
   '{ focus: false, deliveryId }',
   'function openAgentTerminal',
-  'drawerPresentation',
   'function copyBridgeCommand',
   'data-agent-command-form',
   'data-agent-command-draft',
   'data-agent-command-route-selected',
   'data-conversation-slash-menu',
-  'data-conversation-slash-command',
   'data-agent-terminal-open',
   'data-agent-bridge-copy',
   'agent.direct_status',
@@ -532,62 +509,23 @@ const MOTION_AND_MAP_CONTRACTS = [
 ];
 
 const TERMINAL_VIEW_CONTRACTS = [
-  'function renderTmuxMap',
-  'function tmuxPaneCard',
   'function messageContentHtml',
-  'data-user-prompt',
-  'data-prompt-toggle',
-  'data-user-prompt-copy',
   'function memoryCandidatesHtml',
-  'data-scroll-latest',
   'conversationTurnLimits',
-  'data-load-earlier-turns',
-  'drawer.loading_history_inline',
-  'drawer.load_earlier_turns',
   'data-graph-focus',
-  'data-tmux-type',
   'data-open-session',
 ];
 
 const DRAWER_TERMINAL_CONTRACTS = [
-  'const ptyConversation = conversationTab && !session.parentId && !subagentMode && !executionMode',
-  'const embeddedTerminal = window.WhiteboxTerminal?.embeddedState?.() || {}',
-  'embeddedTerminal.connected',
-  'window.WhiteboxDrawerTerminal?.canMount?.(session, target.id)',
-  'readablePreview(rawDrawerTitle || t("drawer.title"), 120)',
-  'drawer.dataset.conversationShell = conversationTab ? "terminal" : "standard"',
-  'terminalSurface.setAttribute("aria-labelledby", "drawerTabChat")',
-  'terminalStyle: conversationTab',
-  'window.WhiteboxDrawerTerminal?.mount?.(session',
-  'state.drawerCreateTerminalIfMissing = options.createTerminalIfMissing !== false',
-  'createIfMissing: createTerminalIfMissing',
-  'ensureForAgent',
-  'resumeForAgent',
-  'window.WhiteboxDrawerTerminal?.unmount?.()',
-  'composer.classList.toggle("hidden", !showComposer)',
-  '&& !actualTerminalChat',
-  'composer.dataset.mode = actualTerminalChat ? "terminal" : "conversation"',
-  'whitebox:drawer-terminal-targets-changed',
-  'window.WhiteboxTerminal.resumeForAgent(session, \'\', false, { focus: false })',
-  'window.WhiteboxTerminal.forkForAgent(session, \'\', false, { focus: false })',
-  'forkIfOriginOwned: true',
-  'forkCreationGesture',
-  'drawer.terminal_resume_available',
-  "function setResumeAction(visible, action = 'resume')",
-  'function showUnavailable(session)',
-  "markUnavailable(session.id, requestedTargetId, 'mount-failed')",
+  'function openPtyFocus',
+  'function openPtyFocusForTerminal',
+  'function syncPendingPtyFocus',
+  'data-pty-focus-trigger',
+  'ptyFocusTerminalViewport',
+  'enterFocus',
   'mountForAgent',
-  'unmountEmbedded',
-  'embeddedTerminalId',
-  'const generation = ++state.embeddedGeneration',
-  'await window.whitebox.terminalReconnect(terminalId)',
-  'state.terminals.delete(session.id)',
-  'entry.terminal.dispose()',
-  'state.selectedId !== key && state.embeddedTerminalId !== key',
   'startAgent',
-  'initialCommandInArgs',
-  'drawerTerminalSurface',
-  'drawerTerminalViewport',
+  'creationId',
 ];
 
 const APP_AGENT_CONTRACTS = [
@@ -613,7 +551,6 @@ const STYLE_FILES = [
   'styles-run-composer.css',
   'styles-product.css',
   'styles-management.css',
-  'styles-runtime-overview.css',
   'styles-onboarding.css',
   'styles-settings.css',
   'styles-quality.css',
@@ -622,7 +559,7 @@ const STYLE_FILES = [
   'styles-responsive-runtime.css',
   'styles-responsive-product.css',
   'styles-control-room.css',
-  'styles-drawer-terminal.css',
+  'styles-pty-focus.css',
 ];
 
 const I18N_RUNTIME_CONTRACTS = [
@@ -673,15 +610,13 @@ const CSS_RESPONSIBILITY_HEADINGS = [
   'Directed workflow map',
   'Collaboration detail',
   'Terminal workspaces',
-  'tmux workspaces',
   'Product experiences',
-  'Runtime schedules and loop observability',
   'Run composer',
   'Onboarding and navigation help',
   'Settings and releases',
   'Responsive shell and shared components',
   'Responsive agent workflows',
-  'Responsive terminal and tmux workspaces',
+  'Responsive terminal and live tmux surfaces',
   'Responsive product surfaces',
 ];
 
@@ -723,19 +658,14 @@ const INTERACTION_STYLE_CONTRACTS = [
   'execution-mode-badge',
   'work-working',
   'work-resting',
-  'subagent-work-source',
-  'subagent-coordination',
   'provider-filter-check',
   'provider-filter-confirm',
   'poc-filter-state',
-  'subagent-message-preview',
   'resume-ready',
   'control-handoff',
   'control-origin-resume',
-  'conversation-context-open',
   'conversation-slash-menu',
   'conversation-slash-command',
-  'drawer-resize-handle',
 ];
 
 const QUALITY_201_300_APP_CONTRACTS = [
@@ -798,25 +728,13 @@ const TERMINAL_RUNTIME_CONTRACTS = [
   'wslDistros',
   'terminalWrite',
   'terminalResize',
-  'terminalDetach',
   'terminalReconnect',
   'terminalStop',
-  'tmuxSendText',
   'tmuxCapture',
-  'tmuxSplitPane',
-  'tmuxKillSession',
   'function modeSessions',
-  'function moveWorkbench',
   'function terminalTypeLabel',
-  'function terminalTypeMark',
-  'function setConnectionState',
-  'function terminalPresentation',
-  'function setTerminalFontSize',
-  'function toggleTerminalFocusMode',
-  'data-status="${esc(presentation.tone)}"',
   'function agentTargets',
   'terminal.bridgeId === agentSession.id',
-  'terminal.background_kept',
   'function requiredAgentTarget',
   'function resumeSupport',
   'parentControlled: true',
@@ -831,32 +749,13 @@ const TERMINAL_RUNTIME_CONTRACTS = [
   'function dispatchAgentCommand',
   'function interruptAgent',
   'function openForAgent',
-  'function bindAgent',
-  'function renderHistoryPanel',
-  'function queueHistoryRefresh',
   'selectTmuxById',
   'window.WhiteboxTerminal',
-  "t('terminal.detach_tmux_input')",
-  "t('terminal.recovered_after_host_restart')",
-  "t('terminal.status.detached')",
-  "t('terminal.status.stopped')",
-  "session.backend === 'managed-tmux'",
-  'window.whitebox.terminalDetach(session.id)',
-  'window.whitebox.terminalReconnect(session.id)',
-  'window.whitebox.terminalStop(session.id)',
+  'window.whitebox.terminalReconnect(terminalId)',
+  'window.whitebox.terminalStop?.(terminalId)',
   'entry.pendingResize',
   'if (!rehydratedIds.has(id)) state.commandDrafts.delete(id)',
-  'resizeObserver.observe',
-  'window.WhiteboxTerminalComposer',
-  'function slashQuery',
-  'function filterCommands',
-  'function isLongDraft',
-  'form.dataset.aiTarget',
-  'form.dataset.longDraft',
-  'composer?.handleKeydown(event)',
-  'function sendRawInputToCurrentSession',
-  "context.sendRawInput?.('\\u001b[Z')",
-  "context.provider !== 'claude'",
+  'embeddedResizeObserver.observe',
 ];
 
 const IPC_MODULE_FILES = [
@@ -1035,7 +934,10 @@ const RELEASE_WORKFLOW_CONTRACTS = [
 
 function assertIncludesAll(source, contracts, messageForContract) {
   for (const contract of contracts) {
-    assert.ok(source.includes(contract), messageForContract && messageForContract(contract));
+    assert.ok(
+      source.includes(contract),
+      messageForContract ? messageForContract(contract) : `${contract} 계약이 없습니다.`,
+    );
   }
 }
 
@@ -1043,192 +945,6 @@ function assertExcludesAll(source, contracts, messageForContract) {
   for (const contract of contracts) {
     assert.equal(source.includes(contract), false, messageForContract(contract));
   }
-}
-
-async function assertLatestDrawerMountKeepsHost(root) {
-  const deferred = () => {
-    let resolve;
-    let reject;
-    const promise = new Promise((next, fail) => {
-      resolve = next;
-      reject = fail;
-    });
-    return { promise, resolve, reject };
-  };
-  const classList = (...initial) => {
-    const values = new Set(initial);
-    return {
-      add: (...items) => items.forEach(item => values.add(item)),
-      contains: item => values.has(item),
-      remove: (...items) => items.forEach(item => values.delete(item)),
-      toggle(item, force) {
-        const enabled = force == null ? !values.has(item) : Boolean(force);
-        if (enabled) values.add(item);
-        else values.delete(item);
-        return enabled;
-      },
-    };
-  };
-  const eventTarget = () => {
-    const attributes = new Map();
-    return {
-      classList: classList(),
-      dataset: {},
-      disabled: false,
-      textContent: '',
-      addEventListener() {},
-      getAttribute(name) { return attributes.get(name) || null; },
-      removeAttribute(name) { attributes.delete(name); },
-      setAttribute(name, value) { attributes.set(name, String(value)); },
-      toggleAttribute(name, force) {
-        if (force) attributes.set(name, '');
-        else attributes.delete(name);
-      },
-    };
-  };
-  const first = deferred();
-  const second = deferred();
-  const terminalId = 'terminal:drawer-current';
-  const session = {
-    id: 'codex:drawer-current',
-    externalId: 'drawer-current',
-    provider: 'codex',
-    parentId: null,
-  };
-  const target = { id: terminalId, terminalId, kind: 'terminal', label: 'Current PTY' };
-  const host = {
-    classList: classList('terminal-screen'),
-    dataset: { terminalScreen: terminalId },
-    parentElement: null,
-  };
-  const viewport = {
-    children: [],
-    isConnected: true,
-    appendChild(node) {
-      if (node.parentElement?.children) {
-        node.parentElement.children = node.parentElement.children.filter(child => child !== node);
-      }
-      this.children.push(node);
-      node.parentElement = this;
-      return node;
-    },
-  };
-  const emptyTitle = { textContent: '' };
-  const emptyHelp = { textContent: '' };
-  const empty = {
-    classList: classList(),
-    querySelector(selector) {
-      if (selector === 'b') return emptyTitle;
-      if (selector === 'small') return emptyHelp;
-      return null;
-    },
-  };
-  const statusbar = { dataset: {} };
-  const surface = {
-    classList: classList(),
-    isConnected: true,
-    getAttribute: () => 'false',
-    querySelector: selector => selector === '.drawer-terminal-statusbar' ? statusbar : null,
-  };
-  const drawer = {
-    classList: classList('open'),
-    dataset: { terminalChat: 'true' },
-  };
-  const elements = new Map([
-    ['detailDrawer', drawer],
-    ['drawerTerminalSurface', surface],
-    ['drawerTerminalViewport', viewport],
-    ['drawerTerminalEmpty', empty],
-    ['drawerTerminalStatus', { textContent: '' }],
-    ['drawerTerminalMeta', { textContent: '' }],
-    ['drawerTerminalReconnectBtn', eventTarget()],
-    ['drawerTerminalResumeBtn', eventTarget()],
-  ]);
-  let embedded = { connected: false, agentSessionId: '', terminalId: '' };
-  let mountCalls = 0;
-  let unmountCalls = 0;
-  const terminal = {
-    agentConnectionSignature: () => 'signature:drawer-current',
-    agentTargets: () => [target],
-    embeddedState: () => ({ ...embedded }),
-    forkSupport: () => ({ supported: false }),
-    pendingPromptForSession: () => null,
-    resumeSupport: () => ({ supported: true }),
-    mountForAgent: () => {
-      mountCalls += 1;
-      return mountCalls === 1 ? first.promise : second.promise;
-    },
-    unmountEmbedded: () => {
-      unmountCalls += 1;
-      viewport.children = viewport.children.filter(child => child !== host);
-      host.parentElement = null;
-      embedded = { connected: false, agentSessionId: '', terminalId: '' };
-    },
-  };
-  const document = {
-    activeElement: null,
-    body: {},
-    documentElement: {},
-    hasFocus: () => true,
-    visibilityState: 'visible',
-    addEventListener() {},
-    getElementById: id => elements.get(id) || null,
-  };
-  const window = {
-    WhiteboxApp: { state: { ptyFocusSessionId: null } },
-    WhiteboxI18n: { t: key => key, errorText: (_error, fallback) => fallback },
-    WhiteboxRendererUtils: { reportRecoverableError() {} },
-    WhiteboxTerminal: terminal,
-    whitebox: {},
-    addEventListener() {},
-    dispatchEvent() {},
-  };
-  const sandbox = {
-    CustomEvent: class CustomEvent {
-      constructor(type, options = {}) { this.type = type; this.detail = options.detail; }
-    },
-    document,
-    queueMicrotask,
-    requestAnimationFrame: callback => { queueMicrotask(callback); return 1; },
-    setTimeout,
-    window,
-  };
-  const source = fs.readFileSync(path.join(root, 'renderer', 'drawer-terminal.js'), 'utf8');
-  vm.runInNewContext(source, sandbox, { filename: 'drawer-terminal-mount-race.js' });
-
-  const staleMount = window.WhiteboxDrawerTerminal.mount(session, {
-    targetId: terminalId,
-    createIfMissing: false,
-  });
-  const currentMount = window.WhiteboxDrawerTerminal.mount(session, {
-    force: true,
-    targetId: terminalId,
-    createIfMissing: false,
-  });
-  assert.equal(mountCalls, 2, 'force mount가 먼저 시작된 drawer mount를 실제로 교체하지 않았습니다.');
-
-  embedded = { connected: true, agentSessionId: session.id, terminalId };
-  viewport.appendChild(host);
-  second.resolve({ ok: true, target });
-  assert.equal((await currentMount).ok, true);
-  assert.strictEqual(host.parentElement, viewport);
-
-  first.resolve({ ok: false, reason: 'cancelled', target });
-  assert.equal((await staleMount).reason, 'cancelled');
-  assert.equal(unmountCalls, 0,
-    '동일 session/target의 stale drawer continuation이 더 최신 mount의 PTY host를 unmount했습니다.');
-  assert.strictEqual(host.parentElement, viewport,
-    '더 최신 drawer mount가 소유한 PTY host가 stale 완료 뒤 viewport에서 사라졌습니다.');
-  assert.deepStrictEqual(
-    JSON.parse(JSON.stringify(window.WhiteboxDrawerTerminal.state())),
-    {
-      sessionId: session.id,
-      targetId: terminalId,
-      targetKind: 'terminal',
-      phase: 'connected',
-      connectionSignature: 'signature:drawer-current',
-    },
-  );
 }
 
 function registerSyntaxContractTests(context) {
@@ -1243,10 +959,6 @@ function registerSyntaxContractTests(context) {
 
 function registerUiContractTests(context) {
   const { test, root } = context;
-  test('stale drawer mount는 더 최신 동일 PTY host의 소유권을 해제하지 않는다', async () => {
-    await assertLatestDrawerMountKeepsHost(root);
-  });
-
   test('fork 가드와 provisional 브리지 정체성 변경은 binding 없이도 새 snapshot을 게시한다', () => {
     const source = fs.readFileSync(path.join(root, 'src', 'monitorWorker.js'), 'utf8');
     const helperStart = source.indexOf('function forkPublicationFingerprintState(');
@@ -1403,6 +1115,42 @@ function registerUiContractTests(context) {
     const agentActions = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
     const messages = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     for (const id of REQUIRED_UI_IDS) assert.ok(html.includes(`id="${id}"`));
+    for (const id of REMOVED_UI_IDS) {
+      assert.equal(html.includes(`id="${id}"`), false, `${id} 삭제 UI가 다시 노출되었습니다.`);
+    }
+    for (const file of REMOVED_UI_IMPLEMENTATIONS) {
+      assert.equal(fs.existsSync(path.join(root, file)), false, `${file} 삭제 UI 구현 파일이 다시 추가되었습니다.`);
+    }
+    const attentionPopupPlaceholder = fs.readFileSync(path.join(root, 'attention-popup-preload.js'), 'utf8');
+    const attentionPopupExecutable = attentionPopupPlaceholder
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+      .trim();
+    assert.equal(attentionPopupExecutable, "'use strict';",
+      '패키지 호환 attention popup preload는 API·IPC·실행 코드가 없는 no-op placeholder여야 합니다.');
+    assert.doesNotMatch(attentionPopupPlaceholder,
+      /\brequire\s*\(|contextBridge|ipcRenderer|exposeInMainWorld|addEventListener|postMessage/u,
+      '패키지 호환 placeholder가 삭제된 popup API나 IPC를 다시 노출합니다.');
+    const runtimeOverviewCompatibility = fs.readFileSync(
+      path.join(root, 'scripts', 'runtime-overview-visual.js'),
+      'utf8',
+    );
+    const runtimeOverviewExecutable = runtimeOverviewCompatibility
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    assert.equal(runtimeOverviewExecutable, "'use strict'; require('./control-room-visual');",
+      '과거 runtime visual 명령은 현재 작업 현황 검증만 실행하는 compatibility entry여야 합니다.');
+    assert.doesNotMatch(runtimeOverviewCompatibility,
+      /automationOverview|runtimeOverview|selectView\s*\(\s*['"]runtime|tmuxSection|tmuxCreateModal/u,
+      'compatibility visual entry가 삭제된 추가 기능 runtime/tmux 화면을 긍정 검증합니다.');
+    for (const removedScript of [
+      'app-drawer-data.js',
+      'app-drawer-content.js',
+      'drawer-terminal.js',
+      'app-attention-popup-settings.js',
+    ]) assert.equal(html.includes(`src="${removedScript}"`), false, `${removedScript} 삭제 화면 런타임이 다시 로드됩니다.`);
     for (const id of RUN_COMPOSER_IDS) assert.ok(html.includes(`id="${id}"`));
     assertIncludesAll(html, BEGINNER_GUIDE_LABELS, label => `${label} 문구가 없습니다.`);
     assertExcludesAll(
@@ -1451,20 +1199,6 @@ function registerUiContractTests(context) {
       '완료 알림 fingerprint 문구는 크기를 제한하고 공백을 정규화해야 합니다.',
     );
     assert.ok(agentActions.includes('"status", "activityState", "statusDetail"'), '상세 화면이 최신 activityState를 덮어쓰지 못합니다.');
-    const terminalBlock = html.slice(html.indexOf('id="terminalSection"'), html.indexOf('id="tmuxSection"'));
-    const tmuxBlock = html.slice(html.indexOf('id="tmuxSection"'), html.indexOf('id="liveSection"'));
-    for (const tmuxOnlyId of TMUX_ONLY_IDS) {
-      assert.equal(
-        terminalBlock.includes(`id="${tmuxOnlyId}"`),
-        false,
-        `${tmuxOnlyId}가 일반 명령창 영역에 섞여 있습니다.`,
-      );
-      assert.equal(
-        tmuxBlock.includes(`id="${tmuxOnlyId}"`),
-        true,
-        `${tmuxOnlyId}가 tmux 전용 영역에 없습니다.`,
-      );
-    }
     assert.equal(html.includes('data-view="subagents"'), false);
     assert.equal(html.includes('id="navSubagentCount"'), false);
     const projectContextTag = html.match(/<section id="projectContextNav"[^>]*>/)?.[0] || '';
@@ -1497,7 +1231,6 @@ function registerUiContractTests(context) {
       'terminal-agent.js',
       'terminal.js',
       'inline-agent-terminal.js',
-      'drawer-terminal.js',
     ]);
     assertIncludesAll(
       app,
@@ -1512,200 +1245,21 @@ function registerUiContractTests(context) {
       contract => `${contract} 드로어 PTY 계약이 없습니다.`,
     );
     const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
-    const drawerTerminalSource = fs.readFileSync(path.join(root, 'renderer', 'drawer-terminal.js'), 'utf8');
     const terminalSource = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
     const terminalAgentSource = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
-    assert.match(
-      terminalAgentSource,
-      /async function openForAgent\(agentSession, targetId = '', draft = '', options = \{\}\)[\s\S]*selectSession\(target\.terminalId, 'question', \{[\s\S]*focus: options\.focus !== false,[\s\S]*isCurrent: options\.isCurrent/,
-      '자동 질문 이동은 PTY를 열되 질문 팝업의 텍스트 포커스를 보존할 수 있어야 합니다.',
-    );
-    assert.equal(html.includes('id="drawerTabTerminal"'), false, '대화와 분리된 터미널 탭을 다시 만들면 안 됩니다.');
-    assert.ok(html.includes('id="drawerTabChat"'), '대화 탭이 없습니다.');
-    assert.equal(drawerSource.includes('state.drawerTab === "terminal"'), false, '별도 터미널 탭 상태 분기가 남아 있습니다.');
-    assert.equal(drawerSource.includes('tab.dataset.tab === "terminal"'), false, '별도 터미널 탭 렌더링 분기가 남아 있습니다.');
-    assert.equal(drawerSource.includes('transcriptChat'), false, '상위 세션 대화 탭에 transcript fallback이 남아 있습니다.');
-    assert.match(drawerSource, /const showComposer =[^;]*&& !actualTerminalChat/s, 'PTY 아래에는 별도 채팅 composer를 만들면 안 됩니다.');
-    assert.doesNotMatch(
-      drawerSource,
-      /const terminalTargets\s*=[^;]*isLiveSession/s,
-      'PTY 연결 여부를 작업 상태값으로 제한하면 waiting/paused 전환에서 같은 PTY가 사라집니다.',
-    );
-    assert.doesNotMatch(
-      drawerSource,
-      /conversationSurface\s*=\s*conversationTab\s*\?\s*\(liveTerminalChat\s*\?\s*["']pty["']\s*:\s*["']transcript["']/,
-      '정상 대화창은 PTY 연결 완료 전에도 실제 터미널 surface를 유지해야 합니다.',
-    );
-    assert.match(
-      drawerSource,
-      /state\.drawerCreateTerminalIfMissing\s*=\s*options\.createTerminalIfMissing\s*!==\s*false[\s\S]*WhiteboxDrawerTerminal\?\.mount\?\.\(session,\s*\{[^}]*createIfMissing:\s*createTerminalIfMissing/s,
-      '일반 대화창은 PTY 생성을 허용하고 자동 알람 이동은 생성 없이 mount할 수 있어야 합니다.',
-    );
-    assert.match(
-      drawerSource,
-      /WhiteboxDrawerTerminal\?\.mount\?\.\(session,\s*\{[^}]*forkIfOriginOwned:\s*true/s,
-      '사용자가 연 Codex Desktop PTY가 원본 writer attach 대신 명시적 fork 경로를 허용해야 합니다.',
-    );
-    assert.match(
-      drawerTerminalSource,
-      /forkSupport\(session\)[\s\S]*WhiteboxTerminal\.forkForAgent\(session, '', false, \{ focus: false \}\)/,
-      '드로어의 새 세션 동작이 Codex Desktop 기록을 fork한 PTY를 열지 않습니다.',
-    );
-    assert.match(
-      drawerTerminalSource,
-      /const forkCreationGesture = forkIfOriginOwned && createIfMissing[\s\S]*options\.forkCreationGesture === true[\s\S]*forkCreationGesture,/,
-      '드로어 mount는 createIfMissing와 별도인 one-shot fork gesture만 core에 전달해야 합니다.',
-    );
-    assert.match(
-      drawerTerminalSource,
-      /generation !== state\.generation[\s\S]*ownsEmbeddedHost\(active\)[\s\S]*unmountEmbedded/,
-      '닫힌 drawer의 늦은 mount가 hidden viewport에 붙인 shared PTY host를 회수해야 합니다.',
-    );
-    assert.match(
-      drawerTerminalSource,
-      /const mountKey = `[^`]*\$\{forkCreationGesture \? 'gesture' : 'passive'\}/,
-      '드로어의 명시적 fork gesture가 먼저 시작된 passive mount promise에 흡수되면 안 됩니다.',
-    );
-    const failureHelperStart = drawerTerminalSource.indexOf('function blockingConnectionFailure(');
-    const failureHelperEnd = drawerTerminalSource.indexOf('function targetMeta(', failureHelperStart);
-    assert.ok(failureHelperStart >= 0 && failureHelperEnd > failureHelperStart,
-      '종료된 fork PTY의 passive failure tombstone helper를 찾을 수 없습니다.');
-    const failureSandbox = {
-      state: { connectionFailures: new Map() },
-    };
-    vm.runInNewContext(
-      `${drawerTerminalSource.slice(failureHelperStart, failureHelperEnd)}\nthis.blockingConnectionFailure = blockingConnectionFailure;`,
-      failureSandbox,
-      { filename: 'drawer-terminal-fork-failure.js' },
-    );
-    const stoppedFailure = { signature: 'source-signature', reason: 'stopped' };
-    failureSandbox.state.connectionFailures.set('codex:desktop-source', stoppedFailure);
-    assert.equal(
-      failureSandbox.blockingConnectionFailure('codex:desktop-source', 'source-signature', false),
-      stoppedFailure,
-      'passive drawer render는 종료된 fork의 failure tombstone을 우회하면 안 됩니다.',
-    );
-    assert.equal(
-      failureSandbox.blockingConnectionFailure('codex:desktop-source', 'source-signature', true),
-      null,
-      '새 명시적 drawer gesture는 종료된 fork tombstone을 해제하고 새 fork를 허용해야 합니다.',
-    );
-    assert.equal(failureSandbox.state.connectionFailures.has('codex:desktop-source'), false);
-    const pendingHelperStart = drawerTerminalSource.indexOf('function pendingMountBlocks(');
-    const pendingHelperEnd = drawerTerminalSource.indexOf('function clearPendingMount(', pendingHelperStart);
-    assert.ok(pendingHelperStart >= 0 && pendingHelperEnd > pendingHelperStart,
-      'drawer pending mount authority helper를 찾을 수 없습니다.');
-    const pendingSandbox = {
-      state: { pendingMountBaseKey: 'same-source', pendingMountForkCreationGesture: false },
-    };
-    vm.runInNewContext(
-      `${drawerTerminalSource.slice(pendingHelperStart, pendingHelperEnd)}\nthis.pendingMountBlocks = pendingMountBlocks;`,
-      pendingSandbox,
-      { filename: 'drawer-terminal-pending-authority.js' },
-    );
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', false), true,
-      '같은 passive mount는 하나로 합쳐야 합니다.');
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', true), false,
-      '새 명시적 gesture는 먼저 시작된 passive mount를 승격해야 합니다.');
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', false, true), false,
-      'authoritative force refresh는 passive pending mount를 교체할 수 있어야 합니다.');
-    pendingSandbox.state.pendingMountForkCreationGesture = true;
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', false), true,
-      '나중 passive render가 진행 중인 명시적 gesture를 무효화하면 안 됩니다.');
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', false, true), true,
-      'passive force refresh도 진행 중인 명시적 gesture를 무효화하면 안 됩니다.');
-    assert.equal(pendingSandbox.pendingMountBlocks('same-source', true), true,
-      '동일한 명시적 mount도 중복 생성하면 안 됩니다.');
-    pendingSandbox.state.pendingMountForkCreationGesture = false;
-    assert.equal(pendingSandbox.pendingMountBlocks('other-source', false), false,
-      '다른 연결 identity의 passive mount는 기존 passive 작업에 흡수하면 안 됩니다.');
-    assert.match(
-      drawerSource,
-      /state\.drawerForkCreationGesture = state\.drawerTab === "chat"[\s\S]*options\.attentionActivation !== true[\s\S]*const forkCreationGestureArmed = state\.drawerForkCreationGesture === true;[\s\S]*state\.drawerForkCreationGesture = false;[\s\S]*forkCreationGestureArmed[\s\S]*forkCreationGesture,/,
-      'openDrawer 사용자 동작만 fork gesture를 arm하고 첫 terminal render가 즉시 소비해야 합니다.',
-    );
-    const dialogEventsSource = fs.readFileSync(path.join(root, 'renderer', 'app-events-dialogs.js'), 'utf8');
-    assert.match(
-      dialogEventsSource,
-      /const selectDrawerTabFromGesture[\s\S]*state\.drawerMountTerminal = true;[\s\S]*state\.drawerCreateTerminalIfMissing = true;[\s\S]*selectDrawerTabFromGesture\(tab\.dataset\.tab\)[\s\S]*selectDrawerTabFromGesture\(tabs\[next\]\.dataset\.tab\)/,
-      '마우스·키보드 Chat 동작만 drawer fork gesture와 실제 PTY mount 권한을 활성화해야 합니다.',
-    );
-    const tabGestureStart = dialogEventsSource.indexOf('const selectDrawerTabFromGesture =');
-    const tabGestureEnd = dialogEventsSource.indexOf('$(".drawer-tabs").addEventListener("click"', tabGestureStart);
-    assert.ok(tabGestureStart >= 0 && tabGestureEnd > tabGestureStart,
-      'drawer tab gesture helper를 찾을 수 없습니다.');
-    const tabGestureSandbox = {
-      state: {
-        drawerMode: 'session',
-        drawerTab: 'chat',
-        drawerMountTerminal: false,
-        drawerCreateTerminalIfMissing: false,
-        drawerForkCreationGesture: false,
-        drawerForceLatest: false,
-      },
-    };
-    vm.runInNewContext(
-      `${dialogEventsSource.slice(tabGestureStart, tabGestureEnd)}\nthis.selectDrawerTabFromGesture = selectDrawerTabFromGesture;`,
-      tabGestureSandbox,
-      { filename: 'drawer-tab-fork-gesture.js' },
-    );
-    assert.equal(tabGestureSandbox.selectDrawerTabFromGesture('chat'), true,
-      'attention이 read-only로 연 top-level Codex drawer에서 실제 Chat 클릭은 fork gesture가 되어야 합니다.');
-    assert.equal(tabGestureSandbox.state.drawerMountTerminal, true);
-    assert.equal(tabGestureSandbox.state.drawerCreateTerminalIfMissing, true);
-    tabGestureSandbox.state.drawerMode = 'subagent';
-    tabGestureSandbox.state.drawerMountTerminal = false;
-    tabGestureSandbox.state.drawerCreateTerminalIfMissing = false;
-    assert.equal(tabGestureSandbox.selectDrawerTabFromGesture('chat'), false,
-      '부모가 제어하는 subagent의 Chat 탭은 독립 PTY 권한을 얻으면 안 됩니다.');
-    assert.equal(tabGestureSandbox.state.drawerMountTerminal, false);
-    assert.match(
-      fs.readFileSync(path.join(root, 'renderer', 'inline-agent-terminal.js'), 'utf8'),
-      /forkCreationGestures: new Map\(\)[\s\S]*forkCreationGestures\.delete\(session\.id\)[\s\S]*forkCreationGesture,[\s\S]*forkCreationGestures\.set\(id, connectionSignature\(session\)\)/,
-      '인라인 PTY는 toggle gesture를 한 번만 소비하고 passive sync에 재사용하지 않아야 합니다.',
-    );
-    assert.match(
-      fs.readFileSync(path.join(root, 'renderer', 'inline-agent-terminal.js'), 'utf8'),
-      /matchingPendingMount[\s\S]*pendingMount\.forkCreationGesture === true[\s\S]*!forkCreationGesture && options\.force !== true[\s\S]*forkCreationGesture, promise: task/,
-      '인라인은 passive mount를 명시 gesture로 승격하고 진행 중인 명시 fork를 force refresh로부터 보존해야 합니다.',
-    );
-    const sessionSwitchIndex = drawerTerminalSource.indexOf('if (switchingSession)');
-    const sessionSwitchUnmountIndex = drawerTerminalSource.indexOf('unmountEmbedded', sessionSwitchIndex);
-    const cachedFailureIndex = drawerTerminalSource.indexOf('const cachedFailure', sessionSwitchIndex);
-    assert.ok(sessionSwitchIndex >= 0
-      && sessionSwitchUnmountIndex > sessionSwitchIndex
-      && cachedFailureIndex > sessionSwitchUnmountIndex,
-    '다른 작업으로 전환할 때 실패·canMount 판정보다 먼저 이전 PTY를 격리해야 합니다.');
-    assert.match(
-      terminalSource,
-      /const currentTarget\s*=\s*currentTargets\.find[\s\S]*if \(current && currentTarget/,
-      'embedded xterm 재사용 전에 현재 작업의 usable terminal인지 확인해야 합니다.',
-    );
-    assert.match(
-      drawerTerminalSource,
-      /\['stopped', 'exited', 'failed'\]\.includes[\s\S]*unmountEmbedded/,
-      '종료 상태가 inventory에 남아 있어도 embedded xterm을 즉시 해제해야 합니다.',
-    );
-    assert.doesNotMatch(
-      terminalAgentSource,
-      /terminalCreate\(\{\s*type:\s*['"]tmux['"]/,
-      '메인 대화창이 외부 tmux pane에 입력 가능한 터미널을 직접 붙이면 안 됩니다.',
-    );
-    assert.match(
-      terminalAgentSource,
-      /if \(terminal\.backend !== 'direct' \|\| terminal\.conversationBound !== true\) return false;/,
-      '메인 대화 입력 대상은 앱이 소유한 direct conversation PTY로 제한해야 합니다.',
-    );
-    assert.match(
-      terminalAgentSource,
-      /return resumeForAgent\(agentSession,\s*'',\s*false,\s*\{[\s\S]*focus:\s*false/,
-      '기존 앱 소유 PTY가 없으면 원래 세션을 prompt 없이 새 실제 PTY로 재개해야 합니다.',
-    );
-    assert.match(
-      drawerSource,
-      /const currentTerminalReady\s*=[\s\S]*const nextTerminalReady\s*=\s*liveTerminalChat\s*\?\s*"true"\s*:\s*"false"[\s\S]*reconcileFocusedComposer/,
-      '포커스된 composer도 PTY disconnect 즉시 같은 노드에서 terminal-ready 상태를 갱신해야 합니다.',
-    );
+    const ptyFocusSource = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
+    assert.match(drawerSource, /async function openOwnerPty\(id, options = \{\}\)[\s\S]*context\.openPtyFocusVerified\?\.\(root\.id,/u,
+      '기존 작업 열기 진입점이 담당 root PTY 집중 모드로 라우팅되어야 합니다.');
+    assert.doesNotMatch(drawerSource, /innerHTML|drawerContent|drawerComposer|classList\.add\("open"\)/u,
+      'headless 호환 라우터가 대화/right drawer 화면을 다시 만들면 안 됩니다.');
+    assert.match(ptyFocusSource, /function openPtyFocusForTerminal\(terminalId, options = \{\}\)[\s\S]*terminalId: id,[\s\S]*creationId:/u,
+      '새 AI 작업은 정확한 PTY identity로 집중 모드를 열어야 합니다.');
+    for (const removedId of ['detailDrawer', 'drawerBackdrop', 'drawerTabChat', 'drawerComposer', 'ptyFocusChildModal']) {
+      assert.equal(html.includes(`id="${removedId}"`), false, `${removedId} 삭제 화면이 다시 노출되었습니다.`);
+    }
+    assert.match(html, /<div id="terminalRuntimeMount" hidden aria-hidden="true"><\/div>/u,
+      '실제 xterm host를 옮겨 붙이는 hidden staging mount만 유지해야 합니다.');
+
     assertIncludesAll(
       app,
       MANAGEMENT_SEMANTIC_CONTRACTS,
@@ -1728,7 +1282,7 @@ function registerUiContractTests(context) {
       timeAgo: () => '방금 전',
       readablePreview: value => ({ text: String(value || ''), full: String(value || '') }),
       isResultReviewComplete: () => false,
-      resultReviewTargets: () => [],
+      resultReviewTargets: session => session?.id === 'result-contract' ? [session] : [],
     });
     const managementNow = Date.parse('2026-08-06T01:00:00.000Z');
     const managementSession = {
@@ -1771,19 +1325,28 @@ function registerUiContractTests(context) {
       evidence: { confidence: 'high' },
     };
     managementState.snapshot.sessions = [managementResultSession];
-    assert.equal(management.needsManagementInbox(managementResultSession, managementNow), false,
-      '답변 요청이 없는 순수 완료 결과에 별도 확인 단계를 만들면 안 됩니다.');
+    assert.equal(management.needsManagementInbox(managementResultSession, managementNow), true,
+      '확인하지 않은 완료 결과는 확인 목록에 표시되어야 합니다.');
     assert.equal(management.needsUserResponse(managementResultSession), false,
       '순수 완료 결과를 실행 흐름을 가리는 답변 대기로 분류하면 안 됩니다.');
-    assert.equal(management.needsManagementReview(managementResultSession, managementNow), false,
-      '순수 완료 결과를 홈 확인 목록에 넣으면 안 됩니다.');
-    assert.equal(management.rootManagementReviews([managementResultSession], managementNow).length, 0,
-      '순수 완료 결과가 홈의 답변·승인 요청과 섞이면 안 됩니다.');
+    assert.equal(management.needsManagementReview(managementResultSession, managementNow), true,
+      '확인하지 않은 완료 결과를 홈 확인 목록에서 누락하면 안 됩니다.');
+    assert.equal(management.rootManagementReviews([managementResultSession], managementNow).length, 1,
+      '확인하지 않은 완료 결과가 홈 확인 목록에 표시되어야 합니다.');
     const managementResultHtml = management.attentionCardHtml(managementResultSession);
-    assert.equal(managementResultHtml.includes('data-result-review'), false,
-      '완료 결과 카드에 제거된 결과 확인 저장 동작이 남아 있으면 안 됩니다.');
+    const completeActionIndex = managementResultHtml.indexOf('data-result-review-complete="result-contract"');
+    const detailActionIndex = managementResultHtml.indexOf('data-open-session="result-contract"');
+    assert.ok(completeActionIndex >= 0 && completeActionIndex < detailActionIndex,
+      '실제 결과 확인 카드의 primary 동작은 상세 열기보다 확인 완료여야 합니다.');
+    assert.match(
+      managementResultHtml,
+      /<button[^>]*data-result-review-complete="result-contract"[^>]*>management\.result_review_complete<\/button>/u,
+      '결과 확인 카드의 확인 완료 버튼이 담당 세션 identity를 보존하지 않습니다.',
+    );
+    assert.equal((managementResultHtml.match(/data-result-review-complete=/g) || []).length, 1,
+      '결과 확인 카드에 확인 완료 primary 동작이 중복되면 안 됩니다.');
     assert.doesNotMatch(managementResultHtml, /data-attention-quick=/,
-      '완료 결과 확인 카드에 답변·승인 빠른 응답을 노출하면 안 됩니다.');
+      '결과 확인 카드에 삭제된 대화 빠른 응답 UI를 다시 노출하면 안 됩니다.');
     const operationsStart = managementSource.indexOf('function renderOperationsOverview()');
     const operationsEnd = managementSource.indexOf('\n  function outcomeHtml', operationsStart);
     const operationsSource = managementSource.slice(operationsStart, operationsEnd);
@@ -1877,10 +1440,10 @@ function registerUiContractTests(context) {
       ...APP_MODULES,
       'terminal-workbench.js',
       'terminal-agent.js',
-      'terminal-composer.js',
       'terminal-events.js',
+      'terminal-prompt.js',
       'terminal.js',
-      'drawer-terminal.js',
+      'inline-agent-terminal.js',
     ];
     rendererScripts.reduce((previous, script) => {
       const index = html.indexOf(`src="${script}"`);
@@ -1912,29 +1475,15 @@ function registerUiContractTests(context) {
       QUALITY_201_300_I18N_CONTRACTS,
       contract => `${contract} 201–300 품질 번역 계약이 없습니다.`,
     );
-    assert.match(styles, /-webkit-line-clamp:\s*5/, '서브에이전트 미리보기의 5줄 제한 계약이 없습니다.');
-    assert.match(
-      styles,
-      /(?:^|\n)\.detail-drawer \.chat-content\.markdown\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
-      '오버레이와 2분할 대화창 모두 평면형 대화 스타일을 유지해야 합니다.',
-    );
-    assert.doesNotMatch(
-      styles,
-      /(?:^|\n)\.detail-drawer \.chat-row\.user \.chat-content\.markdown\s*\{/,
-      '사용자 대화만 다시 말풍선으로 덮어쓰면 안 됩니다.',
-    );
-    assert.match(
-      styles,
-      /\.detail-drawer\[data-conversation-surface="transcript"\] #drawerContent\s*\{[^}]*background-color:\s*#080c12;[^}]*font-family:\s*var\(--font-mono/s,
-      '부모가 제어하는 서브에이전트의 읽기 전용 기록 화면 스타일이 필요합니다.',
-    );
+    assert.doesNotMatch(styles, /\.subagent-(?:coordination|message-preview|work-source)/u,
+      '삭제된 도움 AI 대화/미리보기 화면 스타일이 다시 포함되었습니다.');
     assert.doesNotMatch(styles, /\.agent-inline-terminal-composer\s*\{/, '인라인 PTY에 별도 메시지 입력 셸을 다시 만들면 안 됩니다.');
-    assert.match(styles, /html\[data-theme="light"\].*data-conversation-surface="transcript"/s, '터미널형 기록 화면의 밝은 테마 계약이 없습니다.');
+    assert.match(styles, /\.pty-focus-surface/u, '대화창을 대체하는 full PTY 집중 모드 스타일이 없습니다.');
+    assert.doesNotMatch(styles, /\.pty-focus-child-modal/u, '삭제된 PTY 하위 노드 팝업 스타일이 다시 포함되었습니다.');
     assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/, '동작 줄이기 미디어 계약이 없습니다.');
     const terminal = rendererSource([
       'terminal-workbench.js',
       'terminal-agent.js',
-      'terminal-composer.js',
       'terminal-events.js',
       'terminal.js',
     ]);
@@ -2069,6 +1618,8 @@ function registerUiContractTests(context) {
       assert.ok(pkg.build.files.includes(pattern), `패키징 제외 규칙이 없습니다: ${pattern}`);
     }
     assert.equal(pkg.bin.whitebox, 'bin/whitebox.js');
+    assert.equal(pkg.scripts['test:runtime-overview'], 'electron scripts/runtime-overview-visual.js',
+      'release gate가 참조하는 runtime 호환 점검 진입점을 임의로 바꾸면 안 됩니다.');
     assert.equal(pkg.scripts['test:drawer-conversation'], 'electron scripts/drawer-terminal-visual.js');
     assert.equal(pkg.scripts['test:drawer-actual-pty'], 'node scripts/drawer-actual-pty-runner.js');
     const actualPtyRunner = fs.readFileSync(path.join(root, 'scripts', 'drawer-actual-pty-runner.js'), 'utf8');
@@ -2081,25 +1632,6 @@ function registerUiContractTests(context) {
     assert.ok(actualPtyIntegration.includes('forkForAgent(source'));
     assert.ok(actualPtyIntegration.includes('client.get(codexForkTerminalId, true)'));
     assert.ok(pkg.build.mac.target.some(item => item.arch.includes('arm64') && item.arch.includes('x64')));
-  });
-
-  test('tmux 도움 AI 순회가 자기·상호 순환과 중복 자식을 안전하게 제외한다', () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-tmux-render.js'), 'utf8');
-    const sandbox = { window: { WhiteboxAppFactories: {} } };
-    vm.runInNewContext(source, sandbox, { filename: 'app-tmux-render.js' });
-    const sessions = [
-      { id: 'root', childIds: ['root', 'child-a', 'child-a'] },
-      { id: 'child-a', childIds: ['child-b'] },
-      { id: 'child-b', childIds: ['child-a'] },
-    ];
-    const renderer = sandbox.window.WhiteboxAppFactories.createTmuxRenderer({
-      state: { snapshot: { sessions } },
-    });
-    const rows = renderer.linkedTmuxSubagents({ linkedSessionId: 'root' });
-    assert.deepStrictEqual(
-      Array.from(rows, ({ session, depth }) => [session.id, depth]),
-      [['child-a', 1], ['child-b', 2]],
-    );
   });
 
   test('종료된 세션은 최근 기록 위치만 유지하고 실제 상태와 수동 기록 이동을 보존한다', () => {
@@ -2202,9 +1734,10 @@ function registerUiContractTests(context) {
     assert.ok(values.get(core.SESSION_ARCHIVE_STORAGE_KEY));
   });
 
-  test('완료 결과는 별도 결과 확인 대상으로 만들지 않는다', () => {
+  test('완료 결과는 확인 stamp를 저장하고 내용이 바뀌면 다시 확인 대상으로 만든다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
     const values = new Map();
+    const targetsBySession = new Map();
     const sandbox = {
       localStorage: {
         getItem: key => values.get(key) || null,
@@ -2216,6 +1749,12 @@ function registerUiContractTests(context) {
         WhiteboxRendererUtils: {
           $: () => null, $$: () => [], esc: value => String(value), uiLocale: () => 'ko',
           providerLabel: value => value, reportRecoverableError: () => {},
+          isWritableDirectSession: session => session?.direct === true,
+          appOwnedBridgeTerminalIdentity: session => session?.bridgeIdentity || null,
+          canForkCodexDesktopSession: session => session?.safeFork === true,
+        },
+        WhiteboxTerminal: {
+          agentTargets: session => targetsBySession.get(session?.id) || [],
         },
         matchMedia: () => ({ matches: false, addEventListener: () => {} }),
         WhiteboxI18n: { t: key => key, observedText: value => value },
@@ -2226,6 +1765,9 @@ function registerUiContractTests(context) {
     const rootSession = {
       id: 'review-root',
       status: 'running',
+      direct: true,
+      controlCapabilities: { pty: true },
+      presentation: { conversationSurface: 'pty' },
       childIds: ['review-result'],
       updatedAt: '2026-07-31T01:00:00.000Z',
     };
@@ -2239,21 +1781,87 @@ function registerUiContractTests(context) {
       attention: { category: 'none', required: false },
       outcome: { status: 'completed', verified: true, completedAt: '2026-07-31T01:00:01.000Z', summary: `${'같은 앞부분'.repeat(160)} · 첫 결과` },
     };
+    targetsBySession.set(rootSession.id, [{ id: 'terminal-review', terminalId: 'terminal-review', kind: 'terminal' }]);
     core.state.snapshot = { sessions: [rootSession, resultSession] };
-    assert.ok(source.includes('const RESULT_REVIEW_REQUIRED = false;'));
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession)), []);
-    assert.equal(core.markResultReviewComplete(rootSession), 0);
-    assert.equal(core.isResultReviewComplete(resultSession), false);
-    assert.equal(values.has(core.RESULT_REVIEW_STORAGE_KEY), false,
-      '완료 결과를 자동으로 확인 저장하면 안 됩니다.');
+    assert.equal(source.includes('const RESULT_REVIEW_REQUIRED = false;'), false,
+      '실제 완료 결과 확인 기능을 정적 플래그로 비활성화하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession), session => session.id), ['review-result']);
+    const noTarget = { ...rootSession, id: 'review-no-target', childIds: [] };
+    const imported = { ...rootSession, id: 'review-imported', sourcePluginId: 'builtin.opencode', childIds: [] };
+    const ambiguous = { ...rootSession, id: 'review-ambiguous', childIds: [] };
+    const bridge = {
+      ...rootSession,
+      id: 'review-bridge',
+      status: 'completed',
+      childIds: [],
+      bridgeIdentity: { terminalId: 'terminal-bridge' },
+      outcome: { verified: true, completedAt: '2026-07-31T01:00:02.000Z', summary: 'bridge result' },
+    };
+    const safeFork = {
+      ...rootSession,
+      id: 'review-safe-fork',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      status: 'completed',
+      childIds: [],
+      safeFork: true,
+      attention: { category: 'none', required: false },
+      outcome: { verified: true, completedAt: '2026-07-31T01:00:03.000Z', summary: 'safe fork result' },
+    };
+    const importedSafeFork = { ...safeFork, id: 'review-imported-safe-fork', sourcePluginId: 'builtin.opencode' };
+    const readOnlySafeFork = { ...safeFork, id: 'review-read-only-safe-fork', readOnly: true };
+    const unsafeFork = { ...safeFork, id: 'review-unsafe-fork', safeFork: false };
+    targetsBySession.set(imported.id, [{ id: 'terminal-imported', terminalId: 'terminal-imported', kind: 'terminal' }]);
+    targetsBySession.set(ambiguous.id, [
+      { id: 'terminal-a', terminalId: 'terminal-a', kind: 'terminal' },
+      { id: 'terminal-b', terminalId: 'terminal-b', kind: 'terminal' },
+    ]);
+    targetsBySession.set(bridge.id, [{ id: 'terminal-wrong', terminalId: 'terminal-wrong', kind: 'terminal' }]);
+    core.state.snapshot.sessions.push(
+      noTarget, imported, ambiguous, bridge, safeFork, importedSafeFork, readOnlySafeFork, unsafeFork,
+    );
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(noTarget)), [],
+      'PTY target이 없으면 도달 불가능한 확인 완료 카드를 만들면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(imported)), [],
+      'imported/source-plugin 기록은 writable PTY 결과로 취급하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(ambiguous)), [],
+      'direct 세션의 terminal target이 여러 개면 임의 PTY로 결과 확인을 라우팅하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(bridge)), [],
+      'app-owned bridge는 runtime terminalId와 다른 target을 허용하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(safeFork)), [],
+      '기본 의미 조회는 아직 생성되지 않은 PTY를 존재하는 exact target처럼 취급하면 안 됩니다.');
+    assert.deepStrictEqual(
+      Array.from(core.resultReviewTargets(safeFork, { allowPtyCreation: true }), session => session.id),
+      ['review-safe-fork'],
+      '완료된 Codex Desktop은 명시적 확인 동작에서만 safe fork PTY를 만들 수 있어야 합니다.',
+    );
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(importedSafeFork, { allowPtyCreation: true })), [],
+      'imported/source-plugin 결과는 safe fork 판정이 있어도 확인 완료 PTY를 만들면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(readOnlySafeFork, { allowPtyCreation: true })), [],
+      'read-only 결과는 safe fork 판정이 있어도 확인 완료 PTY를 만들면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(unsafeFork, { allowPtyCreation: true })), [],
+      '안전한 생성 경로가 없는 완료 세션에는 확인 완료 버튼을 노출하면 안 됩니다.');
+    targetsBySession.set(bridge.id, [
+      { id: 'terminal-decoy', terminalId: 'terminal-decoy', kind: 'terminal' },
+      { id: 'terminal-bridge', terminalId: 'terminal-bridge', kind: 'terminal' },
+    ]);
+    assert.equal(core.resultReviewPtyTarget(bridge)?.terminalId, 'terminal-bridge',
+      'bridge root에 decoy가 함께 있어도 runtime identity와 일치하는 exact PTY를 골라야 합니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(bridge), session => session.id), ['review-bridge'],
+      'app-owned bridge의 exact runtime terminal target만 확인 완료 카드에 도달해야 합니다.');
+    const firstStamp = core.resultReviewStamp(resultSession);
+    assert.ok(firstStamp);
+    assert.equal(core.markResultReviewComplete(rootSession), 1);
+    assert.equal(core.isResultReviewComplete(resultSession), true);
+    assert.ok(values.has(core.RESULT_REVIEW_STORAGE_KEY),
+      'verified PTY에서 확인한 완료 결과 stamp를 저장해야 합니다.');
 
     const reloaded = sandbox.window.WhiteboxAppFactories.createCore({});
     reloaded.state.snapshot = core.state.snapshot;
-    assert.equal(reloaded.isResultReviewComplete(resultSession), false);
+    assert.equal(reloaded.isResultReviewComplete(resultSession), true,
+      '저장한 완료 결과 stamp는 reload 뒤에도 유지되어야 합니다.');
     const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
     const sessionRenderSource = fs.readFileSync(path.join(root, 'renderer', 'app-session-render.js'), 'utf8');
-    const runtimeSource = fs.readFileSync(path.join(root, 'renderer', 'app-runtime-overview.js'), 'utf8');
-    const interactionSource = fs.readFileSync(path.join(root, 'scripts', 'interaction-check.js'), 'utf8');
     assert.equal(sessionRenderSource.includes('sessionNeedsResultReview'), false,
       '지난 기록 화면에 제거된 결과 확인 판정이 남아 있으면 안 됩니다.');
     assert.equal(sessionRenderSource.includes('data-result-review'), false,
@@ -2262,38 +1870,31 @@ function registerUiContractTests(context) {
       && sessionRenderSource.includes('t(`memory.stage_decision_${decisionState}`)')
       && !sessionRenderSource.includes('memory.no_result_to_review'),
     '지난 기록의 5단계와 지표는 결과 열람 여부가 아니라 실제 사용자 결정을 표시해야 합니다.');
-    assert.equal(runtimeSource.includes("data-result-review=\"true\""), false,
-      '자동 실행 결과 열기가 별도 확인 상태를 저장한다고 표시하면 안 됩니다.');
-    assert.equal(runtimeSource.includes('확인 상태가 저장'), false,
-      '저장하지 않는 결과 확인 상태를 저장한다고 안내하면 안 됩니다.');
-    assert.ok(runtimeSource.includes('const resultPhase = activePhase.key === "observe";')
-      && runtimeSource.includes('selectedActivePhase?.key === "observe"')
-      && !runtimeSource.includes('/결과|확인/'),
-    '반복 작업의 결과 단계 판정은 번역 문구가 아니라 phase key를 사용해야 합니다.');
-    assert.ok(runtimeSource.includes('resultPhase ? "runtime.open_result" : "runtime.open_task"')
-      && runtimeSource.includes('resultPhase ? t("runtime.phase_observe_detail") : activePhase.detail'),
-    '반복 작업 열기 안내는 현재 단계의 실제 의미를 표시해야 합니다.');
     assert.equal(bootstrapSource.includes("{ tab: 'summary', resultReview: true }"), false,
       '완료 알림을 열 때 결과 확인 상태를 자동 저장하면 안 됩니다.');
-    assert.equal(interactionSource.includes("selector: '[data-result-review-complete]'"), false,
-      '제거된 결과 확인 완료 버튼을 필수 상호작용으로 요구하면 안 됩니다.');
     assert.ok(bootstrapSource.indexOf('window.whitebox.onUpdateState')
       < bootstrapSource.indexOf('window.WhiteboxRendererUtils.bootstrap()'),
     '시작 중 업데이트 상태 변경을 놓치지 않도록 bootstrap 전에 구독해야 합니다.');
     assert.match(bootstrapSource, /state\.update = latestUpdateState \|\| bootstrap\.update/,
       'bootstrap 도중 도착한 최신 업데이트 상태를 초기 스냅샷보다 우선해야 합니다.');
+    assert.match(bootstrapSource, /addEventListener\("whitebox:terminal-inventory-changed"[\s\S]*render\("terminal-inventory"\)/,
+      'PTY inventory가 늦게 도착하면 exact target 기반 결과 확인 카드를 다시 렌더링해야 합니다.');
     const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
     assert.match(mainSource, /if \(updateManager\) sendUpdateState\(updateManager\.getState\(\)\)/,
       'renderer ready 시 최신 업데이트 상태를 한 번 더 보내 이벤트 경합을 닫아야 합니다.');
 
     resultSession.outcome = { ...resultSession.outcome, summary: '새 완료 결과' };
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession)), [],
-      '결과 내용이 바뀌어도 별도 확인 단계가 다시 생기면 안 됩니다.');
+    assert.notEqual(core.resultReviewStamp(resultSession), firstStamp,
+      '완료 결과 내용이 달라지면 review stamp도 달라져야 합니다.');
+    assert.equal(core.isResultReviewComplete(resultSession), false);
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(rootSession), session => session.id), ['review-result'],
+      '새 완료 결과 stamp는 다시 확인 대상으로 나타나야 합니다.');
   });
 
   test('프로젝트 알림 확인은 현재 신호만 숨기고 새 결과와 새 요청을 다시 표시한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
     const values = new Map();
+    const targetsBySession = new Map();
     const sandbox = {
       localStorage: {
         getItem: key => values.get(key) || null,
@@ -2305,6 +1906,11 @@ function registerUiContractTests(context) {
         WhiteboxRendererUtils: {
           $: () => null, $$: () => [], esc: value => String(value), uiLocale: () => 'ko',
           providerLabel: value => value, reportRecoverableError: () => {},
+          isWritableDirectSession: session => session?.direct === true,
+          appOwnedBridgeTerminalIdentity: session => session?.bridgeIdentity || null,
+        },
+        WhiteboxTerminal: {
+          agentTargets: session => targetsBySession.get(session?.id) || [],
         },
         matchMedia: () => ({ matches: false, addEventListener: () => {} }),
         WhiteboxI18n: { t: key => key, observedText: value => value },
@@ -2314,6 +1920,7 @@ function registerUiContractTests(context) {
     const core = sandbox.window.WhiteboxAppFactories.createCore({});
     const result = {
       id: 'notice-result', status: 'completed', updatedAt: '2026-08-12T01:00:00.000Z',
+      direct: true, controlCapabilities: { pty: true }, presentation: { conversationSurface: 'pty' },
       completionObserved: true, messages: [], attention: { category: 'none', required: false },
       outcome: { verified: true, completedAt: '2026-08-12T01:00:00.000Z', summary: '첫 완료 결과' },
     };
@@ -2324,20 +1931,29 @@ function registerUiContractTests(context) {
         requestId: 'request-a|request-b', requestedAt: '2026-08-12T01:01:00.000Z', summary: '환경을 고르세요.',
       },
     };
+    targetsBySession.set(result.id, [{ id: 'terminal-notice', terminalId: 'terminal-notice', kind: 'terminal' }]);
     core.state.snapshot = { sessions: [result, attention] };
 
     assert.equal(core.isProjectNoticeSeen('result', result), false);
     assert.equal(core.markProjectNoticeSeen('result', result), true);
     assert.equal(core.isProjectNoticeSeen('result', result), true);
-    assert.equal(core.isResultReviewComplete(result), false, '완료 결과에 별도 확인 상태를 만들면 안 됩니다.');
-    assert.deepStrictEqual(Array.from(core.resultReviewTargets(result)), []);
+    assert.equal(core.isResultReviewComplete(result), false,
+      '프로젝트 배지를 본 것만으로 완료 결과 확인이 끝나면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(core.resultReviewTargets(result), session => session.id), ['notice-result']);
     assert.ok(values.get(core.PROJECT_NOTICE_ACK_STORAGE_KEY));
 
     const reloaded = sandbox.window.WhiteboxAppFactories.createCore({});
     reloaded.state.snapshot = core.state.snapshot;
     assert.equal(reloaded.isProjectNoticeSeen('result', result), true, '프로젝트 알림 열람 상태가 재시작 후 유지되어야 합니다.');
+    assert.equal(reloaded.markResultReviewComplete(result), 1);
+    assert.equal(reloaded.isResultReviewComplete(result), true);
+    assert.deepStrictEqual(Array.from(reloaded.resultReviewTargets(result)), []);
     result.outcome = { ...result.outcome, summary: '새 완료 결과' };
     assert.equal(reloaded.isProjectNoticeSeen('result', result), false, '새 결과 내용은 다시 프로젝트에 표시해야 합니다.');
+    assert.equal(reloaded.isResultReviewComplete(result), false,
+      '새 결과 내용은 저장된 이전 review stamp와 일치하면 안 됩니다.');
+    assert.deepStrictEqual(Array.from(reloaded.resultReviewTargets(result), session => session.id), ['notice-result'],
+      '새 결과 stamp는 확인 목록에도 다시 나타나야 합니다.');
 
     assert.equal(core.markProjectNoticeSeen('attention', attention), true);
     assert.equal(core.isProjectNoticeSeen('attention', attention), true);
@@ -2358,62 +1974,6 @@ function registerUiContractTests(context) {
       '새 PTY 승인 요청은 다시 프로젝트에 표시해야 합니다.');
   });
 
-  test('서브에이전트 대화에 메인 AI의 SendMessage 후속 지시를 시간순으로 합친다', () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-content.js'), 'utf8');
-    const sandbox = {
-      window: {
-        WhiteboxAppFactories: {},
-        WhiteboxI18n: { t: key => key, observedText: value => value },
-      },
-    };
-    vm.runInNewContext(source, sandbox, { filename: 'app-drawer-content.js' });
-    const parent = {
-      id: 'claude:parent',
-      messages: [],
-      collaboration: {
-        communications: [{
-          id: 'followup:send-1',
-          kind: 'followup',
-          childId: 'claude:child',
-          taskName: '토큰 확인',
-          from: 'claude:parent',
-          to: 'claude:child',
-          text: 'SECOND-4DB8과 FIRST를 결합해줘',
-          timestamp: '2026-07-14T01:00:03Z',
-        }],
-      },
-    };
-    const child = {
-      id: 'claude:child',
-      parentId: parent.id,
-      taskName: '토큰 확인',
-      agentPath: 'claude:child',
-      startedAt: '2026-07-14T01:00:01Z',
-      updatedAt: '2026-07-14T01:00:04Z',
-      delegation: { taskName: '토큰 확인', startedAt: '2026-07-14T01:00:01Z' },
-      messages: [
-        { id: 'child-user', role: 'user', text: 'FIRST-91C2를 반환해줘', timestamp: '2026-07-14T01:00:01Z' },
-        { id: 'child-first', role: 'assistant', text: 'FIRST-91C2', timestamp: '2026-07-14T01:00:02Z' },
-        { id: 'child-second', role: 'assistant', text: 'FIRST-91C2 SECOND-4DB8', timestamp: '2026-07-14T01:00:04Z' },
-      ],
-    };
-    const details = new Map([[parent.id, parent], [child.id, child]]);
-    const drawer = sandbox.window.WhiteboxAppFactories.createDrawerContent({
-      state: { details },
-      snapshotSession: id => details.get(id),
-      agentPathTaskName: value => String(value || '').split(':').pop(),
-    });
-    const messages = drawer.subagentWorkMessages(child);
-    assert.deepStrictEqual(
-      Array.from(messages, message => [message.role, message.text]),
-      [
-        ['user', 'FIRST-91C2를 반환해줘'],
-        ['assistant', 'FIRST-91C2'],
-        ['user', 'SECOND-4DB8과 FIRST를 결합해줘'],
-        ['assistant', 'FIRST-91C2 SECOND-4DB8'],
-      ],
-    );
-  });
 
   test('지난 기록 상세 화면은 전체 대화는 보존하고 최신 대기 상태를 우선한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
@@ -2457,225 +2017,444 @@ function registerUiContractTests(context) {
     assert.strictEqual(selected.lifecycle, staleDetail.lifecycle);
   });
 
-  test('상세 기록을 읽는 중 최신 snapshot이 오면 완료 직후 한 번 다시 읽는다', async () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-data.js'), 'utf8');
-    const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
-    const pending = [];
-    let detailCalls = 0;
-    let ptyDetailRenders = 0;
-    const state = {
-      selectedId: 'slow-detail',
-      drawerTab: 'chat',
-      details: new Map(),
-      detailErrors: new Map(),
-      detailLoadingIds: new Set(),
-      snapshot: { sessions: [{
-        id: 'slow-detail', updatedAt: '2026-08-10T01:00:00.000Z',
-      }] },
-    };
+  test('대화창 호환 진입점은 하위 작업도 담당 root PTY 집중 모드로 연다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const sandbox = {
-      Promise,
+      CustomEvent: class CustomEvent { constructor(type) { this.type = type; } },
       window: {
         WhiteboxAppFactories: {},
-        WhiteboxI18n: { t: key => key, errorText: error => String(error) },
-        whitebox: {
-          sessionDetail: () => {
-            detailCalls += 1;
-            return new Promise(resolve => pending.push(resolve));
-          },
+        WhiteboxI18n: { t: key => key },
+        dispatchEvent: () => {},
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'app-drawer.js' });
+    const parent = { id: 'root', provider: 'codex' };
+    const child = { id: 'child', parentId: parent.id, provider: 'codex' };
+    const sessions = new Map([[parent.id, parent], [child.id, child]]);
+    const opened = [];
+    const state = { details: new Map(), selectedId: '' };
+    const routerContext = {
+      state,
+      snapshotSession: id => sessions.get(id) || null,
+      canOpenPtyFocus: session => session === parent,
+      resultReviewPtyTarget: session => session === parent
+        ? { id: 'terminal-root', terminalId: 'terminal-root' }
+        : null,
+      openPtyFocusVerified: async (id, options) => {
+        opened.push([id, options.focus, options.targetId, options.terminalId]);
+        return { opened: true };
+      },
+    };
+    const drawer = sandbox.window.WhiteboxAppFactories.createDrawer(routerContext);
+
+    assert.equal(await drawer.openSubagentConversation(child.id, { focus: true }), true);
+    assert.deepStrictEqual(opened, [[parent.id, true, 'terminal-root', 'terminal-root']]);
+    assert.equal(state.selectedId, child.id, '상태 선택은 사용자가 누른 하위 작업을 보존해야 합니다.');
+    assert.equal(drawer.closeDrawer(), false, '삭제된 대화창을 닫는 동작은 no-op이어야 합니다.');
+
+    let resolveStale;
+    let activeFocus = false;
+    const staleRoot = { id: 'stale-root', provider: 'codex' };
+    const staleChild = { id: 'stale-child', parentId: staleRoot.id, provider: 'codex' };
+    const currentRoot = { id: 'current-root', provider: 'codex' };
+    const raceSessions = new Map([
+      [staleRoot.id, staleRoot], [staleChild.id, staleChild], [currentRoot.id, currentRoot],
+    ]);
+    const viewFallbacks = [];
+    const fallbackToasts = [];
+    const acknowledgements = [];
+    const raceState = { details: new Map(), selectedId: '' };
+    const raceDrawer = sandbox.window.WhiteboxAppFactories.createDrawer({
+      state: raceState,
+      snapshotSession: id => raceSessions.get(id) || null,
+      canOpenPtyFocus: () => true,
+      resultReviewPtyTarget: session => ({ id: `terminal-${session.id}`, terminalId: `terminal-${session.id}` }),
+      isPtyFocusActive: () => activeFocus,
+      openPtyFocusVerified: (id, options) => {
+        if (id === staleRoot.id) {
+          return new Promise(resolve => { resolveStale = () => resolve({ opened: false }); });
+        }
+        activeFocus = true;
+        assert.equal(options.isCurrent(), true, '가장 최근 PTY open generation은 current여야 합니다.');
+        return Promise.resolve({ opened: true });
+      },
+      acknowledgeSessionNotices: session => { acknowledgements.push(session.id); return 1; },
+      selectView: view => viewFallbacks.push(view),
+      toast: message => fallbackToasts.push(message),
+    });
+    const staleOpen = raceDrawer.openSubagentConversation(staleChild.id, { focus: true });
+    await Promise.resolve();
+    assert.equal(typeof resolveStale, 'function');
+    assert.equal(await raceDrawer.openDrawer(currentRoot.id, { focus: true }), true);
+    resolveStale();
+    assert.equal(await staleOpen, false);
+    assert.deepStrictEqual(viewFallbacks, [],
+      '늦게 실패한 A open이 현재 B PTY를 작업 현황 fallback으로 덮으면 안 됩니다.');
+    assert.deepStrictEqual(fallbackToasts, [], '취소된 A open이 B 위에 실패 toast를 띄우면 안 됩니다.');
+    assert.deepStrictEqual(acknowledgements, [currentRoot.id],
+      'stale A 알림은 확인 처리하지 않고 verified B만 처리해야 합니다.');
+    assert.equal(raceState.selectedId, currentRoot.id);
+  });
+
+  test('legacy attention과 prompt의 늦은 실패는 사용자가 연 다른 PTY를 덮지 않는다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise(next => { resolve = next; });
+      return { promise, resolve };
+    };
+    const classList = () => {
+      const values = new Set();
+      return {
+        add: (...items) => items.forEach(item => values.add(item)),
+        remove: (...items) => items.forEach(item => values.delete(item)),
+        contains: item => values.has(item),
+      };
+    };
+    const elements = new Map();
+    const element = id => {
+      if (!elements.has(id)) {
+        const nested = { textContent: '', removeAttribute() {} };
+        elements.set(id, {
+          id,
+          classList: classList(),
+          hidden: false,
+          inert: false,
+          textContent: '',
+          addEventListener() {},
+          removeAttribute() {},
+          setAttribute() {},
+          querySelector: () => nested,
+          scrollTo() {},
+        });
+      }
+      return elements.get(id);
+    };
+    const windowEvents = new Map();
+    const attentionHandlers = [];
+    const promptHandlers = [];
+    const openCalls = [];
+    const viewFallbacks = [];
+    const fallbackToasts = [];
+    const closeCalls = [];
+    let activeFocus = false;
+    let promptResolution = null;
+    const state = {
+      providers: [],
+      hiddenProviders: new Set(),
+      details: new Map(),
+      sourcePluginSettings: {},
+      snapshot: null,
+      ptyFocusSessionId: '',
+    };
+    const additions = {
+      $: selector => element(String(selector).replace(/^#/, '')),
+      esc: value => String(value),
+      state,
+      loadGuideState() {},
+      loadQualityState() {},
+      saveDashboardPreferences() {},
+      loadProviderVisibility() {},
+      projectVisibleSnapshot: snapshot => snapshot,
+      visibleSnapshot: () => state.snapshot,
+      isProviderVisible: () => true,
+      bindEvents() {},
+      render() {},
+      timeOnly: value => value,
+      renderUpdateSettings() {},
+      syncViewChrome() {},
+      selectView: view => viewFallbacks.push(view),
+      canOpenPtyFocus: () => true,
+      isPtyFocusActive: () => activeFocus,
+      ownerRootSession: session => session,
+      openPtyFocusVerified: (sessionId, options) => {
+        const pending = deferred();
+        openCalls.push({ sessionId, options, pending });
+        return pending.promise;
+      },
+      closePtyFocus: options => closeCalls.push(options),
+      syncPendingPtyFocus() {},
+      toast: message => fallbackToasts.push(message),
+      refreshProviderUsage: async () => null,
+    };
+    const factoryNames = [
+      'createCore', 'createProviderVisibility', 'createDashboard',
+      'createGraphModel', 'createGraphView', 'createGraphLayout', 'createGraphOrchestration',
+      'createAgentActions', 'createManagement', 'createSessionRenderer',
+      'createPtyFocusMode', 'createDrawer', 'createRunModal', 'createQualityEnhancements',
+      'createNavigationEventBindings', 'createSessionEventBindings', 'createFilterEventBindings',
+      'createDialogEventBindings', 'createEventBindings',
+    ];
+    const factories = Object.fromEntries(factoryNames.map(name => [
+      name,
+      () => name === 'createCore' ? additions : {},
+    ]));
+    const bootstrapSnapshot = {
+      generatedAt: '2026-09-02T00:00:00.000Z',
+      sessions: [
+        { id: 'passive-a', provider: 'codex', parentId: null },
+        { id: 'manual-b', provider: 'codex', parentId: null },
+      ],
+    };
+    const whitebox = {
+      onUpdateState() {},
+      setLocale: async () => {},
+      onAttentionRequested: callback => attentionHandlers.push(callback),
+      onTerminalPromptResolved: callback => promptHandlers.push(callback),
+      onMonitorError() {},
+      onSnapshot() {},
+      rendererReady: async () => {},
+    };
+    const sandbox = {
+      console,
+      CustomEvent: class CustomEvent {},
+      document: {
+        documentElement: { dataset: {} },
+        querySelector: selector => element(selector),
+      },
+      navigator: { clipboard: { writeText: async () => {} } },
+      requestAnimationFrame: callback => { callback(); return 1; },
+      setTimeout,
+      window: {
+        WhiteboxAppFactories: factories,
+        WhiteboxI18n: {
+          t: key => key,
+          errorText: error => String(error),
+          getLocale: () => 'ko',
+        },
+        WhiteboxRendererUtils: {
+          bootstrap: async () => ({
+            providers: [{ id: 'codex' }],
+            availability: { codex: true },
+            sourcePlugins: [],
+            workspaces: [],
+            snapshot: bootstrapSnapshot,
+            activeRuns: [],
+            platform: 'win32',
+            versions: {},
+            update: { status: 'idle' },
+          }),
+          reportRecoverableError() {},
+        },
+        WhiteboxTerminal: {
+          resolveAttentionPrompt: () => promptResolution,
+        },
+        whitebox,
+        location: { reload() {} },
+        addEventListener(type, listener) {
+          if (!windowEvents.has(type)) windowEvents.set(type, []);
+          windowEvents.get(type).push(listener);
         },
       },
     };
-    vm.runInNewContext(source, sandbox, { filename: 'app-drawer-data.js' });
-    const drawerData = sandbox.window.WhiteboxAppFactories.createDrawerData({
-      state,
-      renderDrawer: () => {},
-      renderPtyFocusDetail: () => { ptyDetailRenders += 1; },
-      reportRecoverableError: () => {},
-    });
+    vm.runInNewContext(source, sandbox, { filename: 'app-bootstrap-focus-steal.js' });
+    for (let attempt = 0; attempt < 10 && !sandbox.window.WhiteboxApp.initialized; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(sandbox.window.WhiteboxApp.initialized, true);
+    assert.equal(attentionHandlers.length, 1);
+    assert.equal(promptHandlers.length, 1);
+    const manualSelection = windowEvents.get('whitebox:terminal-manual-selection')?.[0];
+    assert.equal(typeof manualSelection, 'function');
 
-    const first = drawerData.loadSessionDetail('slow-detail', true);
+    const legacyPending = attentionHandlers[0]({ sessionId: 'passive-a', event: 'completed' });
     await Promise.resolve();
-    assert.equal(detailCalls, 1);
-    assert.match(bootstrapSource, /loadSessionDetail\(state\.selectedId, true, card\.updatedAt\)/u,
-      '최초 상세 요청에 캐시가 없어도 더 최신 snapshot은 후속 full-history read를 예약해야 합니다.');
-    state.snapshot.sessions[0].updatedAt = '2026-08-10T01:00:10.000Z';
-    drawerData.loadSessionDetail('slow-detail', true, state.snapshot.sessions[0].updatedAt);
-    pending.shift()({
-      id: 'slow-detail', updatedAt: '2026-08-10T01:00:00.000Z', messages: [],
-    });
-    await first;
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(detailCalls, 2, 'in-flight snapshot 갱신은 후속 full-history read를 예약해야 합니다.');
-    assert.equal(state.details.has('slow-detail'), false,
-      '더 최신 snapshot이 확인된 뒤 먼저 도착한 stale 상세 응답을 화면 캐시에 반영하면 안 됩니다.');
-    assert.equal(ptyDetailRenders, 0,
-      '커밋하지 않은 stale 상세 응답으로 열린 PTY 상세 팝업을 다시 그리면 안 됩니다.');
+    assert.equal(openCalls[0].sessionId, 'passive-a');
+    assert.equal(openCalls[0].options.isCurrent(), true);
+    state.ptyFocusSessionId = 'manual-b';
+    activeFocus = true;
+    manualSelection();
+    assert.equal(openCalls[0].options.isCurrent(), false);
+    openCalls[0].pending.resolve({ opened: false });
+    await legacyPending;
+    assert.deepStrictEqual(viewFallbacks, [],
+      '늦은 legacy attention 실패가 사용자의 B PTY를 waiting/active 화면으로 덮으면 안 됩니다.');
+    assert.deepStrictEqual(fallbackToasts, [], '취소된 legacy attention이 B 위에 실패 toast를 띄우면 안 됩니다.');
+    assert.deepStrictEqual(closeCalls, [], 'legacy attention fallback이 다른 owner의 B PTY를 닫으면 안 됩니다.');
 
-    drawerData.loadSessionDetail('slow-detail', true, state.snapshot.sessions[0].updatedAt);
-    state.snapshot.sessions[0].updatedAt = '2026-08-10T01:00:20.000Z';
-    drawerData.loadSessionDetail('slow-detail', true, state.snapshot.sessions[0].updatedAt);
-    pending.shift()({
-      id: 'slow-detail', updatedAt: '2026-08-10T01:00:10.000Z',
-      messages: [{ id: 'latest-answer', role: 'assistant', text: '최신 답변' }],
-    });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(detailCalls, 2,
-      '진행 중인 follow-up은 snapshot이 다시 바뀌어도 재귀 full-history read를 만들면 안 됩니다.');
-    assert.equal(state.details.get('slow-detail').updatedAt, '2026-08-10T01:00:10.000Z');
-    assert.equal(state.details.get('slow-detail').messages[0].text, '최신 답변');
-    assert.equal(state.detailLoadingIds.has('slow-detail'), false);
-    assert.equal(ptyDetailRenders, 1,
-      'queued follow-up이 실제 상세를 커밋하면 열린 PTY 상세 팝업을 갱신해야 합니다.');
-
-    const third = drawerData.loadSessionDetail('slow-detail', true, state.snapshot.sessions[0].updatedAt);
-    assert.equal(detailCalls, 3,
-      'bounded follow-up 완료 뒤 실제 newer snapshot은 다음 독립 요청으로 읽어야 합니다.');
-    pending.shift()({
-      id: 'slow-detail', updatedAt: '2026-08-10T01:00:20.000Z',
-      messages: [{ id: 'newest-answer', role: 'assistant', text: '가장 최신 답변' }],
-    });
-    await third;
-    assert.equal(state.details.get('slow-detail').updatedAt, '2026-08-10T01:00:20.000Z');
-    assert.equal(state.details.get('slow-detail').messages[0].text, '가장 최신 답변');
-    assert.equal(ptyDetailRenders, 2,
-      '다음 독립 상세 커밋도 열린 PTY 상세 팝업에 전달해야 합니다.');
+    activeFocus = false;
+    state.ptyFocusSessionId = '';
+    promptResolution = {
+      ok: true,
+      requiresText: true,
+      sessionId: 'passive-a',
+      targetId: 'terminal-a',
+      terminalId: 'terminal-a',
+    };
+    const promptPending = promptHandlers[0]({ requestId: 'prompt-a' });
+    await Promise.resolve();
+    assert.equal(openCalls[1].sessionId, 'passive-a');
+    assert.equal(openCalls[1].options.targetId, 'terminal-a');
+    state.ptyFocusSessionId = 'manual-b';
+    activeFocus = true;
+    manualSelection();
+    assert.equal(openCalls[1].options.isCurrent(), false);
+    openCalls[1].pending.resolve({ opened: false });
+    await promptPending;
+    assert.deepStrictEqual(viewFallbacks, []);
+    assert.deepStrictEqual(fallbackToasts, []);
+    assert.deepStrictEqual(closeCalls, []);
   });
 
-  test('PTY 상세는 이전 follow-up 완료 뒤 같은 최신 snapshot을 다시 읽을 수 있다', async () => {
+  test('새 작업 PTY 집중 대상은 terminalId와 creationId가 정확히 같은 root 하나만 고른다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     const instrumented = source
-      .replace('let detailState = null;', 'let detailState = context.__detailState || null;')
-      .replace(/return \{\r?\n    canOpenPtyFocus,/u, 'return {\n    refreshOpenDetail,\n    canOpenPtyFocus,');
-    assert.notEqual(instrumented, source,
-      'PTY focus private refresh harness가 실제 구현을 노출하지 못했습니다.');
-
-    const snapshotVersion = '2026-08-10T01:00:20.000Z';
-    const detailVersion = '2026-08-10T01:00:10.000Z';
-    const detailState = {
-      kind: 'child',
-      sessionId: 'sticky-detail',
-      refreshVersion: snapshotVersion,
-      refreshPromise: null,
-    };
-    const state = {
-      ptyFocusSessionId: 'focus-root',
-      snapshot: { sessions: [{
-        id: 'sticky-detail',
-        title: '최신 snapshot',
-        updatedAt: snapshotVersion,
-      }] },
-      details: new Map([['sticky-detail', {
-        id: 'sticky-detail',
-        title: '이전 full detail',
-        updatedAt: detailVersion,
-      }]]),
-    };
-    const modal = { classList: { contains: () => false } };
-    const title = { textContent: '' };
-    const body = {
-      innerHTML: '',
-      isConnected: true,
-      scrollTop: 0,
-      hasChildNodes: () => false,
-      querySelectorAll: () => [],
-    };
-    const elements = new Map([
-      ['ptyFocusChildModal', modal],
-      ['ptyFocusChildTitle', title],
-      ['ptyFocusChildBody', body],
-    ]);
-    let resolveDetail;
-    const detailCalls = [];
+      .replace(
+        /return \{\r?\n    canOpenPtyFocus,/u,
+        'return {\n    sessionForTerminal,\n    canOpenPtyFocus,',
+      )
+      .replace(
+        /    pendingFocus = null;\r?\n    const root = ownerRootSession\(sessionId\);/u,
+        '    pendingFocus = null;\n    if (context.__openSpy) { context.__openSpy(sessionId); state.ptyFocusSessionId = sessionId; return true; }\n    const root = ownerRootSession(sessionId);',
+      );
+    assert.notEqual(instrumented, source, 'PTY identity harness가 실제 구현을 노출하지 못했습니다.');
+    assert.ok(instrumented.includes('context.__openSpy'),
+      '일반 PTY open이 이전 pending create focus를 취소하는 지점을 찾지 못했습니다.');
+    const bridge = (id, creationId, parentId = '') => ({
+      id: `bridge:${id}:${creationId}`,
+      parentId,
+      provider: 'codex',
+      source: 'whitebox-bridge',
+      clientKind: 'whitebox-bridge',
+      runtimePresence: [{ kind: 'bridge', terminalId: id, creationId, provider: 'codex' }],
+    });
+    const state = { snapshot: { sessions: [
+      bridge('terminal:new', 'create-good'),
+      bridge('terminal:new', 'create-other'),
+      bridge('terminal:child-only', 'create-child', 'parent'),
+    ] } };
+    const eventListeners = new Map();
     const sandbox = {
-      Date,
-      Map,
-      Promise,
-      Set,
-      document: { activeElement: null },
-      requestAnimationFrame: callback => callback(),
+      Date, Map, Promise, Set,
+      CustomEvent: class CustomEvent { constructor(type) { this.type = type; } },
       window: {
         WhiteboxAppFactories: {},
         WhiteboxI18n: { t: key => key },
+        WhiteboxRendererUtils: {
+          appOwnedBridgeTerminalIdentity: session => session.runtimePresence?.[0] || null,
+        },
+        addEventListener(type, listener) {
+          if (!eventListeners.has(type)) eventListeners.set(type, []);
+          eventListeners.get(type).push(listener);
+        },
+        dispatchEvent(event) {
+          (eventListeners.get(event.type) || []).forEach(listener => listener(event));
+        },
       },
     };
     vm.runInNewContext(instrumented, sandbox, { filename: 'app-pty-focus.js' });
+    const opened = [];
     const focus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode({
-      __detailState: detailState,
-      $: selector => elements.get(String(selector || '').replace(/^#/, '')) || null,
-      esc: value => String(value),
       state,
-      subagentConversationHtml: session => `<p>${session.title}</p>`,
-      loadSessionDetail: (...args) => {
-        detailCalls.push(args);
-        return new Promise(resolve => { resolveDetail = resolve; });
-      },
-      reportRecoverableError: () => {},
+      $: () => null,
+      __openSpy: id => opened.push(id),
     });
 
-    const refresh = focus.refreshOpenDetail();
-    assert.deepEqual(detailCalls, [['sticky-detail', true, snapshotVersion]],
-      '완료된 이전 promise의 refreshVersion이 같은 최신 snapshot의 독립 read를 막으면 안 됩니다.');
-    resolveDetail(state.details.get('sticky-detail'));
-    await refresh;
-    assert.equal(detailState.refreshPromise, null,
-      '독립 상세 read 완료 뒤 공유 promise gate를 해제해야 합니다.');
+    assert.equal(focus.sessionForTerminal('terminal:new', 'create-good').id, 'bridge:terminal:new:create-good');
+    assert.equal(focus.sessionForTerminal('terminal:new', ''), null,
+      'creationId 없이 같은 terminalId 후보가 둘이면 추측해서 열면 안 됩니다.');
+    assert.equal(focus.sessionForTerminal('terminal:new', 'missing'), null);
+    assert.equal(focus.sessionForTerminal('terminal:child-only', 'create-child'), null,
+      '하위 작업 projection은 새 작업 PTY 집중 대상으로 선택하면 안 됩니다.');
+    assert.match(source, /pendingFocus = \{[\s\S]*terminalId: id,[\s\S]*creationId:/u,
+      'snapshot 전에 요청한 새 PTY의 exact identity를 대기 상태로 보존해야 합니다.');
+
+    state.snapshot.sessions = [{ id: 'manual-b', provider: 'codex' }];
+    assert.equal(focus.openPtyFocusForTerminal('terminal:late-a', { creationId: 'create-a' }), false);
+    assert.equal(focus.openPtyFocus('manual-b'), true);
+    state.snapshot.sessions.push(bridge('terminal:late-a', 'create-a'));
+    focus.syncPendingPtyFocus();
+    assert.deepStrictEqual(opened, ['manual-b'],
+      'A create 대기 뒤 B를 직접 열었으면 늦게 나타난 A snapshot이 focus를 빼앗으면 안 됩니다.');
+    assert.equal(state.ptyFocusSessionId, 'manual-b');
+
+    const navState = { snapshot: { sessions: [] } };
+    const navOpened = [];
+    const navFocus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode({
+      state: navState,
+      $: () => null,
+      __openSpy: id => navOpened.push(id),
+    });
+    navFocus.bindPtyFocusEvents();
+    assert.equal(navFocus.openPtyFocusForTerminal('terminal:nav-a', { creationId: 'create-nav-a' }), false);
+    sandbox.window.dispatchEvent(new sandbox.CustomEvent('whitebox:terminal-manual-selection'));
+    navState.snapshot.sessions.push(bridge('terminal:nav-a', 'create-nav-a'));
+    navFocus.syncPendingPtyFocus();
+    assert.deepStrictEqual(navOpened, [],
+      'pending direct projection 뒤 사용자가 화면을 이동하면 늦게 도착한 projection이 PTY focus를 열면 안 됩니다.');
   });
 
-  test('PTY 실행 팝업은 full detail 본문에 가장 최신 실행 생존 상태를 합친다', () => {
+  test('PTY 집중 모드의 도움 AI와 실행 항목은 클릭 없는 상태 행으로만 표시한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
-    const instrumented = source.replace(
-      /return \{\r?\n    canOpenPtyFocus,/u,
-      'return {\n    mergedExecutionActivity,\n    canOpenPtyFocus,',
-    );
-    assert.notEqual(instrumented, source,
-      'PTY execution merge harness가 실제 private 구현을 노출하지 못했습니다.');
+    const element = (extra = {}) => ({
+      className: '',
+      dataset: {},
+      innerHTML: '',
+      textContent: '',
+      classList: { contains: () => false },
+      setAttribute() {},
+      hasChildNodes() { return false; },
+      querySelector: () => null,
+      ...extra,
+    });
+    const statusLabel = element();
+    const statusTime = element();
+    const elements = new Map([
+      ['ptyFocusSurface', element()],
+      ['ptyFocusProviderMark', element()],
+      ['ptyFocusTerminalMark', element()],
+      ['ptyFocusTitle', element()],
+      ['ptyFocusSummary', element()],
+      ['ptyFocusTerminalTitle', element()],
+      ['ptyFocusRootStatus', element({ querySelector: selector => selector === 'b' ? statusLabel : statusTime })],
+      ['ptyFocusTerminalShell', element()],
+      ['ptyFocusFlow', element()],
+    ]);
+    const rootSession = {
+      id: 'root', provider: 'codex', title: '담당 작업', status: 'running', statusDetail: '진행 중',
+      updatedAt: '2026-09-02T00:00:00.000Z', childIds: ['child'], controlCapabilities: { pty: true },
+      executions: [{ id: 'exec', kind: 'shell', command: 'npm test', status: 'running' }],
+    };
+    const childSession = {
+      id: 'child', parentId: 'root', provider: 'codex', title: '도움 작업', status: 'running',
+      statusDetail: '확인 중', updatedAt: '2026-09-02T00:01:00.000Z', childIds: [], executions: [],
+    };
     const sandbox = {
-      Date,
-      Object,
+      document: { querySelector: () => null },
       window: {
         WhiteboxAppFactories: {},
         WhiteboxI18n: { t: key => key },
+        WhiteboxRendererUtils: { isWritableDirectSession: () => true },
       },
     };
-    vm.runInNewContext(instrumented, sandbox, { filename: 'app-pty-focus.js' });
-    const focus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode({ state: {
-      snapshot: { sessions: [] }, details: new Map(),
-    } });
-    const sameTime = '2026-08-10T01:00:20.000Z';
-    const fullRunning = {
-      id: 'execution-1', status: 'running', statusDetail: 'stale running',
-      command: 'npm test', output: 'FULL_OUTPUT', runtime: 'shell', cwd: 'D:\\fixture',
-      updatedAt: sameTime,
-    };
-    const liveUnverified = {
-      id: 'execution-1', status: 'unverified', statusDetail: 'latest liveness',
-      exitCode: null, completedAt: null, updatedAt: sameTime,
-    };
-    const settled = focus.mergedExecutionActivity(liveUnverified, fullRunning);
-    assert.equal(settled.status, 'unverified');
-    assert.equal(settled.statusDetail, 'latest liveness');
-    assert.equal(settled.output, 'FULL_OUTPUT');
-    assert.equal(settled.command, 'npm test');
-    assert.equal(settled.runtime, 'shell');
-    assert.equal(settled.cwd, 'D:\\fixture');
-
-    const detailWinsTie = focus.mergedExecutionActivity(
-      { ...liveUnverified, status: 'running', statusDetail: 'snapshot running' },
-      { ...fullRunning, status: 'cancelled', statusDetail: 'detail cancelled', exitCode: 130 },
-    );
-    assert.equal(detailWinsTie.status, 'cancelled',
-      '동일 시각에는 종료 상태가 running보다 우선해야 합니다.');
-    assert.equal(detailWinsTie.exitCode, 130);
-
-    const newerSnapshot = focus.mergedExecutionActivity(
-      { ...liveUnverified, status: 'running', statusDetail: 'restarted', updatedAt: '2026-08-10T01:00:30.000Z' },
-      { ...fullRunning, status: 'completed', statusDetail: 'older completion', updatedAt: sameTime },
-    );
-    assert.equal(newerSnapshot.status, 'running',
-      '실행 updatedAt이 더 최신이면 상태 우선순위보다 새 관측을 사용해야 합니다.');
-    assert.equal(newerSnapshot.output, 'FULL_OUTPUT',
-      '최신 경량 snapshot을 합쳐도 full detail output을 잃으면 안 됩니다.');
+    vm.runInNewContext(source, sandbox, { filename: 'app-pty-focus.js' });
+    const focus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode({
+      state: { ptyFocusSessionId: 'root', snapshot: { sessions: [rootSession, childSession] } },
+      $: selector => elements.get(String(selector).replace(/^#/, '')) || null,
+      esc: value => String(value),
+      providerInfo: () => ({ mark: 'C' }),
+      providerStyle: () => '',
+      connectedGraphSessions: sessions => ({ byId: new Map(sessions.map(session => [session.id, session])) }),
+      controlRoomAgentGoal: session => ({ text: session.title, full: session.title }),
+      controlRoomSummary: value => ({ text: String(value), full: String(value) }),
+      latestWorkCopy: session => session.statusDetail || '',
+      subagentWorkLabel: session => session.status,
+      inferredExecutionSummary: activity => ({ text: activity.command, full: activity.command }),
+      executionActivityStatus: activity => activity.status,
+      controlRoomStatus: session => session.status,
+      sessionStatusLabel: session => session.status,
+      timeAgo: () => '방금',
+    });
+    focus.renderPtyFocus();
+    const flowHtml = elements.get('ptyFocusFlow').innerHTML;
+    assert.equal((flowHtml.match(/class="pty-focus-flow-lane"/gu) || []).length, 3,
+      'PTY focus의 담당·진행·완료 상태 레인이 모두 렌더링되어야 합니다.');
+    assert.match(flowHtml, /도움 작업[\s\S]*npm test/u,
+      '도움 AI와 실행 작업 상태가 PTY focus DOM에 렌더링되어야 합니다.');
+    assert.doesNotMatch(flowHtml, /<button|data-open-|aria-haspopup|role="button"/u,
+      '상태 행은 대화나 상세 팝업을 여는 인터랙션을 만들면 안 됩니다.');
+    assert.doesNotMatch(source, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
+      '삭제된 PTY 하위 대화/상세 팝업 코드가 남아 있습니다.');
   });
 
   test('같은 세션의 최신 스냅샷에서 확인된 대화는 상세 캐시가 갱신될 때까지 보존한다', () => {
@@ -2723,156 +2502,6 @@ function registerUiContractTests(context) {
     );
   });
 
-  test('수신 확인된 사용자 메시지는 상세 캐시에 아직 없어도 대화 화면에서 유지한다', () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-content.js'), 'utf8');
-    const sandbox = {
-      window: {
-        WhiteboxAppFactories: {},
-        WhiteboxI18n: { t: key => key },
-      },
-    };
-    vm.runInNewContext(source, sandbox, { filename: 'app-drawer-content.js' });
-    const session = { id: 'same-session', provider: 'codex', messages: [] };
-    const observedUser = {
-      id: 'observed-user', role: 'user', text: '수신 뒤에도 남아야 하는 질문', timestamp: '2026-08-04T01:00:00.000Z',
-    };
-    const entry = { id: 'local-user', text: observedUser.text, timestamp: observedUser.timestamp };
-    const state = {
-      pendingConversationMessages: new Map([[session.id, [entry]]]),
-      resolvedConversationMessages: new Map(),
-      expandedConversationPrompts: new Set(),
-      details: new Map(),
-    };
-    const drawer = sandbox.window.WhiteboxAppFactories.createDrawerContent({
-      esc: value => String(value),
-      uiLocale: () => 'ko',
-      state,
-      messageContentHtml: message => String(message?.text || ''),
-      fullNumber: value => String(value || 0),
-      timeOnly: () => '10:00',
-      providerInfo: () => ({ mark: 'C', label: 'Codex' }),
-      snapshotSession: () => null,
-      conversationDeliveryState: () => ({ phase: 'received', userMessage: observedUser }),
-      observeConversationDelivery: () => {},
-    });
-
-    const html = drawer.chatHtml(session, { showSubagentCalls: false, synthesizeRequest: false });
-
-    assert.ok(html.includes(observedUser.text));
-    assert.ok(html.includes('chat-delivery-status received'));
-  });
-
-  test('도움 AI 상세는 보호된 지시 대체문과 입력창 없이 실제 응답을 보여준다', () => {
-    const contentSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-content.js'), 'utf8');
-    const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
-    const sandbox = {
-      Intl,
-      window: {
-        WhiteboxAppFactories: {},
-        WhiteboxI18n: {
-          t: (key, params = {}) => `${key}:${params.count || ''}`,
-          observedText: value => value,
-        },
-      },
-    };
-    vm.runInNewContext(contentSource, sandbox, { filename: 'app-drawer-content.js' });
-    const parent = { id: 'parent', title: '담당 AI 작업', messages: [], collaboration: { spawns: [], communications: [] } };
-    const state = {
-      pendingConversationMessages: new Map(),
-      resolvedConversationMessages: new Map(),
-      expandedConversationPrompts: new Set(),
-      conversationTurnLimits: new Map(),
-      details: new Map([[parent.id, parent]]),
-    };
-    const drawer = sandbox.window.WhiteboxAppFactories.createDrawerContent({
-      esc: value => String(value),
-      uiLocale: () => 'ko',
-      state,
-      messageContentHtml: message => String(message?.text || ''),
-      compact: value => String(value || 0),
-      fullNumber: value => String(value || 0),
-      timeOnly: () => '10:00',
-      providerInfo: () => ({ mark: 'C', label: 'Codex' }),
-      statusIcon: () => '',
-      agentPathTaskName: value => String(value || '').split('/').filter(Boolean).at(-1) || '',
-      snapshotSession: id => id === parent.id ? parent : null,
-      conversationDeliveryState: () => null,
-      observeConversationDelivery: () => {},
-    });
-    const session = {
-      id: 'protected-child', parentId: parent.id, provider: 'codex', title: '도움 AI 작업',
-      status: 'completed', updatedAt: '2026-08-04T01:00:02.000Z', completedAt: '2026-08-04T01:00:02.000Z',
-      messages: [{ id: 'progress', role: 'assistant', text: '진행 중 응답', timestamp: '2026-08-04T01:00:01.000Z' }],
-      result: '최종 응답',
-      delegation: {
-        assignmentProtected: true,
-        assignmentSource: 'protected',
-        assignmentContext: '화면에 보이면 안 되는 직전 설명',
-      },
-    };
-
-    const html = drawer.subagentConversationHtml(session);
-    assert.ok(html.includes('진행 중 응답'));
-    assert.ok(html.includes('최종 응답'));
-    assert.ok(html.includes('data-subagent-work-messages="2"'));
-    assert.equal(html.includes('subagent-assignment-card'), false);
-    assert.equal(html.includes('화면에 보이면 안 되는 직전 설명'), false);
-    assert.equal(html.includes('drawer.assignment_protected'), false);
-    assert.match(drawerSource, /const ptyConversation = conversationTab && !session\.parentId && !subagentMode && !executionMode/);
-    assert.match(drawerSource, /composer\.classList\.toggle\("hidden", !showComposer\)/);
-  });
-
-  test('긴 대화 기록은 최근 요청부터 제한해 렌더링하고 이전 기록을 단계적으로 연다', () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-content.js'), 'utf8');
-    const sandbox = {
-      Intl,
-      window: {
-        WhiteboxAppFactories: {},
-        WhiteboxI18n: {
-          t: (key, params = {}) => `${key}:${params.count || ''}`,
-        },
-      },
-    };
-    vm.runInNewContext(source, sandbox, { filename: 'app-drawer-content.js' });
-    const messages = [];
-    for (let index = 0; index < 260; index += 1) {
-      messages.push({ id: `user-${index}`, role: 'user', text: `[요청:${index}:끝]`, timestamp: new Date(1700000000000 + index * 2000).toISOString() });
-      messages.push({ id: `assistant-${index}`, role: 'assistant', text: `답변-${index}`, timestamp: new Date(1700000001000 + index * 2000).toISOString() });
-    }
-    const state = {
-      pendingConversationMessages: new Map(),
-      resolvedConversationMessages: new Map(),
-      expandedConversationPrompts: new Set(),
-      conversationTurnLimits: new Map(),
-      details: new Map(),
-    };
-    const drawer = sandbox.window.WhiteboxAppFactories.createDrawerContent({
-      esc: value => String(value),
-      uiLocale: () => 'ko',
-      state,
-      messageContentHtml: message => String(message?.text || ''),
-      fullNumber: value => String(value || 0),
-      timeOnly: () => '10:00',
-      providerInfo: () => ({ mark: 'C', label: 'Codex' }),
-      snapshotSession: () => null,
-      conversationDeliveryState: () => null,
-      observeConversationDelivery: () => {},
-    });
-    const session = { id: 'long-session', provider: 'codex', messages };
-
-    const initial = drawer.chatHtml(session, { showSubagentCalls: false, synthesizeRequest: false });
-    assert.equal(initial.includes('[요청:0:끝]'), false);
-    assert.ok(initial.includes('[요청:140:끝]'));
-    assert.ok(initial.includes('[요청:259:끝]'));
-    assert.ok(initial.includes('data-next-turn-limit="240"'));
-
-    state.conversationTurnLimits.set(session.id, 240);
-    const expanded = drawer.chatHtml(session, { showSubagentCalls: false, synthesizeRequest: false });
-    assert.equal(expanded.includes('[요청:19:끝]'), false);
-    assert.ok(expanded.includes('[요청:20:끝]'));
-    assert.ok(expanded.includes('data-next-turn-limit="360"'));
-  });
-
   test('포커스 작업 흐름 연결선 모션은 주기적 상태 새로고침 뒤에도 유지한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
     const focusedStart = source.indexOf('function focusedGraph(');
@@ -2891,18 +2520,24 @@ function registerUiContractTests(context) {
     assert.ok(source.includes('graph.progress_basis_note'), '기록된 단계 비율을 전체 계획 진척률로 오해하지 않도록 근거 안내가 필요합니다.');
   });
 
-  test('메인 담당 AI는 PTY 집중 모드로 열고 실행·도움 노드는 읽기 전용 상세를 연다', () => {
+  test('모든 작업 열기와 확인 완료는 담당 root PTY 집중 모드로 라우팅한다', () => {
     const graph = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
     const events = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
+    const navigationEvents = fs.readFileSync(path.join(root, 'renderer', 'app-events-navigation.js'), 'utf8');
     const filterEvents = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
     const sessionRenderer = fs.readFileSync(path.join(root, 'renderer', 'app-session-render.js'), 'utf8');
     const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
+    const agentActions = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
+    const quality = fs.readFileSync(path.join(root, 'renderer', 'app-quality.js'), 'utf8');
+    const runModal = fs.readFileSync(path.join(root, 'renderer', 'app-run-modal.js'), 'utf8');
+    const bootstrap = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
     const orchestration = fs.readFileSync(path.join(root, 'renderer', 'app-graph-orchestration.js'), 'utf8');
     const inlineTerminal = fs.readFileSync(path.join(root, 'renderer', 'inline-agent-terminal.js'), 'utf8');
     const ptyFocus = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     const core = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
+    const terminalAgent = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const sharedSource = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'renderer', 'styles-workflow-map.css'), 'utf8');
@@ -2918,174 +2553,273 @@ function registerUiContractTests(context) {
     const graphFilterSource = dashboard.slice(dashboard.indexOf('function graphFilteredSessions()'), dashboard.indexOf('function renderProviderVisibilitySettings()'));
     const historyEvents = filterEvents.slice(filterEvents.indexOf('$("#projectHistoryRail")'), filterEvents.indexOf('const controlProjectSelect'));
 
-    assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*completedMainPty \|\| isDirectWritablePty\(session\)[\s\S]*data-inline-pty-trigger=/,
-      '선택 흐름의 PTY 트리거가 쓰기 가능한 메인 담당 AI로 제한되지 않았습니다.');
-    assert.match(controlRoomSource, /const controlRoomPtyAttributes = root\.parentId[\s\S]*data-pty-focus-trigger=/,
-      '처리 중 화면의 PTY 집중 트리거가 메인 담당 AI로 제한되지 않았습니다.');
-    assert.doesNotMatch(controlRoomSource, /data-inline-pty-trigger=/,
-      '관제 화면의 담당 노드가 구형 인라인 PTY 동작도 동시에 노출하고 있습니다.');
-    assert.match(controlRoomSource, /class="control-room-main"\$\{controlRoomPtyAttributes\}/,
-      '처리 중 화면의 메인 담당 AI에 PTY 토글 속성을 연결하지 않았습니다.');
-    assert.ok(graphNodeSource.includes('const completedMainPty = presentationStatus === "completed"')
-      && graphNodeSource.includes('&& canForkCodexDesktopSession(session);')
-      && graphNodeSource.includes('completedMainPty || isDirectWritablePty(session)'),
-    '완료된 Codex Desktop 담당 AI가 대화 기록형 상세창 대신 새 fork PTY를 우선하지 않습니다.');
-    assert.doesNotMatch(helperNodeSource, /data-inline-pty-trigger=/,
-      '실행 중 도움 AI 노드가 PTY를 열고 있습니다.');
-    assert.doesNotMatch(helperNodeSource, /data-pty-focus-trigger=/,
-      '도움 AI가 담당 노드 전용 PTY 집중 모드를 열고 있습니다.');
-    assert.ok(helperNodeSource.includes('data-open-subagent-chat='),
-      '실행 중 도움 AI 노드의 기존 읽기 전용 상세 경로가 없습니다.');
-    assert.doesNotMatch(compactGraphSource, /data-inline-pty-trigger=/,
-      '작업 흐름 탐색 노드가 PTY 토글로 바뀌었습니다.');
-    assert.doesNotMatch(executionNodeSource, /data-inline-pty-trigger=/,
-      '실행 명령 노드가 PTY 토글로 바뀌었습니다.');
-    assert.doesNotMatch(executionNodeSource, /data-pty-focus-trigger=/,
-      '실행 명령 노드가 담당 노드 전용 PTY 집중 모드를 열고 있습니다.');
-    assert.ok(executionNodeSource.includes('${esc(command.text)}</em>'),
-      '실행 중인 컴퓨터 작업 노드에 실제 명령어가 보이지 않습니다.');
-    const inlinePanelIndex = graph.indexOf('${!focus.parentId && state.inlineTerminalSessionId === focus.id ? inlineTerminalPanel(focus) : ""}');
-    const detailPanelIndex = graph.indexOf('${workflowDetailPanel(focus)}', inlinePanelIndex);
-    assert.ok(inlinePanelIndex >= 0 && detailPanelIndex > inlinePanelIndex, 'PTY가 선택한 AI 영역과 작업 상세 정보 사이에 배치되지 않았습니다.');
-    assert.ok(graph.includes('tab("summary"'), '작업 상세 화면에 요약 탭이 없습니다.');
-    assert.ok(graph.includes('tab("tokens"'), '작업 상세 화면에 토큰 사용량 탭이 없습니다.');
-    assert.ok(events.includes('window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger') && events.includes('focus: !inlineTerminal.closest(".control-room-session")'), 'AI 클릭이 현재 화면의 인라인 PTY 토글로 연결되지 않았습니다.');
-    assert.ok(events.includes('const ptyFocus = event.target.closest("[data-pty-focus-trigger]")')
-      && events.includes('openPtyFocus(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true })'),
-    '관제 화면의 담당 노드 클릭이 전체 화면 PTY 집중 모드로 연결되지 않았습니다.');
-    assert.match(ptyFocus, /function canOpenPtyFocus\(session\)[\s\S]*session\.parentId[\s\S]*session\.sourcePluginId/,
-      'PTY 집중 모드 진입점이 담당 root 세션만 허용하지 않습니다.');
+    assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*isAppOwnedBridgePty\(session\)[\s\S]*data-pty-focus-trigger=/u,
+      '작업 흐름의 writable root와 새 bridge projection이 PTY 집중 모드로 연결되지 않습니다.');
+    assert.doesNotMatch(graphNodeSource, /data-inline-pty-trigger=/u,
+      '작업 노드가 삭제 대상인 인라인/오른쪽 화면 경로를 다시 노출하고 있습니다.');
+    assert.match(controlRoomSource, /const controlRoomPtyAttributes = root\.parentId[\s\S]*data-pty-focus-trigger=/u,
+      '작업 현황의 담당 root 노드가 PTY 집중 모드로 연결되지 않습니다.');
+    assert.match(events, /const ptyFocus = event\.target\.closest\("\[data-pty-focus-trigger\]"\)[\s\S]*await openDrawer\(ptyFocus\.dataset\.ptyFocusTrigger, \{ trigger: ptyFocus, focus: true \}\)/u,
+      '작업 노드 클릭이 full PTY 집중 모드를 열어야 합니다.');
+    assert.match(drawerSource, /function ownerRoot\(value\)[\s\S]*while \(session\?\.parentId[\s\S]*context\.openPtyFocusVerified\?\.\(root\.id,/u,
+      '하위 작업·실행·기존 상세 진입은 담당 root PTY로 귀속되어야 합니다.');
+    const ownerPtyRoute = drawerSource.slice(
+      drawerSource.indexOf('async function openOwnerPty('),
+      drawerSource.indexOf('function openDrawer('),
+    );
+    const verifiedOpenIndex = ownerPtyRoute.indexOf('await context.openPtyFocusVerified?.(root.id,');
+    const acknowledgeIndex = ownerPtyRoute.indexOf('acknowledgeSessionNotices(selected || id)');
+    assert.ok(verifiedOpenIndex >= 0 && acknowledgeIndex > verifiedOpenIndex,
+      '작업 알림은 담당 PTY의 verified mount가 성공하기 전에 사라지면 안 됩니다.');
+    assert.match(ownerPtyRoute, /if \(outcome\?\.opened === true\) \{[\s\S]*acknowledgeSessionNotices\(selected \|\| id\)/u,
+      '작업 알림 확인은 verified PTY 성공 분기 안에서만 실행되어야 합니다.');
+    const commonReviewHandler = events.slice(
+      events.indexOf('const completeResultReview = async'),
+      events.indexOf('$("#operationsOverview").addEventListener("click"'),
+    );
+    const receiptIndex = commonReviewHandler.indexOf('const expectedTargets = resultReviewTargets(sessionId, { allowPtyCreation: true }).map');
+    const openReviewPtyIndex = commonReviewHandler.indexOf('await openPtyFocusVerified(sessionId, {');
+    const markReviewIndex = commonReviewHandler.indexOf('markResultReviewComplete(sessionId, { expectedTargets })');
+    assert.ok(receiptIndex >= 0 && receiptIndex < openReviewPtyIndex,
+      '확인 완료 클릭 시 PTY를 열기 전에 대상 id/stamp receipt를 캡처해야 합니다.');
+    assert.match(commonReviewHandler, /const ptyTarget = resultReviewPtyTarget\(sessionId\)[\s\S]*const terminalId =[\s\S]*await openPtyFocusVerified\(sessionId, \{[\s\S]*focus: true,[\s\S]*targetId: terminalId,[\s\S]*terminalId,/u,
+      '확인 완료 버튼은 decoy가 아닌 담당 root의 exact PTY identity를 verifier에 전달해야 합니다.');
+    assert.match(commonReviewHandler, /else \{[\s\S]*await openDrawer\(sessionId, \{[\s\S]*focus: true,[\s\S]*acknowledge: false,[\s\S]*\}\) === true/u,
+      'live PTY가 없는 safe Codex Desktop 결과는 일반 카드와 같은 exact fork router로 열어야 합니다.');
+    assert.ok(openReviewPtyIndex >= 0 && markReviewIndex > openReviewPtyIndex
+      && commonReviewHandler.indexOf('if (opened)') < markReviewIndex,
+      '확인 완료 상태는 exact PTY mount 성공 뒤에만 처리해야 합니다.');
+    assert.match(commonReviewHandler, /const completed = markResultReviewComplete\(sessionId, \{ expectedTargets \}\)[\s\S]*if \(completed > 0\)/u,
+      'PTY를 보는 동안 결과 stamp가 바뀌면 확인 성공 toast를 내면 안 됩니다.');
+    assert.match(commonReviewHandler, /reviewComplete\.disabled = false;[\s\S]*reviewComplete\.removeAttribute\("aria-busy"\)/u,
+      'verified PTY mount 실패 뒤 확인 완료 버튼을 다시 시도할 수 있어야 합니다.');
+    const operationsReviewHandler = events.slice(
+      events.indexOf('$("#operationsOverview").addEventListener("click"'),
+      events.indexOf('$("#operationsOverview").addEventListener("input"'),
+    );
+    const attentionInboxReviewHandler = events.slice(
+      events.indexOf('$("#attentionInbox").addEventListener("click"'),
+      events.indexOf('$("#attentionInbox").addEventListener("input"'),
+    );
+    for (const [surface, handler] of [
+      ['작업 현황', operationsReviewHandler],
+      ['확인 목록', attentionInboxReviewHandler],
+    ]) {
+      assert.match(handler, /event\.target\.closest\("\[data-result-review-complete\]"\)[\s\S]*await completeResultReview\(reviewComplete\)/u,
+        `${surface}의 확인 완료 동작이 공통 verified PTY handler에 연결되지 않았습니다.`);
+    }
+    assert.match(events, /if \(result\?\.requiresText\)[\s\S]*openPtyFocusVerified\(session\.id, \{[\s\S]*targetId: result\.target\.id,[\s\S]*terminalId: result\.target\.terminalId \|\| result\.target\.id/u,
+      '화면에서 답한 추가 입력 요청은 응답한 exact PTY로 이동해야 합니다.');
+    assert.match(bootstrap, /handleTerminalPromptResolved = async[\s\S]*openPtyFocusVerified\?\.\(session\.id, \{[\s\S]*targetId: resolution\.targetId,[\s\S]*terminalId: resolution\.terminalId/u,
+      'IPC로 완료된 추가 입력 요청도 exact PTY로 이동해야 합니다.');
+    const openAgentTerminalSource = agentActions.slice(
+      agentActions.indexOf('async function openAgentTerminal('),
+      agentActions.indexOf('async function copyBridgeCommand('),
+    );
+    assert.match(openAgentTerminalSource, /openPtyFocusVerified\?\.\(session\.id, \{[\s\S]*targetId: target\.id,[\s\S]*terminalId: target\.terminalId \|\| target\.id/u,
+      'PTY 열기 동작은 선택된 exact target을 full focus verifier로 전달해야 합니다.');
+    assert.doesNotMatch(openAgentTerminalSource, /selectView\(["']terminal["']\)|selectSession\(/u,
+      '일반 terminal 화면이나 전역 PTY 선택으로 우회하면 안 됩니다.');
+    assert.ok(html.includes('id="ptyFocusSurface"') && html.includes('id="ptyFocusTerminalViewport"'),
+      'full PTY 집중 surface와 실제 xterm viewport가 필요합니다.');
+    for (const removedId of ['detailDrawer', 'drawerBackdrop', 'ptyFocusChildModal']) {
+      assert.equal(html.includes(`id="${removedId}"`), false, `${removedId} 대화/오른쪽 팝업이 다시 생겼습니다.`);
+    }
+    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|loadSessionDetail|data-open-subagent-chat/u,
+      'PTY 집중 모드 내부의 도움 AI/실행 행은 상태 전용이어야 합니다.');
+    assert.match(ptyFocus, /function openPtyFocusForTerminal\(terminalId, options = \{\}\)[\s\S]*pendingFocus = \{[\s\S]*creationId:/u,
+      '새 작업은 exact terminalId/creationId를 보존해 같은 PTY를 집중 모드로 열어야 합니다.');
+    assert.match(ptyFocus, /function tryPendingPtyFocus\(\)[\s\S]*const request = pendingFocus;[\s\S]*openPtyFocus\(session\.id, \{[\s\S]*targetId: request\.terminalId,[\s\S]*requireTargetId: true,/u,
+      '새 작업의 늦은 projection도 생성 요청의 exact terminalId를 필수 target으로 강제해야 합니다.');
     assert.ok(ptyFocus.includes('controller.enterFocus(id, { focus: options.focus !== false })')
-      && ptyFocus.includes('controller.sync({ force: true })')
-      && ptyFocus.includes('window.WhiteboxInlineTerminal?.closeFocus?.'),
-    'PTY 집중 모드가 기존 xterm host를 전면 surface로 이동하고 관제 복귀 시 분리하는 계약이 없습니다.');
-    assert.ok(ptyFocus.includes('setDialogOpenState(modal, true)')
-      && ptyFocus.includes('window.WhiteboxTerminal?.focusEmbedded?.()'),
-    '보기 전용 하위 노드 팝업이 PTY 입력을 차단하고 닫은 뒤 같은 PTY로 복귀하지 않습니다.');
-    assert.ok(core.includes('if (!$("#ptyFocusChildModal")?.classList.contains("hidden")) return $("#ptyFocusChildModal")')
-      && core.includes('$("#ptyFocusChildModal")'),
-    '하위 노드 팝업이 공용 dialog focus trap과 inert 해제 계약에 포함되지 않았습니다.');
-    assert.ok(html.includes('id="ptyFocusSurface"')
-      && html.includes('id="ptyFocusTerminalViewport"')
-      && html.includes('id="ptyFocusChildModal"')
-      && html.includes('<script src="app-pty-focus.js"></script>'),
-    'PTY 집중 surface·실제 PTY viewport·읽기 전용 팝업 또는 런타임 로드가 빠졌습니다.');
-    assert.ok(ptyFocusStyles.includes('.pty-focus-surface')
-      && ptyFocusStyles.includes('.pty-focus-child-modal')
-      && ptyFocusStyles.includes('#ptyFocusTerminalViewport > .terminal-screen'),
-    '전체 화면 PTY·터미널 host·팝업의 시각적 계층 계약이 없습니다.');
-    assert.ok(historySource.includes('data-inline-pty-trigger=') && historySource.includes('data-open-session='),
-      '지난 기록이 PTY 가능 여부에 따라 인라인 터미널 또는 읽기 전용 상세로 연결되지 않았습니다.');
-    assert.ok(historySource.includes('hasWritablePtySurface(session)')
-      && historySource.includes('data-inline-pty-trigger=')
-      && historySource.includes('data-open-session='),
-    '완료된 Codex Desktop 최상위 기록만 새 fork PTY를 우선하고 그 외 읽기 전용 기록은 상세창을 유지해야 합니다.');
-    const sharedSandbox = { window: {}, document: {} };
-    vm.runInNewContext(sharedSource, sharedSandbox, { filename: 'shared.js' });
-    const canFork = sharedSandbox.window.WhiteboxRendererUtils.canForkCodexDesktopSession;
-    const isWritableDirect = sharedSandbox.window.WhiteboxRendererUtils.isWritableDirectSession;
-    const forkable = {
-      id: 'codex:desktop-history', externalId: 'desktop-history', provider: 'codex', clientKind: 'codex-desktop',
-      parentId: null, sourcePluginId: '', runId: '', status: 'completed',
+      && /controller\.sync\(\{[\s\S]*force: true,[\s\S]*targetId,[\s\S]*requireTargetId:/u.test(ptyFocus)
+      && inlineTerminal.includes('terminal.mountForAgent(session'),
+    'PTY 집중 모드는 기존 실제 terminal host를 재사용해 mount해야 합니다.');
+    assert.match(ptyFocus, /state\.ptyFocusTargetId = String\(options\.targetId \|\| focusIdentity\?\.terminalId \|\| ""\)\.trim\(\)/u,
+      'focus lifetime 동안 exact terminal target identity를 고정해야 합니다.');
+    assert.match(inlineTerminal, /const focusTargetId = isFocusSurface[\s\S]*state\.ptyFocusTargetId[\s\S]*const requireTargetId = options\.requireTargetId === true \|\| Boolean\(focusTargetId\)/u,
+      'passive focus sync도 고정된 targetId를 필수로 검증해야 합니다.');
+    assert.match(ptyFocus, /whitebox:terminal-manual-selection/u,
+      '직접 PTY 선택은 오래된 attention 이동을 취소하는 신호를 보내야 합니다.');
+    assert.match(bootstrap, /whitebox:terminal-manual-selection[\s\S]*attentionActivation\?\.userNavigated\(\)/u,
+      '수동 PTY 선택 신호가 attention controller의 stale 이동을 취소해야 합니다.');
+    assert.match(core, /function selectViewFromUser\(view, options = \{\}\)[\s\S]*signalManualTerminalSelection\(\)[\s\S]*return selectView\(view, options\)/u,
+      '사용자 화면 이동은 pending attention/direct PTY focus를 먼저 취소해야 합니다.');
+    assert.match(navigationEvents, /\.view-nav"\)\.addEventListener\("click"[\s\S]*selectViewFromUser\(button\.dataset\.view\)/u,
+      '내비게이션 클릭은 수동 선택 신호를 포함한 화면 전환 경로를 사용해야 합니다.');
+    assert.match(drawerSource, /async function openOwnerPty\(id, options = \{\}\)[\s\S]*if \(options\.attentionActivation !== true\) signalManualTerminalSelection\(\)/u,
+      '다른 작업 노드 클릭은 target 확인 전 즉시 pending PTY 이동을 취소해야 합니다.');
+    assert.match(quality, /function openQuickPalette\(\)[\s\S]*signalManualTerminalSelection\(\)/u,
+      'Ctrl+K 빠른 이동은 늦은 direct PTY projection을 취소해야 합니다.');
+    assert.match(quality, /function openShortcutHelp\(\)[\s\S]*signalManualTerminalSelection\(\)/u,
+      '단축키 도움말도 늦은 PTY focus보다 사용자 gesture를 우선해야 합니다.');
+    assert.match(runModal, /function openRunModal\(\)[\s\S]*signalManualTerminalSelection\(\)/u,
+      '새 작업 modal은 pending PTY focus를 취소한 뒤 열려야 합니다.');
+    assert.match(ptyFocus, /addEventListener\("whitebox:terminal-manual-selection"[\s\S]*pendingFocus = null/u,
+      '수동 화면 이동 신호가 snapshot 대기 중인 direct PTY projection을 취소해야 합니다.');
+    assert.doesNotMatch(terminalAgent, /legacyWorkbench|#terminalSection/u,
+      '삭제된 legacy terminal 화면의 hidden 전역 선택 분기가 다시 추가되었습니다.');
+    assert.match(sharedSource, /function appOwnedBridgeTerminalIdentity\(session\)[\s\S]*terminalId[\s\S]*creationId/u,
+      '새 작업의 provisional bridge를 exact app-owned PTY로 판정하는 계약이 없습니다.');
+    assert.match(historySource, /hasWritablePtySurface\(session\)[\s\S]*data-pty-focus-trigger=/u,
+      '지난 작업의 writable root도 PTY 집중 모드로 열려야 합니다.');
+    assert.match(ptyFocusStyles, /\.pty-focus-surface/u);
+    assert.doesNotMatch(ptyFocusStyles, /\.pty-focus-child-modal/u);
+  });
+
+  test('확인 완료는 작업 현황과 확인 목록 모두 verified PTY 성공 뒤에만 처리한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
+    const elements = new Map();
+    const element = id => {
+      if (!elements.has(id)) {
+        const listeners = new Map();
+        elements.set(id, {
+          listeners,
+          addEventListener(type, listener) { listeners.set(type, listener); },
+          querySelectorAll() { return []; },
+        });
+      }
+      return elements.get(id);
     };
-    assert.equal(canFork(forkable), true);
-    assert.equal(isWritableDirect({ id: 'direct', provider: 'codex' }), true);
-    for (const invalid of [
-      { ...forkable, id: 'codex:other' },
-      { ...forkable, externalId: 'bad id', id: 'codex:bad id' },
-      { ...forkable, externalId: 'terminal:owned', id: 'codex:terminal:owned' },
-      { ...forkable, runId: 'desktop-history' },
-      { ...forkable, parentId: 'parent' },
-      { ...forkable, sourcePluginId: 'builtin.opencode' },
-      { ...forkable, sourcePlugin: { id: 'builtin.omo' } },
-      { ...forkable, sourcePlugin: 'builtin.omo' },
-      { ...forkable, sourcePlugin: {} },
-      { ...forkable, provenance: { source: { pluginId: 'builtin.omo' } } },
-      { ...forkable, source: 'opencode' },
-      { ...forkable, status: 'running' },
-      { ...forkable, readOnly: true },
-      { ...forkable, controlAuthority: 'read-only-import' },
-      { ...forkable, importMode: 'local-history' },
-    ]) assert.equal(canFork(invalid), false, `fork 불가 기록을 PTY로 표시했습니다: ${JSON.stringify(invalid)}`);
-    for (const invalid of [
-      { readOnly: true }, { sourcePlugin: {} },
-      { provenance: { source: { pluginId: 'builtin.omo' } } },
-      { source: 'opencode' }, { clientKind: 'aside-browser' },
-      { controlAuthority: 'read-only-import' }, { importMode: 'local-history' },
-    ]) assert.equal(isWritableDirect({ id: 'projection', ...invalid }), false);
-    assert.ok(orchestration.includes('if (state.ptyFocusSessionId) return false;'),
-      'focus PTY mount가 pending인 동안 graph 정리가 shared embedded generation을 취소할 수 있습니다.');
-    assert.match(drawerSource, /const forkableCompletedDesktop = String\(session\.status \|\| ""\) === "completed"[\s\S]*canForkCodexDesktopSession[\s\S]*const conversationSurface = forkableCompletedDesktop\s*\? "pty"/,
-      '지난 작업 카드나 왼쪽 트리에서 연 canonical Codex Desktop 기록도 중앙 drawer에서 새 fork PTY로 승격해야 합니다.');
-    assert.ok(graphNodeSource.includes('const conversationLabel = completedMainPty')
-      && graphNodeSource.includes('t("drawer.terminal_fork_action")')
-      && graphNodeSource.includes('aria-label="${esc(conversationLabel)}"'),
-    '완료된 Codex Desktop 노드는 관계 보기 대신 새 fork 세션 동작을 접근 가능한 이름으로 알려야 합니다.');
-    assert.ok(historyEvents.indexOf('[data-inline-pty-trigger]') >= 0
-      && historyEvents.indexOf('[data-inline-pty-trigger]') < historyEvents.indexOf('[data-open-session]')
-      && historyEvents.includes('window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger)'),
-    '지난 기록 클릭이 팝업보다 먼저 인라인 PTY 경로로 연결되지 않았습니다.');
-    assert.ok(historyEvents.includes('openDrawer(open.dataset.openSession, {')
-      && historyEvents.includes('context: true,'),
-      'PTY가 없는 지난 기록도 진행 중 AI와 같은 컨텍스트 상세 UX로 열려야 합니다.');
-    assert.equal(historySource.includes('data-result-review="true"'), false,
-      '완료된 지난 기록을 열 때 결과 확인 상태를 만들면 안 됩니다.');
-    assert.ok(graphFilterSource.includes('state.graphFocusId || state.inlineTerminalSessionId')
-      && graphFilterSource.includes('const selectedGraphSession = allById.get(selectedGraphId)')
-      && graphFilterSource.includes('contextual.set(currentId, current)'),
-    '최근 표시 기간을 지난 선택 기록을 포커스 그래프에 유지하는 계약이 없습니다.');
-    assert.ok(fs.readFileSync(path.join(root, 'renderer', 'app-graph-model.js'), 'utf8')
-      .includes('included.add(requestedFocus.id)'),
-    '사용자가 직접 선택한 보관 기록을 라이브 그래프 규칙이 다시 제외할 수 있습니다.');
-    assert.ok(sessionRenderer.includes('!state.graphFocusId && graphLiveCount === 0'),
-      '지난 기록 포커스 화면 위에 활성 작업 없음 안내가 겹칠 수 있습니다.');
-    assert.equal(events.includes('if (state.graphFocusId === node.dataset.graphFocus) openDrawer'), false, '같은 AI 재클릭이 오른쪽 드로어를 다시 열고 있습니다.');
-    assert.ok(orchestration.includes('window.WhiteboxInlineTerminal?.sync?.()'), '작업 흐름 갱신 후 PTY 재마운트 계약이 없습니다.');
-    assert.match(
-      orchestration,
-      /if \(!replacement\)\s*\{[\s\S]*state\.inlineTerminalSessionId = null;[\s\S]*unmountInlineEmbeddedUnlessFocused/,
-      '작업 topology가 바뀌어 인라인 PTY 보존에 실패하면 오래된 writable 화면을 닫아야 합니다.',
-    );
-    assert.ok(orchestration.includes('preserveRuntimeConnection && name === "data-connection"'),
-      'snapshot reconcile이 런타임 연결 상태를 지워 한 프레임 깜빡이면 안 됩니다.');
-    assert.ok(inlineTerminal.includes('terminal.mountForAgent(session'), '인라인 PTY가 실제 에이전트 터미널 호스트를 마운트하지 않습니다.');
-    assert.ok(inlineTerminal.includes('if (!isMainSession(session)) return { ok: false, reason: "not-main-session" };'),
-      '렌더러를 우회해도 하위 AI PTY 마운트를 막는 런타임 계약이 없습니다.');
-    assert.match(
-      inlineTerminal,
-      /const createIfMissing\s*=\s*!session\.parentId[\s\S]*terminal\.mountForAgent\(session,\s*\{[\s\S]*createIfMissing,/,
-      '최상위 AI의 PTY를 펼쳤을 때 기존 대화를 prompt 없이 자동 연결하는 생성 계약이 없습니다.',
-    );
-    assert.equal(graph.includes('data-inline-terminal-composer'), false, '인라인 PTY에 별도 메시지 입력창을 다시 만들면 안 됩니다.');
-    assert.match(workbench, /const inputDisabled = readOnly;/, '인라인 PTY가 실제 xterm 입력을 전달해야 합니다.');
-    assert.ok(inlineTerminal.includes('instance.state.inlineTerminalSessionId === id'), '같은 AI를 다시 눌렀을 때 닫는 토글 계약이 없습니다.');
-    assert.ok(html.includes('<script src="inline-agent-terminal.js"></script>'), '인라인 PTY 런타임이 로드되지 않습니다.');
-    assert.ok(styles.includes('.agent-inline-terminal-link'), '선택한 AI와 PTY의 시각적 연결 표시가 없습니다.');
-    assert.ok(styles.indexOf('.agent-inline-terminal') < styles.indexOf('.workflow-detail'), 'PTY가 작업 상세보다 먼저 배치된 시각 계약이 없습니다.');
-    const stableLayoutStart = controlRoomStyles.indexOf('/* Opening the PTY must not move work units that are already on screen. */');
-    const stableLayoutEnd = controlRoomStyles.indexOf('@keyframes control-room-spawn', stableLayoutStart);
-    const stableLayoutSource = controlRoomStyles.slice(stableLayoutStart, stableLayoutEnd);
-    assert.ok(stableLayoutStart >= 0 && stableLayoutEnd > stableLayoutStart, 'PTY 위치 고정 스타일 계약을 찾을 수 없습니다.');
-    assert.match(stableLayoutSource, /\.agent-inline-terminal\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/,
-      'PTY가 기존 작업 행 뒤의 전체 폭 행에 배치되지 않았습니다.');
-    assert.doesNotMatch(stableLayoutSource, /\.control-room-flow|\.completed-column|\.control-flow-link|grid-row:/,
-      'PTY open 상태가 기존 작업 열이나 행을 재배치하고 있습니다.');
-    const allOpenStateRules = [...controlRoomStyles.matchAll(/\.control-room-session\.has-inline-terminal[^{}]*\{[^{}]*\}/g)]
-      .map(match => match[0])
-      .join('\n');
-    assert.doesNotMatch(allOpenStateRules, /\.control-room-flow|\.completed-column|\.control-flow-link|grid-row:/,
-      '반응형 PTY open 스타일이 기존 완료 노드의 위치를 재배치하고 있습니다.');
-    const overviewInlineIndex = controlRoomSource.indexOf('${inlineSession ? inlineTerminalPanel(inlineSession) : ""}');
-    const overviewCompletedIndex = controlRoomSource.indexOf('class="control-room-column completed-column"');
-    assert.ok(overviewCompletedIndex >= 0 && overviewInlineIndex > overviewCompletedIndex,
-      'PTY가 완료 노드 뒤에 배치되지 않아 시각 순서와 키보드 탐색 순서가 어긋납니다.');
+    const opened = [];
+    const drawerOpened = [];
+    const completed = [];
+    const rendered = [];
+    const announcements = [];
+    const reportedErrors = [];
+    const outcomes = [{ opened: false }, { opened: true }, { opened: true }];
+    const drawerOutcomes = [true, false, 'reject'];
+    const expectedReviewSessions = [{ id: 'result-child', status: 'completed' }];
+    let committedResults = [1, 0, 1];
+    let exactPtyTarget = {
+      id: 'terminal-bridge-exact', terminalId: 'terminal-bridge-exact', kind: 'terminal',
+    };
+    const sandbox = {
+      window: {
+        WhiteboxAppFactories: {},
+        WhiteboxI18n: { t: key => key },
+        WhiteboxRendererUtils: {
+          reportRecoverableError: (scope, error) => reportedErrors.push([scope, error.message]),
+        },
+        WhiteboxTerminal: {},
+      },
+      document: {},
+      CSS: { escape: value => String(value) },
+      requestAnimationFrame: callback => { callback(); return 1; },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'app-events-sessions-review-complete.js' });
+    const bindings = sandbox.window.WhiteboxAppFactories.createSessionEventBindings({
+      $: selector => element(String(selector).replace(/^#/, '')),
+      state: {
+        snapshot: { sessions: [] },
+        agentCommandDrafts: new Map(),
+        agentCommandRoutes: new Map(),
+        providerVisibility: {},
+      },
+      openPtyFocusVerified: async (sessionId, options) => {
+        opened.push([sessionId, { ...options }]);
+        return outcomes.shift();
+      },
+      openDrawer: async (sessionId, options) => {
+        drawerOpened.push([sessionId, { ...options }]);
+        const outcome = drawerOutcomes.shift();
+        if (outcome === 'reject') throw new Error('fork rejected');
+        return outcome;
+      },
+      resultReviewPtyTarget: () => exactPtyTarget,
+      resultReviewTargets: () => expectedReviewSessions,
+      resultReviewStamp: session => `stamp:${session.id}`,
+      markResultReviewComplete: (sessionId, options) => {
+        completed.push([sessionId, options]);
+        return committedResults.shift();
+      },
+      renderSessions: reason => rendered.push(reason),
+      announce: message => announcements.push(message),
+    });
+    bindings.bindSessionAndAgentEvents();
+
+    const reviewButton = sessionId => {
+      const attributes = new Set();
+      return {
+        dataset: { resultReviewComplete: sessionId },
+        disabled: false,
+        attributes,
+        closest(selector) { return selector === '[data-result-review-complete]' ? this : null; },
+        setAttribute(name) { attributes.add(name); },
+        removeAttribute(name) { attributes.delete(name); },
+      };
+    };
+    const failedButton = reviewButton('review-from-inbox');
+    await elements.get('attentionInbox').listeners.get('click')({ target: failedButton });
+    assert.deepStrictEqual(opened[0], ['review-from-inbox', {
+      focus: true,
+      targetId: 'terminal-bridge-exact',
+      terminalId: 'terminal-bridge-exact',
+    }]);
+    assert.equal(failedButton.disabled, false);
+    assert.equal(failedButton.attributes.has('aria-busy'), false);
+    assert.deepStrictEqual(completed, [], 'PTY mount 실패를 확인 완료로 저장하면 안 됩니다.');
+    assert.equal(announcements.at(-1), 'agent.open_terminal_failed');
+
+    const completedButton = reviewButton('review-from-overview');
+    await elements.get('operationsOverview').listeners.get('click')({ target: completedButton });
+    assert.deepStrictEqual(opened[1], ['review-from-overview', {
+      focus: true,
+      targetId: 'terminal-bridge-exact',
+      terminalId: 'terminal-bridge-exact',
+    }]);
+    assert.equal(completedButton.disabled, true);
+    assert.equal(completedButton.attributes.has('aria-busy'), true);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(completed)), [[
+      'review-from-overview',
+      { expectedTargets: [{ id: 'result-child', stamp: 'stamp:result-child' }] },
+    ]]);
+    assert.deepStrictEqual(rendered, ['result-reviewed']);
+    assert.equal(announcements.at(-1), 'management.result_review_completed_toast');
+
+    const changedWhileOpening = reviewButton('review-raced-result');
+    await elements.get('attentionInbox').listeners.get('click')({ target: changedWhileOpening });
+    assert.equal(changedWhileOpening.disabled, false);
+    assert.equal(changedWhileOpening.attributes.has('aria-busy'), false);
+    assert.equal(rendered.length, 1, 'stamp race에서 결과 확인 완료 렌더를 실행하면 안 됩니다.');
+    assert.equal(announcements.at(-1), 'agent.open_terminal_failed',
+      'PTY mount 중 결과가 바뀌어 receipt commit이 0이면 성공 toast를 내면 안 됩니다.');
+
+    exactPtyTarget = null;
+    const markAttemptsBeforeFork = completed.length;
+    const forkedButton = reviewButton('review-safe-fork');
+    await elements.get('attentionInbox').listeners.get('click')({ target: forkedButton });
+    assert.deepStrictEqual(drawerOpened[0], ['review-safe-fork', { focus: true, acknowledge: false }]);
+    assert.equal(forkedButton.disabled, true);
+    assert.equal(forkedButton.attributes.has('aria-busy'), true);
+    assert.equal(completed.length, markAttemptsBeforeFork + 1,
+      'safe fork의 verified PTY가 열린 경우에만 확인 stamp를 저장해야 합니다.');
+    assert.equal(rendered.length, 2);
+    assert.equal(announcements.at(-1), 'management.result_review_completed_toast');
+
+    const failedForkButton = reviewButton('review-safe-fork-failed');
+    await elements.get('operationsOverview').listeners.get('click')({ target: failedForkButton });
+    assert.deepStrictEqual(drawerOpened[1], ['review-safe-fork-failed', { focus: true, acknowledge: false }]);
+    assert.equal(failedForkButton.disabled, false);
+    assert.equal(failedForkButton.attributes.has('aria-busy'), false);
+    assert.equal(completed.length, markAttemptsBeforeFork + 1, 'safe fork 실패를 확인 완료로 저장하면 안 됩니다.');
+    assert.equal(rendered.length, 2);
+    assert.equal(announcements.at(-1), 'agent.open_terminal_failed');
+
+    const rejectedForkButton = reviewButton('review-safe-fork-rejected');
+    await elements.get('attentionInbox').listeners.get('click')({ target: rejectedForkButton });
+    assert.equal(rejectedForkButton.disabled, false,
+      'PTY open Promise가 reject해도 확인 완료 버튼을 다시 사용할 수 있어야 합니다.');
+    assert.equal(rejectedForkButton.attributes.has('aria-busy'), false);
+    assert.equal(completed.length, markAttemptsBeforeFork + 1, 'reject된 safe fork를 확인 완료로 저장하면 안 됩니다.');
+    assert.equal(announcements.at(-1), 'agent.open_terminal_failed');
+    assert.deepStrictEqual(reportedErrors, [['result-review-open-pty', 'fork rejected']]);
   });
 
   test('프로젝트 선택은 화면 렌더를 기다리게 하지 않고 최상위 AI PTY 사전 연결을 시작한다', () => {
     const filters = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
     const actions = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
     const terminal = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
-    const drawerTerminal = fs.readFileSync(path.join(root, 'renderer', 'drawer-terminal.js'), 'utf8');
     const drawer = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const eventHelper = filters.slice(
       filters.indexOf('function preconnectSelectedWorkspace()'),
@@ -3110,10 +2844,8 @@ function registerUiContractTests(context) {
       '터미널 공개 API가 batch 사전 연결 함수를 전달하지 않습니다.');
     assert.ok(terminal.includes("if (agentSession.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };"),
       '중앙 mount API가 하위 AI의 PTY host 연결을 막지 않습니다.');
-    assert.ok(drawerTerminal.includes("if (session?.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };"),
-      'drawer terminal이 하위 AI PTY mount를 fail-closed 하지 않습니다.');
-    assert.match(drawer, /if \(selected\?\.parentId\) return openSubagentConversation\(id, options\);/,
-      '일반 drawer 진입점을 우회한 하위 AI가 읽기 전용 상세 경로로 전환되지 않습니다.');
+    assert.match(drawer, /function openSubagentConversation\(id, options = \{\}\) \{[\s\S]*return openOwnerPty\(id, options\);/u,
+      '일반 진입점을 거친 하위 AI가 담당 root PTY 집중 모드로 전환되지 않습니다.');
     assert.match(eventHelper, /void Promise\.resolve\(preconnectProjectAgentTerminals\(state\.workspace\)\)\.catch/,
       '프로젝트 PTY 사전 연결이 fire-and-forget으로 시작되지 않습니다.');
     assert.doesNotMatch(eventHelper, /await\s+(?:Promise\.resolve\()?preconnectProjectAgentTerminals/,
@@ -3247,8 +2979,8 @@ function registerUiContractTests(context) {
       '프로젝트 선택은 현재 알림을 먼저 확인 처리한 뒤 사이드바를 다시 그려야 합니다.');
     assertIncludesAll(drawerSource, [
       'acknowledgeSessionNotices(selected || id)',
-      'acknowledgeSessionNotices(child)',
-      'renderWorkspaces()',
+      'context.openPtyFocusVerified?.(root.id,',
+      'context.renderWorkspaces?.()',
     ]);
     assertIncludesAll(sidebarMarkup, [
       'data-attention-session-count=',
@@ -3506,19 +3238,19 @@ function registerUiContractTests(context) {
     const directProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'direct'));
     const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
     const asideProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.aside'));
-    // Direct root tasks open their project workflow with the PTY attached;
-    // only transcript-only records keep the data-open-session drawer.
+    // Direct root tasks open the full PTY focus surface; imported transcript-only
+    // records remain status-only and never create a conversation drawer.
     assertIncludesAll(directProgram, [
-      'data-inline-pty-trigger="direct-root"',
-      'data-inline-pty-trigger="direct-root-2"',
-      'data-inline-pty-trigger="direct-root-3"',
+      'data-pty-focus-trigger="direct-root"',
+      'data-pty-focus-trigger="direct-root-2"',
+      'data-pty-focus-trigger="direct-root-3"',
       'project-sidebar-session-more',
       '+ 2개 작업 더 있음',
     ]);
-    assert.equal((directProgram.match(/data-inline-pty-trigger=/g) || []).length, 3,
+    assert.equal((directProgram.match(/data-pty-focus-trigger=/g) || []).length, 3,
       '작업이 많은 프로그램도 최신 root 작업 3개까지만 미리 보여야 합니다.');
-    assert.equal(directProgram.includes('data-inline-pty-trigger="direct-root-4"'), false);
-    assert.equal(directProgram.includes('data-inline-pty-trigger="direct-root-5"'), false);
+    assert.equal(directProgram.includes('data-pty-focus-trigger="direct-root-4"'), false);
+    assert.equal(directProgram.includes('data-pty-focus-trigger="direct-root-5"'), false);
     assert.ok(openCodeProgram.includes('data-open-session="builtin.opencode:open-root"'));
     assert.equal(openCodeProgram.includes('data-open-session="builtin.opencode:open-child"'), false,
       '프로그램 아래에는 하위 agent가 아니라 root session 작업 행만 표시해야 합니다.');
@@ -3526,7 +3258,7 @@ function registerUiContractTests(context) {
       '남은 root 작업이 없는 프로그램에 더 있음 요약을 표시하면 안 됩니다.');
     assert.ok(asideProgram.includes('data-open-session="builtin.aside:aside-root"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'direct'))
-      .includes('data-inline-pty-trigger="direct-projectless"'));
+      .includes('data-pty-focus-trigger="direct-projectless"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.opencode'))
       .includes('data-open-session="builtin.opencode:open-projectless"'));
     assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.aside'))
@@ -3554,7 +3286,9 @@ function registerUiContractTests(context) {
         '트리 선택 항목이 펼침 화살표의 자식 그룹을 접근성 트리에 소유해야 합니다.');
     }
 
-    const controls = [...sidebar.innerHTML.matchAll(/aria-controls="([^"]+)"/g)].map(match => match[1]);
+    const controls = [...sidebar.innerHTML.matchAll(/aria-controls="([^"]+)"/g)]
+      .map(match => match[1])
+      .filter(id => id !== 'ptyFocusSurface');
     assert.equal(controls.length, 8, '프로젝트 2개와 프로그램 6개 모두 독립 disclosure여야 합니다.');
     assert.equal(new Set(controls).size, controls.length, '각 disclosure의 aria-controls 대상 ID가 겹치면 안 됩니다.');
     controls.forEach(id => assert.equal((sidebar.innerHTML.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1));
@@ -3870,12 +3604,9 @@ function registerUiContractTests(context) {
   test('설정 화면은 변경 가능한 항목만 읽기 쉬운 순서로 표시한다', () => {
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const themeStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-theme.css'), 'utf8');
-    const settingsStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-settings.css'), 'utf8');
     const noviceStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-novice.css'), 'utf8');
-    const popupSettingsSource = fs.readFileSync(path.join(root, 'renderer', 'app-attention-popup-settings.js'), 'utf8');
-    const i18nSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
-    const settings = html.slice(html.indexOf('id="settingsSection"'), html.indexOf('id="terminalSection"'));
+    const settings = html.slice(html.indexOf('id="settingsSection"'), html.indexOf('id="terminalRuntimeMount"'));
     assert.equal(settings.includes('settings-meta-grid'), false, '설정과 무관한 설치 진단 정보가 다시 노출되면 안 됩니다.');
     assert.equal(settings.includes('settings-emblem'), false, '설정 제목에 의미 없는 장식이 다시 추가되면 안 됩니다.');
     assert.ok(settings.includes('id="currentVersion"'), '설정 화면에 현재 프로그램 버전 값이 없습니다.');
@@ -3924,74 +3655,12 @@ function registerUiContractTests(context) {
       'body[data-current-view="settings"] .source-plugin-toggle',
     ]);
 
-    const elements = {
-      attentionPopupSettingsCard: { dataset: {} },
-      attentionPopupEnabled: { checked: false, disabled: false, setAttribute() {}, addEventListener() {} },
-      attentionPopupStatus: { textContent: '' },
-    };
-    const popupSandbox = { window: { WhiteboxAppFactories: {} } };
-    vm.runInNewContext(i18nSource, popupSandbox, { filename: 'i18n-messages.js' });
-    const messages = popupSandbox.window.WhiteboxMessages;
-    popupSandbox.window.WhiteboxI18n = {
-      t(key, params = {}) {
-        return String(messages[key]?.en || key).replace(/\{([a-zA-Z][\w]*)\}/g, (match, name) => (
-          Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
-        ));
-      },
-    };
-    vm.runInNewContext(popupSettingsSource, popupSandbox, { filename: 'app-attention-popup-settings.js' });
-    const popupState = {};
-    const popupSettings = popupSandbox.window.WhiteboxAppFactories.createAttentionPopupSettings({
-      state: popupState,
-      $: selector => elements[String(selector).replace(/^#/, '')] || null,
-    });
-    popupSettings.loadAttentionPopupSettings({});
-    popupSettings.renderAttentionPopupSettings();
-    assert.equal(elements.attentionPopupEnabled.checked, true, '팝업 설정이 없으면 기본값은 켜짐이어야 합니다.');
-    assert.equal(elements.attentionPopupSettingsCard.dataset.enabled, 'true');
-    popupSettings.loadAttentionPopupSettings({ enabled: false });
-    popupSettings.renderAttentionPopupSettings();
-    assert.equal(elements.attentionPopupEnabled.checked, false, '사용자가 명시적으로 끈 값은 보존해야 합니다.');
-    popupSettings.loadAttentionPopupSettings({
-      enabled: true,
-      hookStatus: 'warning',
-      hookDetail: `\u0000\u202e${'x'.repeat(400)}`,
-    });
-    popupSettings.renderAttentionPopupSettings();
-    assert.equal(elements.attentionPopupSettingsCard.dataset.hookStatus, 'warning');
-    assert.match(elements.attentionPopupStatus.textContent, /^On · response connection warning: /);
-    assert.equal((elements.attentionPopupStatus.textContent.match(/x+$/) || [''])[0].length, 240, '훅 세부 정보는 안전한 표시 길이로 제한해야 합니다.');
-    assert.doesNotMatch(elements.attentionPopupStatus.textContent, /[\u0000\u202e]/, '훅 세부 정보의 제어 문자를 설정 화면에 표시하면 안 됩니다.');
-    for (const [hookStatus, expectedCopy] of [
-      ['error', 'response connection error'],
-      ['review-required', 'connection settings need review'],
-    ]) {
-      popupSettings.loadAttentionPopupSettings({ enabled: true, hookStatus, hookDetail: 'Review the hook configuration.' });
-      popupSettings.renderAttentionPopupSettings();
-      assert.equal(elements.attentionPopupSettingsCard.dataset.hookStatus, hookStatus);
-      assert.ok(elements.attentionPopupStatus.textContent.includes(expectedCopy));
-      assert.ok(elements.attentionPopupStatus.textContent.includes('Review the hook configuration.'));
-    }
-    popupSettings.loadAttentionPopupSettings({ enabled: true, hookStatus: 'installed', hookDetail: 'hidden' });
-    popupSettings.renderAttentionPopupSettings();
-    assert.equal(elements.attentionPopupStatus.textContent, messages['settings.attention_popups.enabled'].en);
-    popupSettings.loadAttentionPopupSettings({ enabled: false, hookStatus: 'error', hookDetail: 'hidden' });
-    popupSettings.renderAttentionPopupSettings();
-    assert.equal(elements.attentionPopupSettingsCard.dataset.hookStatus, 'disabled');
-    assert.equal(elements.attentionPopupStatus.textContent, messages['settings.attention_popups.disabled'].en);
-    for (const key of [
-      'settings.attention_popups.hook_warning',
-      'settings.attention_popups.hook_error',
-      'settings.attention_popups.hook_review_required',
-    ]) {
-      assert.ok(messages[key]?.ko && messages[key]?.en, `${key} 한국어·영어 번역이 필요합니다.`);
-    }
-    assert.ok(
-      settingsStyles.includes('[data-hook-status="warning"]')
-        && settingsStyles.includes('[data-hook-status="review-required"]')
-        && settingsStyles.includes('[data-hook-status="error"]'),
-      '훅 경고·오류 상태를 구분하는 설정 카드 스타일이 필요합니다.',
-    );
+    assert.equal(settings.includes('attentionPopupSettingsCard'), false,
+      '삭제된 오른쪽 팝업 설정 카드가 설정 화면에 다시 노출되었습니다.');
+    assert.equal(settings.includes('attentionPopupEnabled'), false,
+      '삭제된 오른쪽 팝업 토글이 설정 화면에 다시 노출되었습니다.');
+    assert.equal(html.includes('src="app-attention-popup-settings.js"'), false,
+      '삭제된 오른쪽 팝업 설정 런타임을 renderer가 다시 로드하면 안 됩니다.');
   });
 
   test('AI 표시 설정은 기본값·저장값·세션과 tmux 투영을 일관되게 적용한다', () => {

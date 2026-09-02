@@ -35,20 +35,11 @@ html[data-theme="light"] {
   text-wrap: balance;
 }
 
-:is(.subtitle, .section-explain, .settings-section p, .drawer-section p, .run-modal p) {
+:is(.subtitle, .section-explain, .settings-section p, .run-modal p) {
   text-wrap: pretty;
 }
 
-:is(
-  [id$="Count"],
-  [id$="Percent"],
-  .session-token-value,
-  .session-token-detail,
-  .project-sidebar-attention b,
-  .runtime-overview-counts,
-  .token-row,
-  .usage-value
-) {
+:is([id$="Count"], [id$="Percent"], .session-token-value, .session-token-detail, .project-sidebar-attention b, .usage-value) {
   font-variant-numeric: tabular-nums;
 }
 
@@ -92,12 +83,11 @@ body[data-current-view="all"] #operationsOverview {
 }
 
 .project-view-tabs {
-  grid-template-columns: repeat(3, minmax(112px, 1fr)) minmax(140px, .86fr);
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
   gap: 8px;
 }
 
-.project-view-tabs > .nav-item,
-.project-view-tabs > .project-tools-menu > summary {
+.project-view-tabs > .nav-item {
   min-height: 48px;
   height: auto;
 }
@@ -106,21 +96,6 @@ body[data-current-view="all"] #operationsOverview {
   border-color: rgba(64, 201, 239, .28);
   background: rgba(64, 201, 239, .075);
   box-shadow: inset 0 -2px var(--studio-cyan);
-}
-
-.project-view-tabs .project-tools-menu.active > summary,
-.project-view-tabs .project-tools-menu[open] > summary {
-  border-color: rgba(64, 201, 239, .28);
-  color: #e3f7fb;
-  background: rgba(64, 201, 239, .065);
-  box-shadow: inset 0 -2px var(--studio-cyan);
-}
-
-.project-view-tabs .advanced-tools-list .nav-item:hover,
-.project-view-tabs .advanced-tools-list .nav-item.active {
-  border-color: rgba(64, 201, 239, .24);
-  color: #e3f7fb;
-  background: rgba(64, 201, 239, .065);
 }
 
 html[data-theme="light"] #projectContextNav {
@@ -188,17 +163,7 @@ html[data-theme="light"] .run-modal-actions {
   box-shadow: 0 -10px 24px rgba(31, 55, 70, .08);
 }
 
-:is(
-  .language-settings-card,
-  .theme-settings-card,
-  .settings-help-card,
-  .provider-visibility-card,
-  .update-panel,
-  .terminal-resource-panel,
-  .terminal-workbench,
-  .tmux-map,
-  .runtime-schedule-list
-) {
+:is(.language-settings-card, .theme-settings-card, .settings-help-card, .provider-visibility-card, .update-panel, .terminal-resource-panel, .terminal-workbench) {
   box-shadow: var(--surface-ring);
 }
 
@@ -343,12 +308,7 @@ html[data-theme="light"] .project-sidebar-group.has-attention {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-body:is(
-  [data-current-view="runtime"],
-  [data-current-view="terminal"],
-  [data-current-view="tmux"],
-  [data-current-view="settings"]
-) .sidebar-projects {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar-projects {
   display: none;
 }
 
@@ -409,28 +369,7 @@ body:is(
 }
 
 /* Dense toolbars still need reliable pointer/touch targets and separation. */
-:is(
-  .control-room-select-field select,
-  .control-room-search input,
-  .control-room-list-toolbar button,
-  .control-session-review .management-quick-actions > button,
-  .control-review-open,
-  .terminal-approval-choice,
-  .runtime-open-task,
-  .attention-card-header-actions > button,
-  .management-control-buttons > button,
-  .attention-draft-action,
-  .supervision-clear
-) {
-  min-height: 40px;
-}
-
-.tmux-pane-actions {
-  gap: 8px;
-}
-
-.tmux-pane-actions > button {
-  min-width: 40px;
+:is(.control-room-select-field select, .control-room-search input, .control-room-list-toolbar button, .control-session-review .management-quick-actions > button, .control-review-open, .terminal-approval-choice, .attention-card-header-actions > button, .management-control-buttons > button, .attention-draft-action, .supervision-clear) {
   min-height: 40px;
 }
 
@@ -469,9 +408,8 @@ html[data-theme="light"] .session-token-empty {
   background: #ffffff;
 }
 
-/* The result summary is rendered inside a light drawer, but its feature CSS
- * originally painted dark translucent cards. Keep every summary surface and
- * status color on the active theme contract at the final cascade boundary. */
+/* Keep every light-theme result summary surface and status color on the
+ * active theme contract at the final cascade boundary. */
 html[data-theme="light"] :is(
   .management-progress,
   .management-health,
@@ -741,22 +679,6 @@ html[data-theme="light"] body[data-current-view="terminal"]:has(#terminalModeQue
   background: #ffffff;
 }
 
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-distro-node {
-  border-color: #bcdacf;
-  color: #243147;
-  background: linear-gradient(90deg, #effaf5, #ffffff);
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-distro-node > span {
-  color: #185f48;
-  background: #e2f5ed;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-distro-node > b {
-  color: #2b775e;
-  background: #eaf7f2;
-}
-
 /* Light surfaces had their interaction states overwritten by a later base
  * rule, leaving only a one-pixel movement as feedback. */
 html[data-theme="light"] :is(.session-card.memory-record, .session-card.session-record):hover {
@@ -847,73 +769,6 @@ html[data-theme="light"] .project-history-list > button:focus-visible {
     box-shadow: 0 14px 36px rgba(31, 55, 70, .18);
   }
 
-  html[data-theme="light"] .mobile-tools-menu {
-    border-color: #cbd7dd;
-    background: #ffffff;
-    scrollbar-color: #9aabb4 #eef3f5;
-    box-shadow:
-      0 0 0 100vmax rgba(35, 45, 62, .28),
-      0 24px 70px rgba(34, 47, 67, .2);
-  }
-
-  html[data-theme="light"] .mobile-tools-menu > .mobile-tools-head small {
-    color: #5f707c;
-  }
-
-  html[data-theme="light"] #mobileToolsCloseBtn {
-    border-color: #c6d4db;
-    background: #f4f7f8;
-    color: #314852;
-  }
-
-  html[data-theme="light"] #mobileToolsCloseBtn:hover {
-    border-color: #91aab6;
-    background: #eaf1f4;
-    color: #172e39;
-  }
-
-  html[data-theme="light"] .mobile-tools-menu > button,
-  html[data-theme="light"] .mobile-project-picker {
-    border-color: #cbd7dd;
-    background: #f8fbfc;
-    color: #263c47;
-  }
-
-  html[data-theme="light"] .mobile-tools-menu > button:hover,
-  html[data-theme="light"] .mobile-project-picker > summary:hover {
-    border-color: #9eb4be;
-    background: #eef5f7;
-  }
-
-  html[data-theme="light"] .mobile-project-picker > summary {
-    color: #263c47;
-  }
-
-  html[data-theme="light"] .mobile-project-picker > summary em {
-    color: #607681;
-  }
-
-  html[data-theme="light"] .mobile-project-picker-body {
-    border-top-color: #d4dfe4;
-    background: #f4f8f9;
-  }
-
-  html[data-theme="light"] .mobile-project-picker-body > #mobileAddWorkspaceBtn {
-    border-color: #9cb5c0;
-    background: #ffffff;
-    color: #17647c;
-  }
-
-  html[data-theme="light"] .mobile-tools-menu > button > i,
-  html[data-theme="light"] .mobile-project-picker > summary > i {
-    background: #e5f2f6;
-    color: #116985;
-  }
-
-  html[data-theme="light"] .mobile-tools-menu > button > span > small,
-  html[data-theme="light"] .mobile-project-picker > summary > span > small {
-    color: #526875;
-  }
 }
 
 @media (min-width: 721px) and (max-width: 920px) {

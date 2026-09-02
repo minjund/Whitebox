@@ -40,16 +40,13 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     renderUpdateSettings,
     renderProviderOverview,
     renderProviderFilter,
-    renderRuntimeOverview,
     renderProviderVisibilitySettings = () => {},
     renderSourcePluginSettings = () => {},
-    renderAttentionPopupSettings = () => {},
     visibleSnapshot = () => state.snapshot,
     filteredSessions,
     graphFilteredSessions,
     executionModeBadge,
     renderAgentMap,
-    renderTmuxMap,
     renderAttentionInbox,
     renderOperationsOverview,
     progressHtml,
@@ -265,10 +262,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const previousLayout = deferMotion ? null : captureMotionLayout();
     syncViewChrome();
     renderGuide();
-    const tmuxView = state.view === "tmux";
-    const terminalView = state.view === "terminal";
     const settingsView = state.view === "settings";
-    const runtimeView = state.view === "runtime";
     const attentionView = state.view === "waiting";
     const memoryView = state.view === "active";
     const homeView = state.view === "all";
@@ -276,51 +270,24 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const taskProjectSelected = projectSelected && state.workspace !== PROJECTLESS_WORKSPACE;
     const projectSelectionView = homeView && !projectSelected;
     const operationsView = homeView && projectSelected;
-    const focusedToolView = tmuxView || terminalView || settingsView || runtimeView;
+    const focusedToolView = settingsView;
     $("#projectSelectionPrompt")?.classList.toggle("hidden", !projectSelectionView);
     $("#projectTaskToolbar")?.classList.toggle("hidden", !homeView || !taskProjectSelected);
-    $("#terminalSection").classList.toggle("hidden", !terminalView);
-    $("#tmuxSection").classList.toggle("hidden", !tmuxView);
     $("#settingsSection").classList.toggle("hidden", !settingsView);
     $("#globalStats").classList.toggle("hidden", focusedToolView || homeView || memoryView || attentionView);
     $("#providerOverview").classList.add("hidden");
     $("#sessionSection").classList.toggle("hidden", !memoryView);
     $("#operationsOverview").classList.toggle("hidden", !operationsView);
     $("#attentionInbox").classList.toggle("hidden", !attentionView);
-    if (runtimeView) renderRuntimeOverview();
-    $("#automationOverview").classList.toggle("hidden", !runtimeView);
     const guideVisible = state.view === "all" && projectSelected && state.guideExpanded && !state.graphFocusId;
     $("#beginnerGuide").classList.toggle("hidden", !guideVisible);
     $("#guideBtn").setAttribute("aria-expanded", guideVisible ? "true" : "false");
     renderUpdateSettings();
-    if (runtimeView) {
-      $("#liveSection").classList.add("hidden");
-      if (window.WhiteboxTerminal) window.WhiteboxTerminal.deactivate();
-      if (!deferMotion) playMotionLayout(previousLayout, motionKind);
-      if (motionKind === "view") animateVisibleSections();
-      return;
-    }
     if (settingsView) {
       $("#liveSection").classList.add("hidden");
-      renderAttentionPopupSettings();
       renderSourcePluginSettings();
       renderProviderVisibilitySettings();
       if (window.WhiteboxTerminal) window.WhiteboxTerminal.deactivate();
-      if (!deferMotion) playMotionLayout(previousLayout, motionKind);
-      if (motionKind === "view") animateVisibleSections();
-      return;
-    }
-    if (terminalView) {
-      $("#liveSection").classList.add("hidden");
-      if (window.WhiteboxTerminal) window.WhiteboxTerminal.activate(visibleSnapshot(), state.workspaces, "general");
-      if (!deferMotion) playMotionLayout(previousLayout, motionKind);
-      if (motionKind === "view") animateVisibleSections();
-      return;
-    }
-    if (tmuxView) {
-      $("#liveSection").classList.add("hidden");
-      renderTmuxMap();
-      if (window.WhiteboxTerminal) window.WhiteboxTerminal.activate(visibleSnapshot(), state.workspaces, "tmux");
       if (!deferMotion) playMotionLayout(previousLayout, motionKind);
       if (motionKind === "view") animateVisibleSections();
       return;
@@ -420,11 +387,9 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
         renderGlobalStats();
         renderProviderOverview();
         renderProviderFilter();
-        renderAttentionPopupSettings();
         renderSourcePluginSettings();
         renderProviderVisibilitySettings();
         renderSessions(motionKind, true);
-        if (state.selectedId && $("#detailDrawer").classList.contains("open")) context.renderDrawer();
         playMotionLayout(previousLayout, motionKind);
         if (motionKind === "view") animateVisibleSections();
       } finally {

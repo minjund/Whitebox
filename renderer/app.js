@@ -6,7 +6,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   const observedText = (value) => window.WhiteboxI18n.observedText(value);
   const PROJECTLESS_WORKSPACE = "__projectless__";
   const SESSION_RETENTION_MS = 30 * 60 * 1000;
-  const RESULT_REVIEW_REQUIRED = false;
   const LIVE_ACTIVITY_STATES = new Set(["thinking", "working", "juggling", "notification"]);
   const SESSION_ARCHIVE_STORAGE_KEY = "whitebox:session-archives:v1";
   const RESULT_REVIEW_STORAGE_KEY = "whitebox:result-reviews:v1";
@@ -50,10 +49,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     projectNoticeAcks: new Map(),
     controlRoomObservedIds: new Set(),
     selectedId: null,
-    drawerTab: "chat",
-    drawerMode: "session",
-    drawerPresentation: "modal",
-    drawerExecutionId: null,
     runProvider: "claude",
     runSource: "direct",
     sourcePlugins: [],
@@ -64,13 +59,11 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     },
     sourcePluginSettingRequests: new Set(),
     details: new Map(),
-    detailLoadingIds: new Set(),
-    drawerForceLatest: false,
-    drawerForkCreationGesture: false,
     visibleLimit: 30,
     graphFocusId: null,
     inlineTerminalSessionId: null,
     ptyFocusSessionId: null,
+    ptyFocusTargetId: "",
     workflowDetailTab: "summary",
     controlRoomSort: "recent",
     supervisionFocusId: null,
@@ -95,7 +88,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     sourceMessageDrafts: new Map(),
     runControlRequests: new Set(),
     managementFilter: "all",
-    detailErrors: new Map(),
     disclosureStates: new Map(),
     guideCompleted: new Set(),
     guideExpanded: false,
@@ -121,8 +113,8 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   });
   const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
   const motionState = {
-    ready: false, modalTimer: 0, modalFocusTimer: 0, toastTimer: 0, drawerTimer: 0, drawerContentTimer: 0,
-    drawerRenderKey: "", drawerTab: "", focusScopes: [], focusScopeSequence: 0,
+    ready: false, modalTimer: 0, modalFocusTimer: 0, toastTimer: 0,
+    focusScopes: [], focusScopeSequence: 0,
   };
   function disclosureElements(root = document) {
     const elements = [];
@@ -380,15 +372,12 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   };
   const VIEW_TITLES = localizedLookup({
     all: "ui.recent_conversations_and_tasks", active: "ui.active_tasks", waiting: "ui.tasks_needing_review",
-    runtime: "runtime.title", terminal: "app.nav.session_terminal", tmux: "app.nav.tmux", settings: "settings.title",
+    settings: "settings.title",
   });
   const VIEW_META_KEYS = {
     all: ["ui.ai_work_overview", "ui.see_all_ai_work_at_a_glance", "ui.active_work_and_items_needing_your_review_appear_first_find"],
     active: ["memory.eyebrow", "ui.see_which_ai_is_working_now", "ui.see_what_is_being_handled_then_open_a_task_for"],
     waiting: ["ui.your_turn", "ui.handle_items_that_need_your_review_first", "ui.only_tasks_waiting_for_your_response_or_choice_are_shown"],
-    runtime: ["runtime.eyebrow", "runtime.title", "runtime.description"],
-    terminal: ["ui.continue_an_existing_conversation", "ui.continue_ai_sessions_in_the_terminal", "ui.continue_the_same_task_with_its_previous_conversation_beside_the"],
-    tmux: ["ui.advanced_work_tools", "ui.manage_multi_terminal_work_in_one_place", "ui.this_view_is_only_for_existing_tmux_workflows_home_and"],
     settings: ["ui.application_management", "ui.check_versions_and_updates", "ui.compare_the_installed_and_latest_stable_versions_then_download_a"],
   };
   const VIEW_META = new Proxy(Object.create(null), {
@@ -472,37 +461,23 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       if (active) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     });
-    const advancedToolsView = ["runtime", "terminal", "tmux"].includes(state.view);
-    const advancedView = advancedToolsView || state.view === "settings";
-    $("#advancedToolsNav")?.classList.toggle("active", advancedToolsView);
-    $("#mobileMoreBtn")?.classList.toggle("active", advancedView);
-    if (advancedView) $("#mobileMoreBtn")?.setAttribute("aria-current", "page");
-    else $("#mobileMoreBtn")?.removeAttribute("aria-current");
+  }
+  function signalManualTerminalSelection() {
+    if (typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
   }
   function selectView(view, options = {}) {
+    if (!["all", "active", "waiting", "settings"].includes(view)) view = "all";
     if (view !== state.view && state.ptyFocusSessionId) {
       context.closePtyFocus?.({ restore: false });
     }
-    if (
-      view !== state.view
-      && $("#detailDrawer")?.classList.contains("open")
-      && $("#detailDrawer")?.dataset.presentation !== "modal"
-    ) context.closeDrawer?.(false);
     state.view = view;
     state.managementFilter = view === "waiting" ? (options.managementFilter || "all") : "all";
     state.visibleLimit = 30;
     if (view === "active" || view === "waiting") markGuideStep(view);
     syncViewChrome();
     context.renderSessions(options.motionKind || "view");
-    const mobileToolsMenu = $("#mobileToolsMenu");
-    if (mobileToolsMenu && !mobileToolsMenu.classList.contains("hidden")) {
-      const focusWasInsideMobileTools = mobileToolsMenu.contains(document.activeElement);
-      setDialogOpenState(mobileToolsMenu, false);
-      mobileToolsMenu.classList.add("hidden");
-      discardDialogTrigger("mobileToolsMenu");
-      if (focusWasInsideMobileTools && !options.focusMain) $("#mainContent")?.focus({ preventScroll: true });
-    }
-    $("#mobileMoreBtn")?.setAttribute("aria-expanded", "false");
     document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
     if (window.matchMedia("(min-width: 721px)").matches) {
       const sidebar = document.querySelector(".sidebar");
@@ -531,19 +506,15 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       ? t("navigation.view_changed", { view: VIEW_TITLES[view] || view })
       : t("navigation.view_results", { view: VIEW_TITLES[view] || view, count: resultCount }));
   }
+  function selectViewFromUser(view, options = {}) {
+    signalManualTerminalSelection();
+    return selectView(view, options);
+  }
   function currentDialog() {
-    if (!$("#mobileToolsMenu")?.classList.contains("hidden")) return $("#mobileToolsMenu");
-    if (!$("#ptyFocusChildModal")?.classList.contains("hidden")) return $("#ptyFocusChildModal");
     if (!$("#ptyFocusSurface")?.classList.contains("hidden")) return $("#ptyFocusSurface");
     if (!$("#quickPaletteModal")?.classList.contains("hidden")) return $("#quickPaletteModal");
     if (!$("#shortcutHelpModal")?.classList.contains("hidden")) return $("#shortcutHelpModal");
-    if (!$("#sessionResetModal")?.classList.contains("hidden")) return $("#sessionResetModal");
     if (!$("#runModal").classList.contains("hidden")) return $("#runModal");
-    if (!$("#tmuxCreateModal").classList.contains("hidden")) return $("#tmuxCreateModal");
-    if (
-      $("#detailDrawer").classList.contains("open")
-      && $("#detailDrawer").dataset.presentation === "modal"
-    ) return $("#detailDrawer");
     return null;
   }
   function dialogFocusable(dialog) {
@@ -626,8 +597,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     const active = document.activeElement;
     if (isRestorableFocusTarget(active)) return true;
     const roots = [currentDialog()];
-    const drawer = $("#detailDrawer");
-    if (drawer?.classList.contains("open") && !roots.includes(drawer)) roots.push(drawer);
     for (const root of roots) {
       if (root && focusWithoutScroll(dialogFocusable(root)[0])) return true;
     }
@@ -641,9 +610,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   }
   function isBlockingDialogSurface(surface) {
     if (!surface || surface.classList.contains("hidden")) return false;
-    if (surface.id === "detailDrawer") {
-      return surface.classList.contains("open") && surface.dataset.presentation === "modal";
-    }
     return surface.getAttribute("aria-modal") === "true";
   }
   function setDialogOpenState(dialog, open) {
@@ -658,30 +624,11 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     }
     dialog.setAttribute("inert", "");
     dialog.setAttribute("aria-hidden", "true");
-    const anotherDialog = [$("#mobileToolsMenu"), $("#ptyFocusChildModal"), $("#runModal"), $("#tmuxCreateModal"), $("#detailDrawer"), $("#quickPaletteModal"), $("#shortcutHelpModal"), $("#sessionResetModal")]
+    const anotherDialog = [$("#runModal"), $("#quickPaletteModal"), $("#shortcutHelpModal")]
       .some((item) => item !== dialog && isBlockingDialogSurface(item));
     if (!anotherDialog) {
       shell?.removeAttribute("inert");
       document.body.classList.remove("dialog-open");
-    }
-  }
-  function closeMobileToolsAboveBreakpoint() {
-    if (window.innerWidth <= 720) return;
-    const menu = $("#mobileToolsMenu");
-    if (!menu || menu.classList.contains("hidden")) return;
-    const focusWasInside = menu.contains(document.activeElement);
-    setDialogOpenState(menu, false);
-    menu.classList.add("hidden");
-    $("#mobileMoreBtn")?.setAttribute("aria-expanded", "false");
-    discardDialogTrigger("mobileToolsMenu");
-    if (!currentDialog()) {
-      $("#appShell")?.removeAttribute("inert");
-      document.body.classList.remove("dialog-open");
-    }
-    if (focusWasInside) {
-      const dialog = currentDialog();
-      const nextFocus = dialog ? dialogFocusable(dialog)[0] : $("#mainContent");
-      nextFocus?.focus({ preventScroll: true });
     }
   }
   let memoryFiltersDesktopLayout = window.innerWidth > 720;
@@ -694,7 +641,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     if (filters) filters.open = desktopLayout;
   }
   function handleResponsiveResize() {
-    closeMobileToolsAboveBreakpoint();
     syncMemoryFilterDisclosure();
     syncProjectContextNavigation();
   }
@@ -1136,6 +1082,42 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return (state.snapshot?.sessions || []).find(session => String(session.id || "") === id)
       || (typeof sessionOrId === "object" ? sessionOrId : null);
   }
+  function resultReviewPtyOwner(sessionOrId) {
+    let session = resultReviewSnapshot(sessionOrId);
+    const visited = new Set();
+    while (session?.parentId && !visited.has(session.id)) {
+      visited.add(session.id);
+      session = resultReviewSnapshot(session.parentId);
+    }
+    return session || null;
+  }
+  function resultReviewPtyTarget(sessionOrId) {
+    const owner = resultReviewPtyOwner(sessionOrId);
+    const terminal = window.WhiteboxTerminal;
+    if (!owner || owner.sourcePluginId || owner.readOnly === true
+      || typeof terminal?.agentTargets !== "function") return null;
+    const bridgeIdentity = window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity?.(owner);
+    if (!bridgeIdentity) {
+      if (String(owner.provider || "").toLowerCase() === "codex"
+        && String(owner.clientKind || "").toLowerCase() === "codex-desktop") return null;
+      if (window.WhiteboxRendererUtils.isWritableDirectSession?.(owner) !== true
+        || owner.controlCapabilities?.pty !== true
+        || owner.presentation?.conversationSurface === "transcript") return null;
+    }
+    let targets;
+    try {
+      targets = terminal.agentTargets(owner)
+        .filter(target => target?.kind === "terminal");
+    } catch (error) {
+      reportRecoverableError("result-review-pty-target", error);
+      return null;
+    }
+    if (bridgeIdentity) {
+      return targets.find(target => String(target.terminalId || target.id || "") === bridgeIdentity.terminalId)
+        || null;
+    }
+    return targets.length === 1 ? targets[0] : null;
+  }
   function resultContentFingerprint(value) {
     const text = String(value || "");
     let primary = 0x811c9dc5;
@@ -1171,13 +1153,11 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return !required && !isWorkflowLive(session) && (verified || terminal);
   }
   function isResultReviewComplete(sessionOrId) {
-    if (!RESULT_REVIEW_REQUIRED) return false;
     const session = resultReviewSnapshot(sessionOrId);
     if (!session || !isResultReviewCandidate(session)) return false;
     return state.resultReviews.get(String(session.id || ""))?.stamp === resultReviewStamp(session);
   }
-  function resultReviewTargets(sessionOrId, options = {}) {
-    if (!RESULT_REVIEW_REQUIRED) return [];
+  function collectResultReviewTargets(sessionOrId, options = {}) {
     const root = resultReviewSnapshot(sessionOrId);
     if (!root) return [];
     const sessions = state.snapshot?.sessions || [root];
@@ -1195,6 +1175,21 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       queue.push(...(session.childIds || []).map(String));
     }
     return targets;
+  }
+  function resultReviewTargets(sessionOrId, options = {}) {
+    const root = resultReviewSnapshot(sessionOrId);
+    const owner = resultReviewPtyOwner(root);
+    // A review action is only useful when it can reveal the exact PTY that
+    // owns the result. A completed Codex Desktop task may also create one exact
+    // PTY through its explicit safe-fork path. Imported/read-only records and
+    // ambiguous or otherwise retired sessions never expose a dead button.
+    const canCreateExactPty = options.allowPtyCreation === true
+      && owner
+      && !owner.sourcePluginId
+      && owner.readOnly !== true
+      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(owner) === true;
+    if (!root || (!resultReviewPtyTarget(owner) && !canCreateExactPty)) return [];
+    return collectResultReviewTargets(root, options);
   }
   function loadResultReviews() {
     try {
@@ -1218,8 +1213,18 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       reportRecoverableError("result-reviews-save", error);
     }
   }
-  function markResultReviewComplete(sessionOrId) {
-    const targets = resultReviewTargets(sessionOrId);
+  function markResultReviewComplete(sessionOrId, options = {}) {
+    const expected = Array.isArray(options.expectedTargets) ? options.expectedTargets : null;
+    const semanticTargets = expected
+      ? collectResultReviewTargets(sessionOrId)
+      : resultReviewTargets(sessionOrId);
+    const byId = new Map(semanticTargets.map(session => [String(session.id || ""), session]));
+    const targets = expected
+      ? expected.map(receipt => {
+          const session = byId.get(String(receipt?.id || ""));
+          return session && String(receipt?.stamp || "") === resultReviewStamp(session) ? session : null;
+        }).filter(Boolean)
+      : semanticTargets;
     const reviewedAt = Date.now();
     targets.forEach((session) => {
       state.resultReviews.set(String(session.id || ""), {
@@ -1504,6 +1509,8 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     syncProjectContextNavigation,
     syncViewChrome,
     selectView,
+    selectViewFromUser,
+    signalManualTerminalSelection,
     currentDialog,
     dialogFocusable,
     trapDialogFocus,
@@ -1543,6 +1550,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     loadSessionArchives,
     saveSessionArchives,
     resultReviewStamp,
+    resultReviewPtyTarget,
     isResultReviewCandidate,
     isResultReviewComplete,
     resultReviewTargets,

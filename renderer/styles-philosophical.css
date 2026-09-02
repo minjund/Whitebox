@@ -102,29 +102,10 @@ html[data-theme="light"] {
   gap: 5px;
 }
 
-.nav-item,
-.advanced-tools-nav > summary {
+.nav-item {
   min-height: 46px;
   border-radius: 10px;
   color: var(--intent-muted);
-}
-
-.advanced-tools-nav > summary {
-  grid-template-columns: 20px minmax(0, 1fr) auto 12px;
-  gap: 8px;
-  padding-inline: 10px;
-}
-
-.advanced-tools-nav > summary > span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.advanced-tools-nav > summary b {
-  min-width: 20px;
-  padding-inline: 5px;
 }
 
 .nav-item.active {
@@ -467,18 +448,6 @@ body[data-current-view="all"] #sessionSection { order: 9; }
   font-size: 12px;
 }
 
-.drawer-composer .conversation-composer .agent-command-actions button[type="submit"] .conversation-send-label {
-  color: inherit;
-}
-
-.drawer-composer .conversation-composer .agent-command-actions button[type="submit"]:disabled .conversation-send-label {
-  color: #a7b6c4;
-}
-
-html[data-theme="light"] .drawer-composer .conversation-composer .agent-command-actions button[type="submit"]:disabled .conversation-send-label {
-  color: #566579;
-}
-
 .control-room-flow {
   background-image: radial-gradient(rgba(104, 189, 248, .11) 1px, transparent 1px);
   background-size: 22px 22px;
@@ -590,9 +559,7 @@ html[data-theme="light"] .drawer-composer .conversation-composer .agent-command-
 
 .sessions-section,
 .attention-inbox,
-.automation-overview,
 .terminal-section,
-.tmux-section,
 .settings-section {
   width: 100%;
   max-width: var(--intent-content);
@@ -611,9 +578,7 @@ html[data-theme="light"] .drawer-composer .conversation-composer .agent-command-
 
 .session-card,
 .attention-card,
-.automation-overview,
-.terminal-section,
-.tmux-section {
+.terminal-section {
   border-color: var(--intent-line);
   box-shadow: none;
 }
@@ -648,13 +613,6 @@ body[data-current-view="waiting"] .attention-card-list {
 body[data-current-view="terminal"] .topbar {
   min-height: 62px;
   padding-bottom: 12px;
-}
-
-@media (min-width: 1281px) {
-  body[data-current-view="terminal"] #terminalSection .terminal-layout {
-    height: clamp(600px, calc(100dvh - 232px), 820px);
-    min-height: 600px;
-  }
 }
 
 /* Light mode keeps the same hierarchy and uses white surfaces sparingly. */
@@ -709,11 +667,6 @@ html[data-theme="light"] .home-attention-more {
 }
 
 @media (min-width: 721px) and (max-width: 1280px) {
-  body[data-current-view="terminal"] #terminalSection .terminal-workbench {
-    height: clamp(500px, calc(100dvh - 330px), 700px);
-    min-height: 500px;
-  }
-
   body[data-current-view="terminal"] .terminal-session-tools .terminal-key-actions {
     right: auto;
     left: 0;
@@ -767,11 +720,6 @@ html[data-theme="light"] .home-attention-more {
 @media (min-width: 721px) and (max-height: 680px) {
   .brand {
     padding-bottom: 24px;
-  }
-
-  .nav-group-label {
-    margin-top: 12px;
-    margin-bottom: 4px;
   }
 }
 
@@ -1081,7 +1029,7 @@ body[data-current-view="all"] .control-room-project-group[open] > summary {
 body[data-current-view="all"] :is(
   .control-room-main,
   .control-room-node,
-  .live-tmux-pane
+  .live-tmux-pane-summary
 ) {
   background: color-mix(in srgb, var(--intent-surface-solid) 88%, transparent);
 }
@@ -1092,7 +1040,7 @@ body[data-current-view="all"] .control-room-node.execution {
 }
 
 /* Memory is intentionally editorial: one purpose, one retained causal line,
-   one proof. It reuses the existing session events and detail drawer. */
+   and one proof. */
 body[data-current-view="active"] .topbar {
   min-height: 56px;
   padding: 5px 0 14px;
@@ -1820,12 +1768,6 @@ html[data-theme="light"] .memory-record.session-card:focus-visible {
   .control-causal-spine > li > em {
     display: none;
   }
-}
-
-#closeDrawerBtn:focus-visible {
-  outline-width: 2px !important;
-  outline-offset: 1px !important;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 18%, transparent) !important;
 }
 
 @media (max-width: 1450px) and (min-width: 901px) {

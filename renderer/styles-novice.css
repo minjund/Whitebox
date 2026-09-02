@@ -50,8 +50,7 @@
     display: inline;
   }
 
-  .sidebar .nav-item > .nav-label,
-  .advanced-tools-list .nav-item > .nav-label {
+  .sidebar .nav-item > .nav-label {
     min-width: 0;
     display: block;
     overflow: visible;
@@ -180,25 +179,6 @@ body[data-current-view="waiting"] .approval-action-effect b {
   color: #80e3bf;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small {
-  font-size: 13px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small::after {
-  content: none;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > p {
-  padding: 10px 12px;
-  border: 1px solid #3a584d;
-  border-radius: 8px;
-  color: #d1e3dd;
-  background: #10241d;
-  font-size: 14px;
-  line-height: 1.5;
-  text-align: left;
-}
-
 body[data-current-view="settings"] .update-impact-note {
   border-top: 0;
   border-bottom: 1px solid #2d414c;
@@ -285,30 +265,6 @@ body[data-current-view="settings"] .update-impact-note {
     flex-wrap: wrap;
   }
 
-  body[data-current-view="tmux"] .tmux-section-head {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  body[data-current-view="tmux"] .tmux-logo {
-    display: none;
-  }
-
-  body[data-current-view="tmux"] .tmux-section-actions {
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  body[data-current-view="tmux"] .tmux-section-actions button {
-    width: 100%;
-    min-width: 0;
-    padding-inline: 8px;
-    line-height: 1.35;
-    white-space: normal;
-  }
 }
 
 /* Round 53: first-use wording and action hierarchy */
@@ -328,13 +284,11 @@ body[data-current-view="settings"] .update-impact-note {
     padding-bottom: 10px;
   }
 
-  .sidebar .view-nav,
-  .sidebar .advanced-tools-list {
+  .sidebar .view-nav {
     gap: 3px;
   }
 
-  .sidebar .nav-item,
-  .sidebar .advanced-tools-nav > summary {
+  .sidebar .nav-item {
     min-height: 40px;
   }
 
@@ -343,36 +297,8 @@ body[data-current-view="settings"] .update-impact-note {
     padding-block: 5px;
   }
 
-  .sidebar .advanced-tools-list .nav-item,
-  .sidebar .advanced-tools-list .runtime-nav-item {
-    min-height: 46px;
-    padding-block: 4px;
-  }
-
-  .sidebar .advanced-tools-list .nav-item > b {
-    display: none;
-  }
-
-  .sidebar .nav-group-label {
-    margin-top: 7px;
-    margin-bottom: 3px;
-  }
-
   .sidebar .sidebar-section {
     margin-top: 10px;
-  }
-}
-
-@media (min-width: 721px) and (max-width: 980px) {
-  body[data-current-view="runtime"] .runtime-overview-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  body[data-current-view="runtime"] .runtime-overview-counts {
-    width: 100% !important;
-    max-width: 100%;
-    grid-template-columns: minmax(0, 1fr) !important;
   }
 }
 
@@ -456,7 +382,6 @@ body[data-current-view="settings"] .provider-toggle {
   min-width: 78px;
 }
 
-body[data-current-view="runtime"] .runtime-active-phase em,
 body[data-current-view="terminal"] .terminal-mode-guide > button em {
   font-size: 12px !important;
 }
@@ -547,14 +472,6 @@ body[data-current-view="settings"] .provider-toggle i {
   flex: 0 0 auto;
 }
 
-body[data-current-view="runtime"] .automation-overview {
-  padding-bottom: 32px;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-lane {
-  margin-bottom: 16px;
-}
-
 /* Final novice pass: keep the record-history link visually secondary to result review. */
 body[data-current-view="active"] .memory-record.review-pending .memory-record-open {
   width: fit-content !important;
@@ -577,36 +494,6 @@ html[data-theme="light"] body[data-current-view="active"] .memory-record.review-
 }
 
 /* Round 51: each number, mode, and next action forms one novice-readable unit. */
-body[data-current-view="runtime"] .runtime-overview-counts {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(280px, 1fr)) !important;
-  gap: 8px !important;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span {
-  min-height: 58px;
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) !important;
-  align-content: center;
-  gap: 4px !important;
-  padding: 9px 12px !important;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span b {
-  font-size: 15px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span small {
-  display: block;
-  color: #c8d8de;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > p {
-  grid-column: 1 / -1;
-  margin: 0 !important;
-}
 
 body[data-current-view="terminal"] .terminal-mode-guide {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -645,19 +532,6 @@ body[data-current-view="waiting"] .attention-card.approval .management-quick-act
 
 body[data-current-view="waiting"] .attention-card.approval .management-quick-actions > button:last-of-type {
   grid-area: secondary;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary {
-  grid-template-columns: minmax(0, 1fr) auto !important;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary > strong {
-  grid-column: 1;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary > small {
-  grid-column: 2;
-  text-align: right;
 }
 
 @media (min-width: 721px) {
@@ -705,8 +579,7 @@ body[data-current-view="tmux"] .tmux-simple-summary > small {
     text-align: center;
   }
 
-  body[data-current-view="runtime"] .runtime-overview-counts,
-  body[data-current-view="terminal"] .terminal-mode-guide {
+body[data-current-view="terminal"] .terminal-mode-guide {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
@@ -814,35 +687,6 @@ body[data-current-view="active"] .memory-record-open {
   text-underline-offset: 3px;
 }
 
-body[data-current-view="runtime"] .runtime-count-flow {
-  grid-column: 1 / -1;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-provider {
-  display: block;
-  color: #83ccb2;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 800;
-}
-
-body[data-current-view="runtime"] .runtime-result-next {
-  grid-template-columns: minmax(280px, .45fr) minmax(0, 1fr);
-  align-items: center;
-  justify-items: stretch;
-  gap: 12px;
-  margin: 0 14px 10px;
-  padding: 10px;
-  border: 1px solid #3d6d5c;
-  border-radius: 10px;
-  background: #10261e;
-}
-
-body[data-current-view="runtime"] .runtime-result-next small {
-  max-width: none;
-  text-align: left;
-}
-
 body[data-current-view="terminal"] .terminal-send-disabled-hint {
   display: none;
   color: #b8cad3;
@@ -852,10 +696,6 @@ body[data-current-view="terminal"] .terminal-send-disabled-hint {
 
 body[data-current-view="terminal"] .terminal-command-form[data-ai-target="true"]:has(#terminalCommandInput:placeholder-shown) .terminal-send-disabled-hint {
   display: inline;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.needs-review {
-  grid-column: 1 / -1;
 }
 
 body[data-current-view="settings"] .topbar .subtitle {
@@ -875,12 +715,6 @@ body[data-current-view="settings"] .topbar .subtitle {
   body[data-current-view="active"] .sessions-section {
     padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
   }
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-pane-node.needs-review [data-control-tmux] {
-  border-color: #78a894;
-  color: #174b3a;
-  background: #dcefe7;
 }
 
 /* Round 47: every first action and every count explains itself. */
@@ -1030,34 +864,6 @@ body[data-current-view="waiting"] .attention-card.approval .management-quick-act
   margin: 0 10px 10px !important;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts > p {
-  padding: 10px 12px;
-  border: 1px solid #3a584d;
-  border-radius: 8px;
-  color: #d1e3dd;
-  background: #10241d;
-  font-size: 14px;
-  line-height: 1.5;
-  text-align: left;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > p b {
-  color: #79dcb9;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span small {
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small {
-  font-size: 13px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small::after {
-  content: none;
-}
-
 .terminal-mode-instruction {
   margin: 10px 0 6px;
   color: #d4e3e8;
@@ -1081,32 +887,6 @@ body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) s
   color: #0c2b20;
   background: #73ddb7;
   font-size: 11px;
-  font-weight: 900;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary strong {
-  font-size: 15px;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary small {
-  font-size: 13px;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.needs-review {
-  border-color: #58a889;
-  box-shadow: 0 0 0 2px rgba(88, 168, 137, .16);
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.needs-review footer {
-  font-size: 13px;
-  font-weight: 750;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.needs-review [data-control-tmux] {
-  min-height: 40px;
-  border-color: #4c9e7e;
-  color: #effff8;
-  background: #19513d;
   font-weight: 900;
 }
 
@@ -1310,18 +1090,6 @@ body[data-current-view="waiting"] .attention-inbox-head > div > :is(p, h2) {
   display: none;
 }
 
-.runtime-schedule-list {
-  max-height: none !important;
-  overflow: visible !important;
-  padding-right: 0 !important;
-}
-
-.runtime-schedule-card.selected,
-.runtime-loop-tab.selected {
-  border-width: 2px;
-  box-shadow: 0 0 0 2px rgba(89, 216, 180, .13);
-}
-
 .terminal-computer-input-button {
   border-color: #5fc7a8 !important;
   background: rgba(44, 132, 109, .22) !important;
@@ -1346,23 +1114,6 @@ html[data-theme="light"] .terminal-computer-input-button {
   font-size: 11px;
   font-weight: 850;
   letter-spacing: .05em;
-}
-
-.tmux-stats {
-  align-items: stretch;
-}
-
-.tmux-action-path {
-  grid-column: 1 / -1;
-  margin: 0 0 4px;
-  padding: 9px 12px;
-  border: 1px solid rgba(89, 216, 180, .24);
-  border-radius: 9px;
-  color: #bcebdd;
-  background: rgba(35, 91, 76, .13);
-  font-size: 12px;
-  font-weight: 800;
-  text-align: center;
 }
 
 @media (max-width: 900px) {
@@ -1433,14 +1184,12 @@ html[data-theme="light"] .terminal-computer-input-button {
 }
 
 .sidebar::-webkit-scrollbar,
-.terminal-session-list::-webkit-scrollbar,
-.runtime-schedule-list::-webkit-scrollbar {
+.terminal-session-list::-webkit-scrollbar {
   width: 10px;
 }
 
 .sidebar::-webkit-scrollbar-thumb,
-.terminal-session-list::-webkit-scrollbar-thumb,
-.runtime-schedule-list::-webkit-scrollbar-thumb {
+.terminal-session-list::-webkit-scrollbar-thumb {
   min-height: 44px;
   border: 2px solid #0a1018;
   border-radius: 999px;
@@ -1490,52 +1239,6 @@ html[data-theme="light"] .terminal-computer-input-button {
   white-space: pre-line;
   word-break: keep-all;
   line-height: 1.4;
-}
-
-.advanced-tools-list .nav-item {
-  height: auto;
-  min-height: 68px;
-  grid-template-columns: 22px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  align-items: start;
-  padding-block: 8px;
-}
-
-.advanced-tools-list .nav-item > .nav-icon {
-  grid-row: 1 / 3;
-  align-self: center;
-}
-
-.advanced-tools-list .nav-item > .nav-icon + span {
-  grid-column: 2;
-  grid-row: 1;
-  line-height: 1.35;
-}
-
-.advanced-tools-list .nav-item > b {
-  width: auto;
-  min-width: 0;
-  display: block;
-  grid-column: 2;
-  grid-row: 2;
-  justify-self: start;
-  white-space: normal;
-  word-break: keep-all;
-  line-height: 1.35;
-}
-
-.advanced-tools-list .runtime-nav-item {
-  height: auto;
-  min-height: 68px;
-}
-
-.advanced-tools-list .runtime-nav-item > b {
-  width: 100%;
-  display: block;
-  justify-self: stretch;
-  white-space: normal;
-  word-break: keep-all;
-  line-height: 1.35;
 }
 
 .top-actions {
@@ -1603,39 +1306,9 @@ html[data-theme="light"] .terminal-computer-input-button {
   min-height: 70px;
 }
 
-.runtime-schedule-list,
 .terminal-session-list {
   scrollbar-color: #496878 #0a1219;
   scrollbar-width: auto;
-}
-
-.runtime-schedule-card small,
-.runtime-schedule-card strong {
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.runtime-schedule-lane > header em {
-  font-family: var(--font-sans);
-  letter-spacing: 0;
-  word-spacing: 0;
-}
-
-.runtime-schedule-lane > header small {
-  display: block;
-  margin-top: 3px;
-  color: #9fb0bd;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-body[data-current-view="runtime"] .topbar > div:first-child {
-  min-width: 116px;
-}
-
-body[data-current-view="runtime"] .topbar h1 {
-  white-space: nowrap;
 }
 
 .terminal-target-meta {
@@ -1696,16 +1369,6 @@ html[data-theme="light"] .terminal-computer-input-button {
   background: #edf8f4;
 }
 
-.runtime-loop-phase > small {
-  word-break: keep-all;
-}
-
-.runtime-loop-lane-head > div > span {
-  letter-spacing: 0;
-  line-height: 1.4;
-  word-break: keep-all;
-}
-
 .control-room-project-toolbar {
   flex-wrap: wrap;
 }
@@ -1749,86 +1412,6 @@ body[data-current-view="terminal"] .terminal-console-tools {
 
 .terminal-slash-trigger kbd {
   display: none;
-}
-
-.tmux-section-actions {
-  grid-template-columns: minmax(96px, auto) minmax(190px, auto);
-}
-
-.tmux-section-actions button {
-  min-height: 44px;
-  white-space: nowrap;
-  word-break: keep-all;
-}
-
-.tmux-stats > div:first-child {
-  grid-column: auto;
-}
-
-.tmux-stats > div:first-child strong {
-  display: block;
-  font-size: 16px;
-  line-height: 1.45;
-  white-space: normal;
-  word-break: keep-all;
-}
-
-.tmux-distro-node > span {
-  width: 124px;
-  flex-basis: 124px;
-  min-height: 40px;
-  height: auto;
-  white-space: normal;
-  word-break: keep-all;
-}
-
-.tmux-window-node strong,
-.tmux-session-node strong,
-.tmux-pane-command,
-.tmux-pane-cwd,
-.tmux-agent-block strong,
-.tmux-agent-block em {
-  display: block;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  word-break: keep-all;
-  -webkit-line-clamp: unset;
-}
-
-body[data-current-view="tmux"] .tmux-session-tree {
-  display: block;
-}
-
-.tmux-pane-head {
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-.tmux-pane-head i {
-  margin-left: 0;
-}
-
-.tmux-pane-main {
-  padding: 11px 12px 10px;
-}
-
-.tmux-agent-block {
-  margin-top: 9px;
-  padding: 9px;
-}
-
-.tmux-agent-block em {
-  margin-top: 4px;
-}
-
-.tmux-agent-metrics,
-.tmux-context-track {
-  display: none;
-}
-
-.tmux-pane-node footer {
-  min-height: 38px;
 }
 
 @media (min-width: 1000px) {
@@ -1990,8 +1573,7 @@ body[data-current-view="tmux"] .tmux-session-tree {
 }
 
 @media (max-width: 720px) {
-  .sidebar .nav-item[data-view="waiting"],
-  .advanced-tools-list .nav-item.runtime-nav-item {
+  .sidebar .nav-item[data-view="waiting"] {
     height: 66px;
     min-height: 0;
     grid-template-columns: minmax(0, 1fr);
@@ -2001,15 +1583,13 @@ body[data-current-view="tmux"] .tmux-session-tree {
     padding: 5px 1px;
   }
 
-  .sidebar .nav-item[data-view="waiting"] > .nav-icon,
-  .advanced-tools-list .nav-item.runtime-nav-item > .nav-icon {
+  .sidebar .nav-item[data-view="waiting"] > .nav-icon {
     grid-column: 1;
     grid-row: 1;
     align-self: center;
   }
 
-  .sidebar .nav-item[data-view="waiting"] > .nav-icon + .nav-label,
-  .advanced-tools-list .nav-item.runtime-nav-item > .nav-icon + .nav-label {
+  .sidebar .nav-item[data-view="waiting"] > .nav-icon + .nav-label {
     grid-column: 1;
     grid-row: 2;
   }
@@ -2051,57 +1631,6 @@ body[data-current-view="tmux"] .tmux-session-tree {
   background: rgba(118, 139, 165, .06);
 }
 
-.runtime-schedule-card > i {
-  width: auto;
-  max-width: 112px;
-  padding: 4px 7px;
-  border-radius: 999px;
-  color: #aec5d2;
-  background: #172631;
-  font-size: 10px;
-  font-style: normal;
-  line-height: 1.3;
-  text-align: center;
-}
-
-.runtime-schedule-time {
-  padding-right: 118px;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.runtime-schedule-card.selected {
-  border-color: #69ddb8;
-  box-shadow: inset 0 0 0 1px rgba(105, 221, 184, .28);
-}
-
-.runtime-schedule-action {
-  width: max-content;
-  margin-top: 5px;
-  padding: 5px 8px;
-  border: 1px solid #68d9b5;
-  border-radius: 6px;
-  color: #8ce9cb;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.runtime-loop-phase-index em {
-  margin-left: 4px;
-}
-
-.runtime-loop-tab > span:nth-child(2) small,
-.runtime-active-phase {
-  display: grid;
-  gap: 2px;
-}
-
-.runtime-active-phase em {
-  color: #9fb1bc;
-  font-size: 10px;
-  font-style: normal;
-}
-
 .terminal-session-status[data-status="failed"] {
   max-width: 156px;
   white-space: normal;
@@ -2112,41 +1641,6 @@ body[data-current-view="tmux"] .tmux-session-tree {
 .terminal-session-tools summary span {
   white-space: normal;
   line-height: 1.35;
-}
-
-.tmux-logo {
-  height: auto;
-  min-height: 62px;
-  padding: 9px;
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: center;
-}
-
-.tmux-distro-tree {
-  border-left: 3px solid #286451;
-}
-
-.tmux-session-tree {
-  border-left: 2px solid #36576a;
-}
-
-.tmux-window-tree {
-  border-left: 2px solid #735d36;
-}
-
-.tmux-session-node strong::before,
-.tmux-window-node strong::before {
-  display: none;
-  content: "";
-}
-
-.tmux-subagents-toggle > i {
-  width: auto;
-  color: #93cbb9;
-  font-size: 11px;
-  font-style: normal;
-  white-space: nowrap;
 }
 
 .memory-record-open .session-drag-handle {
@@ -2210,16 +1704,6 @@ body[data-current-view="tmux"] .tmux-session-tree {
 }
 
 @media (min-width: 1000px) {
-  body[data-current-view="runtime"] .topbar {
-    display: block;
-  }
-
-  body[data-current-view="runtime"] .topbar .top-actions {
-    width: 100%;
-    margin-top: 12px;
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-  }
 
   body[data-current-view="active"] .topbar {
     display: grid;
@@ -2257,22 +1741,18 @@ body[data-current-view="tmux"] .tmux-session-tree {
     line-clamp: 2;
   }
 
-  body[data-current-view="all"] .topbar h1,
-  body[data-current-view="waiting"] .topbar h1,
-  body[data-current-view="runtime"] .topbar h1,
-  body[data-current-view="terminal"] .topbar h1,
-  body[data-current-view="tmux"] .topbar h1,
-  body[data-current-view="settings"] .topbar h1 {
+body[data-current-view="all"] .topbar h1,
+body[data-current-view="waiting"] .topbar h1,
+body[data-current-view="terminal"] .topbar h1,
+body[data-current-view="settings"] .topbar h1 {
     font-size: clamp(24px, 2.3vw, 38px);
     line-height: 1.1;
   }
 
-  body[data-current-view="all"] .topbar,
-  body[data-current-view="waiting"] .topbar,
-  body[data-current-view="runtime"] .topbar,
-  body[data-current-view="terminal"] .topbar,
-  body[data-current-view="tmux"] .topbar,
-  body[data-current-view="settings"] .topbar {
+body[data-current-view="all"] .topbar,
+body[data-current-view="waiting"] .topbar,
+body[data-current-view="terminal"] .topbar,
+body[data-current-view="settings"] .topbar {
     padding-top: 14px;
     padding-bottom: 14px;
   }
@@ -2394,20 +1874,6 @@ body[data-current-view="tmux"] .tmux-session-tree {
   border-radius: 10px;
 }
 
-.runtime-overview-counts {
-  max-width: 720px;
-}
-
-.runtime-overview-counts > span {
-  white-space: normal;
-  line-height: 1.55;
-  word-break: keep-all;
-}
-
-.runtime-schedule-card.selected {
-  order: -1;
-}
-
 .terminal-console-state {
   display: none;
 }
@@ -2415,35 +1881,6 @@ body[data-current-view="tmux"] .tmux-session-tree {
 .terminal-command-heading label {
   color: #effaf7;
   font-size: 14px;
-}
-
-.tmux-stats > div {
-  position: relative;
-}
-
-.tmux-stats > div + div::before {
-  position: absolute;
-  top: 50%;
-  left: -8px;
-  width: 16px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #39515f;
-  border-radius: 50%;
-  color: #8fdcc4;
-  background: #0b151b;
-  content: "›";
-  transform: translateY(-50%);
-}
-
-.tmux-distro-node {
-  border-color: #2f5a50;
-  background: rgba(16, 39, 35, .48);
-}
-
-.tmux-window-node {
-  margin-left: 24px;
 }
 
 @media (min-width: 1000px) {
@@ -2644,16 +2081,6 @@ body[data-current-view="all"] .live-section-title h2 {
   transform: rotate(90deg);
 }
 
-.runtime-loop-tabs {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-}
-
-.runtime-loop-tab :is(b, small, i),
-.runtime-schedule-card :is(strong, small, i) {
-  font-size: 14px;
-  line-height: 1.45;
-}
-
 .theme-choice button.active::after {
   display: none;
   content: "";
@@ -2672,24 +2099,6 @@ body[data-current-view="all"] .live-section-title h2 {
 .terminal-computer-input-button {
   font-size: 14px;
   font-weight: 850;
-}
-
-.tmux-map :is(small, em, .tmux-pane-node footer, .tmux-pane-head i),
-.tmux-stats span {
-  font-size: 14px;
-}
-
-.tmux-selection-badge {
-  width: fit-content;
-  padding: 3px 7px;
-  border: 1px solid #367d68;
-  border-radius: 999px;
-  color: #8ee9cc;
-  background: #102820;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 850;
-  white-space: nowrap;
 }
 
 /* Round 36: make the next action and the two terminal input modes explicit. */
@@ -2790,23 +2199,6 @@ body[data-current-view="active"] .memory-hero h2 em:empty {
   display: none;
 }
 
-.tmux-pane-main .tmux-agent-block em,
-.tmux-pane-main .tmux-agent-block strong,
-.tmux-pane-main .tmux-agent-metrics,
-.tmux-pane-main .tmux-context-track {
-  display: none;
-}
-
-.runtime-schedule-card > small {
-  white-space: pre-line;
-}
-
-.runtime-loop-tab > i {
-  line-height: 1.35;
-  text-align: center;
-  white-space: normal;
-}
-
 .provider-section-title {
   align-items: stretch;
   flex-direction: column;
@@ -2851,8 +2243,7 @@ body[data-current-view="active"] .memory-hero h2 em:empty {
   body[data-current-view="active"] .memory-metrics > span::before,
   body[data-current-view="active"] .memory-metrics > span b,
   body[data-current-view="active"] .memory-record :is(small, em),
-  .sidebar .nav-item > .nav-label,
-  .advanced-tools-list .nav-item > .nav-label {
+  .sidebar .nav-item > .nav-label {
     font-size: 14px;
     word-break: keep-all;
   }
@@ -2988,15 +2379,6 @@ body[data-current-view="settings"] .provider-visibility-option {
   border-left-color: #39765f;
 }
 
-body[data-current-view="runtime"] .topbar .subtitle {
-  display: block;
-  max-width: 680px;
-  margin-top: 5px;
-  color: #a9bac6;
-  font-size: 14px;
-  line-height: 1.45;
-}
-
 @media (max-width: 720px) {
   body[data-current-view="active"] .memory-hero > p {
     display: block;
@@ -3122,60 +2504,6 @@ body[data-current-view="all"] .home-attention-more {
   min-height: 42px;
   border-top: 1px solid rgba(118, 139, 165, .16);
   border-left: 0;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts {
-  width: min(100%, 660px);
-  max-width: none;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(100px, 1fr));
-  gap: 7px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span {
-  min-height: 52px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-content: center;
-  justify-content: start;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 10px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span b {
-  color: #edf7f6;
-  font-size: 19px;
-  line-height: 1;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span small {
-  color: #a8bac4;
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.25;
-  word-break: keep-all;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-card small {
-  white-space: normal;
-  line-height: 1.45;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-lane > header em {
-  display: none;
-}
-
-body[data-current-view="tmux"] .tmux-action-path {
-  display: none;
-}
-
-body[data-current-view="tmux"] .tmux-secondary-conversation {
-  display: none;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.has-agent .tmux-pane-cwd {
-  display: none;
 }
 
 body[data-current-view="waiting"] .attention-card:not(.approval) .attention-decision-flow,
@@ -3463,18 +2791,6 @@ html[data-theme="light"] .terminal-mode-guide > button[aria-pressed="true"] {
   display: contents;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts {
-  grid-template-columns: minmax(0, 1.7fr) minmax(180px, .8fr);
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts .runtime-count-equation small {
-  font-size: 13px;
-}
-
-body[data-current-view="runtime"] .runtime-loop-tab small span:nth-child(n + 2) {
-  display: none;
-}
-
 body[data-current-view="waiting"] .attention-inbox-head {
   padding-block: 11px;
 }
@@ -3629,145 +2945,6 @@ body[data-current-view="settings"] .update-console {
   border-left: 0;
 }
 
-body[data-current-view="tmux"] .tmux-stats {
-  display: block;
-  padding: 0;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid #324853;
-  border-radius: 12px;
-  background: #0c171e;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary span {
-  color: #e7f2f2;
-  font-size: 16px;
-  font-weight: 850;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary strong {
-  color: #b9cbd2;
-  font-size: 14px;
-}
-
-body[data-current-view="tmux"] .tmux-simple-summary small {
-  color: #7fd8b7;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-body[data-current-view="tmux"] :is(
-  .tmux-breadcrumbs,
-  .tmux-distro-line,
-  .tmux-window-node,
-  .tmux-link-line,
-  .tmux-agent-metrics,
-  .tmux-context-track
-) {
-  display: none !important;
-}
-
-body[data-current-view="tmux"] .tmux-distro-node {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: 66px;
-  cursor: default;
-}
-
-body[data-current-view="tmux"] .tmux-distro-node > span {
-  color: #e6f3f1;
-  font-size: 15px;
-}
-
-body[data-current-view="tmux"] :is(.tmux-session-stack, .tmux-window-stack, .tmux-window-tree) {
-  display: contents;
-}
-
-body[data-current-view="tmux"] .tmux-pane-stack {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  gap: 10px;
-  padding: 10px;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node {
-  min-width: 0;
-  border: 1px solid #2d4653;
-  border-radius: 12px;
-  background: #0d1820;
-}
-
-body[data-current-view="tmux"] .tmux-pane-main {
-  min-height: 160px;
-}
-
-body[data-current-view="tmux"] .tmux-pane-head b {
-  font-size: 15px;
-}
-
-body[data-current-view="tmux"] .tmux-agent-block em {
-  color: #b4c5cf;
-}
-
-body[data-current-view="tmux"] :is(.tmux-agent-block, .tmux-subagents) {
-  display: none;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-list {
-  max-height: 230px;
-  overflow-y: auto;
-}
-
-body[data-current-view="runtime"] .runtime-loop-tabs {
-  max-height: 92px;
-  display: flex;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-body[data-current-view="runtime"] .runtime-loop-tab {
-  min-width: min(360px, 82%);
-}
-
-body[data-current-view="runtime"] :is(.runtime-more-schedules, .runtime-more-loops) {
-  width: 100%;
-}
-
-body[data-current-view="runtime"] :is(.runtime-more-schedules, .runtime-more-loops) > summary {
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 8px;
-  padding: 8px 12px;
-  border: 1px solid #314653;
-  border-radius: 9px;
-  color: #b8c8d0;
-  background: #0e1920;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-  list-style: none;
-}
-
-body[data-current-view="runtime"] .runtime-more-schedules > div {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-body[data-current-view="runtime"] .runtime-more-loops > div {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  overflow-x: auto;
-}
-
 .memory-priority-action {
   width: fit-content;
   min-height: 44px;
@@ -3811,41 +2988,11 @@ html[data-theme="light"] body[data-current-view="waiting"] .conversation-compose
   background: #e8eff2;
 }
 
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-simple-summary,
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-pane-node {
-  border-color: #aabcc5;
-  background: #f2f7f8;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-pane-main {
-  color: #243147;
-  background: transparent;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-simple-summary span {
-  color: #243147;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-simple-summary strong,
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-agent-block em {
-  color: #405a67;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] .tmux-simple-summary small {
-  color: #276d56;
-}
-
 html[data-theme="light"] body[data-current-view="settings"] #installUpdateBtn,
 html[data-theme="light"] #installUpdateBtn {
   border-color: #75a08f;
   color: #245a48;
   background: #e2f0ea;
-}
-
-html[data-theme="light"] body[data-current-view="runtime"] .runtime-open-task {
-  border-color: #5f927f;
-  color: #174c3b;
-  background: #dceee7;
 }
 
 html[data-theme="light"] body[data-current-view="active"] .memory-review-action {
@@ -3856,12 +3003,6 @@ html[data-theme="light"] body[data-current-view="active"] .memory-review-action 
 
 html[data-theme="light"] body[data-current-view="active"] .memory-review-action small {
   color: #405f53;
-}
-
-html[data-theme="light"] body[data-current-view="runtime"] .runtime-other-work .runtime-loop-tab {
-  border-color: #a9bac3;
-  color: #243147;
-  background: #edf4f6;
 }
 
 html[data-theme="light"] body[data-current-view="terminal"] .terminal-slash-trigger {
@@ -4010,9 +3151,6 @@ html[data-theme="light"] body[data-current-view="terminal"] .terminal-slash-trig
     padding-bottom: 320px;
   }
 
-  body[data-current-view="tmux"] .tmux-pane-stack {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
 }
 
 /* Round 45: first-use views show one decision at a time. */
@@ -4084,54 +3222,6 @@ body[data-current-view="waiting"] .attention-card.priority-card .management-quic
   padding-top: 0;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small {
-  font-size: 0;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small::after {
-  content: "이 일정에서 실행 중인 작업";
-  font-size: 12px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-grid {
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-}
-
-body[data-current-view="runtime"] :is(
-  .runtime-schedule-lane,
-  .runtime-loop-lane-head,
-  .runtime-loop-cycle,
-  .runtime-loop-footer
-) {
-  display: none !important;
-}
-
-body[data-current-view="runtime"] .runtime-loop-detail {
-  max-width: 1040px;
-  margin-inline: auto;
-}
-
-body[data-current-view="runtime"] .runtime-loop-lane {
-  min-height: 0 !important;
-}
-
-body[data-current-view="runtime"] .runtime-open-task {
-  min-height: 46px;
-  padding-inline: 20px;
-  border-color: #4ca681;
-  color: #edfff8;
-  background: #19523b;
-  font-size: 15px;
-  font-weight: 900;
-}
-
-body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"]) #terminalSection > .terminal-layout {
-  height: auto;
-  min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-}
-
 body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"]) :is(
   #terminalResourcePanel,
   .terminal-console-head,
@@ -4158,18 +3248,6 @@ body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="tr
 }
 
 body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="true"]) .terminal-command-heading::before {
-  display: none;
-}
-
-body[data-current-view="tmux"] #tmuxControlSection {
-  display: none !important;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node.needs-review .tmux-pane-head i {
-  display: none;
-}
-
-body[data-current-view="tmux"] .tmux-section:has(.tmux-simple-summary.needs-review) .tmux-section-actions {
   display: none;
 }
 
@@ -4348,73 +3426,6 @@ body[data-current-view="waiting"] .attention-card.approval .conversation-compose
   margin-top: 12px;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > p {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: #aebfc8;
-  font-size: 12px;
-  text-align: right;
-}
-
-body[data-current-view="runtime"] :is(.runtime-schedule-lane, .runtime-loop-lane-head) {
-  display: block !important;
-}
-
-body[data-current-view="runtime"] :is(.runtime-schedule-lane, .runtime-other-work) {
-  max-width: 1040px;
-  width: 100%;
-  margin: 10px auto 0;
-  border: 1px solid #314653;
-  border-radius: 10px;
-  background: #0d1820;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-lane:not([open]) {
-  min-height: 0 !important;
-  height: 48px;
-  align-self: start;
-  overflow: hidden;
-}
-
-body[data-current-view="runtime"] :is(.runtime-schedule-lane, .runtime-other-work) > summary {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 14px;
-  color: #c7d8de;
-  font-size: 14px;
-  font-weight: 850;
-  cursor: pointer;
-  list-style: none;
-}
-
-body[data-current-view="runtime"] .runtime-schedule-list,
-body[data-current-view="runtime"] .runtime-other-work .runtime-loop-tabs {
-  max-height: 360px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 0 10px 10px;
-  overflow-y: auto;
-}
-
-body[data-current-view="runtime"] .runtime-open-action {
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-}
-
-body[data-current-view="runtime"] .runtime-open-action small {
-  color: #b2c5cc;
-  font-size: 11px;
-}
-
 .terminal-answer-destination {
   display: none;
 }
@@ -4448,14 +3459,6 @@ body[data-current-view="terminal"]:has(#terminalModeQuestionBtn[aria-pressed="tr
   .terminal-command-footer
 ) {
   font-size: 14px;
-}
-
-body[data-current-view="tmux"] #tmuxControlSection.is-open {
-  display: block !important;
-}
-
-body[data-current-view="tmux"] .tmux-pane-node:not(.needs-review) .tmux-pane-cwd {
-  display: none;
 }
 
 body[data-current-view="settings"] .update-impact-note {
@@ -4507,11 +3510,6 @@ html[data-theme="light"] body[data-current-view="terminal"]:has(#terminalModeQue
 }
 
 /* Round 47 final cascade. */
-body[data-current-view="terminal"]:has(#terminalModeComputerBtn[aria-pressed="true"]) #terminalSection > .terminal-layout {
-  height: clamp(560px, calc(100vh - 330px), 720px);
-  min-height: 560px;
-}
-
 .control-project-heading b em {
   color: #718791;
   font-style: normal;
@@ -4563,36 +3561,6 @@ body[data-current-view="active"] .memory-record-open {
   background: #0d1820;
   font-size: 12px;
   font-weight: 800;
-}
-
-body[data-current-view="runtime"] .runtime-open-action small {
-  max-width: 250px;
-  color: #c9dadf;
-  font-size: 13px;
-  line-height: 1.45;
-  text-align: right;
-}
-
-body[data-current-view="tmux"] .tmux-section:has(.tmux-simple-summary.needs-review) .tmux-section-actions {
-  display: flex !important;
-}
-
-body[data-current-view="tmux"] .tmux-section:has(.tmux-simple-summary.needs-review) #newTmuxSessionBtn {
-  display: inline-flex !important;
-}
-
-body[data-current-view="tmux"] #refreshTmuxTerminalBtn {
-  min-height: 42px;
-  border-color: #4a806c;
-  color: #d9f1e8;
-  background: #143326;
-  font-weight: 850;
-}
-
-html[data-theme="light"] body[data-current-view="tmux"] #refreshTmuxTerminalBtn {
-  border-color: #86aa9d;
-  color: #245a48;
-  background: #e2f0ea;
 }
 
 body[data-current-view="settings"] .provider-visibility-option {
@@ -4718,11 +3686,6 @@ body[data-current-view="active"] .memory-review-proof-proxy {
   display: none !important;
 }
 
-body[data-current-view="runtime"] .runtime-overview-counts > span {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 5px;
-}
-
 body[data-current-view="waiting"] .attention-card.approval .management-quick-actions {
   grid-template-columns: repeat(2, minmax(240px, 1fr));
   justify-content: stretch;
@@ -4743,25 +3706,6 @@ body[data-current-view="waiting"] .approval-action-effect {
 
 body[data-current-view="waiting"] .approval-action-effect b {
   color: #80e3bf;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small {
-  font-size: 13px;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > span:nth-child(2) small::after {
-  content: none;
-}
-
-body[data-current-view="runtime"] .runtime-overview-counts > p {
-  padding: 10px 12px;
-  border: 1px solid #3a584d;
-  border-radius: 8px;
-  color: #d1e3dd;
-  background: #10241d;
-  font-size: 14px;
-  line-height: 1.5;
-  text-align: left;
 }
 
 body[data-current-view="settings"] .update-impact-note {
@@ -4889,16 +3833,6 @@ body[data-current-view="settings"] .update-impact-note {
   }
 }
 
-body[data-current-view="runtime"] .runtime-schedule-lane:not([open]) {
-  height: 56px;
-  overflow: visible;
-}
-
-body[data-current-view="runtime"] :is(.runtime-schedule-lane, .runtime-other-work) > summary {
-  min-height: 56px;
-  line-height: 1.35;
-}
-
 body[data-current-view="settings"] .update-compact-version {
   margin: 0;
   padding: 11px 14px;
@@ -4923,22 +3857,12 @@ body[data-current-view="settings"] .update-impact-note {
     display: none !important;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar {
     overflow-x: hidden !important;
     overflow-y: auto !important;
   }
 
-  body:is(
-    [data-current-view="runtime"],
-    [data-current-view="terminal"],
-    [data-current-view="tmux"],
-    [data-current-view="settings"]
-  ) .sidebar > :is(.sidebar-section, .sidebar-credo, .sidebar-footer) {
+body:is([data-current-view="terminal"], [data-current-view="settings"]) .sidebar > :is(.sidebar-section, .sidebar-credo, .sidebar-footer) {
     display: none;
   }
 }

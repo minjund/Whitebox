@@ -13,6 +13,7 @@ function registerTerminalAgentActionTests(context) {
     const sandbox = { window: { WhiteboxI18n: { t: key => key } } };
     vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
     const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [] },
       providerLabel: provider => provider,
     });
@@ -66,6 +67,7 @@ function registerTerminalAgentActionTests(context) {
     };
     vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
     const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [] },
       init: async () => {},
       refreshSessions: async () => {},
@@ -94,10 +96,8 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(commands[0][0], 'terminal:grok');
     assert.equal(commands[0][1], 'PTY로 한 번 보내기');
     assert.match(commands[0][2].deliveryId, /^start:/);
-    assert.deepStrictEqual(selections, [
-      ['mode', 'general'], ['session', 'terminal:codex', 'question'],
-      ['mode', 'general'], ['session', 'terminal:grok', 'question'],
-    ]);
+    assert.deepStrictEqual(selections, [],
+      '삭제된 범용 터미널 UI를 새 PTY 생성 경로가 선택하려 하면 안 됩니다.');
   });
 
   test('Grok 새 작업은 command 응답 연결이 끊겨도 같은 delivery ID로 한 번만 안전 재시도한다', async () => {
@@ -143,6 +143,7 @@ function registerTerminalAgentActionTests(context) {
     };
     vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
     const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [] },
       init: async () => {},
       refreshSessions: async () => {},
@@ -192,6 +193,7 @@ function registerTerminalAgentActionTests(context) {
     };
     vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
     const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [] },
       init: async () => {},
       refreshSessions: async () => { refreshes += 1; },
@@ -222,9 +224,9 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(deliveryIds[1], deliveryIds[0]);
     assert.equal(deliveryUnknown.deliveryState, 'unknown');
     assert.equal(refreshes, 1, '전달 응답이 불명확해도 새 PTY 목록을 먼저 갱신해야 합니다.');
-    assert.deepStrictEqual(moves, ['general']);
-    assert.deepStrictEqual(selections, [['terminal:grok-unknown', 'question']],
-      '실제 AI 출력이 있을 수 있는 새 PTY를 오류 반환 전에 선택해야 합니다.');
+    assert.deepStrictEqual(moves, []);
+    assert.deepStrictEqual(selections, [],
+      '삭제된 범용 터미널 UI로 이동하지 않고 호출자가 PTY 집중 모드를 검증해야 합니다.');
 
     const lostCreateOptions = [];
     sandbox.window.whitebox.terminalCreate = async options => {
@@ -299,6 +301,7 @@ function registerTerminalAgentActionTests(context) {
     };
     vm.runInNewContext(source, selectionSandbox, { filename: 'terminal-agent.js' });
     const selectionActions = selectionSandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [], mode: 'old' },
       init: async () => {},
       refreshSessions: async () => { throw new Error('refresh failed'); },
@@ -307,20 +310,13 @@ function registerTerminalAgentActionTests(context) {
       preferredWorkspace: () => 'D:\\workspace',
       providerLabel: provider => provider,
     });
-    await assert.rejects(
-      selectionActions.startAgent({
-        provider: 'codex', prompt: '과거 PTY 대신 이 PTY를 열어줘', cwd: 'D:\\workspace',
-        creationId: 'create:selection-failed',
-      }),
-      error => error.code === 'TERMINAL_START_SELECTION_FAILED'
-        && error.creationState === 'accepted'
-        && error.deliveryState === 'accepted'
-        && error.terminalId === 'terminal:new-but-not-selected'
-        && error.retryable === true,
-    );
-    assert.deepStrictEqual(selectionReports, [
-      'terminal-agent-start-refresh', 'terminal-agent-start-selection',
-    ]);
+    const selectionResult = await selectionActions.startAgent({
+      provider: 'codex', prompt: '과거 PTY 대신 이 PTY를 열어줘', cwd: 'D:\\workspace',
+      creationId: 'create:selection-failed',
+    });
+    assert.equal(selectionResult.terminalId, 'terminal:new-but-not-selected');
+    assert.deepStrictEqual(selectionReports, ['terminal-agent-start-refresh'],
+      '삭제된 범용 터미널 선택기는 호출되지 않아야 합니다.');
 
     const failedSelectionIds = [];
     let failedSelectionShouldThrow = false;
@@ -342,6 +338,7 @@ function registerTerminalAgentActionTests(context) {
     };
     vm.runInNewContext(source, failedSandbox, { filename: 'terminal-agent.js' });
     const failedActions = failedSandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
       state: { snapshot: null, sessions: [] },
       init: async () => {},
       refreshSessions: async () => {},
@@ -364,8 +361,8 @@ function registerTerminalAgentActionTests(context) {
         && error.deliveryState === 'rejected'
         && error.terminalId === 'terminal:failed-start',
     );
-    assert.deepStrictEqual(failedSelectionIds, ['terminal:failed-start'],
-      '실패 기록은 보이게 선택하되 작업 시작 성공으로 반환하면 안 됩니다.');
+    assert.deepStrictEqual(failedSelectionIds, [],
+      '실패 기록도 삭제된 범용 터미널 UI에 선택하지 않아야 합니다.');
 
     failedSandbox.window.whitebox.terminalCreate = async () => ({
       id: 'terminal:termination-uncertain',
@@ -389,9 +386,8 @@ function registerTerminalAgentActionTests(context) {
         && error.retryable === true
         && error.terminalId === 'terminal:termination-uncertain',
     );
-    assert.deepStrictEqual(failedSelectionIds, [
-      'terminal:failed-start', 'terminal:termination-uncertain',
-    ], '종료 불확실 기록도 사용자에게 보이게 선택하되 시작 성공으로 반환하면 안 됩니다.');
+    assert.deepStrictEqual(failedSelectionIds, [],
+      '종료 불확실 기록도 삭제된 범용 터미널 UI에 선택하지 않아야 합니다.');
 
     failedSandbox.window.whitebox.terminalCreate = async () => ({
       id: 'terminal:failed-and-unselectable',
@@ -412,9 +408,11 @@ function registerTerminalAgentActionTests(context) {
         && error.creationState === 'failed'
         && error.deliveryState === 'rejected'
         && error.creationFailed === true
-        && error.terminalSelected === false
-        && error.selectionError?.code === 'TERMINAL_START_SELECTION_FAILED',
+        && error.terminalSelected === true
+        && !error.selectionError,
     );
+    assert.deepStrictEqual(failedSelectionIds, [],
+      '존재하지 않는 legacy 선택기의 실패가 실제 생성 실패를 덮어쓰면 안 됩니다.');
     failedSelectionShouldThrow = false;
 
     const runModalSource = fs.readFileSync(path.join(root, 'renderer', 'app-run-modal.js'), 'utf8');
@@ -484,6 +482,7 @@ function registerTerminalAgentActionTests(context) {
       };
     };
     const selectedViews = [];
+    const focusedTerminals = [];
     const makeModalApp = () => {
       const elements = {
         '#runPrompt': makeElement(),
@@ -532,6 +531,10 @@ function registerTerminalAgentActionTests(context) {
         providerInfo: () => ({ label: 'Grok' }), providerStyle: () => '',
         visibleProviders: () => state.providers, isProviderVisible: () => true,
         selectView: view => { selectedViews.push(view); },
+        openPtyFocusForTerminal: (terminalId, options) => {
+          focusedTerminals.push({ terminalId, creationId: options.creationId, focus: options.focus });
+          return true;
+        },
       };
       Object.assign(app, modalSandbox.window.WhiteboxAppFactories.createRunModal(app));
       Object.assign(app, modalSandbox.window.WhiteboxAppFactories.createQualityEnhancements(app));
@@ -631,7 +634,12 @@ function registerTerminalAgentActionTests(context) {
       '종료 확인 전까지 이 긴 초안과 생성 ID를 모두 보존');
     assert.equal(reloadedPage.elements['#runModal'].classList.contains('hidden'), true,
       '전달 결과가 불명확해도 선택된 실제 PTY가 모달 뒤에 가려지면 안 됩니다.');
-    assert.equal(selectedViews.at(-1), 'terminal');
+    assert.equal(selectedViews.at(-1), 'all');
+    assert.deepStrictEqual(focusedTerminals.at(-1), {
+      terminalId: 'terminal:termination-uncertain',
+      creationId: uncertainCreationId,
+      focus: true,
+    }, '전달 결과가 불명확해도 정확한 terminalId/creationId의 PTY 집중 모드를 열어야 합니다.');
     await reloadedPage.app.handleRun({ preventDefault: () => {} });
     assert.equal(submitIds.at(-1), uncertainCreationId,
       '종료 불확실 상태의 명시적 재시도는 병렬 PTY를 만들지 않도록 같은 creationId를 사용해야 합니다.');
@@ -3512,91 +3520,6 @@ function registerTerminalAgentActionTests(context) {
     assert.deepStrictEqual(tmuxKeys, []);
   });
 
-  test('실제 PTY 대화 composer는 pending 기록 없이도 Ctrl+C 중단을 한 번만 보내고 연결 끊김에는 비활성화한다', async () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
-    const session = { id: 'codex:bound-interrupt', provider: 'codex', externalId: 'bound-interrupt', cwd: root };
-    const target = {
-      id: 'terminal:bound-interrupt',
-      kind: 'terminal',
-      terminalId: 'terminal:bound-interrupt',
-      label: 'Codex PTY',
-    };
-    const state = {
-      snapshot: { sessions: [session] },
-      details: new Map(),
-      selectedId: session.id,
-      agentCommandTargets: new Map(),
-      agentCommandDrafts: new Map([[session.id, '작성 중인 질문']]),
-      agentCommandSending: new Set(),
-      pendingConversationMessages: new Map(),
-      conversationInterruptRequests: new Set(),
-    };
-    const interrupted = [];
-    let releaseInterrupt;
-    const pendingInterrupt = new Promise(resolve => { releaseInterrupt = resolve; });
-    const sandbox = {
-      clearTimeout,
-      window: {
-        WhiteboxAppFactories: {},
-        WhiteboxI18n: {
-          t: key => key === 'agent.terminal_interrupt' ? '응답 중단(Ctrl+C)' : key,
-          errorText: (_error, key) => key,
-        },
-        WhiteboxRendererUtils: { reportRecoverableError: () => {} },
-        WhiteboxTerminal: {
-          agentTargets: () => [target],
-          resumeSupport: () => ({ supported: false }),
-          interruptAgent: async (value, targetId) => {
-            interrupted.push([value, targetId]);
-            await pendingInterrupt;
-          },
-        },
-      },
-    };
-    vm.runInNewContext(source, sandbox, { filename: 'app-agent-actions.js' });
-    const actions = sandbox.window.WhiteboxAppFactories.createAgentActions({
-      $: () => null,
-      esc: value => String(value),
-      state,
-      isLiveSession: () => true,
-      providerInfo: () => ({ label: 'Codex' }),
-      conversationMessageKey: value => String(value?.id || ''),
-      toast: () => {},
-      render: () => {},
-      renderDrawer: () => {},
-    });
-
-    const connectedHtml = actions.agentCommandComposer(session, {
-      conversation: true,
-      terminal: true,
-      connectionReady: true,
-    });
-    assert.match(connectedHtml, /data-terminal-interrupt="codex:bound-interrupt"/u);
-    assert.match(connectedHtml, /응답 중단\(Ctrl\+C\)/u);
-    assert.equal(connectedHtml.includes('data-conversation-slash-menu'), false);
-    assert.equal(connectedHtml.includes('aria-haspopup="listbox"'), false);
-    const connectedButton = connectedHtml.match(/<button class="conversation-interrupt terminal-interrupt"[\s\S]*?<\/button>/u)?.[0] || '';
-    assert.equal(/\sdisabled(?:\s|>)/u.test(connectedButton), false);
-
-    const disconnectedHtml = actions.agentCommandComposer(session, {
-      conversation: true,
-      terminal: true,
-      connectionReady: false,
-    });
-    const disconnectedButton = disconnectedHtml.match(/<button class="conversation-interrupt terminal-interrupt"[\s\S]*?<\/button>/u)?.[0] || '';
-    assert.match(disconnectedButton, /\sdisabled(?:\s|>)/u);
-
-    const first = actions.interruptAgentTerminal(session.id);
-    const second = actions.interruptAgentTerminal(session.id);
-    await Promise.resolve();
-    assert.equal(interrupted.length, 1, '빠른 더블클릭도 terminal interrupt를 한 번만 보내야 합니다.');
-    assert.equal(interrupted[0][0].id, session.id);
-    assert.equal(interrupted[0][1], 'terminal:bound-interrupt');
-    assert.equal(state.agentCommandDrafts.get(session.id), '작성 중인 질문', 'Ctrl+C 중단은 draft를 변경하면 안 됩니다.');
-    releaseInterrupt();
-    await Promise.all([first, second]);
-  });
-
   function createQuickResponseHarness() {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
     const sessionA = { id: 'codex:quick-a', provider: 'codex', externalId: 'quick-a', cwd: root };
@@ -3811,45 +3734,18 @@ function registerTerminalAgentActionTests(context) {
     };
   }
 
-  test('빠른 응답은 drawer PTY 비동기 렌더 뒤 signed direct target에 정확히 한 번 제출한다', () => {
+  test('준비되지 않은 빠른 응답은 대화창 대신 담당 PTY 집중 모드를 연다', () => {
     const harness = createQuickResponseHarness();
-    const target = {
-      id: 'terminal:quick-a',
-      terminalId: 'terminal:quick-a',
-      kind: 'terminal',
-      label: 'Codex PTY',
-    };
-    // The drawer's listener is registered before the per-click waiter. Its
-    // animation frame therefore renders the connected composer first.
-    harness.window.addEventListener('whitebox:drawer-terminal-targets-changed', event => {
-      if (event.detail?.sessionId !== harness.sessionA.id) return;
-      harness.requestFrame(() => {
-        harness.targets.set(harness.sessionA.id, [target]);
-        harness.connectForm(harness.sessionA.id, target.terminalId);
-      });
-    });
-
     harness.actions.quickRespond(harness.sessionA.id, '승인하고 계속해 주세요.', harness.noFormRoot);
-    harness.actions.quickRespond(harness.sessionA.id, '중복 클릭은 보내지 마세요.', harness.noFormRoot);
     harness.flushFrames();
-    assert.equal(harness.submissions.length, 0, 'PTY가 연결되기 전에는 제출하면 안 됩니다.');
+
     assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
-
-    harness.dispatchTerminalChange(harness.sessionA.id);
-    harness.flushFrames();
-    harness.dispatchTerminalChange(harness.sessionA.id);
-    harness.flushFrames();
-
-    assert.deepStrictEqual(harness.submissions, [{
-      sessionId: harness.sessionA.id,
-      terminalId: target.terminalId,
-      command: '승인하고 계속해 주세요.',
-    }]);
+    assert.deepStrictEqual(harness.submissions, [], '준비되지 않은 form에 자동 입력을 제출하면 안 됩니다.');
     assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '승인하고 계속해 주세요.');
     assert.deepStrictEqual(harness.errors, []);
   });
 
-  test('빠른 응답은 이전 embedded PTY 정리로 drawer 소유권 전환이 늦어져도 한 번 제출한다', () => {
+  test('PTY 집중 모드 요청 뒤 늦은 UI 상태는 빠른 응답을 자동 제출하지 않는다', () => {
     const harness = createQuickResponseHarness();
     const target = {
       id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
@@ -3858,7 +3754,7 @@ function registerTerminalAgentActionTests(context) {
 
     harness.actions.quickRespond(harness.sessionA.id, 'drawer 전환 뒤 한 번만 전달', harness.noFormRoot);
     harness.flushFrames();
-    assert.deepStrictEqual(harness.submissions, [], '자기 drawer를 소유하기 전에는 제출하면 안 됩니다.');
+    assert.deepStrictEqual(harness.submissions, [], '담당 PTY 집중 모드가 열리기 전에는 제출하면 안 됩니다.');
     assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
 
     harness.setDeferDrawerOwnership(false);
@@ -3867,22 +3763,19 @@ function registerTerminalAgentActionTests(context) {
     harness.connectForm(harness.sessionA.id, target.terminalId);
     harness.flushFrames();
 
-    assert.deepStrictEqual(harness.submissions, [{
-      sessionId: harness.sessionA.id,
-      terminalId: target.terminalId,
-      command: 'drawer 전환 뒤 한 번만 전달',
-    }]);
+    assert.deepStrictEqual(harness.submissions, [],
+      '삭제된 drawer 이벤트를 따라 늦게 명령을 자동 제출하면 안 됩니다. 사용자가 PTY에서 확인해야 합니다.');
+    assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), 'drawer 전환 뒤 한 번만 전달');
     assert.deepStrictEqual(harness.errors, []);
   });
 
-  test('빠른 응답은 마지막 ready 이벤트 뒤 signed target 상태가 늦게 반영되어도 bounded retry로 한 번만 제출한다', () => {
+  test('늦게 생긴 signed target에도 삭제된 대화창 응답을 자동 재시도하지 않는다', () => {
     const harness = createQuickResponseHarness();
     const target = {
       id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
     };
 
     harness.actions.quickRespond(harness.sessionA.id, '늦은 target에도 한 번만 전달', harness.noFormRoot);
-    harness.actions.quickRespond(harness.sessionA.id, '두 번째 클릭은 무시', harness.noFormRoot);
     harness.flushFrames();
 
     harness.connectForm(harness.sessionA.id, target.terminalId);
@@ -3890,23 +3783,17 @@ function registerTerminalAgentActionTests(context) {
     harness.flushFrames();
     assert.deepStrictEqual(harness.submissions, [], 'signed target이 보이기 전에는 제출하면 안 됩니다.');
 
-    // Reproduce the production race: the final DOM/PTY notification already
-    // ran, then the in-memory signed target becomes visible without a new event.
     harness.targets.set(harness.sessionA.id, [target]);
-    harness.runRetryTimer();
-    harness.flushFrames();
     harness.dispatchTerminalChange(harness.sessionA.id);
     harness.flushFrames();
 
-    assert.deepStrictEqual(harness.submissions, [{
-      sessionId: harness.sessionA.id,
-      terminalId: target.terminalId,
-      command: '늦은 target에도 한 번만 전달',
-    }]);
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
+    assert.deepStrictEqual(harness.submissions, [],
+      'PTY focus 요청 이후 target이 생겨도 과거 대화창 draft를 자동 전송하면 안 됩니다.');
     assert.deepStrictEqual(harness.errors, []);
   });
 
-  test('PTY 전용 drawer는 중복 composer 없이 확인함의 원래 form으로 빠른 응답을 한 번 제출한다', () => {
+  test('확인함의 미준비 form은 응답을 보내지 않고 담당 PTY 집중 모드로 전환한다', () => {
     const harness = createQuickResponseHarness();
     const target = {
       id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
@@ -3923,29 +3810,7 @@ function registerTerminalAgentActionTests(context) {
     harness.flushFrames();
     assert.deepStrictEqual(harness.opened, [harness.sessionA.id]);
     assert.deepStrictEqual(harness.submissions, []);
-
-    harness.targets.set(harness.sessionA.id, [target]);
-    form.dataset.agentTerminalReady = 'true';
-    form.dataset.agentSendAvailable = 'true';
-    harness.setEmbedded({ connected: true, agentSessionId: harness.sessionA.id, terminalId: 'terminal:wrong' });
-    harness.drawerRoot.dataset.conversationSurface = 'pty';
-    harness.notifyMutation();
-    harness.dispatchTerminalChange(harness.sessionA.id);
-    harness.flushFrames();
-    assert.deepStrictEqual(harness.submissions, [], '다른 embedded PTY에는 원래 확인함 form을 제출하면 안 됩니다.');
-
-    harness.setEmbedded({ connected: true, agentSessionId: harness.sessionA.id, terminalId: target.terminalId });
-    harness.notifyMutation();
-    harness.dispatchTerminalChange(harness.sessionA.id);
-    harness.flushFrames();
-    harness.dispatchTerminalChange(harness.sessionA.id);
-    harness.flushFrames();
-
-    assert.deepStrictEqual(harness.submissions, [{
-      sessionId: harness.sessionA.id,
-      terminalId: target.terminalId,
-      command: '원래 확인함에서 한 번만 전달',
-    }]);
+    assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '원래 확인함에서 한 번만 전달');
     assert.deepStrictEqual(harness.errors, []);
   });
 
@@ -3970,10 +3835,11 @@ function registerTerminalAgentActionTests(context) {
       terminalId: target.terminalId,
       command: '승인하고 바로 계속',
     }]);
-    assert.deepStrictEqual(harness.opened, [], 'transport-ready form은 drawer fallback을 열면 안 됩니다.');
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id],
+      '전송 직후에도 사용자가 같은 담당 PTY 집중 모드에서 결과를 계속 봐야 합니다.');
   });
 
-  test('preserved disabled form의 빠른 응답은 PTY ready까지 기다린 뒤 한 번만 제출한다', () => {
+  test('disabled form에서 PTY가 늦게 준비돼도 빠른 응답을 자동 제출하지 않는다', () => {
     const harness = createQuickResponseHarness();
     const target = {
       id: 'terminal:quick-a', terminalId: 'terminal:quick-a', kind: 'terminal', label: 'Codex PTY',
@@ -3990,7 +3856,7 @@ function registerTerminalAgentActionTests(context) {
     harness.actions.quickRespond(harness.sessionA.id, '연결되면 한 번만 전달', harness.drawerRoot);
     harness.flushFrames();
     assert.equal(harness.submissions.length, 0);
-    assert.deepStrictEqual(harness.opened, [harness.sessionA.id], '미준비 form도 drawer PTY 대기 경로를 써야 합니다.');
+    assert.deepStrictEqual(harness.opened, [harness.sessionA.id], '미준비 form은 담당 PTY 집중 모드로 이동해야 합니다.');
 
     form.dataset.agentTerminalReady = 'true';
     form.dataset.agentSendAvailable = 'true';
@@ -4003,11 +3869,9 @@ function registerTerminalAgentActionTests(context) {
     harness.dispatchTerminalChange(harness.sessionA.id);
     harness.flushFrames();
 
-    assert.deepStrictEqual(harness.submissions, [{
-      sessionId: harness.sessionA.id,
-      terminalId: target.terminalId,
-      command: '연결되면 한 번만 전달',
-    }]);
+    assert.deepStrictEqual(harness.submissions, [],
+      'PTY가 뒤늦게 준비돼도 삭제된 대화창의 응답을 자동 제출하면 안 됩니다.');
+    assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '연결되면 한 번만 전달');
   });
 
   test('다른 세션의 present form은 직접 제출하지 않고 현재 대화 PTY로 다시 검증한다', () => {
@@ -4045,7 +3909,7 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), 'A 대화에만 전달');
   });
 
-  test('빠른 응답은 embedded PTY와 일치하는 signed target이 생길 때까지 제출하지 않는다', () => {
+  test('PTY focus 전환 뒤 signed target 변화는 과거 빠른 응답을 되살리지 않는다', () => {
     const harness = createQuickResponseHarness();
     harness.actions.quickRespond(harness.sessionA.id, '정확한 PTY에만 전달', harness.noFormRoot);
     harness.flushFrames();
@@ -4069,8 +3933,9 @@ function registerTerminalAgentActionTests(context) {
     harness.notifyMutation();
     harness.dispatchTerminalChange(harness.sessionA.id);
     harness.flushFrames();
-    assert.equal(harness.submissions.length, 1);
-    assert.equal(harness.submissions[0].command, '정확한 PTY에만 전달');
+    assert.deepStrictEqual(harness.submissions, [],
+      'PTY focus로 전환된 뒤에는 target이 일치해져도 삭제된 대화창 draft를 자동 제출하면 안 됩니다.');
+    assert.equal(harness.state.agentCommandDrafts.get(harness.sessionA.id), '정확한 PTY에만 전달');
   });
 }
 

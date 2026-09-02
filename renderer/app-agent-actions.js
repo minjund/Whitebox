@@ -3,9 +3,6 @@
 window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createAgentActions = function createAgentActions(context = {}) {
-  const QUICK_RESPONSE_DRAWER_TIMEOUT_MS = 30_000;
-  const QUICK_RESPONSE_RETRY_INTERVAL_MS = 50;
-  const QUICK_RESPONSE_MAX_RETRIES = QUICK_RESPONSE_DRAWER_TIMEOUT_MS / QUICK_RESPONSE_RETRY_INTERVAL_MS;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const errorText = (error, key, params) => window.WhiteboxI18n.errorText(error, key, params);
   const {
@@ -20,7 +17,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     controlRoomRootSessions = () => [],
     controlRoomProject = session => ({ path: session?.cwd || session?.workspace || "" }),
   } = context;
-  const pendingQuickResponses = new Map();
   let projectPreconnectGeneration = 0;
 
   const normalizedProjectPath = value => String(value || "")
@@ -257,7 +253,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       .filter(item => item?.status !== "interrupted");
     pending.push(entry);
     state.pendingConversationMessages.set(session.id, pending);
-    state.drawerForceLatest = true;
     context.renderDrawer?.();
     return entry;
   }
@@ -275,7 +270,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         entry.confirmationTimer = 0;
         const pending = state.pendingConversationMessages.get(sessionId) || [];
         if (!pending.includes(entry) || entry.status !== "awaiting") return;
-        state.drawerForceLatest = true;
         context.render?.();
         context.renderDrawer?.();
       }, delay + 40);
@@ -291,7 +285,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       clearTimeout(entry.confirmationTimer);
       entry.confirmationTimer = 0;
     }
-    state.drawerForceLatest = true;
     context.renderDrawer?.();
   }
 
@@ -336,14 +329,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
           available: true,
         };
     const { route, targetSession, targets: routeTargets, available: routeAvailable } = routeContext;
-    // Raw xterm input must never keep a tmux target selected while the drawer
-    // is showing a different attached PTY. Transcript mode may still use all
-    // safe conversation transports.
-    const targets = options.terminal
-      ? routeTargets.filter(target => target.kind === "terminal")
-      : routeTargets;
+    const targets = routeTargets;
     const mode = routingEnabled && !routeAvailable ? "ended" : agentControlMode(targetSession, targets);
-    const inputMode = options.terminal ? "terminal" : options.conversation ? "conversation" : "terminal";
+    const inputMode = options.conversation ? "conversation" : "terminal";
     const relayed = routingEnabled && route === "parent" && routeAvailable;
     const targetKey = agentCommandTargetKey(session, route);
     const savedTarget = state.agentCommandTargets.get(targetKey) || "";
@@ -400,12 +388,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
                 ? t("agent.connect_help", { provider: targetSession.provider })
                 : agentResumeSupport(targetSession).reason || t("agent.resume_method_unknown");
     const help = options.conversation
-      ? inputMode === "terminal"
-        ? t("agent.terminal_input_help", { target: target?.label || providerInfo(targetSession.provider).label })
-        : t("agent.ai_input_help", { provider: providerInfo(session.provider).label })
+      ? t("agent.ai_input_help", { provider: providerInfo(session.provider).label })
       : controlHelp;
     const picker =
-      targets.length > 1 && !relayed && (!options.conversation || inputMode === "terminal")
+      targets.length > 1 && !relayed && !options.conversation
         ? `<label class="agent-command-target">
       <span>${esc(t("agent.target_terminal"))}</span>
       <select data-agent-command-target="${esc(targetKey)}">
@@ -450,32 +436,20 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         : "agent.command_example")
       : status;
     const availabilityClass = mode === "direct" ? "connected" : ["resume", "handoff", "origin-resume"].includes(mode) ? "resume-ready" : "unavailable";
-    const terminalInterruptible = inputMode === "terminal"
-      && terminalReady
-      && mode === "direct"
-      && target?.kind === "terminal";
     const interruptLabel = t(interrupting
       ? "agent.stopping_response"
-      : terminalInterruptible ? "agent.terminal_interrupt" : "agent.stop_response");
-    const interruptAction = options.conversation && inputMode === "conversation"
+      : "agent.stop_response");
+    const interruptAction = options.conversation
       ? `<button class="conversation-interrupt" type="button" data-conversation-interrupt="${esc(session.id)}"
           ${canInterrupt && !interrupting ? "" : "disabled"} ${canInterrupt || interrupting ? "" : 'hidden'}
           ${interrupting ? 'aria-busy="true"' : ""} aria-label="${esc(interruptLabel)}" title="${esc(interruptLabel)}">
           <span class="conversation-interrupt-icon" aria-hidden="true">${interrupting ? "…" : ""}</span>
           <span class="conversation-interrupt-label">${esc(t(interrupting ? "agent.stopping_short" : "agent.stop_short"))}</span></button>`
-      : options.conversation && inputMode === "terminal"
-        ? `<button class="conversation-interrupt terminal-interrupt" type="button" data-terminal-interrupt="${esc(session.id)}"
-            ${terminalInterruptible && !interrupting ? "" : "disabled"}
-            ${interrupting ? 'aria-busy="true"' : ""} aria-label="${esc(interruptLabel)}" title="${esc(interruptLabel)}">
-            <span class="conversation-interrupt-icon" aria-hidden="true">${interrupting ? "…" : ""}</span>
-            <span class="conversation-interrupt-label">${esc(t(interrupting ? "agent.stopping_short" : "agent.terminal_interrupt"))}</span></button>`
-        : "";
+      : "";
     const safeSessionId = String(session.id || "").replace(/[^a-z0-9_-]/gi, "-");
     if (options.conversation) {
       const slashMenuId = `conversation-slash-menu-${safeSessionId}`;
-      const slashMenu = options.terminal
-        ? ""
-        : `<div class="conversation-slash-menu hidden" id="${esc(slashMenuId)}" data-conversation-slash-menu role="listbox"
+      const slashMenu = `<div class="conversation-slash-menu hidden" id="${esc(slashMenuId)}" data-conversation-slash-menu role="listbox"
             aria-label="${esc(t("terminal.slash.title", { provider: providerInfo(session.provider).label }))}">
             <header>
               <b data-conversation-slash-title></b>
@@ -483,9 +457,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
             </header>
             <div class="conversation-slash-menu-list" data-conversation-slash-list></div>
           </div>`;
-      const slashAttributes = options.terminal
-        ? ""
-        : ` aria-controls="${esc(slashMenuId)}" aria-expanded="false" aria-autocomplete="list" aria-haspopup="listbox"`;
+      const slashAttributes = ` aria-controls="${esc(slashMenuId)}" aria-expanded="false" aria-autocomplete="list" aria-haspopup="listbox"`;
       const conversationActions = submitActionLabel
         ? `<button class="conversation-send" type="submit" ${canSend ? "" : "disabled"}
             ${sending ? 'aria-busy="true"' : ""} aria-label="${esc(submitActionLabel)}" title="${esc(submitActionLabel)}">
@@ -497,19 +469,17 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         : actions;
       const showDraftCount = draft.length >= 7200;
       return `<div class="conversation-composer-shell mode-conversation">
-        <form class="agent-command-panel ${availabilityClass} control-${mode} conversation-composer ${options.terminal || options.terminalStyle ? "terminal-conversation" : ""}"
+        <form class="agent-command-panel ${availabilityClass} control-${mode} conversation-composer"
           data-agent-command-form="${esc(session.id)}" data-agent-command-route-selected="${esc(route)}"
           data-agent-command-input-mode-selected="${esc(inputMode)}" data-agent-command-routing="conversation"
           data-agent-command-provider="${esc(session.provider)}" data-agent-terminal-ready="${terminalReady ? "true" : "false"}"
           data-agent-send-available="${sendAvailable ? "true" : "false"}">
           ${slashMenu}
-          ${options.terminal ? picker : ""}
           <label class="agent-command-input">
             <span class="sr-only">${esc(t("agent.command_sr"))}</span>
             <textarea data-agent-command-draft="${esc(session.id)}" maxlength="8000" rows="2"${slashAttributes}
-              placeholder="${esc(t(options.terminal ? "drawer.terminal_placeholder" : "agent.chat_placeholder"))}" ${editable ? "" : "disabled"}>${editable ? esc(draft) : ""}</textarea>
+              placeholder="${esc(t("agent.chat_placeholder"))}" ${editable ? "" : "disabled"}>${editable ? esc(draft) : ""}</textarea>
           </label>
-          ${options.terminal ? `<small class="drawer-terminal-input-hint"><span>${esc(t("drawer.terminal_raw_input"))}</span><span>${esc(t("drawer.terminal_shortcuts"))}</span></small>` : ""}
           <div class="agent-command-actions">
             <span class="conversation-draft-count ${showDraftCount ? "" : "hidden"}" data-conversation-draft-count
               aria-live="polite">${esc(t("agent.input_count", { count: draft.length.toLocaleString() }))}</span>
@@ -600,8 +570,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     if (!support.supported) return context.toast(support.reason || t("agent.cannot_reconnect"));
     state.agentCommandSending.add(sessionId);
     try {
-      if ($("#detailDrawer").classList.contains("open")) context.closeDrawer(false);
-      selectView("terminal");
+      selectView("all");
       const draft = state.agentCommandDrafts.get(sessionId) || "";
       const deliveryKey = sendDraft && draft.trim()
         ? commandDeliveryKey(sessionId, "resume", draft)
@@ -609,7 +578,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       const deliveryId = commandDeliveryId(deliveryKey);
       let resumed = null;
       try {
-        resumed = await window.WhiteboxTerminal.resumeForAgent(session, draft, sendDraft, { deliveryId });
+        resumed = await window.WhiteboxTerminal.resumeForAgent(session, draft, sendDraft, { deliveryId, focus: false });
       } catch (error) {
         if (sendDraft && deliveryStateOf(error) === "rejected") {
           settleCommandDelivery(deliveryKey, deliveryId, "rejected");
@@ -620,6 +589,12 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         context.toast(t(sendDraft ? "agent.delivery_uncertain" : "agent.reconnect_failed"));
         return;
       }
+      if (typeof context.openPtyFocusForTerminal === "function") {
+        context.openPtyFocusForTerminal(resumed?.terminalId || resumed?.id, {
+          creationId: resumed?.creationId || resumed?.terminal?.creationId || "",
+          focus: true,
+        });
+      } else context.openPtyFocus?.(session.id, { focus: true });
       if (sendDraft && resumed?.deliveryState === "unknown") {
         settleCommandDelivery(deliveryKey, deliveryId, "unknown");
         context.toast(t("agent.delivery_uncertain"));
@@ -642,24 +617,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     if (state.agentCommandSending.has(sessionId)) return;
     const session = snapshotSession(sessionId);
     if (!session || !window.WhiteboxTerminal) return context.toast(t("agent.latest_not_found"));
-    const drawerSubmission = form?.dataset.agentCommandRouting === "conversation";
-    const liveDrawerMode = form?.closest?.("#drawerComposer")?.dataset.mode || "";
-    if (drawerSubmission && liveDrawerMode === "terminal") {
-      const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
-      const usableTarget = agentCommandTargets(session).some(target => target.kind === "terminal"
-        && String(target.terminalId || target.id || "") === embedded.terminalId);
-      if (form?.dataset.agentTerminalReady === "false"
-        || !embedded.connected
-        || embedded.agentSessionId !== sessionId
-        || !usableTarget) return;
-    }
-    const inputMode = drawerSubmission
-      ? ["terminal", "conversation"].includes(liveDrawerMode)
-        ? liveDrawerMode
-        : form?.dataset.agentCommandInputModeSelected || "conversation"
-      : "terminal";
-    let conversationSubmission = drawerSubmission && inputMode === "conversation";
-    const routingEnabled = drawerSubmission && Boolean(session.parentId);
+    const conversationForm = form?.dataset.agentCommandRouting === "conversation";
+    const inputMode = conversationForm ? "conversation" : "terminal";
+    let conversationSubmission = conversationForm;
+    const routingEnabled = conversationForm && Boolean(session.parentId);
     const requestedRoute = routingEnabled ? form?.dataset.agentCommandRouteSelected || selectedAgentCommandRoute(session) : "direct";
     const routeContext = routingEnabled
       ? routedAgentCommandContext(session, requestedRoute)
@@ -683,7 +644,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     if (mode === "resume" || mode === "handoff" || mode === "origin-resume") {
       if (input) state.agentCommandDrafts.set(sessionId, input.value);
       if (!command) return context.toast(t("agent.enter_command"));
-      if (drawerSubmission) {
+      if (conversationForm) {
         state.agentCommandSending.add(sessionId);
         const pendingMessage = conversationSubmission ? beginConversationMessage(session, command) : null;
         const deliveryKey = pendingMessage ? "" : commandDeliveryKey(targetSession.id, `resume:${mode}`, routedCommand);
@@ -778,7 +739,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         const latest = snapshotSession(targetSession.id) || targetSession;
         const support = agentResumeSupport(latest);
         const shouldRecover = support.supported
-          && (drawerSubmission || !agentCommandTargets(latest).length);
+          && (conversationForm || !agentCommandTargets(latest).length);
         if (shouldRecover) {
           state.agentCommandDrafts.set(sessionId, command);
           try {
@@ -786,8 +747,14 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
               latest,
               routedCommand,
               true,
-              { focus: drawerSubmission ? false : true, deliveryId },
+              { focus: false, deliveryId },
             );
+            if (!conversationForm && typeof context.openPtyFocusForTerminal === "function") {
+              context.openPtyFocusForTerminal(dispatched?.terminalId || dispatched?.id, {
+                creationId: dispatched?.creationId || dispatched?.terminal?.creationId || "",
+                focus: true,
+              });
+            }
             transportError = null;
           } catch (resumeError) {
             transportError = resumeError;
@@ -834,11 +801,11 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
           : inputMode === "terminal" ? "agent.terminal_command_sent" : "agent.command_sent", { target: target.label }));
     } finally {
       state.agentCommandSending.delete(sessionId);
-      if (drawerSubmission) context.renderDrawer?.();
+      if (conversationForm) context.renderDrawer?.();
       if (submit && submit.isConnected) {
         const restoredLabel = t(routingEnabled && routeContext.route === "parent"
           ? "agent.send_via_parent"
-          : inputMode === "terminal" ? "agent.send_terminal" : drawerSubmission ? "agent.send_request" : "agent.send_now");
+          : inputMode === "terminal" ? "agent.send_terminal" : conversationForm ? "agent.send_request" : "agent.send_now");
         const visibleLabel = submit.querySelector(".conversation-send-label");
         if (visibleLabel) {
           submit.disabled = !String(input?.value || "").trim();
@@ -851,28 +818,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
           submit.textContent = restoredLabel;
         }
       }
-    }
-  }
-
-  async function resetAgentSession(sessionId) {
-    if (state.agentCommandSending.has(sessionId)) return;
-    const session = snapshotSession(sessionId) || state.details.get(sessionId);
-    if (!session || !window.WhiteboxTerminal?.resetForAgent) return context.toast(t("agent.session_not_found"));
-    if (session.parentId) return context.toast(t("terminal.resume.parent_controlled"));
-    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
-      return context.toast(t("terminal.agent.no_input_target"));
-    }
-    state.agentCommandSending.add(sessionId);
-    try {
-      if ($("#detailDrawer").classList.contains("open")) context.closeDrawer(false);
-      selectView("terminal");
-      await window.WhiteboxTerminal.resetForAgent(session);
-      document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
-      context.toast(t("session.reset_complete"));
-    } catch (error) {
-      context.toast(errorText(error, "session.reset_failed"));
-    } finally {
-      state.agentCommandSending.delete(sessionId);
     }
   }
 
@@ -896,7 +841,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       entry.interruptedAt = new Date().toISOString();
       clearTimeout(entry.confirmationTimer);
       entry.confirmationTimer = 0;
-      state.drawerForceLatest = true;
       context.toast(t("agent.response_stopped"));
     } catch (error) {
       context.toast(errorText(error, "agent.interrupt_failed"));
@@ -936,14 +880,13 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const target = chosenAgentCommandTarget(session, routeContext.route);
     if (!target)
       return context.toast(t(routeContext.targets.length ? "agent.select_open_target" : "agent.no_writable_terminal"));
-    if ($("#detailDrawer").classList.contains("open")) context.closeDrawer?.(false);
-    selectView(target.kind === "tmux" ? "tmux" : "terminal");
-    try {
-      await window.WhiteboxTerminal.openForAgent(routeContext.targetSession, target.id, state.agentCommandDrafts.get(sessionId) || "");
-      document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
-    } catch (error) {
-      context.toast(errorText(error, "agent.open_terminal_failed"));
-    }
+    const outcome = await context.openPtyFocusVerified?.(session.id, {
+      targetId: target.id,
+      terminalId: target.terminalId || target.id,
+      focus: true,
+    });
+    if (outcome?.opened) return;
+    context.toast(t("agent.open_terminal_failed"));
   }
 
   async function copyBridgeCommand(provider) {
@@ -1036,7 +979,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     }
   }
 
-  function readyQuickResponseForm(sessionId, form, options = {}) {
+  function readyQuickResponseForm(sessionId, form) {
     const session = snapshotSession(sessionId);
     const input = form?.querySelector?.("[data-agent-command-draft]");
     const submit = form?.querySelector?.('[type="submit"]');
@@ -1059,167 +1002,25 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       && !input.disabled
       && Boolean(submit)
       && typeof form?.requestSubmit === "function";
-    if (!baseReady) return null;
-    if (!options.drawer) return { input, target };
-
-    const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
-    const composerReady = options.composer
-      ? options.composer.dataset?.mode === "terminal"
-      : options.sourceForm === true;
-    const drawerReady = options.drawer.dataset?.mode === "session"
-      && options.drawer.dataset?.terminalChat === "true"
-      && options.drawer.dataset?.conversationSurface === "pty"
-      && composerReady
-      && embedded.connected === true
-      && embedded.agentSessionId === sessionId
-      && String(target.terminalId || target.id || "") === String(embedded.terminalId || "");
-    return drawerReady ? { input, target } : null;
-  }
-
-  function queueQuickResponseForDrawer(sessionId, command, sourceForm = null) {
-    if (pendingQuickResponses.has(sessionId)) return;
-    const pending = {
-      command,
-      opened: false,
-      scheduled: false,
-      frame: null,
-      retryTimer: null,
-      retries: 0,
-      owned: false,
-      timeout: null,
-      observer: null,
-      terminalListener: null,
-    };
-
-    const finish = (retry = false) => {
-      if (pendingQuickResponses.get(sessionId) !== pending) return;
-      pendingQuickResponses.delete(sessionId);
-      if (pending.frame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(pending.frame);
-      if (pending.retryTimer !== null) clearTimeout(pending.retryTimer);
-      if (pending.timeout !== null) clearTimeout(pending.timeout);
-      pending.observer?.disconnect?.();
-      if (pending.terminalListener && typeof window.removeEventListener === "function") {
-        window.removeEventListener("whitebox:drawer-terminal-targets-changed", pending.terminalListener);
-      }
-      if (retry) context.toast?.(t("agent.delivery_retry_ready"));
-    };
-
-    const ownsOpenDrawer = (drawer) => Boolean(drawer?.classList?.contains?.("open"))
-      && state.selectedId === sessionId
-      && state.drawerMode === "session"
-      && state.drawerTab === "chat";
-
-    const scheduleAttempt = () => {
-      if (pending.scheduled || pendingQuickResponses.get(sessionId) !== pending) return;
-      if (pending.retryTimer !== null) {
-        clearTimeout(pending.retryTimer);
-        pending.retryTimer = null;
-      }
-      pending.scheduled = true;
-      if (typeof requestAnimationFrame === "function") {
-        pending.frame = requestAnimationFrame(attemptSubmit);
-      } else {
-        pending.frame = setTimeout(attemptSubmit, 0);
-      }
-    };
-
-    const scheduleRetry = () => {
-      if (pending.retryTimer !== null || pendingQuickResponses.get(sessionId) !== pending) return;
-      if (pending.retries >= QUICK_RESPONSE_MAX_RETRIES) {
-        finish(true);
-        return;
-      }
-      pending.retryTimer = setTimeout(() => {
-        pending.retryTimer = null;
-        pending.retries += 1;
-        scheduleAttempt();
-      }, QUICK_RESPONSE_RETRY_INTERVAL_MS);
-      pending.retryTimer?.unref?.();
-    };
-
-    function attemptSubmit() {
-      pending.scheduled = false;
-      pending.frame = null;
-      if (pendingQuickResponses.get(sessionId) !== pending || !pending.opened) return;
-      const drawer = document.querySelector?.("#detailDrawer");
-      if (!ownsOpenDrawer(drawer)) {
-        // openDrawer may first await disposal of a previously embedded PTY.
-        // Do not drop the response during that transition; once this waiter
-        // has observed its own drawer, any later ownership loss is final.
-        if (pending.owned) finish(false);
-        else scheduleRetry();
-        return;
-      }
-      pending.owned = true;
-      const composer = drawer.querySelector?.("#drawerComposer");
-      // PTY-only drawers deliberately render no duplicate composer. In that
-      // layout the visible review card remains the submit surface that started
-      // this action; it is safe only while the owned drawer and exact signed
-      // embedded target below still match this session.
-      const drawerForm = composer?.querySelector?.(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
-      const form = drawerForm || (sourceForm?.isConnected ? sourceForm : null);
-      const ready = readyQuickResponseForm(sessionId, form, {
-        drawer,
-        composer,
-        sourceForm: Boolean(!drawerForm && form === sourceForm),
-      });
-      if (!ready) {
-        // DOM/PTY notifications may be coalesced just before the signed target
-        // state becomes visible. Keep a bounded waiter alive while this drawer
-        // still belongs to the same session instead of losing the response.
-        scheduleRetry();
-        return;
-      }
-
-      ready.input.value = pending.command;
-      state.agentCommandDrafts.set(sessionId, pending.command);
-      // Remove every waiter before the synchronous submit event. This keeps
-      // duplicate PTY-ready events and quick-button double clicks exactly-once.
-      finish(false);
-      try {
-        form.requestSubmit();
-      } catch (error) {
-        window.WhiteboxRendererUtils.reportRecoverableError("quick-response-submit", error);
-        context.toast?.(t("agent.delivery_retry_ready"));
-      }
-    }
-
-    pending.terminalListener = () => scheduleAttempt();
-    if (typeof window.addEventListener === "function") {
-      window.addEventListener("whitebox:drawer-terminal-targets-changed", pending.terminalListener);
-    }
-    const drawer = document.querySelector?.("#detailDrawer");
-    if (drawer && typeof MutationObserver === "function") {
-      pending.observer = new MutationObserver(scheduleAttempt);
-      pending.observer.observe(drawer, { attributes: true, childList: true, subtree: true });
-    }
-    pending.timeout = setTimeout(() => finish(true), QUICK_RESPONSE_DRAWER_TIMEOUT_MS);
-    pending.timeout?.unref?.();
-    pendingQuickResponses.set(sessionId, pending);
-
-    try {
-      context.openDrawer?.(sessionId);
-      pending.opened = true;
-      scheduleAttempt();
-    } catch (error) {
-      finish(true);
-      window.WhiteboxRendererUtils.reportRecoverableError("quick-response-open-drawer", error);
-    }
+    return baseReady ? { input, target } : null;
   }
 
   function quickRespond(sessionId, value, root = document) {
     sessionId = String(sessionId || "");
     const command = String(value || "").trim();
-    if (!sessionId || !command || pendingQuickResponses.has(sessionId)) return;
+    if (!sessionId || !command) return;
     state.agentCommandDrafts.set(sessionId, command);
     const form = root.querySelector?.(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
     const input = form?.querySelector("[data-agent-command-draft]");
     if (input) input.value = command;
-    const composer = form?.closest?.("#drawerComposer") || null;
-    const drawer = composer?.dataset?.mode === "terminal" ? document.querySelector?.("#detailDrawer") : null;
-    const ready = readyQuickResponseForm(sessionId, form, drawer ? { drawer, composer } : {});
-    if (!ready) return queueQuickResponseForDrawer(sessionId, command, form);
+    const ready = readyQuickResponseForm(sessionId, form);
+    if (!ready) {
+      context.openDrawer?.(sessionId, { focus: true });
+      context.toast?.(t("agent.delivery_retry_ready"));
+      return;
+    }
     form.requestSubmit();
+    context.openDrawer?.(sessionId, { focus: true, acknowledge: false });
   }
 
   function prepareReassignment(sessionId) {
@@ -1260,7 +1061,6 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     snapshotSession,
     chosenAgentCommandTarget,
     resumeAgentTerminal,
-    resetAgentSession,
     dispatchAgentCommand,
     interruptConversation,
     interruptAgentTerminal,

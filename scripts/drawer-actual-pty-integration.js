@@ -4,10 +4,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { app, BrowserWindow, ipcMain } = require('electron');
-const { TerminalManager } = require('../src/terminalManager');
+const Module = require('module');
+const vm = require('vm');
+const { app, BrowserWindow, ipcMain, session: electronSession } = require('electron');
+const { fileURLToPath, pathToFileURL } = require('url');
+
+const testNodeModulesValue = String(process.env.WHITEBOX_TEST_NODE_MODULES || '').trim();
+const testNodeModules = testNodeModulesValue ? path.resolve(testNodeModulesValue) : '';
+if (testNodeModules && fs.existsSync(testNodeModules)) {
+  process.env.NODE_PATH = [testNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter);
+  Module._initPaths();
+}
+
+const { TerminalManager, isInternalTerminalProjectionSessionId } = require('../src/terminalManager');
 const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost');
 const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
+const { applyRuntimePresence } = require('../src/processMonitor');
 
 app.disableHardwareAcceleration();
 // Keep cleanup in control after the hidden integration window is destroyed;
@@ -17,8 +29,8 @@ app.on('window-all-closed', () => {});
 
 const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, 'artifacts');
-const logFile = path.join(artifacts, 'inline-actual-pty-integration.log');
-const screenshotFile = path.join(artifacts, 'whitebox-inline-actual-pty-failure.png');
+const logFile = path.join(artifacts, 'pty-focus-actual-pty-integration.log');
+const screenshotFile = path.join(artifacts, 'whitebox-pty-focus-actual-pty-failure.png');
 const temporary = (() => {
   const candidate = path.resolve(String(process.env.WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_ROOT || ''));
   const nonce = String(process.env.WHITEBOX_DRAWER_ACTUAL_PTY_TEMP_NONCE || '');
@@ -62,6 +74,20 @@ function assert(value, message) {
   if (!value) throw new Error(message);
 }
 
+function installWorktreeDependencyRedirect() {
+  const localRoot = path.join(root, 'node_modules');
+  if (!testNodeModules || !fs.existsSync(testNodeModules) || fs.existsSync(localRoot)) return;
+  electronSession.defaultSession.webRequest.onBeforeRequest({ urls: ['file:///*'] }, (details, callback) => {
+    let requested = '';
+    try { requested = fileURLToPath(details.url); } catch {}
+    const relative = requested ? path.relative(localRoot, requested) : '..';
+    const alternate = relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      ? path.join(testNodeModules, relative)
+      : '';
+    callback(alternate && fs.existsSync(alternate) ? { redirectURL: pathToFileURL(alternate).href } : {});
+  });
+}
+
 function wait(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
@@ -96,6 +122,23 @@ function fixtureLaunchArgumentsMarker(args) {
   return `WHITEBOX_DRAWER_BOUND_PTY_ARGV_${hash}`;
 }
 
+function mainBridgePresenceProjector() {
+  const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const start = source.indexOf('function bridgePresenceSessionEligible(session)');
+  const end = source.indexOf('function bridgePresence()', start);
+  if (start < 0 || end <= start) {
+    throw new Error('main.js bridge presence projector를 찾지 못했습니다.');
+  }
+  const sandbox = {
+    process: { platform: process.platform },
+    isInternalTerminalProjectionSessionId,
+  };
+  vm.runInNewContext(`${source.slice(start, end)}\nthis.projectTerminalBridgePresence = projectTerminalBridgePresence;`, sandbox, {
+    filename: 'main-bridge-presence.js',
+  });
+  return sessions => Array.from(sandbox.projectTerminalBridgePresence(sessions, process.platform));
+}
+
 async function rendererValue(win, expression) {
   return win.webContents.executeJavaScript(expression);
 }
@@ -105,10 +148,11 @@ async function waitForRenderer(win, expression, message, timeoutMs = 12_000) {
 }
 
 async function run() {
+  installWorktreeDependencyRedirect();
   const fixtureProvider = {
     command: 'node',
     args: [path.join(__dirname, 'drawer-bound-pty-agent-fixture.js')],
-    label: 'Signed drawer PTY integration',
+    label: 'Signed PTY focus integration',
   };
   const manager = new TerminalManager({
     storeFile,
@@ -197,7 +241,7 @@ async function run() {
       reuseBridge: true,
       cols: 120,
       rows: 32,
-      title: '실제 drawer PTY 통합 검증',
+      title: '실제 PTY focus 통합 검증',
     });
     terminalId = String(session?.id || '');
     assert(terminalId && session.status === 'running'
@@ -249,9 +293,12 @@ async function run() {
         backgroundThrottling: false,
       },
     });
-    win.webContents.on('console-message', (_event, details, legacyMessage) => {
+    win.webContents.on('console-message', (_event, details, legacyMessage, legacyLine, legacySourceId) => {
       const message = typeof details === 'object' ? details.message : String(legacyMessage || details || '');
-      log(`renderer ${message}`);
+      const location = typeof details === 'object'
+        ? `${details.sourceId || 'renderer'}:${details.lineNumber || 0}`
+        : `${legacySourceId || 'renderer'}:${legacyLine || 0}`;
+      log(`renderer ${location} ${message}`);
     });
 
     registerTerminalIpc({
@@ -275,7 +322,7 @@ async function run() {
       `Boolean(window.WhiteboxApp?.initialized && window.WhiteboxTerminal && window.WhiteboxInlineTerminal && window.interactionTest)`,
       'renderer와 실제 PTY preload가 준비되지 않았습니다.');
 
-    const openedInline = await rendererValue(win, `(() => {
+    const openedFocus = await rendererValue(win, `(() => {
       const findWorkspace = () => [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
         .find(node => node.dataset.workspace === ${JSON.stringify(root)});
       let workspace = findWorkspace();
@@ -286,33 +333,44 @@ async function run() {
       workspace = findWorkspace();
       if (workspace?.getAttribute('aria-expanded') === 'false') workspace.click();
       const trigger = document.querySelector('.control-room-main[data-pty-focus-trigger="fixture-root"]');
-      if (trigger) window.WhiteboxInlineTerminal.toggle('fixture-root', { focus: false });
+      trigger?.click();
       return Boolean(workspace && trigger);
     })()`);
-    assert(openedInline, '실제 PTY를 열 프로젝트 또는 메인 AI 영역을 찾지 못했습니다.');
+    assert(openedFocus, '실제 PTY focus를 열 프로젝트 또는 담당 노드 진입점을 찾지 못했습니다.');
     await waitForRenderer(win, `(() => {
-      const inline = document.querySelector('[data-inline-agent-terminal="fixture-root"]');
+      const surface = document.querySelector('#ptyFocusSurface');
+      const shell = document.querySelector('#ptyFocusTerminalShell[data-inline-agent-terminal="fixture-root"]');
       const embedded = window.WhiteboxTerminal.embeddedState();
       const rootSession = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-root');
       const terminal = window.interactionTest.getTerminals().find(item =>
         item.id === ${JSON.stringify(terminalId)});
-      return inline
-        && !document.querySelector('#detailDrawer')?.classList.contains('open')
+      const oldDomAbsent = [
+        '#detailDrawer', '#drawerBackdrop', '#drawerTerminalViewport', '#drawerContent',
+        '#drawerComposer', '#agentInlineTerminalViewport', '#ptyFocusChildModal',
+      ].every(selector => !document.querySelector(selector));
+      return surface && !surface.classList.contains('hidden') && !surface.inert
+        && surface.getAttribute('aria-hidden') === 'false'
+        && document.body.classList.contains('pty-focus-open')
+        && shell
+        && oldDomAbsent
+        && document.querySelector('#mainContent')?.inert
+        && document.querySelector('.sidebar')?.inert
         && embedded.connected
         && embedded.agentSessionId === 'fixture-root'
         && embedded.terminalId === ${JSON.stringify(terminalId)}
+        && window.WhiteboxApp.state.ptyFocusTargetId === ${JSON.stringify(terminalId)}
         && window.WhiteboxTerminal.agentTargets(rootSession).some(target =>
           target.terminalId === ${JSON.stringify(terminalId)})
         && terminal?.conversationBound === true
         && terminal?.backend === 'direct'
         && terminal?.agentResumeSessionId === rootSession.externalId
-        && document.querySelector('#agentInlineTerminalViewport > .terminal-screen .xterm')
-        && document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea')
+        && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')
+        && document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')
         && !document.querySelector('[data-inline-terminal-composer]');
-    })()`, '클릭한 메인 AI 바로 아래에 별도 메시지 입력란 없는 실제 PTY가 연결되지 않았습니다.');
+    })()`, 'full PTY focus-only 화면에 별도 메시지 입력란 없는 실제 PTY가 연결되지 않았습니다.');
 
     const terminalTextExpression = `(() => {
-      const screen = document.querySelector('#agentInlineTerminalViewport > .terminal-screen');
+      const screen = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen');
       if (!screen) return '';
       return [
         ...[...screen.querySelectorAll('.xterm-rows > div')].map(row => row.textContent || ''),
@@ -321,14 +379,14 @@ async function run() {
       ].join('\\n');
     })()`;
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(hydrationMarker)})`,
-      'terminalGet replay가 인라인 xterm에 hydrate되지 않았습니다.', 20_000);
+      'terminalGet replay가 PTY focus xterm에 hydrate되지 않았습니다.', 20_000);
 
     const focused = await rendererValue(win, `(() => {
       window.interactionTest.clearCalls();
       return window.WhiteboxTerminal.focusEmbedded()
-        && document.activeElement === document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea');
+        && document.activeElement === document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
     })()`);
-    assert(focused, '인라인 PTY의 실제 xterm 입력 커서에 포커스하지 못했습니다.');
+    assert(focused, 'PTY focus의 실제 xterm 입력 커서에 포커스하지 못했습니다.');
 
     const writesBeforeShiftTab = await rendererValue(win,
       `window.interactionTest.getCalls().filter(call => call.name === 'terminalWrite').length`);
@@ -338,7 +396,7 @@ async function run() {
       .filter(call => call.name === 'terminalWrite').length === ${writesBeforeShiftTab + 1}`,
     'Shift+Tab이 PTY raw 입력으로 정확히 한 번 전달되지 않았습니다.');
     const shiftTabResult = await rendererValue(win, `(() => {
-      const input = document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea');
+      const input = document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
       const writes = window.interactionTest.getCalls().filter(call => call.name === 'terminalWrite');
       const call = writes[${writesBeforeShiftTab}];
       return {
@@ -355,51 +413,26 @@ async function run() {
       return;
     }
 
-    const scrollStateExpression = `(() => {
-      const screen = document.querySelector('#agentInlineTerminalViewport > .terminal-screen');
-      return {
-        viewportY: Number(screen?.dataset.viewportY || 0),
-        baseY: Number(screen?.dataset.baseY || 0),
-      };
-    })()`;
-    await waitForRenderer(win, `(() => {
-      const state = ${scrollStateExpression};
-      return state.baseY > 0 && state.viewportY >= state.baseY;
-    })()`, '긴 PTY replay가 xterm scrollback으로 쌓이지 않았습니다.');
-    const wheelDispatched = await rendererValue(win, `(() => {
-      const terminal = document.querySelector('#agentInlineTerminalViewport > .terminal-screen .xterm-screen');
-      if (!terminal) return false;
-      terminal.dispatchEvent(new WheelEvent('wheel', {
-        bubbles: true,
-        cancelable: true,
-        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-        deltaY: -720,
-      }));
-      return true;
-    })()`);
-    assert(wheelDispatched, '인라인 xterm에 마우스 휠 이벤트를 전달하지 못했습니다.');
-    await waitForRenderer(win, `(() => {
-      const state = ${scrollStateExpression};
-      return state.baseY > 0 && state.viewportY < state.baseY;
-    })()`, '인라인 PTY의 마우스 휠이 이전 scrollback으로 이동하지 않았습니다.');
-    const scrolledState = await rendererValue(win, scrollStateExpression);
-
     const remountResult = await rendererValue(win, `(async () => {
-      const rootSession = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-root');
-      const mount = document.querySelector('#agentInlineTerminalViewport');
-      const result = await window.WhiteboxTerminal.mountForAgent(rootSession, {
-        mount,
+      const result = await window.WhiteboxInlineTerminal.sync({
+        force: true,
         targetId: ${JSON.stringify(terminalId)},
+        requireTargetId: true,
       });
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      return { result, state: ${scrollStateExpression} };
+      const screen = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen');
+      return {
+        result,
+        mountedTerminalId: screen?.dataset.terminalScreen || '',
+        xtermMounted: Boolean(screen?.querySelector('.xterm')),
+      };
     })()`);
     assert(remountResult.result?.ok && remountResult.result?.reused
-      && remountResult.state.baseY > 0 && remountResult.state.viewportY < remountResult.state.baseY,
-    `PTY를 다시 맞춘 뒤 마우스 휠 scrollback 위치가 맨 아래로 돌아갔습니다: ${JSON.stringify({ scrolledState, remountResult })}`);
+      && remountResult.mountedTerminalId === terminalId && remountResult.xtermMounted,
+    `PTY focus를 다시 맞춘 뒤 기존 실제 PTY mount가 유지되지 않았습니다: ${JSON.stringify(remountResult)}`);
 
     const pasted = await rendererValue(win, `(() => {
-      const input = document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea');
+      const input = document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
       if (!input) return false;
       const clipboard = new DataTransfer();
       clipboard.setData('text/plain', ${JSON.stringify(liveCommand)});
@@ -415,16 +448,20 @@ async function run() {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
 
     await waitUntil(() => clientData.join('').includes(liveMarker),
-      '인라인 PTY 입력 명령이 TerminalHost 소켓을 거쳐 실제 PTY 출력으로 돌아오지 않았습니다.');
+      'PTY focus 입력 명령이 TerminalHost 소켓을 거쳐 실제 PTY 출력으로 돌아오지 않았습니다.');
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(liveMarker)})`,
-      '실제 PTY live marker가 인라인 xterm 출력과 접근성 버퍼에 표시되지 않았습니다.');
+      '실제 PTY live marker가 PTY focus xterm 출력과 접근성 버퍼에 표시되지 않았습니다.');
 
     const rendererResult = await rendererValue(win, `(() => ({
       embedded: window.WhiteboxTerminal.embeddedState(),
-      inlineMounted: Boolean(document.querySelector('[data-inline-agent-terminal="fixture-root"]')),
-      drawerOpen: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
-      xtermMounted: Boolean(document.querySelector('#agentInlineTerminalViewport > .terminal-screen .xterm')),
+      focusMounted: Boolean(document.querySelector('#ptyFocusTerminalShell[data-inline-agent-terminal="fixture-root"]')),
+      focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
+      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+        .every(selector => !document.querySelector(selector)),
+      xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')),
       composerAbsent: !document.querySelector('[data-inline-terminal-composer]'),
+      writableFlowControls: document.querySelector('#ptyFocusFlow')
+        ?.querySelectorAll('button, a, input, textarea, select, [contenteditable="true"]').length || 0,
       calls: window.interactionTest.getCalls(),
       text: ${terminalTextExpression},
     }))()`);
@@ -433,12 +470,13 @@ async function run() {
       .filter(call => call.args[0] === terminalId)
       .map(call => String(call.args[1] || ''))
       .join('');
-    assert(rendererResult.inlineMounted && !rendererResult.drawerOpen && rendererResult.xtermMounted && rendererResult.composerAbsent,
-      `메인 AI 바로 아래 인라인 영역이 실제 PTY 전용 화면이 아닙니다: ${JSON.stringify(rendererResult)}`);
+    assert(rendererResult.focusMounted && rendererResult.focusVisible && rendererResult.oldDomAbsent
+      && rendererResult.xtermMounted && rendererResult.composerAbsent && rendererResult.writableFlowControls === 0,
+    `full PTY focus-only 영역이 실제 PTY 전용 화면이 아닙니다: ${JSON.stringify(rendererResult)}`);
     assert(rendererWriteText.endsWith(`${liveCommand}\r`),
       `xterm 직접 입력이 terminalWrite IPC로 전달되지 않았습니다: ${JSON.stringify(rendererWrites)}`);
     assert(!rendererResult.calls.some(call => call.name === 'terminalCreate'),
-      '기존 실제 PTY가 있는데 인라인 화면이 별도 터미널을 생성했습니다.');
+      '기존 실제 PTY가 있는데 PTY focus 화면이 별도 터미널을 생성했습니다.');
     assert(!rendererResult.calls.some(call => call.name === 'terminalCommand'),
       'PTY 직접 입력 중 별도 메시지 command 경로가 호출되었습니다.');
     assert(ipcCalls.some(call => call.operation === 'list')
@@ -448,6 +486,269 @@ async function run() {
     `preload→IPC→TerminalHostClient 호출 경로가 완주하지 않았습니다: ${JSON.stringify(ipcCalls)}`);
     assert(String((await client.get(terminalId, true))?.replay || '').includes(liveMarker),
       'TerminalManager/node-pty replay에서 live marker를 확인하지 못했습니다.');
+
+    const directSessionCountBeforeCreate = manager.list().length;
+    const directIpcCreateCountBefore = ipcCalls.filter(call => call.operation === 'create').length;
+    const directPrompt = `실제 새 AI PTY 생성 경로를 검증해줘 ${Date.now()}`;
+    const directRunPrepared = await rendererValue(win, `(() => {
+      window.WhiteboxApp.closePtyFocus({ restore: false });
+      const originalStartAgent = window.WhiteboxTerminal.startAgent;
+      const capture = { options: null, result: null, error: '' };
+      window.__whiteboxActualDirectStart = capture;
+      window.WhiteboxTerminal.startAgent = async options => {
+        capture.options = {
+          sourcePluginId: options.sourcePluginId || '',
+          provider: options.provider || '',
+          cwd: options.cwd || '',
+          prompt: options.prompt || '',
+          creationId: options.creationId || '',
+        };
+        try {
+          const result = await originalStartAgent(options);
+          capture.result = {
+            ok: result?.ok === true,
+            terminalId: result?.terminalId || '',
+            creationId: result?.creationId || '',
+            deliveryState: result?.deliveryState || '',
+            promptSent: result?.promptSent === true,
+          };
+          return result;
+        } catch (error) {
+          capture.error = String(error?.stack || error?.message || error);
+          throw error;
+        } finally {
+          window.WhiteboxTerminal.startAgent = originalStartAgent;
+        }
+      };
+      window.interactionTest.clearCalls();
+      const opened = window.WhiteboxApp.openRunModal();
+      if (opened === false) {
+        window.WhiteboxTerminal.startAgent = originalStartAgent;
+        return { opened: false };
+      }
+      const source = document.querySelector('[data-run-source="direct"]');
+      if (source?.getAttribute('aria-checked') !== 'true') source?.click();
+      const provider = document.querySelector('[data-run-provider="claude"]');
+      if (provider?.getAttribute('aria-checked') !== 'true') provider?.click();
+      const prompt = document.querySelector('#runPrompt');
+      const form = document.querySelector('#runForm');
+      const submit = form?.querySelector('button[type="submit"]');
+      if (!prompt || !form || !submit) return { opened: true, formReady: false };
+      prompt.value = ${JSON.stringify(directPrompt)};
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      const prepared = {
+        opened: true,
+        formReady: true,
+        source: document.querySelector('[data-run-source][aria-checked="true"]')?.dataset.runSource || '',
+        provider: document.querySelector('[data-run-provider][aria-checked="true"]')?.dataset.runProvider || '',
+        cwd: document.querySelector('#runCwd')?.value || '',
+        prompt: prompt.value,
+        submitDisabled: submit.disabled,
+      };
+      form.requestSubmit();
+      return prepared;
+    })()`);
+    assert(directRunPrepared.opened && directRunPrepared.formReady
+      && directRunPrepared.source === 'direct'
+      && directRunPrepared.provider === 'claude'
+      && directRunPrepared.cwd === root
+      && directRunPrepared.prompt === directPrompt
+      && directRunPrepared.submitDisabled === false,
+    `새 작업 modal의 직접 실행 제출을 준비하지 못했습니다: ${JSON.stringify(directRunPrepared)}`);
+    await waitForRenderer(win, `(() => {
+      const capture = window.__whiteboxActualDirectStart;
+      return Boolean((capture?.result?.terminalId || capture?.error)
+        && document.querySelector('#runModal')?.classList.contains('hidden'));
+    })()`, '새 작업 modal의 직접 AI 생성 결과가 돌아오지 않았습니다.', 20_000);
+
+    const directRunOutcome = await rendererValue(win, `(() => ({
+      capture: window.__whiteboxActualDirectStart,
+      calls: window.interactionTest.getCalls(),
+      focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+      focusTargetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
+      focusHidden: document.querySelector('#ptyFocusSurface')?.classList.contains('hidden') === true,
+    }))()`);
+    const directCreateCalls = directRunOutcome.calls.filter(call => call.name === 'terminalCreate');
+    const directCreateOptions = directCreateCalls[0]?.args?.[0] || null;
+    const directCreationResult = directRunOutcome.capture?.result || null;
+    const directTerminalId = String(directCreationResult?.terminalId || '');
+    const directCreationId = String(directCreationResult?.creationId || '');
+    assert(!directRunOutcome.capture?.error
+      && directCreationResult?.ok === true
+      && directCreationResult?.deliveryState === 'accepted'
+      && directCreationResult?.promptSent === true
+      && directTerminalId
+      && /^create:[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/u.test(directCreationId),
+    `새 작업 modal이 terminalId + creationId 성공 결과를 반환하지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
+    assert(directCreateCalls.length === 1
+      && directCreateOptions?.type === 'agent'
+      && directCreateOptions.provider === 'claude'
+      && directCreateOptions.cwd === root
+      && directCreateOptions.sessionBackend === 'direct'
+      && directCreateOptions.transient === false
+      && directCreateOptions.initialCommand === directPrompt
+      && directCreateOptions.creationId === directCreationId
+      && directRunOutcome.capture.options?.creationId === directCreationId,
+    `새 작업 modal이 동일 creationId의 fresh direct PTY를 정확히 한 번 생성하지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
+    assert(directRunOutcome.focusHidden
+      && directRunOutcome.focusSessionId !== `bridge:${directTerminalId}`
+      && directRunOutcome.focusTargetId !== directTerminalId,
+    `monitor projection 전에 새 PTY가 다른 세션으로 추측되어 열렸습니다: ${JSON.stringify(directRunOutcome)}`);
+
+    const directLaunchMarker = fixtureLaunchArgumentsMarker(directCreateOptions.args || []);
+    await waitUntil(async () => {
+      const created = await client.get(directTerminalId, true);
+      return Number(created?.pid) > 0
+        && String(created?.replay || '').includes(directLaunchMarker);
+    }, '새 작업 modal의 fresh direct argv가 실제 node-pty fixture에 도착하지 않았습니다.', 20_000);
+    const directSession = await client.get(directTerminalId, true);
+    assert(directSession?.status === 'running'
+      && directSession.type === 'agent'
+      && directSession.provider === 'claude'
+      && directSession.backend === 'direct'
+      && directSession.conversationBound === false
+      && directSession.bridgeId === ''
+      && directSession.creationId === directCreationId
+      && Number(directSession.pid) > 0
+      && manager.list().length === directSessionCountBeforeCreate + 1,
+    `새 작업 modal의 실제 fresh direct node-pty가 고유하게 실행되지 않았습니다: ${JSON.stringify(directSession)}`);
+
+    const directBridgePresence = mainBridgePresenceProjector()([directSession]);
+    assert(directBridgePresence.length === 1
+      && directBridgePresence[0].id === directTerminalId
+      && directBridgePresence[0].terminalId === directTerminalId
+      && directBridgePresence[0].linkedSessionId === ''
+      && directBridgePresence[0].creationId === directCreationId,
+    `main bridge presence가 실제 fresh PTY의 terminalId + creationId를 보존하지 않았습니다: ${JSON.stringify(directBridgePresence)}`);
+    const monitoredDirectSessions = applyRuntimePresence(
+      [],
+      { available: false, distros: [] },
+      { available: true, processes: [] },
+      Date.now(),
+      directBridgePresence,
+    );
+    const directProjectionId = `bridge:${directTerminalId}`;
+    const directProjection = monitoredDirectSessions.find(item => item.id === directProjectionId);
+    const directProjectionPresence = directProjection?.runtimePresence?.filter(item => item.kind === 'bridge') || [];
+    assert(directProjection
+      && directProjection.externalId === directTerminalId
+      && directProjection.source === 'whitebox-bridge'
+      && directProjection.clientKind === 'whitebox-bridge'
+      && directProjectionPresence.length === 1
+      && directProjectionPresence[0].terminalId === directTerminalId
+      && directProjectionPresence[0].creationId === directCreationId,
+    `monitor가 exact creationId의 provisional app-owned bridge:${directTerminalId} session을 노출하지 않았습니다: ${JSON.stringify(monitoredDirectSessions)}`);
+
+    const mismatchedCreationId = `${directCreationId}:mismatch`;
+    const mismatchedProjection = {
+      ...directProjection,
+      runtimePresence: directProjection.runtimePresence.map(presence => ({
+        ...presence,
+        creationId: presence.kind === 'bridge' ? mismatchedCreationId : presence.creationId,
+      })),
+    };
+    const mismatchedSelection = await rendererValue(win, `(async () => {
+      const projection = ${JSON.stringify(mismatchedProjection)};
+      const added = window.interactionTest.addSession(projection);
+      const listenerCount = window.interactionTest.emitSnapshot();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const visible = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === projection.id);
+      return {
+        added,
+        listenerCount,
+        visibleIdentity: window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity(visible),
+        focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+        focusTargetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
+        focusHidden: document.querySelector('#ptyFocusSurface')?.classList.contains('hidden') === true,
+        embedded: window.WhiteboxTerminal.embeddedState(),
+        terminalCreateCount: window.interactionTest.getCalls()
+          .filter(call => call.name === 'terminalCreate').length,
+      };
+    })()`);
+    assert(mismatchedSelection.added
+      && mismatchedSelection.listenerCount > 0
+      && mismatchedSelection.visibleIdentity?.terminalId === directTerminalId
+      && mismatchedSelection.visibleIdentity?.creationId === mismatchedCreationId
+      && mismatchedSelection.focusHidden
+      && mismatchedSelection.focusSessionId !== directProjectionId
+      && mismatchedSelection.focusTargetId !== directTerminalId
+      && mismatchedSelection.embedded?.terminalId !== directTerminalId
+      && mismatchedSelection.terminalCreateCount === 1,
+    `creationId가 다른 provisional projection이 pending 새 작업 PTY 대상으로 선택되었습니다: ${JSON.stringify(mismatchedSelection)}`);
+
+    const exactProjectionUpdated = await rendererValue(win, `(() => {
+      const projection = ${JSON.stringify(directProjection)};
+      const updated = window.interactionTest.updateSession(projection.id, projection);
+      const listenerCount = window.interactionTest.emitSnapshot();
+      return Boolean(updated && listenerCount > 0);
+    })()`);
+    assert(exactProjectionUpdated,
+      'mismatched provisional projection을 monitor의 exact projection으로 갱신하지 못했습니다.');
+    await waitForRenderer(win, `(() => {
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      const projection = window.WhiteboxApp.state.snapshot.sessions
+        .find(item => item.id === ${JSON.stringify(directProjectionId)});
+      const identity = window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity(projection);
+      return identity?.terminalId === ${JSON.stringify(directTerminalId)}
+        && identity?.creationId === ${JSON.stringify(directCreationId)}
+        && embedded.connected
+        && embedded.agentSessionId === ${JSON.stringify(directProjectionId)}
+        && embedded.terminalId === ${JSON.stringify(directTerminalId)}
+        && window.WhiteboxApp.state.ptyFocusSessionId === ${JSON.stringify(directProjectionId)}
+        && window.WhiteboxApp.state.ptyFocusTargetId === ${JSON.stringify(directTerminalId)}
+        && document.querySelector(${JSON.stringify(`#ptyFocusTerminalShell[data-inline-agent-terminal="${directProjectionId}"]`)})
+        && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm');
+    })()`, 'exact terminalId + creationId projection이 같은 실제 node-pty/xterm PTY focus를 열지 못했습니다.', 20_000);
+    await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(directLaunchMarker)})`,
+      'fresh direct PTY argv marker가 exact provisional bridge의 xterm에 hydrate되지 않았습니다.', 20_000);
+
+    const directLiveMarker = `LTA_FRESH_DIRECT_LIVE_${Date.now()}`;
+    const directLiveCommand = encodedMarkerCommand(directLiveMarker);
+    const directPasted = await rendererValue(win, `(() => {
+      const input = document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
+      if (!input || !window.WhiteboxTerminal.focusEmbedded()) return false;
+      const clipboard = new DataTransfer();
+      clipboard.setData('text/plain', ${JSON.stringify(directLiveCommand)});
+      input.dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: clipboard,
+      }));
+      return document.activeElement === input;
+    })()`);
+    assert(directPasted, 'fresh direct PTY xterm의 실제 입력 경로에 포커스/붙여넣기를 전달하지 못했습니다.');
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    await waitUntil(async () => String((await client.get(directTerminalId, true))?.replay || '').includes(directLiveMarker),
+      'fresh direct xterm 입력이 TerminalHost/node-pty를 거쳐 되돌아오지 않았습니다.');
+    await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(directLiveMarker)})`,
+      'fresh direct live marker가 동일한 renderer xterm에 표시되지 않았습니다.');
+    const directFocusResult = await rendererValue(win, `(() => ({
+      embedded: window.WhiteboxTerminal.embeddedState(),
+      focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+      focusTargetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
+      xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')),
+      calls: window.interactionTest.getCalls(),
+    }))()`);
+    const directFocusCreates = directFocusResult.calls.filter(call => call.name === 'terminalCreate');
+    const directFocusWrites = directFocusResult.calls.filter(call => call.name === 'terminalWrite');
+    const directFocusWriteText = directFocusWrites
+      .filter(call => call.args[0] === directTerminalId)
+      .map(call => String(call.args[1] || ''))
+      .join('');
+    assert(directFocusResult.embedded?.connected
+      && directFocusResult.embedded?.agentSessionId === directProjectionId
+      && directFocusResult.embedded?.terminalId === directTerminalId
+      && directFocusResult.focusSessionId === directProjectionId
+      && directFocusResult.focusTargetId === directTerminalId
+      && directFocusResult.xtermMounted
+      && directFocusCreates.length === 1
+      && directFocusWriteText.endsWith(`${directLiveCommand}\r`)
+      && manager.list().length === directSessionCountBeforeCreate + 1
+      && manager.list().filter(item => item.id === directTerminalId).length === 1
+      && ipcCalls.filter(call => call.operation === 'create').length === directIpcCreateCountBefore + 1,
+    `fresh direct PTY focus가 같은 node-pty를 재사용하지 않았거나 별도 terminal을 만들었습니다: ${JSON.stringify(directFocusResult)}`);
 
     const codexForkExternalId = 'actual-pty-fork-source';
     const codexForkSource = {
@@ -525,34 +826,50 @@ async function run() {
       && codexForkSession.conversationBound === false,
     `실제 Codex fork PTY가 원본 대화 writer에 attach되지 않은 새 세션이 아닙니다: ${JSON.stringify(codexForkSession)}`);
 
-    const codexMount = await rendererValue(win, `(async () => {
+    const codexFocusOpened = await rendererValue(win, `(async () => {
       const source = ${JSON.stringify(codexForkSource)};
-      const mount = document.querySelector('#agentInlineTerminalViewport');
-      const result = await window.WhiteboxTerminal.mountForAgent(source, {
-        mount,
-        targetId: ${JSON.stringify(codexForkTerminalId)},
-        forkIfOriginOwned: true,
-      });
-      return {
-        ok: result.ok,
-        reason: result.reason || '',
-        terminalId: result.target?.terminalId || result.target?.id || '',
-        embedded: window.WhiteboxTerminal.embeddedState(),
-      };
+      window.interactionTest.addSession(source);
+      window.interactionTest.emitSnapshot();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return window.WhiteboxApp.openPtyFocus(source.id, { focus: true });
     })()`);
-    assert(codexMount.ok
-      && codexMount.terminalId === codexForkTerminalId
-      && codexMount.embedded?.connected
+    assert(codexFocusOpened === true,
+      'Codex Desktop fork 소스가 full PTY focus 사용자 열기 경로를 시작하지 못했습니다.');
+    await waitForRenderer(win, `(() => {
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return embedded.connected
+        && embedded.agentSessionId === ${JSON.stringify(codexForkSource.id)}
+        && embedded.terminalId === ${JSON.stringify(codexForkTerminalId)}
+        && window.WhiteboxApp.state.ptyFocusSessionId === ${JSON.stringify(codexForkSource.id)}
+        && window.WhiteboxApp.state.ptyFocusTargetId === ${JSON.stringify(codexForkTerminalId)}
+        && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm');
+    })()`, 'Codex fork 실제 PTY가 full PTY focus xterm에 mount되지 않았습니다.');
+    const codexMount = await rendererValue(win, `(() => ({
+        embedded: window.WhiteboxTerminal.embeddedState(),
+        focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
+        focusTargetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
+        focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
+        xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')),
+        oldDomAbsent: ['#detailDrawer', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+          .every(selector => !document.querySelector(selector)),
+        terminalCreateCount: window.interactionTest.getCalls()
+          .filter(call => call.name === 'terminalCreate').length,
+      }))()`);
+    assert(codexMount.embedded?.connected
       && codexMount.embedded?.agentSessionId === codexForkSource.id
-      && codexMount.embedded?.terminalId === codexForkTerminalId,
-    `Codex fork 실제 PTY가 renderer xterm에 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
+      && codexMount.embedded?.terminalId === codexForkTerminalId
+      && codexMount.focusSessionId === codexForkSource.id
+      && codexMount.focusTargetId === codexForkTerminalId
+      && codexMount.focusVisible && codexMount.xtermMounted && codexMount.oldDomAbsent
+      && codexMount.terminalCreateCount === 1,
+    `Codex fork 실제 PTY가 full PTY focus xterm에 정확히 한 번 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLaunchMarker)})`,
       'Codex fork argv marker가 실제 renderer xterm에 hydrate되지 않았습니다.');
 
     const codexLiveMarker = `LTA_CODEX_FORK_LIVE_${Date.now()}`;
     const codexLiveCommand = encodedMarkerCommand(codexLiveMarker);
     const codexPasted = await rendererValue(win, `(() => {
-      const input = document.querySelector('#agentInlineTerminalViewport .xterm-helper-textarea');
+      const input = document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
       if (!input || !window.WhiteboxTerminal.focusEmbedded()) return false;
       const clipboard = new DataTransfer();
       clipboard.setData('text/plain', ${JSON.stringify(codexLiveCommand)});
@@ -574,6 +891,12 @@ async function run() {
     const summary = {
       terminalId,
       pid: session.pid,
+      directTerminalId,
+      directCreationId,
+      directPid: directSession.pid,
+      directProjectionId,
+      mismatchedCreationIdRejected: mismatchedCreationId,
+      directLiveMarker,
       codexForkTerminalId,
       codexForkPid: codexForkSession.pid,
       codexForkSourceSessionId: codexForkSource.id,
@@ -584,22 +907,27 @@ async function run() {
       hydrationMarker,
       scrollHistoryMarker,
       liveMarker,
-      scrolledState,
+      remountedTerminalId: remountResult.mountedTerminalId,
       rendererTerminalWriteCalls: rendererWrites.length,
       shiftTab: shiftTabResult,
       ipcOperations: ipcCalls.map(call => call.operation),
     };
     log(`passed ${JSON.stringify(summary)}`);
-    process.stdout.write(`✓ AI 아래 인라인 PTY → preload → IPC → TerminalHost socket → TerminalManager → node-pty → xterm 통합 검증\n${JSON.stringify(summary, null, 2)}\n`);
+    process.stdout.write(`✓ full PTY focus → preload → IPC → TerminalHost socket → TerminalManager → node-pty → xterm 통합 검증\n${JSON.stringify(summary, null, 2)}\n`);
   } catch (error) {
     log(`failed ${error.stack || error}`);
     if (win && !win.isDestroyed()) {
       try {
         const diagnostic = await rendererValue(win, `(() => {
-          const viewport = document.querySelector('#agentInlineTerminalViewport');
+          const viewport = document.querySelector('#ptyFocusTerminalViewport');
           const screen = viewport?.querySelector(':scope > .terminal-screen');
           return {
             embedded: window.WhiteboxTerminal?.embeddedState?.() || null,
+            focusSessionId: window.WhiteboxApp?.state?.ptyFocusSessionId || '',
+            focusTargetId: window.WhiteboxApp?.state?.ptyFocusTargetId || '',
+            focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
+            oldDomPresent: ['#detailDrawer', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+              .filter(selector => document.querySelector(selector)),
             viewportHtml: viewport?.innerHTML?.slice(0, 2_000) || '',
             rows: [...(screen?.querySelectorAll('.xterm-rows > div') || [])]
               .map(row => row.textContent || ''),

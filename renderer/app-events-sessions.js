@@ -4,7 +4,7 @@ window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createSessionEventBindings = function createSessionEventBindings(context = {}) {
   const {
-    $, state, selectView, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, renderSessions, renderTmuxMap, openDrawer, openSubagentConversation, openExecutionActivity,
+    $, state, selectView, selectViewFromUser = selectView, renderProviderOverview, renderProviderFilter, toggleProviderFilter, announceProviderFilter, renderSessions, openDrawer, openSubagentConversation, openExecutionActivity,
     dispatchAgentCommand, interruptAgentTerminal, openAgentTerminal, copyBridgeCommand, saveDashboardPreferences = () => {},
     controlManagedRun, controlSourceSession = async () => {}, quickRespond, prepareReassignment,
     copyText = async () => false,
@@ -13,7 +13,11 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     moveProjectOrder = () => false,
     archiveSession = () => false,
     refreshProviderUsage = async () => null,
-    openPtyFocus = () => false,
+    resultReviewTargets = () => [],
+    resultReviewPtyTarget = () => null,
+    resultReviewStamp = () => "",
+    markResultReviewComplete = () => 0,
+    openPtyFocusVerified = async () => ({ opened: false }),
   } = context;
 
   let sessionDragJustEnded = false;
@@ -225,6 +229,55 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
   }));
 
   function bindManagementEvents() {
+    const completeResultReview = async (reviewComplete) => {
+      const sessionId = reviewComplete.dataset.resultReviewComplete;
+      const expectedTargets = resultReviewTargets(sessionId, { allowPtyCreation: true }).map(session => ({
+        id: String(session.id || ""),
+        stamp: resultReviewStamp(session),
+      }));
+      if (!expectedTargets.length) {
+        announce(window.WhiteboxI18n.t("agent.open_terminal_failed"));
+        return false;
+      }
+      const ptyTarget = resultReviewPtyTarget(sessionId);
+      const terminalId = String(ptyTarget?.terminalId || ptyTarget?.id || "");
+      reviewComplete.disabled = true;
+      reviewComplete.setAttribute("aria-busy", "true");
+      let opened = false;
+      let succeeded = false;
+      try {
+        if (terminalId) {
+          const outcome = await openPtyFocusVerified(sessionId, {
+            focus: true,
+            targetId: terminalId,
+            terminalId,
+          });
+          opened = outcome?.opened === true;
+        } else {
+          opened = await openDrawer(sessionId, {
+            focus: true,
+            acknowledge: false,
+          }) === true;
+        }
+        if (opened) {
+          const completed = markResultReviewComplete(sessionId, { expectedTargets });
+          if (completed > 0) {
+            succeeded = true;
+            renderSessions("result-reviewed");
+            announce(window.WhiteboxI18n.t("management.result_review_completed_toast"));
+          }
+        }
+      } catch (error) {
+        window.WhiteboxRendererUtils?.reportRecoverableError?.("result-review-open-pty", error);
+      } finally {
+        if (!succeeded) {
+          reviewComplete.disabled = false;
+          reviewComplete.removeAttribute("aria-busy");
+        }
+      }
+      if (!succeeded) announce(window.WhiteboxI18n.t("agent.open_terminal_failed"));
+      return succeeded;
+    };
     $("#operationsOverview").addEventListener("click", async (event) => {
       const usageRefresh = event.target.closest("[data-provider-usage-refresh]");
       if (usageRefresh) {
@@ -254,6 +307,11 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
         requestAnimationFrame(() => $("#liveSection")?.scrollIntoView({ behavior: "smooth", block: "start" }));
         return;
       }
+      const reviewComplete = event.target.closest("[data-result-review-complete]");
+      if (reviewComplete) {
+        await completeResultReview(reviewComplete);
+        return;
+      }
       const open = event.target.closest("[data-open-session]");
       if (open) {
         const session = (state.snapshot?.sessions || []).find(item => item.id === open.dataset.openSession);
@@ -274,7 +332,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       if (reassign) return prepareReassignment(reassign.dataset.reassignSession);
       const filter = event.target.closest("[data-management-filter]");
       if (!filter) return;
-      selectView("waiting", { focusMain: true, managementFilter: filter.dataset.managementFilter });
+      selectViewFromUser("waiting", { focusMain: true, managementFilter: filter.dataset.managementFilter });
       announceManagementFilter(filter.dataset.managementFilter);
     });
     $("#operationsOverview").addEventListener("input", (event) => {
@@ -302,6 +360,11 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       dispatchAgentCommand(form.dataset.agentCommandForm, form);
     });
     $("#attentionInbox").addEventListener("click", async (event) => {
+      const reviewComplete = event.target.closest("[data-result-review-complete]");
+      if (reviewComplete) {
+        await completeResultReview(reviewComplete);
+        return;
+      }
       const filter = event.target.closest("[data-management-inbox-filter]");
       if (filter) {
         state.managementFilter = filter.dataset.managementInboxFilter;
@@ -377,37 +440,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
 
   function bindSessionListEvents() {
     bindSortableSessionList($("#sessionGrid"), "[data-session-id][data-session-sortable]");
-    $("#automationOverview").addEventListener("click", (event) => {
-      const loopSelect = event.target.closest("[data-loop-select]");
-      if (loopSelect) {
-        state.selectedRuntimeLoopId = loopSelect.dataset.loopSelect;
-        renderSessions("focus");
-        requestAnimationFrame(() => $("#automationOverview").querySelector(`[data-loop-select="${CSS.escape(state.selectedRuntimeLoopId)}"]`)?.focus({ preventScroll: true }));
-        return;
-      }
-      const sessionTarget = event.target.closest("[data-loop-open], [data-automation-session]");
-      if (sessionTarget) openDrawer(
-        sessionTarget.dataset.loopOpen || sessionTarget.dataset.automationSession,
-        sessionTarget.hasAttribute("data-result-review") ? { tab: "summary", resultReview: true } : {},
-      );
-    });
-    $("#automationOverview").addEventListener("keydown", (event) => {
-      const loop = event.target.closest("[data-loop-select]");
-      if (loop && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
-        const tabs = Array.from(event.currentTarget.querySelectorAll("[data-loop-select]"));
-        const current = Math.max(0, tabs.indexOf(loop));
-        const next = event.key === "Home"
-          ? 0
-          : event.key === "End"
-            ? tabs.length - 1
-            : (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
-        event.preventDefault();
-        state.selectedRuntimeLoopId = tabs[next].dataset.loopSelect;
-        renderSessions("focus");
-        requestAnimationFrame(() => $("#automationOverview")?.querySelector(`[data-loop-select="${CSS.escape(state.selectedRuntimeLoopId)}"]`)?.focus({ preventScroll: true }));
-        return;
-      }
-    });
     $("#providerOverview").addEventListener("click", (event) => {
       const card = event.target.closest("[data-provider-card]");
       if (!card) return;
@@ -483,15 +515,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       const ptyFocus = event.target.closest("[data-pty-focus-trigger]");
       if (ptyFocus && !ptyFocus.hasAttribute("data-transcript-source")) {
         event.stopPropagation();
-        openPtyFocus(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true });
-        return;
-      }
-      const inlineTerminal = event.target.closest("[data-inline-pty-trigger]");
-      if (inlineTerminal && !inlineTerminal.hasAttribute("data-transcript-source")) {
-        event.stopPropagation();
-        window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger, {
-          focus: !inlineTerminal.closest(".control-room-session"),
-        });
+        await openDrawer(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true });
         return;
       }
       const terminalInterrupt = event.target.closest("[data-terminal-interrupt]");
@@ -530,15 +554,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
         else state.expandedExecutionSessions.add(ownerId);
         renderSessions("expand");
         requestAnimationFrame(() => $("#liveSessionGrid")?.querySelector(`[data-execution-history-toggle="${CSS.escape(ownerId)}"]`)?.focus({ preventScroll: true }));
-        return;
-      }
-      const tmuxPane = event.target.closest('.live-tmux-pane[data-tmux-type="pane"][data-tmux-id]');
-      const tmuxOverview = event.target.closest(".live-tmux-overview-open");
-      if (tmuxPane || tmuxOverview) {
-        event.stopPropagation();
-        if (tmuxPane) state.tmuxFocus = { type: "pane", id: tmuxPane.dataset.tmuxId };
-        selectView("tmux");
-        if (tmuxPane) window.WhiteboxTerminal?.selectTmuxById(tmuxPane.dataset.tmuxId);
         return;
       }
       const bridge = event.target.closest("[data-agent-bridge-copy]");
@@ -596,8 +611,12 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
           if (result?.requiresText) {
             const session = (state.snapshot?.sessions || []).find(item => item.id === sessionId);
             if (session && result.target?.id) {
-              selectView("terminal");
-              await window.WhiteboxTerminal.openForAgent(session, result.target.id);
+              const outcome = await openPtyFocusVerified(session.id, {
+                targetId: result.target.id,
+                terminalId: result.target.terminalId || result.target.id,
+                focus: true,
+              });
+              if (!outcome?.opened) announce(window.WhiteboxI18n.t("agent.open_terminal_failed"));
             }
           }
         } catch (error) {
@@ -680,7 +699,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
   }
 
   function bindGraphNavigationEvents() {
-    $("#openTmuxFromAgentWork").addEventListener("click", () => selectView("tmux", { focusMain: true }));
     $("#graphBreadcrumbs").addEventListener("click", (event) => {
       window.WhiteboxInlineTerminal?.close?.({ render: false });
       if (event.target.closest("[data-graph-reset]")) state.graphFocusId = null;
@@ -698,93 +716,11 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     });
   }
 
-  function bindTmuxMapEvents() {
-    $("#tmuxMap").addEventListener("click", (event) => {
-      const subagentToggle = event.target.closest("[data-tmux-subagents-toggle]");
-      if (subagentToggle) {
-        event.stopPropagation();
-        const paneId = subagentToggle.dataset.tmuxSubagentsToggle;
-        if (state.expandedTmuxSubagents.has(paneId)) state.expandedTmuxSubagents.delete(paneId);
-        else state.expandedTmuxSubagents.add(paneId);
-        renderTmuxMap();
-        requestAnimationFrame(() => $("#tmuxMap").querySelector(`[data-tmux-subagents-toggle="${CSS.escape(paneId)}"]`)?.focus({ preventScroll: true }));
-        return;
-      }
-      const subagentChat = event.target.closest("[data-open-subagent-chat]");
-      if (subagentChat) {
-        event.stopPropagation();
-        openSubagentConversation(subagentChat.dataset.openSubagentChat);
-        return;
-      }
-      const control = event.target.closest("[data-control-tmux]");
-      if (control) {
-        event.stopPropagation();
-        window.WhiteboxTerminal?.selectTmuxById(control.dataset.controlTmux);
-        $("#tmuxControlSection").classList.add("is-open");
-        $("#tmuxControlSection").scrollIntoView({ behavior: "smooth", block: "start" });
-        return;
-      }
-      const open = event.target.closest("[data-open-session]");
-      if (open) {
-        event.stopPropagation();
-        openDrawer(open.dataset.openSession);
-        return;
-      }
-      const node = event.target.closest("[data-tmux-type][data-tmux-id]");
-      if (!node) return;
-      const nextFocus = { type: node.dataset.tmuxType, id: node.dataset.tmuxId };
-      state.tmuxFocus = nextFocus;
-      renderTmuxMap();
-      requestAnimationFrame(() => $("#tmuxMap")?.querySelector(`[data-tmux-type="${CSS.escape(nextFocus.type)}"][data-tmux-id="${CSS.escape(nextFocus.id)}"]`)?.focus({ preventScroll: true }));
-      if (node.dataset.tmuxType === "pane") window.WhiteboxTerminal?.selectTmuxById(node.dataset.tmuxId);
-    });
-    $("#tmuxMap").addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-      const nodes = Array.from(event.currentTarget.querySelectorAll("[data-tmux-type][data-tmux-id]"));
-      const current = Math.max(0, nodes.indexOf(event.target.closest("[data-tmux-type][data-tmux-id]")));
-      const next = event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? nodes.length - 1
-          : (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + nodes.length) % nodes.length;
-      event.preventDefault();
-      nodes.forEach((candidate, index) => { candidate.tabIndex = index === next ? 0 : -1; });
-      nodes[next]?.focus();
-    });
-    $("#tmuxBreadcrumbs").addEventListener("click", (event) => {
-      if (event.target.closest("[data-tmux-reset]")) state.tmuxFocus = null;
-      else {
-        const node = event.target.closest("[data-tmux-type][data-tmux-id]");
-        if (!node) return;
-        state.tmuxFocus = { type: node.dataset.tmuxType, id: node.dataset.tmuxId };
-      }
-      renderTmuxMap();
-    });
-    $("#tmuxBreadcrumbs").addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      const items = Array.from(event.currentTarget.querySelectorAll("button"));
-      const current = Math.max(0, items.indexOf(event.target.closest("button")));
-      const next = event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? items.length - 1
-          : (current + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
-      event.preventDefault();
-      items.forEach((candidate, index) => { candidate.tabIndex = index === next ? 0 : -1; });
-      items[next]?.focus();
-    });
-    $("#tmuxResetBtn").addEventListener("click", () => {
-      state.tmuxFocus = null;
-      renderTmuxMap();
-    });
-  }
-
   function bindSessionAndAgentEvents() {
     bindManagementEvents();
     bindSessionListEvents();
     bindLiveAgentEvents();
     bindGraphNavigationEvents();
-    bindTmuxMapEvents();
   }
 
   return { bindSessionAndAgentEvents };

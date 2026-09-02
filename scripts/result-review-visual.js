@@ -1,12 +1,20 @@
 'use strict';
 
+// This historical visual entry point now verifies the active result-review
+// contract: completion is acknowledged only after the owning PTY is mounted
+// in the full focus surface. No drawer or transcript UI participates.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, session: electronSession } = require('electron');
+const { fileURLToPath, pathToFileURL } = require('url');
 
 process.env.WHITEBOX_TEST_UPDATE_BOOTSTRAP_RACE = '1';
-const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-completion-status-'));
+const root = path.resolve(__dirname, '..');
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-result-review-'));
+const resultSessionId = 'fixture-ended';
+const resultTerminalId = 'terminal-result-review';
+
 app.setPath('userData', userData);
 app.once('quit', () => {
   try { fs.rmSync(userData, { recursive: true, force: true }); } catch {}
@@ -14,12 +22,17 @@ app.once('quit', () => {
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-async function waitFor(win, expression, message, attempts = 120) {
+async function waitFor(win, expression, message, attempts = 180) {
+  let lastError = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (await win.webContents.executeJavaScript(expression)) return;
+    try {
+      if (await win.webContents.executeJavaScript(expression)) return;
+    } catch (error) {
+      lastError = error;
+    }
     await wait(60);
   }
-  throw new Error(message);
+  throw new Error(`${message}${lastError ? ` (${lastError.message})` : ''}`);
 }
 
 async function capture(win, output) {
@@ -32,38 +45,59 @@ async function capture(win, output) {
   return output;
 }
 
-async function completionState(win) {
+function installWorktreeDependencyRedirect() {
+  const value = String(process.env.WHITEBOX_TEST_NODE_MODULES || '').trim();
+  const dependencyRoot = value ? path.resolve(value) : '';
+  const localRoot = path.join(root, 'node_modules');
+  if (!dependencyRoot || !fs.existsSync(dependencyRoot) || fs.existsSync(localRoot)) return;
+  electronSession.defaultSession.webRequest.onBeforeRequest({ urls: ['file:///*'] }, (details, callback) => {
+    let requested = '';
+    try { requested = fileURLToPath(details.url); } catch {}
+    const relative = requested ? path.relative(localRoot, requested) : '..';
+    const alternate = relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+      ? path.join(dependencyRoot, relative)
+      : '';
+    callback(alternate && fs.existsSync(alternate) ? { redirectURL: pathToFileURL(alternate).href } : {});
+  });
+}
+
+const resultCardSelector = `.attention-card[data-management-session="${resultSessionId}"]`;
+const completeButtonSelector = `${resultCardSelector} [data-result-review-complete="${resultSessionId}"]`;
+
+async function resultState(win) {
   return win.webContents.executeJavaScript(`(() => {
-    const control = window.WhiteboxApp;
-    const ended = control.state.snapshot.sessions.find(item => item.id === 'fixture-ended');
-    const projectResult = control.state.snapshot.sessions.find(item => item.id === 'fixture-project-result-ready');
+    const appControl = window.WhiteboxApp;
+    const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
     const projectButton = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
-      .find(item => item.dataset.workspace === 'D:\\\\fixture-other');
-    const card = document.querySelector('.memory-record[data-session-id="fixture-ended"]');
-    const badge = card?.querySelector('.memory-review-status.completed');
-    const badgeBounds = badge?.getBoundingClientRect();
-    const badgeStyle = badge ? getComputedStyle(badge) : null;
+      .find(item => item.dataset.workspace === session.cwd);
+    const card = document.querySelector(${JSON.stringify(resultCardSelector)});
+    const complete = document.querySelector(${JSON.stringify(completeButtonSelector)});
+    const detail = card?.querySelector('[data-open-session]');
+    const target = window.WhiteboxTerminal.agentTargets(session)
+      .find(item => (item.terminalId || item.id) === ${JSON.stringify(resultTerminalId)});
     return {
-      endedTargets: control.resultReviewTargets(ended).length,
-      projectTargets: control.resultReviewTargets(projectResult).length,
-      endedComplete: control.isResultReviewComplete(ended),
-      projectComplete: control.isResultReviewComplete(projectResult),
-      storedReview: Boolean(localStorage.getItem(control.RESULT_REVIEW_STORAGE_KEY)),
-      projectCount: Number(projectButton?.dataset.resultReadyCount || 0),
-      projectBadge: Boolean(projectButton?.closest('.project-sidebar-project')
-        ?.querySelector('.project-sidebar-result-ready')),
+      stamp: appControl.resultReviewStamp(session),
+      pending: appControl.resultReviewTargets(session).length,
+      complete: appControl.isResultReviewComplete(session),
+      storedReview: Boolean(localStorage.getItem(appControl.RESULT_REVIEW_STORAGE_KEY)),
       cardVisible: Boolean(card?.getBoundingClientRect().height),
-      badgeVisible: Boolean(badgeBounds && badgeBounds.width > 0 && badgeBounds.height > 0),
-      badgeText: badge?.textContent.trim() || '',
-      badgeColor: badgeStyle?.color || '',
-      legacyReviewTrigger: Boolean(card?.matches('[data-result-review="true"]')
-        || card?.querySelector('[data-result-review], .memory-review-action')),
-      legacyReviewCopy: /확인 상태가 저장|결과 확인하기/.test(card?.textContent || ''),
+      completeVisible: Boolean(complete?.getBoundingClientRect().height),
+      completeLabel: complete?.textContent.trim() || '',
+      primaryBeforeDetail: Boolean(complete && detail && (complete.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      quickResponseAbsent: !card?.querySelector('[data-attention-quick], [data-agent-command-form]'),
+      projectCount: Number(projectButton?.dataset.resultReadyCount || 0),
+      projectBadge: Boolean(projectButton?.closest('.project-sidebar-project')?.classList.contains('has-result-ready')),
+      ptyEligible: appControl.canOpenPtyFocus(session),
+      exactTarget: target ? { id: target.id, terminalId: target.terminalId || target.id } : null,
+      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer', '#ptyFocusChildModal',
+        '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
+        .every(selector => !document.querySelector(selector)),
     };
   })()`);
 }
 
-app.whenReady().then(async () => {
+async function run() {
+  installWorktreeDependencyRedirect();
   const win = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -79,8 +113,9 @@ app.whenReady().then(async () => {
   });
 
   try {
-    await win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-    await waitFor(win, 'Boolean(window.WhiteboxApp?.initialized)', '앱 초기화를 기다리다 시간이 초과되었습니다.');
+    await win.loadFile(path.join(root, 'renderer', 'index.html'));
+    await waitFor(win, 'Boolean(window.WhiteboxApp?.initialized && window.interactionTest && window.WhiteboxTerminal)',
+      '앱과 PTY fixture 초기화를 기다리다 시간이 초과되었습니다.');
     await waitFor(
       win,
       `window.WhiteboxApp.state.update.status === 'current'
@@ -89,166 +124,196 @@ app.whenReady().then(async () => {
       'bootstrap 도중 끝난 업데이트 확인 상태를 놓쳐 확인 화면이 멈췄습니다.',
     );
 
-    await win.webContents.executeJavaScript(`(() => {
+    const setup = await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      const current = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
       const completedAt = new Date().toISOString();
-      window.interactionTest.addSession({
-        id: 'fixture-project-result-ready', externalId: 'fixture-project-result-ready-external',
-        provider: 'codex', model: 'gpt-fixture', title: '자동 시작 작업 완료',
-        cwd: 'D:\\\\fixture-other', originCwd: 'D:\\\\fixture-other', workspace: '자동 시작 작업 결과',
-        status: 'completed', statusDetail: '작업 완료', completionObserved: true,
-        completedAt, updatedAt: completedAt, parentId: null, childIds: [], executions: [],
-        messages: [{ id: 'project-result', role: 'assistant', text: '요청한 자동 시작 작업을 모두 마쳤습니다.', timestamp: completedAt }],
-        outcome: { status: 'completed', verified: true, completedAt, summary: '자동 시작 작업을 모두 마쳤습니다.' },
+      const updated = window.interactionTest.updateSession(${JSON.stringify(resultSessionId)}, {
+        provider: 'gpt', status: 'completed', statusDetail: '확인할 완료 결과가 있습니다.',
+        completedAt, updatedAt: completedAt,
+        controlCapabilities: { ...(current.controlCapabilities || {}), pty: true },
+        presentation: { ...(current.presentation || {}), conversationSurface: 'pty' },
+        runtimePresence: [{ kind: 'terminal', terminalId: ${JSON.stringify(resultTerminalId)}, pid: 43001, label: '완료 결과 담당 PTY' }],
+        attention: { category: 'none', required: false },
+        outcome: { status: 'completed', verified: true, completedAt, summary: '첫 번째 완료 결과를 확인해 주세요.' },
+      });
+      const signature = window.interactionTest.connectionSignatureForSession(updated);
+      window.interactionTest.addTerminal({
+        id: ${JSON.stringify(resultTerminalId)}, type: 'agent', title: '완료 결과 담당 PTY', status: 'running',
+        pid: 43001, cwd: updated.cwd, provider: updated.provider, bridgeId: updated.id,
+        agentResumeSessionId: updated.externalId, agentConnectionSignature: signature,
+        conversationBound: true, background: true, backend: 'direct', distro: '', outputSequence: 0,
+        replay: 'RESULT_REVIEW_PTY_READY\\r\\n',
       });
       window.interactionTest.emitSnapshot();
-      const control = window.WhiteboxApp;
+      window.interactionTest.emitTerminalState('added');
       window.WhiteboxI18n.setLocale('ko');
-      control.state.workspace = control.state.snapshot.sessions.find(item => item.id === 'fixture-root').cwd;
-      control.state.providerFilters.clear();
-      control.state.search = '';
-      control.selectView('active');
-      control.render();
+      appControl.state.workspace = updated.cwd;
+      appControl.state.providerFilters.clear();
+      appControl.state.search = '';
+      appControl.selectView('waiting');
+      appControl.render();
+      return { cwd: updated.cwd, signature };
     })()`);
-    await waitFor(
-      win,
-      `Boolean(document.querySelector('.memory-record[data-session-id="fixture-ended"].task-completed .memory-review-status.completed'))`,
-      '완료된 작업 카드에서 작업 완료 상태를 찾지 못했습니다.',
-    );
 
-    const completion = await completionState(win);
-    if (!completion.cardVisible || !completion.badgeVisible
-      || completion.badgeText !== '현재 상태: 작업 완료'
-      || completion.endedTargets !== 0 || completion.projectTargets !== 0
-      || completion.endedComplete || completion.projectComplete || completion.storedReview
-      || completion.projectCount !== 0 || completion.projectBadge
-      || completion.legacyReviewTrigger || completion.legacyReviewCopy) {
-      throw new Error(`완료 결과의 단일 완료 상태가 올바르지 않습니다: ${JSON.stringify(completion)}`);
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      return appControl.resultReviewTargets(session).length === 1
+        && appControl.canOpenPtyFocus(session)
+        && window.WhiteboxTerminal.agentTargets(session).some(target =>
+          (target.terminalId || target.id) === ${JSON.stringify(resultTerminalId)})
+        && Boolean(document.querySelector(${JSON.stringify(completeButtonSelector)}));
+    })()`, '확인 목록에 exact PTY가 연결된 완료 결과 카드를 찾지 못했습니다.');
+
+    const initial = await resultState(win);
+    if (initial.pending !== 1 || initial.complete || initial.storedReview
+      || !initial.cardVisible || !initial.completeVisible || initial.completeLabel !== '확인 완료'
+      || !initial.primaryBeforeDetail || !initial.quickResponseAbsent
+      || initial.projectCount < 1 || !initial.projectBadge
+      || !initial.ptyEligible || initial.exactTarget?.terminalId !== resultTerminalId
+      || !initial.oldDomAbsent) {
+      throw new Error(`완료 결과의 초기 확인/PTY 계약이 올바르지 않습니다: ${JSON.stringify(initial)}`);
     }
 
-    const outputDir = path.join(__dirname, '..', 'artifacts');
+    const outputDir = path.join(root, 'artifacts');
     fs.mkdirSync(outputDir, { recursive: true });
     const outputs = {};
     const themeStates = {};
     win.show();
     for (const theme of ['dark', 'light']) {
       await win.webContents.executeJavaScript(`window.WhiteboxTheme.setTheme(${JSON.stringify(theme)})`);
-      await waitFor(
-        win,
-        `document.documentElement.dataset.theme === ${JSON.stringify(theme)}
-          && Boolean(document.querySelector('.memory-record[data-session-id="fixture-ended"] .memory-review-status.completed'))`,
-        `${theme} 테마의 작업 완료 상태가 준비되지 않았습니다.`,
-      );
+      await waitFor(win, `document.documentElement.dataset.theme === ${JSON.stringify(theme)}
+        && Boolean(document.querySelector(${JSON.stringify(completeButtonSelector)}))`,
+      `${theme} 테마의 완료 결과 확인 카드가 준비되지 않았습니다.`);
       themeStates[theme] = await win.webContents.executeJavaScript(`(() => {
-        const badge = document.querySelector('.memory-record[data-session-id="fixture-ended"] .memory-review-status.completed');
-        const probe = document.createElement('i');
-        probe.style.color = 'var(--theme-success)';
-        document.body.appendChild(probe);
-        const successColor = getComputedStyle(probe).color;
-        probe.remove();
+        const button = document.querySelector(${JSON.stringify(completeButtonSelector)});
+        const bounds = button?.getBoundingClientRect();
         return {
-          badgeColor: getComputedStyle(badge).color,
-          successColor,
-          reviewTrigger: Boolean(document.querySelector('[data-result-review], .memory-review-action')),
+          buttonVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+          label: button?.textContent.trim() || '',
+          oldDomAbsent: ['#detailDrawer', '#drawerContent', '#drawerComposer',
+            '#automationOverview', '#tmuxSection', '#tmuxCreateModal'].every(selector => !document.querySelector(selector)),
         };
       })()`);
-      if (themeStates[theme].badgeColor !== themeStates[theme].successColor
-        || themeStates[theme].reviewTrigger) {
-        throw new Error(`${theme} 테마의 작업 완료 상태가 올바르지 않습니다: ${JSON.stringify(themeStates[theme])}`);
+      if (!themeStates[theme].buttonVisible || themeStates[theme].label !== '확인 완료'
+        || !themeStates[theme].oldDomAbsent) {
+        throw new Error(`${theme} 테마의 완료 결과 primary 동작이 올바르지 않습니다: ${JSON.stringify(themeStates[theme])}`);
       }
       outputs[theme] = await capture(win, path.join(outputDir, `whitebox-result-review-${theme}.png`));
     }
     fs.copyFileSync(outputs.light, path.join(outputDir, 'whitebox-result-review.png'));
 
+    // Looking at the project clears only its badge; it must not complete the
+    // independent result-review stamp.
     await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      appControl.acknowledgeProjectNotices(${JSON.stringify(setup.cwd)});
+      appControl.renderWorkspaces();
+    })()`);
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      const projectButton = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+        .find(item => item.dataset.workspace === session.cwd);
+      return appControl.resultReviewTargets(session).length === 1
+        && !appControl.isResultReviewComplete(session)
+        && Number(projectButton?.dataset.resultReadyCount || 0) === 0
+        && Boolean(document.querySelector(${JSON.stringify(completeButtonSelector)}));
+    })()`, '프로젝트 알림 확인이 완료 결과 확인 상태까지 잘못 지웠습니다.');
+    const projectAcknowledged = await resultState(win);
+
+    await win.webContents.executeJavaScript(`(() => {
+      window.interactionTest.clearCalls();
+      document.querySelector(${JSON.stringify(completeButtonSelector)})?.click();
+    })()`);
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      const stored = JSON.parse(localStorage.getItem(appControl.RESULT_REVIEW_STORAGE_KEY) || '{}');
+      return appControl.isResultReviewComplete(session)
+        && appControl.resultReviewTargets(session).length === 0
+        && stored[session.id]?.stamp === appControl.resultReviewStamp(session)
+        && !document.querySelector(${JSON.stringify(resultCardSelector)})
+        && !document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')
+        && appControl.state.ptyFocusSessionId === session.id
+        && appControl.state.ptyFocusTargetId === ${JSON.stringify(resultTerminalId)}
+        && embedded.connected && embedded.agentSessionId === session.id
+        && embedded.terminalId === ${JSON.stringify(resultTerminalId)}
+        && Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm'));
+    })()`, '확인 완료가 exact PTY mount 성공 뒤 review 저장·카드 제거까지 완료하지 못했습니다.');
+    const firstReview = await win.webContents.executeJavaScript(`(() => ({
+      calls: window.interactionTest.getCalls(),
+      focusVisible: !document.querySelector('#ptyFocusSurface')?.classList.contains('hidden'),
+      backgroundInactive: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
+      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer', '#ptyFocusChildModal',
+        '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
+        .every(selector => !document.querySelector(selector)),
+      composerAbsent: !document.querySelector('[data-inline-terminal-composer]'),
+    }))()`);
+    if (!firstReview.focusVisible || !firstReview.backgroundInactive || !firstReview.oldDomAbsent
+      || !firstReview.composerAbsent || firstReview.calls.some(call => call.name === 'terminalCreate')) {
+      throw new Error(`확인 완료가 기존 담당 PTY만 여는 focus-only 경로가 아닙니다: ${JSON.stringify(firstReview)}`);
+    }
+
+    const newResult = await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      const before = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      const previousStamp = appControl.resultReviewStamp(before);
+      appControl.closePtyFocus({ restore: false, suppressManualSelection: true });
       const completedAt = new Date(Date.now() + 5000).toISOString();
-      window.interactionTest.updateSession('fixture-ended', {
-        completedAt,
-        updatedAt: completedAt,
-        outcome: { status: 'completed', verified: true, completedAt, summary: '새로 도착한 완료 결과' },
+      window.interactionTest.updateSession(${JSON.stringify(resultSessionId)}, {
+        completedAt, updatedAt: completedAt,
+        messages: [...(before.messages || []), {
+          id: 'result-review-new-stamp', role: 'assistant', text: '두 번째 완료 결과가 도착했습니다.', timestamp: completedAt,
+        }],
+        outcome: { status: 'completed', verified: true, completedAt, summary: '두 번째 완료 결과가 도착했습니다.' },
       });
       window.interactionTest.emitSnapshot();
+      appControl.selectView('waiting');
+      appControl.render();
+      return { previousStamp };
     })()`);
-    await waitFor(
-      win,
-      `(() => {
-        const control = window.WhiteboxApp;
-        const session = control.state.snapshot.sessions.find(item => item.id === 'fixture-ended');
-        return control.resultReviewTargets(session).length === 0
-          && !control.isResultReviewComplete(session)
-          && !document.querySelector('[data-session-id="fixture-ended"][data-result-review="true"]')
-          && !localStorage.getItem(control.RESULT_REVIEW_STORAGE_KEY);
-      })()`,
-      '새 완료 결과에 불필요한 결과 확인 단계가 다시 나타났습니다.',
-    );
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      const projectButton = [...document.querySelectorAll('#projectSidebarList [data-workspace]')]
+        .find(item => item.dataset.workspace === session.cwd);
+      return appControl.resultReviewStamp(session) !== ${JSON.stringify(newResult.previousStamp)}
+        && !appControl.isResultReviewComplete(session)
+        && appControl.resultReviewTargets(session).length === 1
+        && Boolean(document.querySelector(${JSON.stringify(completeButtonSelector)}))
+        && Number(projectButton?.dataset.resultReadyCount || 0) >= 1;
+    })()`, '새 완료 결과 stamp가 확인 카드와 프로젝트 배지를 다시 만들지 못했습니다.');
+    const reappeared = await resultState(win);
 
     await win.webContents.executeJavaScript(`(() => {
-      const control = window.WhiteboxApp;
-      control.state.workspace = control.state.snapshot.sessions.find(item => item.id === 'fixture-root').cwd;
-      control.state.providerFilters.clear();
-      control.state.search = '';
-      control.selectView('all');
-      control.render();
+      window.interactionTest.clearCalls();
+      document.querySelector(${JSON.stringify(completeButtonSelector)})?.click();
     })()`);
-    await waitFor(
-      win,
-      `Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-waiting"]'))`,
-      '구조화된 답변 요청이 홈 확인 목록에서 사라졌습니다.',
-    );
-    const home = await win.webContents.executeJavaScript(`(() => ({
-      waiting: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-waiting"]')),
-      ended: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-ended"]')),
-      projectResult: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-project-result-ready"]')),
-      resultReviewEntry: Boolean(document.querySelector('.home-attention-item[data-result-review]')),
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      const stored = JSON.parse(localStorage.getItem(appControl.RESULT_REVIEW_STORAGE_KEY) || '{}');
+      return appControl.isResultReviewComplete(session)
+        && appControl.resultReviewTargets(session).length === 0
+        && stored[session.id]?.stamp === appControl.resultReviewStamp(session)
+        && !document.querySelector(${JSON.stringify(resultCardSelector)});
+    })()`, '새 완료 결과의 두 번째 확인 상태가 저장되지 않았습니다.');
+    const secondReview = await win.webContents.executeJavaScript(`(() => ({
+      terminalCreates: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+      terminalId: window.WhiteboxTerminal.embeddedState().terminalId,
+      focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId,
     }))()`);
-    if (!home.waiting || home.ended || home.projectResult || home.resultReviewEntry) {
-      throw new Error(`홈 확인 목록이 실제 답변 요청과 완료 결과를 구분하지 못했습니다: ${JSON.stringify(home)}`);
+    if (secondReview.terminalCreates !== 0 || secondReview.terminalId !== resultTerminalId
+      || secondReview.focusSessionId !== resultSessionId) {
+      throw new Error(`새 stamp 확인도 동일한 담당 PTY를 재사용해야 합니다: ${JSON.stringify(secondReview)}`);
     }
 
-    await win.webContents.executeJavaScript(`(() => {
-      const control = window.WhiteboxApp;
-      control.selectView('waiting');
-      control.render();
-    })()`);
-    await waitFor(
-      win,
-      `Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]'))`,
-      '확인 대기 화면에서 구조화된 답변 요청을 찾지 못했습니다.',
-    );
-    const waiting = await win.webContents.executeJavaScript(`(() => ({
-      request: Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]')),
-      ended: Boolean(document.querySelector('.attention-card[data-management-session="fixture-ended"]')),
-      projectResult: Boolean(document.querySelector('.attention-card[data-management-session="fixture-project-result-ready"]')),
-      resultReviewEntry: Boolean(document.querySelector('.attention-card [data-result-review]')),
-    }))()`);
-    if (!waiting.request || waiting.ended || waiting.projectResult || waiting.resultReviewEntry) {
-      throw new Error(`확인 대기 화면이 실제 답변 요청과 완료 결과를 구분하지 못했습니다: ${JSON.stringify(waiting)}`);
-    }
-
-    await win.reload();
-    await waitFor(win, 'Boolean(window.WhiteboxApp?.initialized)', '재시작 후 앱 초기화를 기다리다 시간이 초과되었습니다.');
-    await win.webContents.executeJavaScript(`(() => {
-      const control = window.WhiteboxApp;
-      control.state.workspace = control.state.snapshot.sessions.find(item => item.id === 'fixture-root').cwd;
-      control.selectView('waiting');
-      control.render();
-    })()`);
-    const persisted = await win.webContents.executeJavaScript(`(() => {
-      const control = window.WhiteboxApp;
-      const ended = control.state.snapshot.sessions.find(item => item.id === 'fixture-ended');
-      return {
-        storedReview: Boolean(localStorage.getItem(control.RESULT_REVIEW_STORAGE_KEY)),
-        pending: control.resultReviewTargets(ended).length,
-        complete: control.isResultReviewComplete(ended),
-        waiting: Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]')),
-        ended: Boolean(document.querySelector('.attention-card[data-management-session="fixture-ended"]')),
-      };
-    })()`);
-    if (persisted.storedReview || persisted.pending !== 0 || persisted.complete
-      || !persisted.waiting || persisted.ended) {
-      throw new Error(`재시작 후 불필요한 결과 확인 상태가 되살아났습니다: ${JSON.stringify(persisted)}`);
-    }
-
-    process.stdout.write(`확인 필요·작업 완료 UI 검증 통과\n${JSON.stringify({ completion, home, waiting, persisted, themeStates }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);
+    process.stdout.write(`완료 결과 → verified PTY focus → 확인 저장/재등장 검증 통과\n${JSON.stringify({
+      setup, initial, projectAcknowledged, firstReview, reappeared, secondReview, themeStates,
+    }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);
   } catch (error) {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;
@@ -256,4 +321,10 @@ app.whenReady().then(async () => {
     win.destroy();
     app.exit(process.exitCode || 0);
   }
+}
+
+app.whenReady().then(run).catch(error => {
+  process.stderr.write(`${error.stack || error}\n`);
+  process.exitCode = 1;
+  app.exit(1);
 });

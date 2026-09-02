@@ -74,7 +74,7 @@ html[data-theme="light"] {
   --theme-border-strong: #a89f93;
   --theme-text: #24211f;
   --theme-text-secondary: #514c47;
-  --theme-text-muted: #6f6861;
+  --theme-text-muted: #625b55;
   --theme-accent: #6254d9;
   --theme-accent-strong: #493cbd;
   --theme-accent-soft: #efecff;
@@ -235,7 +235,6 @@ html[data-theme] :where(
   .sidebar-footer small,
   .settings-section > header p,
   .settings-section p,
-  .drawer-section p,
   .terminal-resource-tip
 ) {
   color: var(--theme-text-muted);
@@ -243,7 +242,6 @@ html[data-theme] :where(
 
 html[data-theme] :where(
   .eyebrow,
-  .nav-group-label,
   .section-title,
   .settings-section > header span,
   .provider-section-title
@@ -287,11 +285,11 @@ html[data-theme] :is(.brand-shortcut-button, .sidebar-settings-button, .provider
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] :is(.nav-item, .advanced-tools-nav > summary) {
+html[data-theme] .nav-item {
   color: var(--theme-text-secondary);
 }
 
-html[data-theme] :is(.nav-item, .advanced-tools-nav > summary):hover {
+html[data-theme] .nav-item:hover {
   background: var(--theme-surface-subtle);
   color: var(--theme-text);
 }
@@ -303,7 +301,7 @@ html[data-theme] .sidebar-settings-button.active {
   box-shadow: inset 3px 0 var(--theme-accent);
 }
 
-html[data-theme] :is(.nav-item b, .advanced-tools-nav > summary b) {
+html[data-theme] .nav-item b {
   background: var(--theme-surface-muted);
   color: var(--theme-text-secondary);
 }
@@ -314,18 +312,12 @@ html[data-theme] .nav-item.active b {
 }
 
 html[data-theme] :is(
-  .advanced-tools-nav,
-  .advanced-tools-list,
   .sidebar-footer,
   .sidebar-projects,
   .sidebar > .view-nav,
   .sidebar > .sidebar-section
 ) {
   border-color: var(--theme-border-soft);
-}
-
-html[data-theme] .advanced-tools-nav {
-  background: var(--theme-surface-raised);
 }
 
 html[data-theme] .sidebar-app-version,
@@ -381,6 +373,22 @@ html[data-theme] :is(.project-sidebar-copy strong, .project-sidebar-session b) {
 
 html[data-theme] :is(.project-sidebar-copy small, .project-sidebar-session small) {
   color: var(--theme-text-muted);
+}
+
+html[data-theme="dark"] :is(
+  .project-sidebar-source-copy small,
+  .project-sidebar-session small,
+  .project-sidebar-session-more
+) {
+  color: #b0b0ba;
+}
+
+html[data-theme="light"] :is(
+  .project-sidebar-source-copy small b,
+  .project-sidebar-session-empty,
+  .project-sidebar-session-more
+) {
+  color: #4b6070;
 }
 
 html[data-theme] :is(.project-sidebar-icon, .provider-mini-mark, .provider-mark) {
@@ -545,76 +553,20 @@ html[data-theme="light"] .theme-toggle-button .theme-toggle-moon {
 }
 
 /* Shared surfaces */
-html[data-theme] :is(
-  .provider-card,
-  .provider-status-card,
-  .operations-summary-card,
-  .attention-summary-card,
-  .runtime-summary-card,
-  .session-card,
-  .stat-card,
-  .settings-card,
-  .language-settings-card,
-  .provider-visibility-card,
-  .update-panel,
-  .settings-meta-grid article,
-  .provider-usage-overview,
-  .provider-limit-card,
-  .attention-inbox,
-  .automation-overview,
-  .runtime-loop-detail,
-  .runtime-schedule-card,
-  .tmux-resource-card,
-  .tmux-summary-card,
-  .tmux-distro-node,
-  .tmux-session-node,
-  .tmux-window-node,
-  .tmux-pane-node,
-  .memory-record,
-  .memory-wisdom > article,
-  .agent-flow-session,
-  .execution-work-card,
-  .control-room-project-group,
-  .control-room-session,
-  .control-room-main,
-  .control-room-node
-) {
+html[data-theme] :is(.provider-card, .provider-status-card, .operations-summary-card, .attention-summary-card, .session-card, .stat-card, .settings-card, .language-settings-card, .provider-visibility-card, .update-panel, .settings-meta-grid article, .provider-usage-overview, .provider-limit-card, .attention-inbox, .memory-record, .memory-wisdom > article, .agent-flow-session, .execution-work-card, .control-room-project-group, .control-room-session, .control-room-main, .control-room-node) {
   border-color: var(--theme-border);
   background: var(--theme-surface);
   color: var(--theme-text);
   box-shadow: var(--theme-shadow-soft);
 }
 
-html[data-theme] :is(
-  .provider-card,
-  .provider-status-card,
-  .operations-summary-card,
-  .attention-summary-card,
-  .runtime-summary-card,
-  .session-card,
-  .runtime-schedule-card,
-  .control-room-main,
-  .control-room-node,
-  .memory-record
-):hover {
+html[data-theme] :is(.provider-card, .provider-status-card, .operations-summary-card, .attention-summary-card, .session-card, .control-room-main, .control-room-node, .memory-record):hover {
   border-color: var(--theme-border-strong);
   background: var(--theme-surface-raised);
   box-shadow: var(--theme-shadow);
 }
 
-html[data-theme] :is(
-  .section-head,
-  .live-section-head,
-  .control-room-head,
-  .control-room-toolbar,
-  .control-project-heading,
-  .control-project-header,
-  .session-card-head,
-  .terminal-section-head,
-  .tmux-section-head,
-  .runtime-overview-head,
-  .settings-head
-) {
+html[data-theme] :is(.section-head, .live-section-head, .control-room-head, .control-room-toolbar, .control-project-heading, .control-project-header, .session-card-head, .terminal-section-head, .settings-head) {
   border-color: var(--theme-border-soft);
   color: var(--theme-text);
 }
@@ -628,16 +580,7 @@ html[data-theme] #providerFilter {
   color: var(--theme-text);
 }
 
-html[data-theme] :is(
-  .section-head p,
-  .section-head small,
-  .control-project-heading small,
-  .session-card p,
-  .session-card small,
-  .agent-flow-session p,
-  .execution-work-card p,
-  .runtime-schedule-card small
-) {
+html[data-theme] :is(.section-head p, .section-head small, .control-project-heading small, .session-card p, .session-card small, .agent-flow-session p, .execution-work-card p) {
   color: var(--theme-text-muted);
 }
 
@@ -659,56 +602,14 @@ html[data-theme] :is(input, select, textarea):focus {
   box-shadow: 0 0 0 3px var(--theme-focus-ring);
 }
 
-html[data-theme] :is(
-  .filter-button,
-  .filter-reset,
-  .ghost-button,
-  .icon-button,
-  .sort-control,
-  .top-icon-action,
-  .guide-toggle,
-  .sync-state,
-  .close-button,
-  .load-more,
-  .control-room-toolbar button,
-  .control-room-toolbar select,
-  .control-project-heading button,
-  .terminal-create-actions button,
-  .terminal-controlbar button,
-  .terminal-resource-panel button,
-  .tmux-actions button,
-  .tmux-section-actions button:not(.accent):not(.danger),
-  .update-actions .ghost-button,
-  .run-prompt-examples button,
-  .path-field button,
-  .run-workspace-suggestions button
-) {
+html[data-theme] :is(.filter-button, .filter-reset, .ghost-button, .icon-button, .sort-control, .top-icon-action, .guide-toggle, .sync-state, .close-button, .load-more, .control-room-toolbar button, .control-room-toolbar select, .control-project-heading button, .terminal-create-actions button, .terminal-controlbar button, .terminal-resource-panel button, .update-actions .ghost-button, .run-prompt-examples button, .path-field button, .run-workspace-suggestions button) {
   border-color: var(--theme-border);
   background: var(--theme-surface);
   color: var(--theme-text-secondary);
   box-shadow: none;
 }
 
-html[data-theme] :is(
-  .filter-button,
-  .filter-reset,
-  .ghost-button,
-  .icon-button,
-  .top-icon-action,
-  .guide-toggle,
-  .close-button,
-  .load-more,
-  .control-room-toolbar button,
-  .control-project-heading button,
-  .terminal-create-actions button,
-  .terminal-controlbar button,
-  .terminal-resource-panel button,
-  .tmux-actions button,
-  .tmux-section-actions button:not(.accent):not(.danger),
-  .run-prompt-examples button,
-  .path-field button,
-  .run-workspace-suggestions button
-):hover:not(:disabled) {
+html[data-theme] :is(.filter-button, .filter-reset, .ghost-button, .icon-button, .top-icon-action, .guide-toggle, .close-button, .load-more, .control-room-toolbar button, .control-project-heading button, .terminal-create-actions button, .terminal-controlbar button, .terminal-resource-panel button, .run-prompt-examples button, .path-field button, .run-workspace-suggestions button):hover:not(:disabled) {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
   color: var(--theme-accent-strong);
@@ -781,40 +682,13 @@ html[data-theme] button:disabled .conversation-send-label {
   color: var(--theme-text-secondary);
 }
 
-html[data-theme] .detail-drawer[data-terminal-chat="true"] .conversation-send:disabled .conversation-send-label {
-  color: inherit;
-}
-
-html[data-theme] :is(
-  .provider-filter.active,
-  .filter-button.active,
-  button[aria-pressed="true"],
-  .drawer-tab.active,
-  .quality-tab.active,
-  .runtime-loop-tab.selected,
-  .status-running,
-  .runtime-now-mark,
-  .runtime-active-phase,
-  .runtime-loop-phase.active,
-  .control-main-now,
-  .tmux-session-node.attached,
-  .recommended-choice
-) {
+html[data-theme] :is(.provider-filter.active, .filter-button.active, button[aria-pressed="true"], .quality-tab.active, .status-running, .control-main-now, .recommended-choice) {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] :is(
-  .status-pill,
-  .provider-pill,
-  .session-tag,
-  .agent-flow-badge,
-  .runtime-kind,
-  .delivery-badge,
-  .meta-chip,
-  .drawer-meta .meta-chip
-) {
+html[data-theme] :is(.status-pill, .provider-pill, .session-tag, .agent-flow-badge, .delivery-badge, .meta-chip) {
   border-color: var(--theme-border);
   background: var(--theme-surface-subtle);
   color: var(--theme-text-secondary);
@@ -878,12 +752,7 @@ html[data-theme] :is(
   color: var(--theme-info);
 }
 
-html[data-theme] :is(
-  .runtime-open-task,
-  .terminal-focus-button,
-  .terminal-slash-trigger,
-  .terminal-session-tools > summary
-) {
+html[data-theme] :is(.terminal-focus-button, .terminal-slash-trigger, .terminal-session-tools > summary) {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
   color: var(--theme-accent-strong);
@@ -1277,22 +1146,6 @@ html[data-theme] .chat-content.markdown pre {
   color: var(--theme-text);
 }
 
-html[data-theme] .chat-truncated {
-  border-color: var(--theme-warning-border);
-  background: var(--theme-warning-soft);
-  color: var(--theme-warning);
-}
-
-html[data-theme] :is(.chat-activities, .chat-activities article) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] :is(.chat-activities > summary, .chat-activities article header) {
-  color: var(--theme-text-muted);
-}
-
 html[data-theme] .agent-workflow-canvas {
   border-color: var(--theme-border);
   background-color: var(--theme-surface-raised);
@@ -1334,25 +1187,15 @@ html[data-theme] .agent-workflow-selected .agent-node {
   box-shadow: var(--theme-shadow), inset 3px 0 var(--theme-accent);
 }
 
-/* Drawers and dialogs */
-html[data-theme] :is(.modal-backdrop, .drawer-backdrop) {
+/* Dialogs */
+html[data-theme] .modal-backdrop {
   background: var(--theme-overlay);
   backdrop-filter: blur(7px);
 }
 
-html[data-theme] .session-reset-modal {
-  background: var(--theme-overlay);
-}
-
 html[data-theme] :is(
-  .detail-drawer,
-  .drawer-head,
-  .drawer-tabs,
-  .drawer-content,
-  .drawer-composer,
   .run-modal,
   .quality-modal,
-  .session-reset-dialog,
   .terminal-modal
 ) {
   border-color: var(--theme-border);
@@ -1360,31 +1203,9 @@ html[data-theme] :is(
   color: var(--theme-text);
 }
 
-html[data-theme] :is(.drawer-head, .drawer-tabs, .modal-head, .quality-modal-head) {
+html[data-theme] :is(.modal-head, .quality-modal-head) {
   border-color: var(--theme-border-soft);
   background: var(--theme-surface-raised);
-}
-
-html[data-theme] .detail-drawer {
-  box-shadow: var(--theme-shadow);
-}
-
-html[data-theme] .session-reset-dialog-icon {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .session-reset-dialog header p {
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .session-reset-dialog h2 {
-  color: var(--theme-text);
-}
-
-html[data-theme] .session-reset-dialog > p {
-  color: var(--theme-text-secondary);
 }
 
 html[data-theme] .quality-modal-head p {
@@ -1415,157 +1236,14 @@ html[data-theme] .quality-command-list button:hover {
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] .drawer-tab {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .drawer-tab:hover {
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text);
-}
-
-html[data-theme] .drawer-tab.active {
-  box-shadow: inset 0 -2px var(--theme-accent);
-}
-
-html[data-theme] .drawer-tab.active::after {
-  background: var(--theme-accent);
-}
-
 html[data-theme] :is(
-  .drawer-section,
-  .drawer-summary-card,
-  .chat-row,
-  .chat-bubble,
-  .chat-history-head,
-  .chat-earlier-history,
-  .drawer-history-refreshing,
-  .conversation-context-meter,
   .agent-communication-event,
-  .subagent-work-source,
-  .subagent-work-card,
   .agent-workflow-node,
   .agent-communication-panel
 ) {
   border-color: var(--theme-border);
   background: var(--theme-surface-raised);
   color: var(--theme-text-secondary);
-}
-
-html[data-theme] .chat-row.user .chat-bubble {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-text);
-}
-
-html[data-theme] .drawer-composer .conversation-composer,
-html[data-theme] body.conversation-context-open .drawer-composer .conversation-composer {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  box-shadow: var(--theme-shadow);
-}
-
-html[data-theme] .drawer-composer .conversation-composer:focus-within {
-  border-color: var(--theme-accent);
-  background: var(--theme-surface);
-  box-shadow:
-    0 0 0 3px var(--theme-focus-ring),
-    var(--theme-shadow);
-}
-
-html[data-theme] .drawer-composer textarea {
-  color: var(--theme-text);
-}
-
-html[data-theme] .drawer-composer textarea::placeholder {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .drawer-meta .origin-project-meta {
-  border-color: var(--theme-info-border);
-  background: var(--theme-info-soft);
-  color: var(--theme-info);
-}
-
-html[data-theme] .drawer-meta .session-reset-button {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .drawer-flow-button {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .drawer-flow-button:hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .drawer-flow-button > span {
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .chat-history-head {
-  background: var(--theme-surface);
-}
-
-html[data-theme] .chat-history-head button {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .chat-history-head button:hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .chat-earlier-history button {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(.chat-earlier-history small, .drawer-history-refreshing small) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .detail-drawer .chat-prompt-actions button,
-html[data-theme] .detail-drawer .chat-prompt-actions [data-user-prompt-copy] {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] :is(.subagent-call-anchor, .subagent-call-event) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text);
-}
-
-html[data-theme] .subagent-call-connector b,
-html[data-theme] .subagent-call-icon {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-}
-
-html[data-theme] :is(
-  .subagent-call-copy small,
-  .subagent-call-copy .subagent-call-clock,
-  .subagent-call-copy > span
-) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .subagent-call-copy .subagent-call-timing {
-  border-color: var(--theme-warning-border);
-  background: var(--theme-warning-soft);
-  color: var(--theme-warning);
 }
 
 html[data-theme] :is(
@@ -1579,18 +1257,6 @@ html[data-theme] :is(
   .management-attention-detail,
   .management-outcome,
   .agent-command-panel,
-  .execution-purpose-card,
-  .execution-process-card,
-  .execution-process-card > header,
-  .execution-process-card dl,
-  .execution-process-card dl > div,
-  .execution-code-card,
-  .execution-code-card > header,
-  .execution-code-card pre,
-  .execution-code-card > p,
-  .execution-timeline,
-  .subagent-assignment-card,
-  .subagent-assignment-card aside,
   .shortcut-help-list > div,
   .quality-search,
   .quality-command-list button,
@@ -1622,26 +1288,7 @@ html[data-theme] .management-result-review > button:focus-visible {
   outline-color: var(--theme-focus-ring);
 }
 
-/* Attention, runtime and tmux */
-html[data-theme] .runtime-overview-emblem {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-overview-emblem::before,
-html[data-theme] .runtime-overview-emblem i {
-  border-color: color-mix(in srgb, var(--theme-accent) 32%, transparent);
-}
-
-html[data-theme] :is(
-  .runtime-overview-title p,
-  .runtime-schedule-lane > header span,
-  .runtime-loop-lane-head > div > span,
-  .runtime-loop-kicker
-) {
-  color: var(--theme-accent-strong);
-}
+/* Attention and live tmux */
 
 html[data-theme] :is(
   .attention-inbox-head,
@@ -1750,431 +1397,10 @@ html[data-theme] :is(
   color: var(--theme-text-muted);
 }
 
-html[data-theme] :is(
-  .runtime-overview-counts > *,
-  .runtime-schedule-list,
-  .runtime-loop-tabs,
-  .runtime-loop-footer,
-  .runtime-loop-footer dl > div
-) {
-  border-color: var(--theme-border-soft);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-schedule-card.selected,
-html[data-theme] .runtime-schedule-card:focus-visible {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-}
-
-html[data-theme] .runtime-schedule-card.paused {
-  border-color: var(--theme-border-soft);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-schedule-card.incomplete {
-  border-color: var(--theme-warning-border);
-  background: var(--theme-warning-soft);
-}
-
-html[data-theme] .runtime-schedule-card.incomplete .runtime-schedule-time,
-html[data-theme] .runtime-schedule-card.incomplete > i {
-  color: var(--theme-warning);
-}
-
-html[data-theme] .runtime-schedule-time {
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-schedule-card.selected .runtime-schedule-time {
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-schedule-provider {
-  color: color-mix(in srgb, var(--provider, var(--theme-accent)) 44%, var(--theme-text));
-}
-
-html[data-theme] .runtime-overview-counts > * b {
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-overview-counts > * small {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] body[data-current-view="runtime"] :is(
-  .runtime-more-schedules,
-  .runtime-more-loops
-) > summary {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-tab {
-  border-color: transparent;
-  background: transparent;
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-tab:hover {
-  background: var(--theme-surface-muted);
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-now-strip {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-now-strip time {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] :is(
-  .runtime-loop-phase,
-  .runtime-loop-phase-index em,
-  .runtime-loop-return > span,
-  .runtime-loop-return > b,
-  .runtime-current-signal > span
-) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-phase.done {
-  border-color: var(--theme-success-border);
-  background: var(--theme-success-soft);
-}
-
-html[data-theme] .runtime-loop-phase.active {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  box-shadow: inset 0 2px var(--theme-accent), var(--theme-shadow-soft);
-}
-
-html[data-theme] :is(
-  .runtime-now-strip b,
-  .runtime-current-signal b,
-  .runtime-loop-phase > b,
-  .runtime-loop-footer dd
-) {
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(
-  .runtime-now-strip p,
-  .runtime-now-strip time,
-  .runtime-current-signal p,
-  .runtime-loop-phase > small,
-  .runtime-loop-footer dt
-) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-overview-grid {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-schedule-lane {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-loop-lane {
-  background: var(--theme-surface);
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-schedule-list,
-html[data-theme] .runtime-loop-tabs {
-  scrollbar-color: var(--theme-border-strong) transparent;
-}
-
-html[data-theme] :is(.runtime-schedule-lane > header b, .runtime-loop-lane-head > div > b) {
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(.runtime-schedule-lane > header em, .runtime-loop-lane-head > div > small) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-loop-tab {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-tab:hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-loop-tab.selected {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-loop-tab-mark {
-  border-color: color-mix(in srgb, var(--provider) 42%, var(--theme-border));
-  background: var(--theme-surface-subtle);
-  color: var(--provider);
-}
-
-html[data-theme] .runtime-loop-tab small {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-loop-tab > i {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-muted);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-tab.selected > i {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] :is(.runtime-loop-detail > header, .runtime-loop-footer) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-}
-
-html[data-theme] .runtime-loop-detail h3 {
-  color: var(--theme-text);
-}
-
-html[data-theme] .runtime-loop-detail header p {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-open-task {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-active-phase {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-}
-
-html[data-theme] .runtime-now-strip {
-  border-color: var(--theme-accent-border);
-  background: linear-gradient(90deg, var(--theme-accent-soft), var(--theme-surface-raised) 58%, var(--theme-surface));
-}
-
-html[data-theme] .runtime-now-strip time {
-  background: var(--theme-surface-muted);
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-loop-phase {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] .runtime-loop-phase-index {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .runtime-loop-phase-index em,
-html[data-theme] .runtime-loop-phase > i {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-muted);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-phase.done {
-  border-color: var(--theme-success-border);
-  background: var(--theme-success-soft);
-}
-
-html[data-theme] .runtime-loop-phase.done > i {
-  border-color: var(--theme-success-border);
-  background: var(--theme-success-soft);
-  color: var(--theme-success);
-}
-
-html[data-theme] .runtime-loop-phase.active > i,
-html[data-theme] .runtime-loop-phase.active .runtime-loop-phase-index em {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-loop-return {
-  border-color: var(--theme-accent-border);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .runtime-loop-return > :is(span, b) {
-  background: var(--theme-surface);
-}
-
-html[data-theme] .runtime-loop-footer dl > div {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] .runtime-loop-footer dd {
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(.runtime-schedule-empty, .runtime-loop-empty) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] :is(
-  .tmux-section,
-  .tmux-map,
-  .tmux-map-toolbar,
-  .tmux-stats,
-  .tmux-control-section,
-  .tmux-resource-panel,
-  .tmux-agent-block,
-  .tmux-pane-node footer,
-  .tmux-subagents-toggle,
-  .tmux-subagent-row
-) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .tmux-distro-group {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-  color: var(--theme-text);
-}
-
-html[data-theme] .tmux-distro-node {
-  border-color: var(--theme-accent-border);
-  background: linear-gradient(90deg, var(--theme-accent-soft), var(--theme-surface));
-  color: var(--theme-text);
-}
-
-html[data-theme] .tmux-distro-node:hover {
-  border-color: var(--theme-accent-border);
-  background: linear-gradient(90deg, var(--theme-accent-soft), var(--theme-surface));
-}
-
-html[data-theme] .tmux-distro-node > span,
-html[data-theme] .tmux-distro-node > b {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .tmux-distro-line,
-html[data-theme] .tmux-link-line::before {
-  background: var(--theme-border-strong);
-}
-
-html[data-theme] .tmux-link-line i {
-  border-color: var(--theme-border-strong);
-}
-
-html[data-theme] .tmux-subagents {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] :is(.tmux-subagents-toggle:hover, .tmux-subagents-toggle:focus-visible) {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .tmux-subagents-toggle small,
-html[data-theme] :is(.tmux-distro-node small, .tmux-distro-node em) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .tmux-subagents-toggle > i {
-  color: var(--theme-accent);
-}
-
-html[data-theme] .tmux-pane-main:hover {
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] .tmux-pane-head i {
-  background: var(--theme-surface-muted);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .tmux-pane-node.active .tmux-pane-head i {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .tmux-pane-command,
-html[data-theme] .tmux-agent-metrics b {
-  color: var(--theme-text);
-}
-
-html[data-theme] .tmux-context-track {
-  background: var(--theme-surface-muted);
-}
-
-html[data-theme] .tmux-pane-actions button {
+html[data-theme] :is(.live-tmux-card) {
   border-color: var(--theme-border);
   background: var(--theme-surface);
   color: var(--theme-text-secondary);
-}
-
-html[data-theme] .tmux-pane-actions button:hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .tmux-pane-actions .tmux-secondary-conversation {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] :is(.tmux-session-node, .tmux-window-node, .tmux-pane-node) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(.tmux-session-node, .tmux-window-node, .tmux-pane-node):hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-}
-
-html[data-theme] :is(.tmux-session-node.attached, .tmux-window-node.active, .tmux-pane-node.active) {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-}
-
-html[data-theme] :is(.tmux-empty, .live-tmux-card, .tmux-simple-summary) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .tmux-empty > span {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
 }
 
 html[data-theme] .live-tmux-card.active {
@@ -2182,16 +1408,12 @@ html[data-theme] .live-tmux-card.active {
   box-shadow: inset 3px 0 var(--theme-accent);
 }
 
-html[data-theme] :is(.live-tmux-card-head small, .tmux-simple-summary small) {
+html[data-theme] :is(.live-tmux-card-head small) {
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] :is(.live-tmux-card-head b, .tmux-simple-summary strong) {
+html[data-theme] :is(.live-tmux-card-head b) {
   color: var(--theme-text-secondary);
-}
-
-html[data-theme] .tmux-simple-summary span {
-  color: var(--theme-text);
 }
 
 html[data-theme] .terminal-tmux-pane {
@@ -2211,42 +1433,10 @@ html[data-theme] .terminal-tmux-pane.active {
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] .tmux-selection-badge {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] :is(
-  .tmux-stats strong,
-  .tmux-distro-node > b,
-  .tmux-session-node strong,
-  .tmux-window-node strong,
-  .tmux-pane-head b,
-  .tmux-agent-block strong
-) {
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(
-  .tmux-section-head > p,
-  .tmux-stats span,
-  .tmux-stats small,
-  .tmux-distro-node small,
-  .tmux-session-node small,
-  .tmux-window-node small,
-  .tmux-pane-cwd,
-  .tmux-pane-head span,
-  .tmux-agent-block small
-) {
-  color: var(--theme-text-muted);
-}
-
 /* Settings */
 html[data-theme] :is(
   .settings-help-card,
   .settings-meta-grid,
-  .attention-popup-settings-card,
   .source-plugin-settings-card,
   .source-plugin-option,
   .source-plugin-option.enabled,
@@ -2265,7 +1455,7 @@ html[data-theme] .settings-help-card {
     var(--theme-surface);
 }
 
-html[data-theme] :is(.language-settings-mark, .attention-popup-settings-mark, .source-plugin-mark, .settings-emblem) {
+html[data-theme] :is(.language-settings-mark, .source-plugin-mark, .settings-emblem) {
   border-color: var(--theme-accent-border);
   background: var(--theme-accent-soft);
   color: var(--theme-accent);
@@ -2273,7 +1463,6 @@ html[data-theme] :is(.language-settings-mark, .attention-popup-settings-mark, .s
 
 html[data-theme] :is(
   .language-settings-copy > span,
-  .attention-popup-settings-copy > span,
   .source-plugin-settings-copy > span,
   .settings-help-copy > span,
   .provider-visibility-copy > span,
@@ -2284,7 +1473,6 @@ html[data-theme] :is(
 
 html[data-theme] :is(
   .language-settings-copy h3,
-  .attention-popup-settings-copy h3,
   .source-plugin-settings-copy h3,
   .source-plugin-copy b,
   .settings-help-copy h3,
@@ -2296,7 +1484,6 @@ html[data-theme] :is(
 
 html[data-theme] :is(
   .language-settings-copy p,
-  .attention-popup-settings-copy p,
   .source-plugin-settings-copy p,
   .source-plugin-copy small,
   .settings-help-copy p,
@@ -2489,14 +1676,6 @@ html[data-theme] body[data-current-view="settings"] .source-plugin-toggle {
 html[data-theme] body[data-current-view="settings"] .source-plugin-toggle i {
   background: var(--theme-text-muted);
 }
-
-html[data-theme] body[data-current-view="settings"] .attention-popup-switch {
-  border-color: var(--theme-border-strong);
-  background: var(--theme-surface-raised);
-}
-
-html[data-theme] body[data-current-view="settings"] .attention-popup-switch b { color: var(--theme-text); }
-html[data-theme] body[data-current-view="settings"] .attention-popup-switch small { color: var(--theme-text-muted); }
 
 html[data-theme] .run-permission-mode select {
   border-color: var(--theme-border);
@@ -3164,7 +2343,7 @@ body[data-current-view="settings"] #settingsSection > * {
   order: 0;
 }
 
-body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
+body[data-current-view="settings"] :is(.settings-head, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
   grid-column: 1 / -1;
 }
 
@@ -3205,7 +2384,7 @@ body[data-current-view="settings"] :is(.language-settings-mark, .theme-settings-
   height: 44px;
 }
 
-body[data-current-view="settings"] :is(.language-settings-copy h3, .theme-settings-copy h3, .attention-popup-settings-copy h3, .provider-visibility-copy h3) {
+body[data-current-view="settings"] :is(.language-settings-copy h3, .theme-settings-copy h3, .provider-visibility-copy h3) {
   margin: 0;
   color: var(--theme-text);
   font-size: 18px;
@@ -3216,7 +2395,7 @@ body[data-current-view="settings"] .theme-settings-copy > span {
   display: none;
 }
 
-body[data-current-view="settings"] :is(.language-settings-copy p, .theme-settings-copy p, .attention-popup-settings-copy p, .provider-visibility-copy p) {
+body[data-current-view="settings"] :is(.language-settings-copy p, .theme-settings-copy p, .provider-visibility-copy p) {
   margin-top: 7px;
   color: var(--theme-text-secondary);
   font-size: 13px;
@@ -3363,7 +2542,7 @@ body[data-current-view="settings"] .update-panel:is(
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body[data-current-view="settings"] :is(.settings-head, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
+  body[data-current-view="settings"] :is(.settings-head, .source-plugin-settings-card, .provider-visibility-card, .update-panel) {
     grid-column: auto;
   }
 }
@@ -3374,7 +2553,7 @@ body[data-current-view="settings"] .update-panel:is(
     margin-top: 0;
   }
 
-  body[data-current-view="settings"] :is(.language-settings-card, .theme-settings-card, .attention-popup-settings-card, .source-plugin-settings-card, .provider-visibility-card) {
+  body[data-current-view="settings"] :is(.language-settings-card, .theme-settings-card, .source-plugin-settings-card, .provider-visibility-card) {
     min-height: 0;
     padding: 18px;
   }
@@ -3450,90 +2629,10 @@ html[data-theme] .provider-filter-chip.selected {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-success) 14%, transparent);
 }
 
-html[data-theme] .project-view-tabs .advanced-tools-list .nav-item:hover,
-html[data-theme] .project-view-tabs .advanced-tools-list .nav-item.active {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
 html[data-theme] .home-attention-list .home-attention-item:first-child {
   border-color: var(--theme-warning-border);
   background: var(--theme-surface-raised);
   box-shadow: inset 3px 0 var(--theme-warning);
-}
-
-/* Runtime: the overview rail is navigation accent; an unreviewed result is a
- * warning, never a large success-green region. */
-html[data-theme] .automation-overview::before {
-  background: var(--theme-accent);
-  box-shadow: 0 0 18px color-mix(in srgb, var(--theme-accent) 32%, transparent);
-}
-
-html[data-theme] body[data-current-view="runtime"] .runtime-result-next {
-  border-color: var(--theme-warning-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text);
-  box-shadow: inset 3px 0 var(--theme-warning);
-}
-
-html[data-theme] body[data-current-view="runtime"] .runtime-result-next b {
-  color: var(--theme-text);
-}
-
-html[data-theme] body[data-current-view="runtime"] .runtime-result-next small {
-  color: var(--theme-text-secondary);
-}
-
-html[data-theme] .runtime-loop-kicker {
-  color: var(--theme-warning);
-}
-
-html[data-theme] .runtime-loop-kicker i {
-  background: var(--theme-warning);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--theme-warning) 28%, transparent);
-}
-
-html[data-theme] .runtime-active-phase {
-  border-color: var(--theme-warning-border);
-  background: var(--theme-warning-soft);
-}
-
-html[data-theme] .runtime-active-phase :is(small, b, em) {
-  color: var(--theme-warning);
-}
-
-html[data-theme] .runtime-loop-spine {
-  background: var(--theme-accent-border);
-}
-
-html[data-theme] .runtime-loop-spine::after {
-  border-color: var(--theme-accent);
-}
-
-html[data-theme] .runtime-loop-spine span {
-  background: var(--theme-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--theme-accent) 34%, transparent);
-}
-
-/* Current runtime markup uses details/summary. Cover both it and the older
- * header shape without changing disclosure layout. */
-html[data-theme] :is(
-  .runtime-schedule-lane > summary,
-  .runtime-other-work > summary,
-  .runtime-loop-detail > summary
-) {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text);
-}
-
-html[data-theme] :is(
-  .runtime-schedule-lane > summary,
-  .runtime-other-work > summary,
-  .runtime-loop-detail > summary
-) :is(small, span, em) {
-  color: var(--theme-text-muted);
 }
 
 /* Settings update states. */
@@ -3606,25 +2705,11 @@ html[data-theme] body[data-current-view="settings"] .update-impact-note b {
 
 /* Terminal and tmux chrome. The xterm canvas keeps its dedicated light/dark
  * palette, while every surrounding control follows the application palette. */
-html[data-theme] :is(
-  #terminalSection .terminal-layout,
-  .terminal-layout,
-  .tmux-control-layout,
-  .terminal-resource-head,
-  .terminal-console-head,
-  .terminal-tabs-row,
-  .terminal-key-actions,
-  .terminal-stage,
-  .terminal-console-pane
-) {
+html[data-theme] :is(.terminal-layout, .terminal-resource-head, .terminal-console-head, .terminal-tabs-row, .terminal-key-actions, .terminal-stage, .terminal-console-pane) {
   border-color: var(--terminal-border);
   background: var(--terminal-surface);
   color: var(--terminal-fg);
   box-shadow: none;
-}
-
-html[data-theme] :is(#terminalSection .terminal-layout, .tmux-control-layout) {
-  box-shadow: var(--theme-shadow-soft);
 }
 
 html[data-theme] :is(.terminal-resource-head, .terminal-console-head) {
@@ -3919,86 +3004,11 @@ html[data-theme] .execution-activity-retained:hover {
   color: var(--theme-accent-strong);
 }
 
-/* Drawer loading/error, lifecycle, usage, and conversation slash states. */
-html[data-theme] .drawer-loading {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .drawer-loading span,
-html[data-theme] .drawer-history-refreshing span {
-  border-color: var(--theme-border);
-  border-top-color: var(--theme-accent);
-}
-
-html[data-theme] .drawer-loading b {
-  color: var(--theme-text);
-}
-
-html[data-theme] .drawer-loading small,
-html[data-theme] .drawer-error span,
-html[data-theme] .drawer-history-refreshing {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .drawer-history-refreshing {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] .drawer-error button {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .lifecycle-list::before {
-  background: var(--theme-border);
-}
-
-html[data-theme] .life-node {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .lifecycle-event.running .life-node {
-  border-color: var(--theme-success-border);
-  background: var(--theme-success-soft);
-  color: var(--theme-success);
-  box-shadow: none;
-}
-
-html[data-theme] .lifecycle-event.failed .life-node {
-  border-color: var(--theme-danger-border);
-  background: var(--theme-danger-soft);
-  color: var(--theme-danger);
-}
-
-html[data-theme] .big-context {
-  background: var(--theme-surface-muted);
-}
-
-html[data-theme] .context-scale,
-html[data-theme] .lifecycle-event time {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] :is(.token-hero, .token-tile, .now-strip, .token-note) {
+/* Usage summary and conversation slash states. */
+html[data-theme] .now-strip {
   border-color: var(--theme-border);
   background: var(--theme-surface-raised);
   color: var(--theme-text-secondary);
-}
-
-html[data-theme] .token-row > div {
-  border-color: var(--theme-border-soft);
-}
-
-html[data-theme] .token-row > div:last-child {
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] :is(.token-hero-head span, .token-tile span, .token-tile small, .token-note) {
-  color: var(--theme-text-muted);
 }
 
 html[data-theme] .conversation-slash-menu {
@@ -4033,75 +3043,6 @@ html[data-theme] .conversation-slash-menu-list > button {
 
 html[data-theme] .conversation-slash-menu-list > button:hover,
 html[data-theme] .conversation-slash-menu-list > button.active {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-/* Mobile tools and memory filters use the same warm/iris system as desktop. */
-html[data-theme] .mobile-tools-menu {
-  border-color: var(--theme-border);
-  background: var(--theme-surface);
-  color: var(--theme-text);
-  scrollbar-color: var(--theme-border-strong) var(--theme-surface-muted);
-  box-shadow: 0 0 0 100vmax var(--theme-overlay), var(--theme-shadow);
-}
-
-html[data-theme] .mobile-tools-menu::-webkit-scrollbar-track {
-  background: var(--theme-surface-muted);
-}
-
-html[data-theme] .mobile-tools-menu::-webkit-scrollbar-thumb {
-  border-color: var(--theme-surface-muted);
-  background: var(--theme-border-strong);
-}
-
-html[data-theme] .mobile-tools-menu > .mobile-tools-head small {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] #mobileToolsCloseBtn,
-html[data-theme] .mobile-tools-menu > button,
-html[data-theme] .mobile-project-picker {
-  border-color: var(--theme-border);
-  background: var(--theme-surface-raised);
-  color: var(--theme-text);
-}
-
-html[data-theme] #mobileToolsCloseBtn:hover,
-html[data-theme] .mobile-tools-menu > button:hover,
-html[data-theme] .mobile-project-picker > summary:hover {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] .mobile-project-picker > summary {
-  color: var(--theme-text);
-}
-
-html[data-theme] .mobile-project-picker > summary em,
-html[data-theme] :is(
-  .mobile-tools-menu > button > span > small,
-  .mobile-project-picker > summary > span > small
-) {
-  color: var(--theme-text-muted);
-}
-
-html[data-theme] .mobile-project-picker-body {
-  border-color: var(--theme-border-soft);
-  background: var(--theme-surface-subtle);
-}
-
-html[data-theme] .mobile-project-picker-body > #mobileAddWorkspaceBtn {
-  border-color: var(--theme-accent-border);
-  background: var(--theme-surface);
-  color: var(--theme-accent-strong);
-}
-
-html[data-theme] :is(
-  .mobile-tools-menu > button > i,
-  .mobile-project-picker > summary > i
-) {
   background: var(--theme-accent-soft);
   color: var(--theme-accent-strong);
 }
@@ -4385,14 +3326,6 @@ html[data-theme] .workflow-origin-icon {
   color: var(--theme-accent-strong);
 }
 
-html[data-theme] .conversation-context-track {
-  background: var(--theme-surface-muted);
-}
-
-html[data-theme] .conversation-context-track i {
-  background: var(--theme-accent-action);
-}
-
 html[data-theme] .terminal-target-meta .terminal-target-facts i {
   border-color: var(--terminal-border);
   background: var(--theme-surface-subtle);
@@ -4658,12 +3591,12 @@ html[data-theme] .control-session-review.simple-review .control-review-provider 
 
 html[data-theme] .control-session-review.simple-review .control-review-provider small {
   color: var(--theme-text-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 html[data-theme] .control-session-review.simple-review .control-review-provider b {
   color: var(--theme-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 html[data-theme] .control-review-copy {
@@ -4697,7 +3630,7 @@ html[data-theme] .control-review-copy small {
 
 html[data-theme] .control-review-more {
   color: var(--theme-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
   white-space: nowrap;
 }
@@ -4774,4 +3707,67 @@ html[data-theme] .brand-icon {
   border-radius: 9px;
   background: transparent;
   box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+}
+
+/* PTY focus intentionally remains a dark terminal workspace in both app
+ * themes. This final-layer contract prevents generic light-theme typography
+ * rules from painting dark text over its terminal chrome. */
+html[data-theme] .pty-focus-surface {
+  --bg: #071016;
+  --panel: #0b141b;
+  --panel-2: #101b23;
+  --line: #344752;
+  --line-soft: #263943;
+  --text: #f1f5f8;
+  --muted: #b8c7d1;
+  --dim: #a9b7c1;
+  --green: #4dd2a2;
+  --amber: #f1b95f;
+  --red: #ff7b91;
+  color: #f1f5f8;
+}
+
+html[data-theme] #ptyFocusSurface :is(
+  #ptyFocusBackBtn,
+  #ptyFocusBackBtn b,
+  .pty-focus-heading h1,
+  .pty-focus-root-status b,
+  .pty-focus-flow-region > header b,
+  .pty-focus-node-copy b,
+  .agent-inline-terminal-title b,
+  .agent-inline-terminal-state b,
+  .agent-inline-terminal-empty b
+) {
+  color: #f1f5f8 !important;
+}
+
+html[data-theme] #ptyFocusSurface .pty-focus-heading p {
+  color: #4dd2a2 !important;
+}
+
+html[data-theme] #ptyFocusSurface :is(
+  .pty-focus-heading > span,
+  .pty-focus-root-status small,
+  .pty-focus-flow-region > header small,
+  .pty-focus-flow-lane > header b,
+  .pty-focus-flow-lane > header span,
+  .pty-focus-node-copy small,
+  .pty-focus-node-copy em,
+  .pty-focus-node-state,
+  .pty-focus-flow-empty,
+  .agent-inline-terminal-title small,
+  .agent-inline-terminal-state small,
+  .agent-inline-terminal-empty small
+) {
+  color: #c1ced6 !important;
+}
+
+html[data-theme] #ptyFocusSurface .pty-focus-node-mark {
+  color: #eef5f8 !important;
+}
+
+html[data-theme] #ptyFocusSurface .agent-inline-terminal-actions button {
+  border-color: #49616d;
+  background: #0c171d;
+  color: #d7e2e8 !important;
 }

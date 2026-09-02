@@ -39,14 +39,6 @@ html[data-theme] .project-sidebar-group.has-attention :is(
   color: var(--theme-text-secondary) !important;
 }
 
-html[data-theme] .runtime-now-strip time {
-  color: var(--theme-text-secondary) !important;
-}
-
-html[data-theme] .subagent-call-copy .subagent-call-timing {
-  color: var(--theme-warning) !important;
-}
-
 /* A composite search field gets one focus affordance, not nested teal/violet
  * rings from the input and its container. */
 html[data-theme] .quality-search:focus-within {
@@ -71,26 +63,6 @@ html[data-theme] body[data-current-view="terminal"] .terminal-command-submit:dis
   background: var(--theme-surface-muted) !important;
   color: var(--theme-text-muted) !important;
   box-shadow: none !important;
-}
-
-html[data-theme] .chat-delivery-status {
-  color: var(--theme-success) !important;
-}
-
-html[data-theme] :is(
-  .chat-delivery-status.confirming,
-  .chat-delivery-status.received,
-  .chat-delivery-status.responding
-) {
-  color: var(--theme-info) !important;
-}
-
-html[data-theme] :is(.chat-delivery-status.delayed, .chat-delivery-status.uncertain) {
-  color: var(--theme-warning) !important;
-}
-
-html[data-theme] :is(.chat-delivery-status.failed, .chat-delivery-status.interrupted) {
-  color: var(--theme-danger) !important;
 }
 
 html[data-theme] :is(.global-stat > span, .operations-metrics span) {
@@ -150,6 +122,30 @@ html[data-theme] button:disabled .conversation-send-label {
   color: var(--theme-text-secondary) !important;
 }
 
-html[data-theme] .detail-drawer[data-terminal-chat="true"] .conversation-send:disabled .conversation-send-label {
-  color: inherit !important;
+/* The sidebar attention surface and PTY workspace sit on deliberately dark
+ * backgrounds in both app themes. These overrides live in the first cascade
+ * layer so they can beat the global important metadata color above. */
+html[data-theme="dark"] :is(
+  .project-sidebar-source-copy small,
+  .project-sidebar-session small,
+  .project-sidebar-session-more
+) {
+  color: #9696a0 !important;
+}
+
+html[data-theme] #ptyFocusSurface :is(
+  .pty-focus-heading > span,
+  .pty-focus-root-status small,
+  .pty-focus-flow-region > header small,
+  .pty-focus-flow-lane > header b,
+  .pty-focus-flow-lane > header span,
+  .pty-focus-node-copy small,
+  .pty-focus-node-copy em,
+  .pty-focus-node-state,
+  .pty-focus-flow-empty,
+  .agent-inline-terminal-title small,
+  .agent-inline-terminal-state small,
+  .agent-inline-terminal-empty small
+) {
+  color: #c1ced6 !important;
 }

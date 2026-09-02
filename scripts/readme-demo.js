@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { app, BrowserWindow } = require('electron');
 
 const root = path.resolve(__dirname, '..');
@@ -15,33 +14,37 @@ process.env.WHITEBOX_DEMO_CAPTURE = '1';
 process.env.WHITEBOX_TEST_INSTANCE = '1';
 require('../main');
 
-const frameDir = path.join(root, 'artifacts', 'readme-demo-frames');
 const assetDir = path.join(root, 'docs', 'assets');
-const gifOutput = path.join(assetDir, 'whitebox-demo.gif');
 const screenshotOutput = path.join(assetDir, 'whitebox-dashboard.png');
-let frameIndex = 0;
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function captureSettled(win, count = 6) {
+  let image = null;
+  for (let index = 0; index < count; index += 1) {
+    image = await win.webContents.capturePage();
+    await delay(90);
+  }
+  return image;
+}
+
 async function waitForRenderer(win, attempts = 80) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const ready = await win.webContents.executeJavaScript("window.WhiteboxApp?.state?.providers?.length === 4 && typeof window.WhiteboxApp.render === 'function'");
+    const ready = await win.webContents.executeJavaScript("window.WhiteboxApp?.state?.providers?.length >= 4 && typeof window.WhiteboxApp.render === 'function' && Boolean(window.interactionTest)");
     if (ready) return;
     await delay(100);
   }
   throw new Error('Whitebox 화면이 준비되지 않았습니다.');
 }
 
-async function capture(win, count, intervalMs = 90) {
-  for (let index = 0; index < count; index += 1) {
-    const image = await win.webContents.capturePage();
-    const output = path.join(frameDir, `frame-${String(frameIndex).padStart(3, '0')}.png`);
-    fs.writeFileSync(output, image.toPNG());
-    frameIndex += 1;
-    await delay(intervalMs);
+async function waitFor(win, expression, message, attempts = 120) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await win.webContents.executeJavaScript(expression)) return;
+    await delay(100);
   }
+  throw new Error(message);
 }
 
 async function installFixture(win) {
@@ -52,6 +55,8 @@ async function installFixture(win) {
     const usage = (input, output, total) => ({ input, output, cachedInput: Math.round(input * .42), cacheWrite: 0, reasoning: Math.round(output * .15), total });
     const context = (used, windowSize = 258400) => ({ used, window: windowSize, percent: used / windowSize * 100, source: 'session' });
     const message = (id, role, text, offset) => ({ id, role, text, timestamp: new Date(now - offset).toISOString() });
+    const fixtureRoot = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-root');
+    if (!fixtureRoot) throw new Error('기존 PTY fixture root를 찾지 못했습니다.');
     const session = (value) => ({
       externalId: value.id.replace(/[^a-z0-9]/gi, '-'),
       model: value.provider === 'codex' ? 'gpt-5' : (value.provider === 'claude' ? 'claude-sonnet' : (value.provider === 'gemini' ? 'gemini-2.5-pro' : 'grok-4')),
@@ -74,7 +79,12 @@ async function installFixture(win) {
       ...value,
     });
     const root = session({
-      id: 'demo:codex:root', provider: 'codex', title: '결제 흐름 안정성 검토', status: 'running', offset: 1000,
+      ...fixtureRoot,
+      id: fixtureRoot.id, provider: fixtureRoot.provider, externalId: fixtureRoot.externalId,
+      environment: fixtureRoot.environment, runtimePresence: fixtureRoot.runtimePresence,
+      controlCapabilities: fixtureRoot.controlCapabilities,
+      cwd: '/Users/demo/whitebox', originCwd: '/Users/demo/whitebox', workspace: 'Whitebox Demo',
+      title: '결제 흐름 안정성 검토', status: 'running', offset: 1000,
       childIds: ['demo:claude:child', 'demo:gemini:child', 'demo:grok:child'],
       request: '결제 흐름을 점검하고 위험한 부분을 찾아줘.',
       reply: '세 개의 도움 AI와 코드, 테스트, 문서를 나눠 확인하고 있습니다.',
@@ -101,6 +111,11 @@ async function installFixture(win) {
       session({ id: 'demo:grok:root', provider: 'grok', title: '느린 테스트 원인 조사', status: 'waiting', offset: 6300 }),
     ];
     const sessions = [root, claude, gemini, grok, ...extra];
+    for (const current of window.interactionTest.getSnapshot().sessions) {
+      if (current.id !== root.id) window.interactionTest.removeSession(current.id);
+    }
+    window.interactionTest.updateSession(root.id, root);
+    for (const item of sessions.slice(1)) window.interactionTest.addSession(item);
     const summaries = window.WhiteboxApp.state.providers.map(provider => {
       const owned = sessions.filter(item => item.provider === provider.id);
       return {
@@ -182,76 +197,94 @@ async function installFixture(win) {
 }
 
 async function setFocus(win, id, targetSelector) {
-  await win.webContents.executeJavaScript(`(() => {
-    window.__ensureWhiteboxReadmeDemo(${JSON.stringify(id)});
+  const clicked = await win.webContents.executeJavaScript(`(() => {
+    const trigger = document.querySelector(${JSON.stringify(targetSelector)});
     window.__readmeDemoPoint(${JSON.stringify(targetSelector)}, true);
-    window.WhiteboxApp.renderSessions('focus');
+    trigger?.click();
     window.__readmeDemoFinishMotion();
+    return Boolean(trigger);
   })()`);
+  if (!clicked) throw new Error(`README 데모의 PTY 진입점을 찾지 못했습니다: ${targetSelector}`);
+  await waitFor(win, `(() => {
+    const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
+    return window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+      && window.WhiteboxApp.state.ptyFocusTargetId === 'terminal-main'
+      && embedded.connected === true
+      && embedded.agentSessionId === 'fixture-root'
+      && embedded.terminalId === 'terminal-main'
+      && Boolean(document.querySelector('#ptyFocusTerminalViewport [data-terminal-screen="terminal-main"] .xterm'));
+  })()`, `README 데모의 ${id} 노드가 정확한 root PTY를 열지 못했습니다.`);
   await delay(180);
   await win.webContents.executeJavaScript('window.__readmeDemoFinishMotion()');
 }
 
-async function showDrawer(win, id) {
+async function closeFocus(win) {
   await win.webContents.executeJavaScript(`(() => {
-    window.__ensureWhiteboxReadmeDemo(${JSON.stringify(id)});
-    window.__readmeDemoPoint('[data-open-session="${id}"]', true);
-    window.WhiteboxApp.state.selectedId = ${JSON.stringify(id)};
-    window.WhiteboxApp.state.drawerTab = 'chat';
-    window.WhiteboxApp.state.drawerForceLatest = true;
-    window.WhiteboxApp.state.detailLoading = false;
-    document.querySelector('#drawerBackdrop').classList.remove('hidden', 'closing');
-    document.querySelector('#detailDrawer').classList.add('open');
-    document.querySelector('#detailDrawer').setAttribute('aria-hidden', 'false');
-    window.WhiteboxApp.renderDrawer();
+    window.__readmeDemoPoint('#ptyFocusBackBtn', true);
+    document.querySelector('#ptyFocusBackBtn')?.click();
     window.__readmeDemoFinishMotion();
   })()`);
-  await delay(180);
-  await win.webContents.executeJavaScript('window.__readmeDemoFinishMotion()');
+  await waitFor(win, `!window.WhiteboxApp.state.ptyFocusSessionId
+    && document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')`,
+  'README 데모의 PTY 집중 화면이 닫히지 않았습니다.');
+}
+
+async function restoreDashboard(win) {
+  await win.webContents.executeJavaScript(`(() => {
+    window.__ensureWhiteboxReadmeDemo();
+    window.__readmeDemoPoint('[data-pty-focus-trigger="fixture-root"]');
+    window.__readmeDemoFinishMotion();
+  })()`);
+  await waitFor(win, `Boolean(document.querySelector('[data-open-subagent-chat="demo:claude:child"]'))`,
+    'README 데모의 도움 AI 상태 노드를 찾지 못했습니다.');
+}
+
+async function assertDeletedSurfacesAbsent(win) {
+  const result = await win.webContents.executeJavaScript(`(() => ({
+    drawer: Boolean(document.querySelector('#detailDrawer,#drawerBackdrop,#drawerContent,#drawerComposer')),
+    conversation: Boolean(document.querySelector('[data-conversation-shell],#terminalHistoryPanel')),
+    additionalTools: Boolean(document.querySelector('#advancedToolsNav,#mobileMoreBtn,#mobileToolsMenu,'
+      + '#automationOverview,#tmuxSection,#tmuxCreateModal')),
+    ptyDestination: Boolean(document.querySelector('#ptyFocusSurface,#ptyFocusTerminalViewport')),
+  }))()`);
+  if (result.drawer || result.conversation || result.additionalTools || !result.ptyDestination) {
+    throw new Error(`README 데모의 PTY-only 화면 계약이 올바르지 않습니다: ${JSON.stringify(result)}`);
+  }
+  return result;
 }
 
 async function buildDemo() {
-  fs.rmSync(frameDir, { recursive: true, force: true });
-  fs.mkdirSync(frameDir, { recursive: true });
   fs.mkdirSync(assetDir, { recursive: true });
 
-  const win = BrowserWindow.getAllWindows()[0];
-  if (!win) throw new Error('Whitebox 창을 찾을 수 없습니다.');
-  win.setSize(1440, 900);
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'interaction-fixture-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  await win.loadFile(path.join(root, 'renderer', 'index.html'));
   await waitForRenderer(win);
   await installFixture(win);
+  await assertDeletedSurfacesAbsent(win);
   await delay(400);
-  await capture(win, 5);
 
-  await setFocus(win, 'demo:codex:root', '[data-graph-focus="demo:codex:root"]');
-  await capture(win, 8);
-  fs.copyFileSync(path.join(frameDir, `frame-${String(frameIndex - 1).padStart(3, '0')}.png`), screenshotOutput);
+  await setFocus(win, 'fixture-root', '[data-pty-focus-trigger="fixture-root"]');
+  fs.writeFileSync(screenshotOutput, (await captureSettled(win)).toPNG());
 
-  await setFocus(win, 'demo:claude:child', '[data-graph-focus="demo:claude:child"]');
-  await capture(win, 8);
+  await closeFocus(win);
+  await restoreDashboard(win);
 
-  await showDrawer(win, 'demo:claude:child');
-  await capture(win, 8);
+  await setFocus(win, 'demo:claude:child', '[data-open-subagent-chat="demo:claude:child"]');
 
-  await win.webContents.executeJavaScript(`(() => {
-    window.__readmeDemoPoint('[data-tab="tokens"]', true);
-    window.WhiteboxApp.state.drawerTab = 'tokens';
-    window.WhiteboxApp.state.detailLoading = false;
-    window.WhiteboxApp.renderDrawer();
-    window.__readmeDemoFinishMotion();
-  })()`);
-  await delay(180);
-  await win.webContents.executeJavaScript('window.__readmeDemoFinishMotion()');
-  await capture(win, 6);
-
-  const ffmpeg = spawnSync('ffmpeg', [
-    '-y', '-loglevel', 'error', '-framerate', '8',
-    '-i', path.join(frameDir, 'frame-%03d.png'),
-    '-vf', 'fps=8,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle',
-    gifOutput,
-  ], { encoding: 'utf8' });
-  if (ffmpeg.status !== 0) throw new Error(ffmpeg.stderr || 'ffmpeg로 GIF를 만들지 못했습니다.');
-  process.stdout.write(`${gifOutput}\n${screenshotOutput}\n`);
+  await closeFocus(win);
+  process.stdout.write(`${screenshotOutput}\n`);
+  win.destroy();
 }
 
 app.whenReady().then(() => {

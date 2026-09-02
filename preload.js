@@ -26,7 +26,6 @@ contextBridge.exposeInMainWorld('whitebox', {
   setLocale: locale => ipcRenderer.invoke('app:set-locale', locale),
   setThemeAppearance: theme => ipcRenderer.invoke('app:set-theme-appearance', theme),
   setProviderVisibility: preference => ipcRenderer.invoke('app:set-provider-visibility', preference),
-  setAttentionPopups: preference => ipcRenderer.invoke('app:set-attention-popups', preference),
   ackAttentionActivation: result => ipcRenderer.invoke('app:ack-attention-activation', result),
   syncAttentionPrompts: prompts => ipcRenderer.invoke('app:sync-attention-prompts', prompts),
   notifyAttentionPrompt: prompt => ipcRenderer.invoke('app:notify-attention-prompt', prompt),
