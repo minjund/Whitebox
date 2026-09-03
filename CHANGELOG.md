@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.14 - 2026-09-03
+
+- Open a running Codex Desktop main node in its existing signed fork PTY's
+  full-window focus view instead of falling back to a waiting or transcript view.
+- Route completed-result confirmation to the same verified PTY and reject
+  ambiguous or mismatched fork candidates without creating another writer.
+
 ## 1.7.13 - 2026-09-03
 
 - Open new AI work, active nodes, and completed-result reviews in the exact
