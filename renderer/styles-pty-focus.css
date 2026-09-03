@@ -36,6 +36,8 @@ body.pty-focus-open > .modal-backdrop {
   visibility: hidden !important;
   pointer-events: none !important;
 }
+body.pty-focus-open > #drawerBackdrop { z-index: 70; }
+body.pty-focus-open > #detailDrawer { z-index: 71; }
 body.pty-focus-open #toast { z-index: 90; }
 
 .pty-focus-header {
@@ -154,6 +156,13 @@ body.pty-focus-open #toast { z-index: 90; }
   background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 5%, #091118);
   color: inherit;
   text-align: left;
+}
+button.pty-focus-node { cursor: pointer; }
+button.pty-focus-node:hover,
+button.pty-focus-node:focus-visible {
+  border-color: var(--node-provider, var(--provider, var(--green)));
+  outline: none;
+  background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 10%, #091118);
 }
 .pty-focus-node-mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--node-provider, var(--provider, var(--green))) 14%, #0a1319); color: var(--node-provider, var(--provider, var(--green))); font: 800 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .pty-focus-node-copy { min-width: 0; }

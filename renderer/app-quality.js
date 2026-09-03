@@ -346,7 +346,6 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
     return [
       ["all", "⌂", t("app.nav.home"), t("quality.command.view"), () => selectViewFromUser("all", { focusMain: true })],
       ["active", "●", t("app.nav.active"), t("quality.command.view"), () => selectViewFromUser("active", { focusMain: true })],
-      ["waiting", "!", t("app.nav.needs_review"), t("quality.command.view"), () => selectViewFromUser("waiting", { focusMain: true })],
       ["settings", "⚙", t("app.nav.settings"), t("quality.command.view"), () => selectViewFromUser("settings", { focusMain: true })],
       ["new-task", "+", t("ui.new_ai_task"), t("quality.command.action"), () => openRunModal()],
       ["probe", "↻", t("ui.check_ai_connections_again"), t("quality.command.action"), () => $("#probeBtn")?.click()],

@@ -3,10 +3,22 @@
 window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
 window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEventBindings(context = {}) {
+  const CONTEXT_DRAWER_MIN_WIDTH = 1680;
+  const CONTEXT_WORKSPACE_MIN_WIDTH = 960;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
     $, $$, state, providerInfo, visibleProviders = () => state.providers, renderProviderRail, providerPickerHtml, syncRunComposer, openRunModal, closeRunModal, toast, performUiAction,
     handleRun, trapDialogFocus, currentDialog, selectView, selectViewFromUser = selectView, saveRunDraft = () => {}, safeBackdrop = null,
+    closeDrawer = () => false, backToAgentFlow = () => closeDrawer(), renderDrawer = () => {}, render = () => {}, loadSessionDetail = async () => null,
+    openDrawer = async () => false, openSubagentConversation = () => false, copyText = async () => false,
+    scheduleAgentWorkflowConnections = () => {}, controlSourceSession = async () => {}, sendSourceMessage = async () => {},
+    resumeAgentTerminal = async () => false, resetAgentSession = async () => false,
+    interruptConversation = async () => false, interruptAgentTerminal = async () => false,
+    openAgentTerminal = async () => false, copyBridgeCommand = async () => false,
+    controlManagedRun = async () => false, quickRespond = () => {}, prepareReassignment = () => {},
+    dispatchAgentCommand = async () => false, snapshotSession = () => null,
+    resultReviewTargets = () => [], resultReviewPtyTarget = () => null, resultReviewStamp = () => "",
+    markResultReviewComplete = () => 0, announce = () => {}, openPtyFocusVerified = async () => ({ opened: false }),
     closePtyFocus = () => false,
     isPtyFocusActive = () => false,
   } = context;
@@ -187,12 +199,536 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
     });
   }
 
+  function bindDrawerEvents() {
+    const drawer = $("#detailDrawer");
+    const backdrop = $("#drawerBackdrop");
+    const tabs = $(".drawer-tabs");
+    const selectDrawerTab = (tabName) => {
+      const nextTab = String(tabName || "");
+      if (!nextTab) return;
+      state.drawerTab = nextTab;
+      state.drawerForceLatest = nextTab === "chat";
+      renderDrawer();
+    };
+    const conversationSlashStates = new Map();
+    const conversationSlashState = (input) => {
+      const sessionId = input?.dataset.agentCommandDraft || "";
+      if (!conversationSlashStates.has(sessionId)) {
+        conversationSlashStates.set(sessionId, {
+          activeIndex: 0,
+          dismissedValue: "",
+          filtered: [],
+          open: false,
+        });
+      }
+      return conversationSlashStates.get(sessionId);
+    };
+    const setConversationSlashOpen = (input, next) => {
+      const slashState = conversationSlashState(input);
+      const form = input?.closest("[data-agent-command-routing='conversation']");
+      const menu = form?.querySelector("[data-conversation-slash-menu]");
+      if (!menu) {
+        slashState.open = false;
+        input?.removeAttribute("aria-expanded");
+        input?.removeAttribute("aria-activedescendant");
+        return;
+      }
+      slashState.open = Boolean(next && input && !input.disabled);
+      menu.classList.toggle("hidden", !slashState.open);
+      input.setAttribute("aria-expanded", slashState.open ? "true" : "false");
+      if (!slashState.open) input.removeAttribute("aria-activedescendant");
+    };
+    const syncConversationSlashOption = (input) => {
+      const slashState = conversationSlashState(input);
+      const options = Array.from(input?.closest("form")?.querySelectorAll("[data-conversation-slash-command]") || []);
+      if (!options.length) {
+        input?.removeAttribute("aria-activedescendant");
+        return;
+      }
+      slashState.activeIndex = Math.max(0, Math.min(slashState.activeIndex, options.length - 1));
+      options.forEach((option, index) => {
+        const selected = index === slashState.activeIndex;
+        option.classList.toggle("active", selected);
+        option.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      input?.setAttribute("aria-activedescendant", options[slashState.activeIndex].id);
+      options[slashState.activeIndex]?.scrollIntoView({ block: "nearest" });
+    };
+    const renderConversationSlashMenu = (input, query) => {
+      const composer = window.WhiteboxTerminalComposer;
+      const form = input?.closest("[data-agent-command-routing='conversation']");
+      const list = form?.querySelector("[data-conversation-slash-list]");
+      const title = form?.querySelector("[data-conversation-slash-title]");
+      const status = form?.querySelector("[data-conversation-slash-status]");
+      const menu = form?.querySelector("[data-conversation-slash-menu]");
+      if (!composer || !form || !list || !title || !status || !menu) return false;
+      const slashState = conversationSlashState(input);
+      const provider = form.dataset.agentCommandProvider || "";
+      slashState.filtered = composer.filterCommands(provider, query);
+      slashState.activeIndex = Math.max(0, Math.min(slashState.activeIndex, slashState.filtered.length - 1));
+      title.textContent = t("terminal.slash.title", { provider: providerInfo(provider).label });
+      status.textContent = t("terminal.slash.result_count", { count: slashState.filtered.length });
+      list.replaceChildren();
+      if (!slashState.filtered.length) {
+        const empty = document.createElement("div");
+        empty.className = "conversation-slash-empty";
+        empty.textContent = t("terminal.slash.no_results");
+        list.append(empty);
+        return true;
+      }
+      slashState.filtered.forEach((command, index) => {
+        const option = document.createElement("button");
+        const token = document.createElement("span");
+        const description = document.createElement("span");
+        const key = document.createElement("kbd");
+        option.id = `${menu.id}-option-${index}`;
+        option.type = "button";
+        option.tabIndex = -1;
+        option.dataset.conversationSlashCommand = command.value;
+        option.setAttribute("role", "option");
+        option.setAttribute("aria-selected", index === slashState.activeIndex ? "true" : "false");
+        token.className = "conversation-slash-command-token";
+        token.textContent = command.value;
+        description.className = "conversation-slash-command-description";
+        description.textContent = t(command.descriptionKey);
+        key.setAttribute("aria-hidden", "true");
+        key.textContent = "↵";
+        option.append(token, description, key);
+        list.append(option);
+      });
+      return true;
+    };
+    const syncConversationSlashMenu = (input, options = {}) => {
+      const form = input?.closest("[data-agent-command-routing='conversation']");
+      const composer = window.WhiteboxTerminalComposer;
+      if (!form || !composer || input.disabled) {
+        if (input) setConversationSlashOpen(input, false);
+        return;
+      }
+      const slashState = conversationSlashState(input);
+      if (input.value !== slashState.dismissedValue) slashState.dismissedValue = "";
+      const query = composer.slashQuery(input.value, input.selectionStart);
+      if (query == null || (!options.force && slashState.dismissedValue === input.value)) {
+        setConversationSlashOpen(input, false);
+        return;
+      }
+      if (!renderConversationSlashMenu(input, query)) return;
+      setConversationSlashOpen(input, true);
+      syncConversationSlashOption(input);
+    };
+    const closeConversationSlashMenu = (input, dismiss = true) => {
+      const slashState = conversationSlashState(input);
+      if (dismiss) slashState.dismissedValue = input?.value || "";
+      setConversationSlashOpen(input, false);
+    };
+    const selectConversationSlashCommand = (input, commandValue = "") => {
+      const slashState = conversationSlashState(input);
+      const command = commandValue
+        ? slashState.filtered.find(item => item.value === commandValue)
+        : slashState.filtered[slashState.activeIndex];
+      if (!input || !command) return false;
+      input.value = command.value;
+      slashState.dismissedValue = command.value;
+      setConversationSlashOpen(input, false);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
+      window.WhiteboxA11y?.announce(t("terminal.slash.selected", { command: command.value }));
+      return true;
+    };
+    const handleConversationSlashKeydown = (event, input) => {
+      const slashState = conversationSlashState(input);
+      if (!slashState.open) return false;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeConversationSlashMenu(input);
+        return true;
+      }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        if (!slashState.filtered.length) return true;
+        if (event.key === "Home") slashState.activeIndex = 0;
+        else if (event.key === "End") slashState.activeIndex = slashState.filtered.length - 1;
+        else slashState.activeIndex = (
+          slashState.activeIndex + (event.key === "ArrowDown" ? 1 : -1) + slashState.filtered.length
+        ) % slashState.filtered.length;
+        syncConversationSlashOption(input);
+        return true;
+      }
+      if (!["Enter", "Tab"].includes(event.key) || !slashState.filtered.length || event.isComposing || event.keyCode === 229) {
+        return false;
+      }
+      const selected = slashState.filtered[slashState.activeIndex];
+      if (event.key === "Enter" && input.value === selected?.value) {
+        closeConversationSlashMenu(input);
+        return false;
+      }
+      event.preventDefault();
+      selectConversationSlashCommand(input);
+      return true;
+    };
+    const resultReviewOwnerId = (sessionId) => {
+      let session = snapshotSession(sessionId) || state.details.get(sessionId) || null;
+      const visited = new Set();
+      while (session?.parentId && !visited.has(session.id)) {
+        visited.add(session.id);
+        session = snapshotSession(session.parentId) || state.details.get(session.parentId) || null;
+      }
+      return String(session?.id || sessionId || "");
+    };
+    const completeDrawerResultReview = async (reviewComplete) => {
+      const sessionId = String(reviewComplete?.dataset.resultReviewComplete || "");
+      const expectedTargets = resultReviewTargets(sessionId, { allowPtyCreation: true }).map(session => ({
+        id: String(session?.id || ""),
+        stamp: resultReviewStamp(session),
+      }));
+      if (!sessionId || !expectedTargets.length) {
+        announce(t("agent.open_terminal_failed"));
+        return false;
+      }
+      const ptyTarget = resultReviewPtyTarget(sessionId);
+      const terminalId = String(ptyTarget?.terminalId || ptyTarget?.id || "");
+      const ownerId = resultReviewOwnerId(sessionId);
+      reviewComplete.dataset.busy = "true";
+      reviewComplete.disabled = true;
+      reviewComplete.setAttribute("aria-busy", "true");
+      let opened = false;
+      let succeeded = false;
+      try {
+        if (terminalId) {
+          closeDrawer(false);
+          const outcome = await openPtyFocusVerified(ownerId, {
+            focus: true,
+            targetId: terminalId,
+            terminalId,
+          });
+          opened = outcome?.opened === true;
+        } else {
+          opened = await openDrawer(ownerId, {
+            focus: true,
+            acknowledge: false,
+          }) === true;
+        }
+        if (opened) {
+          const completed = markResultReviewComplete(sessionId, { expectedTargets });
+          if (completed > 0) {
+            succeeded = true;
+            render("review");
+            toast(t("management.result_review_completed_toast"));
+          }
+        }
+      } catch (error) {
+        window.WhiteboxRendererUtils?.reportRecoverableError?.("drawer-result-review-open-pty", error);
+      } finally {
+        if (!succeeded && reviewComplete.isConnected) {
+          delete reviewComplete.dataset.busy;
+          reviewComplete.disabled = false;
+          reviewComplete.removeAttribute("aria-busy");
+        }
+      }
+      if (!succeeded) announce(t("agent.open_terminal_failed"));
+      return succeeded;
+    };
+
+    $("#closeDrawerBtn")?.addEventListener("click", () => closeDrawer());
+    $("#drawerBackToFlowBtn")?.addEventListener("click", () => backToAgentFlow());
+    if (backdrop) {
+      if (safeBackdrop && drawer) safeBackdrop(backdrop, () => closeDrawer(), drawer);
+      else backdrop.addEventListener("click", () => closeDrawer());
+    }
+
+    const resizeHandle = $("#drawerResizeHandle");
+    const setConversationPanelWidth = (nextWidth) => {
+      if (!resizeHandle) return;
+      const maximum = Math.max(560, Math.min(860, window.innerWidth - CONTEXT_WORKSPACE_MIN_WIDTH));
+      const width = Math.max(560, Math.min(maximum, Math.round(nextWidth)));
+      document.documentElement.style.setProperty("--conversation-panel-width", `${width}px`);
+      resizeHandle.setAttribute("aria-valuemax", String(maximum));
+      resizeHandle.setAttribute("aria-valuenow", String(width));
+      scheduleAgentWorkflowConnections();
+    };
+    resizeHandle?.addEventListener("pointerdown", (event) => {
+      if (state.drawerPresentation !== "context" || event.button !== 0) return;
+      event.preventDefault();
+      resizeHandle.setPointerCapture?.(event.pointerId);
+      document.body.classList.add("conversation-panel-resizing");
+      setConversationPanelWidth(window.innerWidth - event.clientX);
+    });
+    resizeHandle?.addEventListener("pointermove", (event) => {
+      if (!document.body.classList.contains("conversation-panel-resizing")) return;
+      setConversationPanelWidth(window.innerWidth - event.clientX);
+    });
+    const finishPanelResize = (event) => {
+      if (!document.body.classList.contains("conversation-panel-resizing")) return;
+      document.body.classList.remove("conversation-panel-resizing");
+      try { resizeHandle?.releasePointerCapture?.(event.pointerId); } catch {}
+      scheduleAgentWorkflowConnections();
+    };
+    resizeHandle?.addEventListener("pointerup", finishPanelResize);
+    resizeHandle?.addEventListener("pointercancel", finishPanelResize);
+    resizeHandle?.addEventListener("keydown", (event) => {
+      if (state.drawerPresentation !== "context" || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--conversation-panel-width"))
+        || drawer?.getBoundingClientRect().width
+        || 640;
+      const next = event.key === "Home"
+        ? 560
+        : event.key === "End"
+          ? 860
+          : current + (event.key === "ArrowLeft" ? 32 : -32);
+      setConversationPanelWidth(next);
+    });
+
+    tabs?.addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-tab]");
+      if (!tab) return;
+      selectDrawerTab(tab.dataset.tab);
+    });
+    tabs?.addEventListener("keydown", (event) => {
+      const pageKey = event.ctrlKey && ["PageUp", "PageDown"].includes(event.key);
+      if (!pageKey && !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+      const visibleTabs = $$(".drawer-tab:not(.hidden)");
+      if (!visibleTabs.length) return;
+      const current = Math.max(0, visibleTabs.indexOf(event.target.closest(".drawer-tab")));
+      const next = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? visibleTabs.length - 1
+          : (current + (["ArrowRight", "ArrowDown", "PageDown"].includes(event.key) ? 1 : -1) + visibleTabs.length) % visibleTabs.length;
+      event.preventDefault();
+      selectDrawerTab(visibleTabs[next].dataset.tab);
+      requestAnimationFrame(() => $(`.drawer-tab[data-tab="${state.drawerTab}"]`)?.focus());
+    });
+
+    drawer?.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-close-expanded-reader]")) {
+        closeDrawer();
+        return;
+      }
+      const slashCommand = event.target.closest("[data-conversation-slash-command]");
+      if (slashCommand) {
+        const input = slashCommand.closest("form")?.querySelector("[data-agent-command-draft]");
+        selectConversationSlashCommand(input, slashCommand.dataset.conversationSlashCommand);
+        return;
+      }
+      const subagent = event.target.closest("[data-open-subagent-chat]");
+      if (subagent) {
+        openSubagentConversation(subagent.dataset.openSubagentChat, { presentation: state.drawerPresentation });
+        return;
+      }
+      const copy = event.target.closest("[data-copy-text]");
+      if (copy) {
+        await copyText(copy.dataset.copyText);
+        return;
+      }
+      const bridge = event.target.closest("[data-agent-bridge-copy]");
+      if (bridge) {
+        await copyBridgeCommand(bridge.dataset.agentBridgeCopy);
+        return;
+      }
+      const resultReviewComplete = event.target.closest("[data-result-review-complete]");
+      if (resultReviewComplete) {
+        if (resultReviewComplete.dataset.busy === "true") return;
+        await completeDrawerResultReview(resultReviewComplete);
+        return;
+      }
+      const reset = event.target.closest("[data-session-reset]");
+      if (reset) {
+        if (reset.dataset.busy === "true" || !window.confirm(t("session.reset_confirm"))) return;
+        reset.dataset.busy = "true";
+        reset.disabled = true;
+        reset.setAttribute("aria-busy", "true");
+        try {
+          await resetAgentSession(reset.dataset.sessionReset);
+        } finally {
+          if (reset.isConnected) {
+            delete reset.dataset.busy;
+            reset.disabled = false;
+            reset.removeAttribute("aria-busy");
+          }
+        }
+        return;
+      }
+      const terminal = event.target.closest("[data-agent-terminal-open]");
+      if (terminal) {
+        await openAgentTerminal(terminal.dataset.agentTerminalOpen);
+        return;
+      }
+      const resume = event.target.closest("[data-resume-agent]");
+      if (resume) {
+        if (resume.dataset.busy === "true") return;
+        resume.dataset.busy = "true";
+        resume.disabled = true;
+        resume.setAttribute("aria-busy", "true");
+        try {
+          await resumeAgentTerminal(resume.dataset.resumeAgent);
+        } finally {
+          if (resume.isConnected) {
+            delete resume.dataset.busy;
+            resume.disabled = false;
+            resume.removeAttribute("aria-busy");
+          }
+        }
+        return;
+      }
+      const quick = event.target.closest("[data-attention-quick]");
+      if (quick) {
+        quickRespond(quick.dataset.attentionSessionId || state.selectedId, quick.dataset.attentionQuick, drawer);
+        return;
+      }
+      const managedAction = event.target.closest("[data-managed-run-action]");
+      if (managedAction) {
+        await controlManagedRun(managedAction.dataset.managementSessionId || state.selectedId, managedAction.dataset.managedRunAction);
+        return;
+      }
+      const sourceAction = event.target.closest("[data-source-session-action]");
+      if (sourceAction) {
+        await controlSourceSession(sourceAction.dataset.sourceSessionId || state.selectedId, sourceAction.dataset.sourceSessionAction);
+        return;
+      }
+      const reassign = event.target.closest("[data-reassign-session]");
+      if (reassign) {
+        prepareReassignment(reassign.dataset.reassignSession);
+        return;
+      }
+      const promptToggle = event.target.closest("[data-prompt-toggle]");
+      if (promptToggle) {
+        const promptKey = promptToggle.dataset.promptToggle;
+        const expanded = promptToggle.getAttribute("aria-expanded") === "true";
+        if (expanded) state.expandedConversationPrompts.delete(promptKey);
+        else {
+          state.expandedConversationPrompts.clear();
+          state.expandedConversationPrompts.add(promptKey);
+        }
+        renderDrawer();
+        requestAnimationFrame(() => {
+          const prompt = drawer.querySelector(`[data-user-prompt="${CSS.escape(promptKey)}"]`);
+          if (!expanded) prompt?.scrollIntoView({ block: "start", behavior: "auto" });
+          prompt?.querySelector(`[data-prompt-toggle="${CSS.escape(promptKey)}"]`)?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      const retry = event.target.closest("[data-retry-detail]");
+      if (retry) {
+        if (retry.dataset.busy === "true") return;
+        retry.dataset.busy = "true";
+        retry.disabled = true;
+        retry.setAttribute("aria-busy", "true");
+        await loadSessionDetail(retry.dataset.retryDetail, true);
+        return;
+      }
+      const latest = event.target.closest("[data-scroll-latest]");
+      if (latest) {
+        const content = $("#drawerContent");
+        content?.scrollTo({ top: content.scrollHeight, behavior: "smooth" });
+        return;
+      }
+      const earlierTurns = event.target.closest("[data-load-earlier-turns]");
+      if (earlierTurns) {
+        const content = $("#drawerContent");
+        if (!content) return;
+        const previousHeight = content.scrollHeight;
+        const previousTop = content.scrollTop;
+        const sessionId = earlierTurns.dataset.loadEarlierTurns;
+        const nextLimit = Number(earlierTurns.dataset.nextTurnLimit || 0);
+        if (sessionId && nextLimit > 0) state.conversationTurnLimits.set(sessionId, nextLimit);
+        state.drawerForceLatest = false;
+        renderDrawer();
+        requestAnimationFrame(() => {
+          content.scrollTop = previousTop + Math.max(0, content.scrollHeight - previousHeight);
+          content.querySelector("[data-load-earlier-turns]")?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      const interrupt = event.target.closest("[data-conversation-interrupt]");
+      if (interrupt) {
+        await interruptConversation(interrupt.dataset.conversationInterrupt);
+        return;
+      }
+      const terminalInterrupt = event.target.closest("[data-terminal-interrupt]");
+      if (terminalInterrupt) {
+        await interruptAgentTerminal(terminalInterrupt.dataset.terminalInterrupt);
+        return;
+      }
+      const stop = event.target.closest("[data-stop-run]");
+      if (stop) await controlManagedRun(state.selectedId, "stop");
+    });
+    drawer?.addEventListener("input", (event) => {
+      const sourceInput = event.target.closest("[data-source-message-input]");
+      if (sourceInput) {
+        state.sourceMessageDrafts.set(sourceInput.dataset.sourceMessageInput, sourceInput.value);
+        const submit = sourceInput.closest("form")?.querySelector('button[type="submit"]');
+        if (submit && !submit.matches('[aria-busy="true"]')) submit.disabled = !sourceInput.value.trim();
+        return;
+      }
+      const input = event.target.closest("[data-agent-command-draft]");
+      if (!input) return;
+      state.agentCommandDrafts.set(input.dataset.agentCommandDraft, input.value);
+      const form = input.closest("form");
+      const counter = form?.querySelector("[data-agent-command-count]");
+      if (counter) counter.textContent = t("agent.input_count", { count: input.value.length.toLocaleString() });
+      const progressiveCount = form?.querySelector("[data-conversation-draft-count]");
+      if (progressiveCount) {
+        progressiveCount.textContent = t("agent.input_count", { count: input.value.length.toLocaleString() });
+        progressiveCount.classList.toggle("hidden", input.value.length < 7200);
+        progressiveCount.classList.toggle("limit-near", input.value.length >= 7800);
+      }
+      const conversationSend = form?.querySelector(".conversation-send");
+      if (conversationSend && !conversationSend.matches('[aria-busy="true"]')) {
+        conversationSend.disabled = form.dataset.agentSendAvailable !== "true" || !input.value.trim();
+      }
+      syncConversationSlashMenu(input);
+    });
+    drawer?.addEventListener("change", (event) => {
+      const picker = event.target.closest("[data-agent-command-target]");
+      if (!picker) return;
+      if (picker.value) state.agentCommandTargets.set(picker.dataset.agentCommandTarget, picker.value);
+      else state.agentCommandTargets.delete(picker.dataset.agentCommandTarget);
+      picker.closest("form")?.querySelectorAll("[data-agent-terminal-open], button[type='submit']")
+        .forEach(button => { button.disabled = !picker.value; });
+    });
+    drawer?.addEventListener("keydown", (event) => {
+      const input = event.target.closest("[data-agent-command-draft]");
+      if (!input || handleConversationSlashKeydown(event, input)) return;
+      window.WhiteboxImeSubmit?.handleKeydown(event, input);
+    });
+    drawer?.addEventListener("compositionend", (event) => {
+      if (event.target.closest?.("[data-agent-command-draft]")) {
+        window.WhiteboxImeSubmit?.handleCompositionEnd(event);
+      }
+    });
+    drawer?.addEventListener("focusout", (event) => {
+      const input = event.target.closest("[data-agent-command-routing='conversation'] [data-agent-command-draft]");
+      if (!input) return;
+      setTimeout(() => {
+        if (!input.closest("form")?.contains(document.activeElement)) closeConversationSlashMenu(input);
+      }, 0);
+    });
+    drawer?.addEventListener("submit", async (event) => {
+      const sourceForm = event.target.closest("[data-source-message-form]");
+      if (sourceForm) {
+        event.preventDefault();
+        await sendSourceMessage(
+          sourceForm.dataset.sourceMessageForm,
+          sourceForm.querySelector("[data-source-message-input]")?.value || "",
+        );
+        return;
+      }
+      const form = event.target.closest("[data-agent-command-form]");
+      if (!form) return;
+      event.preventDefault();
+      window.WhiteboxImeSubmit?.handleSubmit(form);
+      await dispatchAgentCommand(form.dataset.agentCommandForm, form);
+    });
+  }
+
   function bindGlobalEvents() {
     document.addEventListener("keydown", (event) => {
       trapDialogFocus(event);
       const editable = event.target instanceof HTMLElement && Boolean(event.target.closest("input, textarea, select, [contenteditable='true']"));
       const dialogOpen = Boolean(currentDialog?.() || isPtyFocusActive());
-      const viewShortcuts = ["all", "active", "waiting", null, null, null, "settings"];
+      const viewShortcuts = ["all", "active", null, null, null, null, "settings"];
       const shortcutView = viewShortcuts[Number(event.key) - 1];
       if (!editable && !dialogOpen && shortcutView && (event.metaKey || event.ctrlKey) && /^[1-7]$/.test(event.key)) {
         event.preventDefault();
@@ -212,12 +748,20 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
       }
       if (event.key !== "Escape") return;
       if (!$("#runModal").classList.contains("hidden")) closeRunModal();
+      else if ($("#detailDrawer")?.classList.contains("open")) closeDrawer();
       else if (isPtyFocusActive()) closePtyFocus();
+    });
+    window.addEventListener("resize", () => {
+      scheduleAgentWorkflowConnections();
+      if (window.innerWidth < CONTEXT_DRAWER_MIN_WIDTH && state.drawerPresentation === "context") {
+        if (!isPtyFocusActive()) closeDrawer(false);
+      }
     });
   }
 
   function bindDialogAndGlobalEvents() {
     bindRunComposerEvents();
+    bindDrawerEvents();
     bindGlobalEvents();
   }
 

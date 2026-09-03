@@ -589,6 +589,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         context.toast(t(sendDraft ? "agent.delivery_uncertain" : "agent.reconnect_failed"));
         return;
       }
+      context.closeDrawer?.(false);
       if (typeof context.openPtyFocusForTerminal === "function") {
         context.openPtyFocusForTerminal(resumed?.terminalId || resumed?.id, {
           creationId: resumed?.creationId || resumed?.terminal?.creationId || "",
@@ -851,6 +852,43 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     }
   }
 
+  async function resetAgentSession(sessionId) {
+    if (state.agentCommandSending.has(sessionId)) return false;
+    const session = snapshotSession(sessionId) || state.details.get(sessionId);
+    if (!session || !window.WhiteboxTerminal?.resetForAgent) {
+      context.toast(t("agent.session_not_found"));
+      return false;
+    }
+    if (session.parentId) {
+      context.toast(t("terminal.resume.parent_controlled"));
+      return false;
+    }
+    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
+      context.toast(t("terminal.agent.no_input_target"));
+      return false;
+    }
+    state.agentCommandSending.add(sessionId);
+    try {
+      const created = await window.WhiteboxTerminal.resetForAgent(session);
+      const terminalId = String(created?.terminalId || created?.id || "");
+      if (!terminalId) throw new Error(t("session.reset_failed"));
+      context.closeDrawer?.(false);
+      selectView("all");
+      context.openPtyFocusForTerminal?.(terminalId, {
+        creationId: created?.creationId || created?.terminal?.creationId || "",
+        focus: true,
+      });
+      document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
+      context.toast(t("session.reset_complete"));
+      return true;
+    } catch (error) {
+      context.toast(errorText(error, "session.reset_failed"));
+      return false;
+    } finally {
+      state.agentCommandSending.delete(sessionId);
+    }
+  }
+
   async function interruptAgentTerminal(sessionId) {
     if (state.conversationInterruptRequests.has(sessionId)) return;
     const session = snapshotSession(sessionId) || state.details.get(sessionId);
@@ -880,6 +918,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const target = chosenAgentCommandTarget(session, routeContext.route);
     if (!target)
       return context.toast(t(routeContext.targets.length ? "agent.select_open_target" : "agent.no_writable_terminal"));
+    context.closeDrawer?.(false);
     const outcome = await context.openPtyFocusVerified?.(session.id, {
       targetId: target.id,
       terminalId: target.terminalId || target.id,
@@ -1061,6 +1100,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     snapshotSession,
     chosenAgentCommandTarget,
     resumeAgentTerminal,
+    resetAgentSession,
     dispatchAgentCommand,
     interruptConversation,
     interruptAgentTerminal,

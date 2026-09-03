@@ -2,34 +2,154 @@
 
 window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 
-// Kept as a small compatibility router while older cards and notifications
-// are migrated away from the removed conversation drawer. Every task-open
-// gesture now resolves to the owning root PTY focus surface.
 window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
+  const CONTEXT_DRAWER_MIN_WIDTH = 1680;
+  const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
-    state,
-    markGuideStep = () => {},
-    snapshotSession = () => null,
-    acknowledgeSessionNotices = () => 0,
-    resultReviewPtyTarget = () => null,
-    selectView = () => {},
+    $, $$, esc, state, motionPreference, motionState, STATUS, sessionStatusLabel = (session, status = session?.status) => STATUS[status] || status, markGuideStep, rememberDialogTrigger, restoreDialogTrigger, discardDialogTrigger, setDialogOpenState,
+    providerInfo, sessionBadgesHtml = () => "", isLiveSession, controlRoomStatus = session => session?.status, subagentWorkState, subagentWorkLabel, isProjectlessSession, sessionOriginPath, sessionWorkspaceLabel,
+    readablePreview = value => ({ full: String(value || "").trim(), text: String(value || "").trim(), truncated: false }),
+    pendingConversationDelivery = () => null,
+    agentResumeSupport, originAppInfo, selectedSession, snapshotSession, loadSessionDetail, loadSubagentParentDetail,
+    chatHtml, lifecycleHtml, tokensHtml, outcomeHtml, subagentCoordinationEvents, subagentConversationHtml, executionActivityDetailHtml, agentCommandComposer,
+    rememberDisclosureStates = () => {}, restoreDisclosureStates = () => {},
+    acknowledgeSessionNotices = () => 0, markResultReviewComplete = () => 0,
+    renderSessions = () => {}, renderWorkspaces = () => {},
+    resultReviewPtyTarget = () => null, resultReviewTargets = () => [], resultReviewStamp = () => "",
     signalManualTerminalSelection = () => {},
     toast = () => {},
   } = context;
-  const t = (key, params) => window.WhiteboxI18n.t(key, params);
+  let drawerFocusToken = null;
+  let terminalRefreshQueued = false;
   let openGeneration = 0;
   window.addEventListener?.("whitebox:terminal-manual-selection", () => {
     openGeneration += 1;
   });
+  const deliveryLabelKey = (phase) => ({
+    sending: "control.delivery_sending",
+    confirming: "control.delivery_confirming",
+    delayed: "control.delivery_delayed",
+    uncertain: "control.delivery_uncertain",
+    received: "control.delivery_received",
+    responding: "control.delivery_responding",
+    interrupted: "control.delivery_interrupted",
+    failed: "control.delivery_failed",
+  })[phase] || "control.delivery_confirming";
+
+  function reconcileFocusedComposer(composer, nextHtml, sessionId) {
+    const currentForm = composer.querySelector(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
+    const currentInput = currentForm?.querySelector("[data-agent-command-draft]");
+    if (!currentForm || !currentInput || !nextHtml) return false;
+    const template = document.createElement("template");
+    template.innerHTML = nextHtml;
+    const nextForm = template.content.querySelector(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
+    const nextInput = nextForm?.querySelector("[data-agent-command-draft]");
+    if (!nextForm || !nextInput) return false;
+
+    currentForm.className = nextForm.className;
+    for (const attribute of [...currentForm.attributes]) {
+      if (attribute.name.startsWith("data-agent-") && !nextForm.hasAttribute(attribute.name)) currentForm.removeAttribute(attribute.name);
+    }
+    for (const attribute of [...nextForm.attributes]) {
+      if (attribute.name.startsWith("data-agent-")) currentForm.setAttribute(attribute.name, attribute.value);
+    }
+    currentInput.placeholder = nextInput.placeholder;
+    currentInput.disabled = nextInput.disabled;
+    const inputLabel = currentInput.closest(".agent-command-input");
+    const currentPicker = currentForm.querySelector(":scope > .agent-command-target");
+    const nextPicker = nextForm.querySelector(":scope > .agent-command-target");
+    currentPicker?.remove();
+    if (nextPicker && inputLabel) currentForm.insertBefore(nextPicker.cloneNode(true), inputLabel);
+    const currentHint = currentForm.querySelector(":scope > .drawer-terminal-input-hint");
+    const nextHint = nextForm.querySelector(":scope > .drawer-terminal-input-hint");
+    currentHint?.remove();
+    if (nextHint && inputLabel) inputLabel.after(nextHint.cloneNode(true));
+    const currentActions = currentForm.querySelector(":scope > .agent-command-actions");
+    const nextActions = nextForm.querySelector(":scope > .agent-command-actions");
+    if (currentActions && nextActions) currentActions.replaceChildren(...[...nextActions.childNodes].map(node => node.cloneNode(true)));
+    return true;
+  }
+
+  window.addEventListener("whitebox:drawer-terminal-targets-changed", event => {
+    const sessionId = String(event.detail?.sessionId || "");
+    if (sessionId && sessionId !== state.selectedId) return;
+    if (terminalRefreshQueued || state.drawerTab !== "chat" || !$("#detailDrawer")?.classList.contains("open")) return;
+    terminalRefreshQueued = true;
+    requestAnimationFrame(() => {
+      terminalRefreshQueued = false;
+      if (state.drawerTab === "chat" && $("#detailDrawer")?.classList.contains("open")) renderDrawer();
+    });
+  });
+
+  function scheduleFlowConnections() {
+    requestAnimationFrame(() => {
+      window.WhiteboxApp?.scheduleAgentWorkflowConnections?.();
+      window.WhiteboxApp?.drawAgentWorkflowConnections?.();
+    });
+  }
+
+  function resolvedPresentation(options = {}) {
+    const requested = options.presentation || (options.context ? "context" : "modal");
+    if (requested !== "context") return "modal";
+    return state.view === "all" && window.innerWidth >= CONTEXT_DRAWER_MIN_WIDTH
+      ? "context"
+      : "modal";
+  }
+
+  function setDrawerPresentation(presentation) {
+    const drawer = $("#detailDrawer");
+    const contextual = presentation === "context";
+    state.drawerPresentation = presentation;
+    drawer.dataset.presentation = presentation;
+    drawer.setAttribute("role", contextual ? "complementary" : "dialog");
+    if (contextual) drawer.removeAttribute("aria-modal");
+    else drawer.setAttribute("aria-modal", "true");
+    $("#drawerBackToFlowBtn").classList.toggle("hidden", !contextual);
+    $("#drawerResizeHandle").classList.toggle("hidden", !contextual);
+    document.body.classList.toggle("conversation-context-open", contextual);
+    const currentWidth = Math.round(drawer.getBoundingClientRect().width || 640);
+    $("#drawerResizeHandle").setAttribute("aria-valuenow", String(currentWidth));
+    if (contextual) {
+      $("#drawerBackdrop").classList.add("hidden");
+      $("#drawerBackdrop").classList.remove("closing");
+    } else {
+      $("#drawerBackdrop").classList.remove("hidden");
+      $("#drawerBackdrop").classList.remove("closing");
+    }
+    scheduleFlowConnections();
+  }
+
+  function openDrawerSurface(presentation) {
+    // Child/execution details can be opened over the root PTY. Keep that exact
+    // terminal mounted so closing the read-only drawer returns to the same
+    // live scrollback instead of disconnecting the user's work surface.
+    if (!context.isPtyFocusActive?.()) window.WhiteboxInlineTerminal?.close?.({ render: false });
+    clearTimeout(motionState.drawerTimer);
+    setDrawerPresentation(presentation);
+    $("#detailDrawer").classList.add("open");
+    if (presentation === "modal") {
+      setDialogOpenState($("#detailDrawer"), true);
+    } else {
+      $("#detailDrawer").removeAttribute("inert");
+      $("#detailDrawer").setAttribute("aria-hidden", "false");
+      $("#appShell")?.removeAttribute("inert");
+      document.body.classList.remove("dialog-open");
+    }
+  }
+
+  function rememberDrawerTrigger() {
+    if ($("#detailDrawer").classList.contains("open")) return;
+    drawerFocusToken = rememberDialogTrigger("detailDrawer", { refresh: Boolean(drawerFocusToken) });
+  }
 
   function ownerRoot(value) {
     let session = typeof value === "object" && value
       ? value
-      : snapshotSession(value) || state.details?.get?.(value);
+      : snapshotSession(value) || state.details.get(value);
     const visited = new Set();
     while (session?.parentId && !visited.has(session.id)) {
       visited.add(session.id);
-      session = snapshotSession(session.parentId) || state.details?.get?.(session.parentId);
+      session = snapshotSession(session.parentId) || state.details.get(session.parentId);
     }
     return session || null;
   }
@@ -38,19 +158,24 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     if (options.attentionActivation !== true) signalManualTerminalSelection();
     const generation = ++openGeneration;
     const isCurrent = () => generation === openGeneration;
-    const selected = snapshotSession(id) || state.details?.get?.(id);
+    const selected = snapshotSession(id) || state.details.get(id);
     const root = ownerRoot(selected || id);
+    // Capture the exact review receipts before any async fork/mount work. A
+    // newer completion that arrives while the PTY is opening must remain
+    // pending instead of being acknowledged by the older click.
+    const expectedReviewTargets = options.resultReview === true
+      ? resultReviewTargets(selected || id, { allowPtyCreation: true }).map(session => ({
+          id: String(session?.id || ""),
+          stamp: resultReviewStamp(session),
+        }))
+      : null;
+    if (globalThis.document?.querySelector?.("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
     let exactTarget = options.targetId || options.terminalId
       ? { id: options.targetId || options.terminalId, terminalId: options.terminalId || options.targetId }
       : resultReviewPtyTarget(root);
     markGuideStep("detail");
     state.selectedId = selected?.id || String(id || "");
 
-    // A task card is an explicit request to enter its PTY. If the provider
-    // session has no live app-owned terminal yet, create that exact terminal
-    // first (Codex Desktop uses its safe fork path), then mount only the
-    // returned identity. Automatic attention activation never creates a
-    // competing writer here.
     if (root && !exactTarget && options.attentionActivation !== true && window.WhiteboxTerminal) {
       const canFork = window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(root) === true;
       const launch = canFork
@@ -70,7 +195,6 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
 
     const targetId = String(options.targetId || exactTarget?.id || exactTarget?.terminalId || "");
     const terminalId = String(options.terminalId || exactTarget?.terminalId || exactTarget?.id || "");
-
     if (root && targetId && terminalId && context.canOpenPtyFocus?.(root)) {
       try {
         const outcome = await context.openPtyFocusVerified?.(root.id, {
@@ -82,11 +206,16 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
           manualSelectionSignaled: options.attentionActivation !== true,
           isCurrent,
         });
-        if (!isCurrent()) return false;
-        if (outcome?.reason === "cancelled") return false;
+        if (!isCurrent() || outcome?.reason === "cancelled") return false;
         if (outcome?.opened === true) {
+          const reviewed = options.resultReview === true
+            ? markResultReviewComplete(selected || id, { expectedTargets: expectedReviewTargets })
+            : 0;
           const acknowledged = options.acknowledge === false ? 0 : acknowledgeSessionNotices(selected || id);
-          if (acknowledged > 0) context.renderWorkspaces?.();
+          if (reviewed > 0) {
+            renderSessions("result-reviewed");
+            renderWorkspaces();
+          } else if (acknowledged > 0) renderWorkspaces();
           return true;
         }
       } catch (error) {
@@ -94,31 +223,536 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
       }
     }
     if (!isCurrent() || context.isPtyFocusActive?.()) return false;
-    // Imported/read-only work has no app-owned PTY. Keep it in work status;
-    // there is intentionally no transcript or replacement detail surface.
-    if (options.keepView !== true) selectView(selected?.status === "completed" ? "active" : "waiting");
     toast(t("pty_focus.terminal_unavailable"));
     return false;
   }
 
+  function openReadOnlyDrawer(id, options = {}) {
+    const selected = snapshotSession(id) || state.details.get(id);
+    if (selected?.parentId) return openSubagentConversation(id, options);
+    if (!selected) return false;
+    if (options.attentionActivation !== true && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    rememberDrawerTrigger();
+    markGuideStep("detail");
+    state.selectedId = id;
+    state.drawerMode = "session";
+    state.drawerExecutionId = null;
+    state.drawerTab = options.tab === "summary" ? "summary" : "chat";
+    state.drawerCreateTerminalIfMissing = options.createTerminalIfMissing !== false;
+    state.drawerMountTerminal = options.mountTerminal !== false;
+    state.drawerForkCreationGesture = state.drawerTab === "chat"
+      && state.drawerCreateTerminalIfMissing
+      && state.drawerMountTerminal
+      && options.attentionActivation !== true;
+    state.drawerForceLatest = state.drawerTab === "chat";
+    const reviewed = options.resultReview === true ? markResultReviewComplete(selected || id) : 0;
+    if (options.acknowledge !== false && acknowledgeSessionNotices(selected || id) > 0) renderWorkspaces();
+    openDrawerSurface(resolvedPresentation(options));
+    renderDrawer();
+    if (reviewed > 0) {
+      renderSessions("result-reviewed");
+      renderWorkspaces();
+    }
+    loadSessionDetail(id, true);
+    if (options.focus !== false) {
+      setTimeout(
+        () => (state.drawerPresentation === "modal" ? $("#closeDrawerBtn") : $("#drawerBackToFlowBtn")).focus({ preventScroll: true }),
+        0,
+      );
+    }
+    return true;
+  }
+
   function openDrawer(id, options = {}) {
-    return openOwnerPty(id, options);
+    const selected = snapshotSession(id) || state.details.get(id);
+    if (selected?.parentId) return openSubagentConversation(id, options);
+    if (selected && !selected.sourcePluginId && context.canOpenPtyFocus?.(selected)) {
+      return openOwnerPty(id, options);
+    }
+    return openReadOnlyDrawer(id, options);
   }
 
   function openSubagentConversation(id, options = {}) {
-    return openOwnerPty(id, options);
+    const child = snapshotSession(id) || state.details.get(id);
+    if (!child || !child.parentId) return openDrawer(id, options);
+    if (options.attentionActivation !== true && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    rememberDrawerTrigger();
+    markGuideStep("detail");
+    state.selectedId = id;
+    state.drawerMode = "subagent";
+    state.drawerExecutionId = null;
+    state.drawerTab = "chat";
+    state.drawerCreateTerminalIfMissing = false;
+    state.drawerMountTerminal = false;
+    state.drawerForkCreationGesture = false;
+    state.agentCommandRoutes.delete(id);
+    state.drawerForceLatest = true;
+    const reviewed = options.resultReview === true ? markResultReviewComplete(child) : 0;
+    if (options.acknowledge !== false && acknowledgeSessionNotices(child) > 0) renderWorkspaces();
+    openDrawerSurface("modal");
+    renderDrawer();
+    if (reviewed > 0) {
+      renderSessions("result-reviewed");
+      renderWorkspaces();
+    }
+    loadSessionDetail(id);
+    loadSubagentParentDetail(child);
+    if (options.focus !== false) {
+      setTimeout(
+        () => (state.drawerPresentation === "modal" ? $("#closeDrawerBtn") : $("#drawerBackToFlowBtn")).focus({ preventScroll: true }),
+        0,
+      );
+    }
+    return true;
   }
 
-  function openExecutionActivity(ownerId, _executionId, options = {}) {
-    return openOwnerPty(ownerId, options);
+  function openExecutionActivity(ownerId, executionId) {
+    const owner = snapshotSession(ownerId) || state.details.get(ownerId);
+    if (!owner) return;
+    if (typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    rememberDrawerTrigger();
+    markGuideStep("detail");
+    state.selectedId = ownerId;
+    state.drawerMode = "execution";
+    state.drawerExecutionId = executionId;
+    state.drawerTab = "chat";
+    state.drawerCreateTerminalIfMissing = true;
+    state.drawerMountTerminal = true;
+    state.drawerForkCreationGesture = false;
+    state.drawerForceLatest = false;
+    openDrawerSurface("modal");
+    renderDrawer();
+    loadSessionDetail(ownerId);
+    if (owner.parentId) loadSubagentParentDetail(owner);
+    setTimeout(() => $("#closeDrawerBtn").focus({ preventScroll: true }), 0);
+    return true;
+  }
+
+  function closeDrawer(restoreFocus = true) {
+    if (!$("#detailDrawer").classList.contains("open")) return false;
+    window.WhiteboxDrawerTerminal?.unmount?.({ resetAvailability: true, sessionId: state.selectedId });
+    state.drawerForkCreationGesture = false;
+    const presentation = state.drawerPresentation;
+    const focusToken = drawerFocusToken;
+    $("#detailDrawer").classList.remove("open");
+    if (presentation === "modal") {
+      setDialogOpenState($("#detailDrawer"), false);
+      $("#drawerBackdrop").classList.add("closing");
+    } else {
+      $("#detailDrawer").setAttribute("inert", "");
+      $("#detailDrawer").setAttribute("aria-hidden", "true");
+      $("#drawerBackdrop").classList.add("hidden");
+      $("#drawerBackdrop").classList.remove("closing");
+      document.body.classList.remove("conversation-context-open");
+      scheduleFlowConnections();
+    }
+    clearTimeout(motionState.drawerTimer);
+    motionState.drawerTimer = setTimeout(
+      () => {
+        $("#drawerBackdrop").classList.add("hidden");
+        $("#drawerBackdrop").classList.remove("closing");
+        setDrawerPresentation("modal");
+        $("#drawerBackdrop").classList.add("hidden");
+        if (drawerFocusToken !== focusToken) return;
+        drawerFocusToken = null;
+        if (!focusToken) return;
+        if (restoreFocus) restoreDialogTrigger(focusToken);
+        else discardDialogTrigger(focusToken);
+      },
+      motionPreference.matches ? 0 : 260,
+    );
+    return true;
+  }
+
+  function backToAgentFlow() {
+    closeDrawer();
+  }
+
+  function renderDrawer() {
+    const session = selectedSession();
+    if (!session) return closeDrawer();
+    const ptyFocusActive = Boolean(state.ptyFocusSessionId);
+    const provider = providerInfo(session.provider);
+    const presentationStatus = controlRoomStatus(session);
+    const delivery = pendingConversationDelivery(session);
+    const presentationLabel = delivery ? t(deliveryLabelKey(delivery.phase)) : sessionStatusLabel(session, presentationStatus);
+    const subagentMode = state.drawerMode === "subagent" && Boolean(session.parentId);
+    const executionMode = state.drawerMode === "execution" && Boolean(state.drawerExecutionId);
+    // A main conversation is an actual terminal surface, not a terminal-styled
+    // transcript. Reuse its exact PTY when one exists. Desktop-owned Codex
+    // history is instead forked into a separate app-owned PTY so its writer is
+    // never attached from two apps; other providers use canonical resume.
+    // Parent-controlled subagents and execution details remain read-only.
+    const conversationTab = state.drawerTab === "chat";
+    // A top-level session's conversation is the PTY itself. The terminal
+    // surface stays visible while it connects or reports that no PTY exists;
+    // it must never fall back to a second transcript/chat transport.
+    const forkableCompletedDesktop = String(session.status || "") === "completed"
+      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+    const directWritablePty = window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
+      && session.controlCapabilities?.pty === true
+      && session.presentation?.conversationSurface !== "transcript";
+    const conversationSurface = forkableCompletedDesktop
+      ? "pty"
+      : directWritablePty ? "pty" : "transcript";
+    const ptyConversation = conversationTab && !session.parentId && !subagentMode && !executionMode;
+    const terminalPtyConversation = ptyConversation && conversationSurface === "pty";
+    const terminalTargets = terminalPtyConversation
+      ? (window.WhiteboxTerminal?.agentTargets?.(session) || [])
+      : [];
+    const savedTargetId = state.agentCommandTargets.get(session.id) || "";
+    const attachableTerminalTargets = terminalTargets.filter(target => target.kind === "terminal");
+    const savedTerminalTarget = attachableTerminalTargets.find(target => target.id === savedTargetId) || null;
+    const terminalTarget = [savedTerminalTarget, ...attachableTerminalTargets]
+      .filter((target, index, targets) => target && targets.indexOf(target) === index)
+      .find(target => window.WhiteboxDrawerTerminal?.canMount?.(session, target.id) !== false)
+      || null;
+    const terminalConversation = terminalTarget?.kind === "terminal";
+    const embeddedTerminal = window.WhiteboxTerminal?.embeddedState?.() || {};
+    const terminalId = String(terminalTarget?.terminalId || terminalTarget?.id || "");
+    const drawerTerminalState = window.WhiteboxDrawerTerminal?.state?.() || {};
+    const embeddedInventoryTarget = attachableTerminalTargets.find(target =>
+      String(target.terminalId || target.id || "") === embeddedTerminal.terminalId
+      && window.WhiteboxDrawerTerminal?.canMount?.(session, target.id) !== false) || null;
+    const embeddedJustConnected = drawerTerminalState.sessionId === session.id
+      && drawerTerminalState.targetId === embeddedTerminal.terminalId
+      && drawerTerminalState.phase === "connected";
+    const liveTerminalChat = conversationTab && embeddedTerminal.connected
+      && embeddedTerminal.agentSessionId === session.id
+      && (!terminalId || embeddedTerminal.terminalId === terminalId)
+      && Boolean(embeddedInventoryTarget || embeddedJustConnected);
+    const actualTerminalChat = terminalPtyConversation;
+    const readOnlyConversation = conversationTab && !actualTerminalChat;
+    const terminalConnectionFailed = actualTerminalChat
+      && drawerTerminalState.sessionId === session.id
+      && ['error', 'unavailable'].includes(drawerTerminalState.phase);
+    const externallyActive = ["starting", "running", "waiting", "paused"].includes(String(session.status || ""));
+    const externalOrigin = !terminalConversation && externallyActive ? originAppInfo(session) : null;
+    const snapshot = snapshotSession(session.id);
+    const activity = executionMode
+      ? (session.executions || []).find(item => item.id === state.drawerExecutionId)
+        || (snapshot?.executions || []).find(item => item.id === state.drawerExecutionId)
+        || null
+      : null;
+    // The lightweight snapshot already contains recent conversation rows.
+    // Show those immediately while the full history is fetched instead of
+    // covering useful content with a blocking loading screen.
+    const detailPending = state.detailLoadingIds.has(state.selectedId);
+    const detailLoading = detailPending && !state.details.has(state.selectedId) && !snapshot;
+    const detailPreviewing = detailPending && !state.details.has(state.selectedId) && Boolean(snapshot);
+    const drawer = $("#detailDrawer");
+    drawer.dataset.mode = executionMode ? "execution" : subagentMode ? "subagent" : "session";
+    drawer.dataset.conversationShell = conversationTab ? "terminal" : "standard";
+    drawer.dataset.terminalChat = actualTerminalChat ? "true" : "false";
+    drawer.dataset.conversationSurface = conversationTab
+      ? actualTerminalChat ? liveTerminalChat ? "pty" : terminalConnectionFailed ? "error" : "connecting" : "transcript"
+      : "standard";
+    drawer.style.setProperty("--drawer-provider", provider.accent);
+    $("#drawerProviderMark").style.setProperty("--provider", provider.accent);
+    $("#drawerProviderMark").textContent = executionMode && activity?.kind === "shell" ? ">_" : provider.mark;
+    $("#drawerProvider").textContent = state.drawerPresentation !== "modal" && !executionMode
+      ? `${t("drawer.agent_flow")} · ${presentationLabel}`
+      : executionMode
+      ? `${activity?.runtime || activity?.tool || t("drawer.execution_unit")} · ${activity ? context.executionActivityStatus(activity) : t("drawer.unknown")}`
+      : subagentMode
+      ? `${t("control.subagent")} · ${presentationLabel}`
+      : `${provider.company} · ${presentationLabel}`;
+    const rawDrawerTitle = executionMode
+      ? context.inferredExecutionSummary(activity || {}).text
+      : subagentMode ? session.title || session.taskName || (session.delegation && session.delegation.taskName) : session.title;
+    const drawerTitle = readablePreview(rawDrawerTitle || t("drawer.title"), 120);
+    $("#drawerTitle").textContent = drawerTitle.text || t("drawer.title");
+    $("#drawerTitle").title = drawerTitle.full || drawerTitle.text || t("drawer.title");
+    const stopping = session.runId && state.stopRequests.has(session.runId);
+    const stop =
+      session.runId && (session.status === "running" || session.status === "starting")
+        ? `<button type="button" class="meta-chip stop-run" data-stop-run="${esc(session.runId)}"
+          ${stopping ? 'disabled aria-busy="true"' : ""}>
+          ${esc(t(stopping ? "drawer.stop_requested" : "drawer.stop_run"))}</button>`
+        : "";
+    const writableDirectSession = window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true;
+    const reset = writableDirectSession ? `<button type="button" class="meta-chip session-reset-button" data-session-reset="${esc(session.id)}"
+      aria-label="${esc(t("session.reset"))}" title="${esc(t("session.reset_help"))}">↻ <b>${esc(t("session.reset"))}</b></button>` : "";
+    const runtime = session.runtimePresence || [];
+    const resume =
+      writableDirectSession && !isLiveSession(session) && agentResumeSupport(session).supported
+        ? `<button type="button" class="meta-chip resume-agent" data-resume-agent="${esc(session.id)}">▶
+          <b>${esc(t(originAppInfo(session) ? "drawer.continue_background_terminal" : "drawer.resume_in_terminal"))}</b>
+        </button>`
+        : "";
+    const sourceControls = session.sourcePluginId ? ["stop", "archive", "delete"].map(action => {
+      const supported = Boolean(session.controlCapabilities?.[action]);
+      const reason = session.controlUnavailableReasons?.[action] || "";
+      if (!supported && !reason) return "";
+      const label = action === "stop" ? "중지" : action === "archive" ? "보관" : "삭제";
+      const busy = state.sourceActionRequests.has(`${session.id}:${action}`);
+      return `<button type="button" class="meta-chip source-session-action ${action === "delete" ? "danger" : ""}"
+        data-source-session-action="${action}" data-source-session-id="${esc(session.id)}"
+        ${!supported || busy ? `disabled${busy ? ' aria-busy="true"' : ""}` : ""}
+        ${reason ? `title="${esc(reason)}" aria-label="${esc(`${label} · ${reason}`)}"` : ""}><b>${esc(label)}</b></button>`;
+    }).join("") : "";
+    const originPath = sessionOriginPath(session);
+    const copyWorkspace = !isProjectlessSession(session) && originPath
+      ? `<button type="button" class="meta-chip meta-copy origin-project-meta" data-copy-text="${esc(originPath)}" aria-label="${esc(t("quality.copy_workspace"))}">${esc(t("project.origin"))} <b>${esc(sessionWorkspaceLabel(session))}</b><span aria-hidden="true">⧉</span></button>`
+      : "";
+    $("#drawerMeta").innerHTML = executionMode
+      ? `<span class="meta-chip work-state ${activity?.status === "running" ? "working" : "resting"}"><b>${esc(activity ? context.executionActivityStatus(activity) : t("drawer.unknown"))}</b></span>
+        <span class="meta-chip">${esc(session.parentId ? t("control.subagent") : t("control.main_agent"))} <b>${esc(session.agentName || provider.label)}</b></span>
+        ${activity?.backgroundId ? `<span class="meta-chip">${esc(t("graph.execution_handle"))} <b>${esc(activity.backgroundId)}</b></span>` : ""}`
+      : subagentMode
+      ? `<span class="meta-chip work-state ${subagentWorkState(session)}">
+        <b>${esc(subagentWorkLabel(session))}</b>
+        </span>
+        <span class="meta-chip">${esc(t("drawer.model"))} <b>${esc(session.model || t("drawer.unknown"))}</b></span>${resume}`
+      : `${sessionBadgesHtml(session)}<span class="meta-chip">${esc(t("drawer.model"))} <b>${esc(session.model || t("drawer.unknown"))}</b>
+        </span>
+        ${copyWorkspace || `<span class="meta-chip origin-project-meta">${esc(t("project.origin"))} <b>${esc(sessionWorkspaceLabel(session))}</b></span>`}
+        ${
+          session.parentId
+            ? `<span class="meta-chip">⑂ <b>${esc(t("drawer.helper_ai"))}</b>
+        </span>`
+            : ""
+        }${
+          runtime.length
+            ? `<span class="meta-chip runtime-meta">● <b>${esc(t("session.running_programs", { count: runtime.length }))}</b>
+        </span>`
+            : ""
+        }${resume}${stop}${sourceControls}${reset}`;
+    $$(".drawer-tab").forEach((tab) => {
+      const hidden = (subagentMode || executionMode) && tab.dataset.tab !== "chat";
+      tab.classList.toggle("hidden", hidden);
+      const shortLabel = t({
+        summary: "drawer.tab_summary_short",
+        chat: "drawer.tab_chat_short",
+        lifecycle: "drawer.tab_progress_short",
+        tokens: "drawer.tab_usage_short",
+      }[tab.dataset.tab]);
+      const fullLabel = tab.dataset.tab === "chat"
+        ? executionMode ? t("drawer.execution_process") : subagentMode ? t("drawer.work_content") : t("ui.conversation")
+        : t({
+            summary: "management.summary",
+            lifecycle: "ui.progress",
+            tokens: "ui.usage",
+          }[tab.dataset.tab]);
+      tab.textContent = executionMode || subagentMode ? fullLabel : shortLabel;
+      tab.setAttribute("aria-label", fullLabel);
+      tab.setAttribute("aria-controls", tab.dataset.tab === "chat" && actualTerminalChat ? "drawerTerminalSurface" : "drawerContent");
+      const active = tab.dataset.tab === state.drawerTab;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.tabIndex = active ? 0 : -1;
+    });
+    const activeTab = $(`.drawer-tab[data-tab="${state.drawerTab}"]`);
+    const content = $("#drawerContent");
+    const terminalSurface = $("#drawerTerminalSurface");
+    content.classList.toggle("hidden", actualTerminalChat);
+    terminalSurface.classList.toggle("hidden", !actualTerminalChat);
+    terminalSurface.setAttribute("aria-hidden", actualTerminalChat ? "false" : "true");
+    if (!actualTerminalChat && !ptyFocusActive) window.WhiteboxDrawerTerminal?.unmount?.();
+    if (actualTerminalChat) {
+      content.removeAttribute("aria-label");
+      content.removeAttribute("aria-labelledby");
+      terminalSurface.setAttribute("aria-labelledby", "drawerTabChat");
+    } else if (subagentMode && state.drawerPresentation === "context") {
+      content.removeAttribute("aria-labelledby");
+      content.setAttribute("aria-label", t("control.subagent_conversation"));
+    } else {
+      content.removeAttribute("aria-label");
+      if (activeTab) content.setAttribute("aria-labelledby", activeTab.id);
+    }
+    rememberDisclosureStates(content);
+    const previousTop = content.scrollTop;
+    const wasAtBottom = window.WhiteboxRendererUtils.isScrolledToEnd(content);
+    const renderKey = `${state.drawerMode}:${state.selectedId}:${state.drawerTab}:${detailLoading ? "loading" : "ready"}`;
+    const previousRenderKey = motionState.drawerRenderKey;
+    const shouldAnimateContent = previousRenderKey !== renderKey;
+    const tabChanged = Boolean(motionState.drawerTab) && motionState.drawerTab !== state.drawerTab;
+    motionState.drawerRenderKey = renderKey;
+    motionState.drawerTab = state.drawerTab;
+    const detailError = state.detailErrors.get(state.selectedId);
+    let nextContentHtml = actualTerminalChat
+      ? ""
+      : detailLoading
+      ? `<div class="drawer-loading"><span></span><b>${esc(t("drawer.loading_history"))}</b><small>${esc(t("drawer.loading_history_help"))}</small></div>`
+      : detailError
+        ? `<div class="drawer-error">
+        <b>${esc(t("drawer.history_failed"))}</b>
+        <span>${esc(detailError)}</span>
+        <button type="button" data-retry-detail="${esc(state.selectedId)}">${esc(t("drawer.retry"))}</button>
+        </div>`
+        : executionMode
+          ? executionActivityDetailHtml(session, activity)
+        : subagentMode
+          ? subagentConversationHtml(session)
+          : state.drawerTab === "summary"
+            ? outcomeHtml(session)
+            : state.drawerTab === "chat"
+            ? chatHtml(session)
+            : state.drawerTab === "lifecycle"
+              ? lifecycleHtml(session)
+              : tokensHtml(session);
+    if (readOnlyConversation && externalOrigin && !detailLoading && !detailError) {
+      nextContentHtml = `<aside class="drawer-external-session-note" role="status">
+        <span aria-hidden="true">↗</span><div><b>${esc(t("drawer.external_session_running", { provider: externalOrigin.provider }))}</b>
+        <small>${esc(t("drawer.external_session_running_help"))}</small></div>
+      </aside>${nextContentHtml}`;
+    }
+    if (!actualTerminalChat && detailPreviewing && !detailError) {
+      nextContentHtml = `<div class="drawer-history-refreshing" role="status">
+        <span aria-hidden="true"></span><small>${esc(t("drawer.loading_history_inline"))}</small>
+      </div>${nextContentHtml}`;
+    }
+    if (motionState.drawerContentHtml !== nextContentHtml) {
+      content.innerHTML = nextContentHtml;
+      motionState.drawerContentHtml = nextContentHtml;
+    }
+    const composer = $("#drawerComposer");
+    composer.dataset.mode = actualTerminalChat ? "terminal" : "conversation";
+    if (session.sourcePluginId && conversationSurface === "transcript") composer.dataset.mode = "source";
+    const showSourceComposer = Boolean(session.sourcePluginId && conversationSurface === "transcript" && session.controlCapabilities?.sendInstruction);
+    const showComposer = !session.parentId
+      && !executionMode
+      && conversationTab
+      && !actualTerminalChat
+      && (showSourceComposer || (typeof agentCommandComposer === "function" && liveTerminalChat));
+    composer.classList.toggle("hidden", !showComposer);
+    composer.setAttribute("aria-hidden", showComposer ? "false" : "true");
+    const sourceDraft = state.sourceMessageDrafts.get(session.id) || "";
+    const sourceBusy = state.sourceActionRequests.has(`${session.id}:send`);
+    const nextComposerHtml = showSourceComposer ? `<form class="agent-command-composer source-message-composer" data-source-message-form="${esc(session.id)}">
+      <label class="agent-command-input"><span class="sr-only">이어갈 지시</span><textarea rows="2" data-source-message-input="${esc(session.id)}" placeholder="이 작업에 이어서 지시하기" ${sourceBusy ? "disabled" : ""}>${esc(sourceDraft)}</textarea></label>
+      <div class="agent-command-actions"><button type="submit" ${sourceBusy || !sourceDraft.trim() ? "disabled" : ""} ${sourceBusy ? 'aria-busy="true"' : ""}>${sourceBusy ? "전송 중…" : "전송"}</button></div>
+    </form>` : showComposer ? agentCommandComposer.call(null, session, {
+      conversation: true,
+      terminal: actualTerminalChat,
+      terminalStyle: conversationTab,
+      connectionReady: liveTerminalChat,
+      delivery,
+      deliveryLabel: delivery ? t(deliveryLabelKey(delivery.phase)) : "",
+    }) : "";
+    const focusedDraft = document.activeElement?.matches?.("[data-agent-command-draft]")
+      && composer.contains(document.activeElement)
+      && document.activeElement.dataset.agentCommandDraft === session.id;
+    // Session snapshots arrive while the user is typing. Replacing the
+    // composer would destroy the focused textarea and its IME/caret state.
+    // Keep that exact node alive until focus leaves it; the delegated input
+    // handler already mirrors the current draft into state.
+    const currentInputMode = composer.querySelector("[data-agent-command-form]")?.dataset.agentCommandInputModeSelected || "";
+    const nextInputMode = actualTerminalChat ? "terminal" : "conversation";
+    const currentTerminalReady = composer.querySelector("[data-agent-command-form]")?.dataset.agentTerminalReady || "";
+    const nextTerminalReady = liveTerminalChat ? "true" : "false";
+    if (focusedDraft
+      && (currentInputMode !== nextInputMode || currentTerminalReady !== nextTerminalReady)
+      && reconcileFocusedComposer(composer, nextComposerHtml, session.id)) {
+      motionState.drawerComposerHtml = nextComposerHtml;
+    } else if (!focusedDraft && motionState.drawerComposerHtml !== nextComposerHtml) {
+      composer.innerHTML = nextComposerHtml;
+      motionState.drawerComposerHtml = nextComposerHtml;
+    } else if (!showComposer && composer.innerHTML) {
+      composer.innerHTML = "";
+      motionState.drawerComposerHtml = "";
+    }
+    // A snapshot may change delivery state while the textarea keeps focus.
+    // Update the stable interrupt control in place so preserving IME/caret
+    // state never delays the user's ability to stop the current AI turn.
+    const interruptButton = composer.querySelector(
+      `[data-conversation-interrupt="${CSS.escape(session.id)}"], [data-terminal-interrupt="${CSS.escape(session.id)}"]`,
+    );
+    if (interruptButton) {
+      const interrupting = state.conversationInterruptRequests.has(session.id);
+      const terminalInterrupt = interruptButton.hasAttribute("data-terminal-interrupt");
+      const interruptible = terminalInterrupt
+        ? Boolean(liveTerminalChat && terminalTarget?.kind === "terminal")
+        : Boolean(delivery?.entry?.target)
+          && ["confirming", "delayed", "received", "responding"].includes(delivery?.phase);
+      interruptButton.hidden = !interruptible && !interrupting;
+      interruptButton.disabled = !interruptible || interrupting;
+      interruptButton.toggleAttribute("aria-busy", interrupting);
+      const interruptLabel = t(interrupting
+        ? "agent.stopping_response"
+        : terminalInterrupt ? "agent.terminal_interrupt" : "agent.stop_response");
+      interruptButton.setAttribute("aria-label", interruptLabel);
+      interruptButton.setAttribute("title", interruptLabel);
+      const interruptIcon = interruptButton.querySelector(".conversation-interrupt-icon");
+      const interruptVisibleLabel = interruptButton.querySelector(".conversation-interrupt-label");
+      if (interruptIcon) interruptIcon.textContent = interrupting ? "…" : "";
+      if (interruptVisibleLabel) interruptVisibleLabel.textContent = t(interrupting
+        ? "agent.stopping_short"
+        : terminalInterrupt ? "agent.terminal_interrupt" : "agent.stop_short");
+    }
+    const createTerminalIfMissing = state.drawerCreateTerminalIfMissing !== false;
+    const forkCreationGestureArmed = state.drawerForkCreationGesture === true;
+    state.drawerForkCreationGesture = false;
+    const forkCreationGesture = actualTerminalChat
+      && state.drawerMountTerminal !== false
+      && forkCreationGestureArmed;
+    if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && terminalTarget) {
+      window.WhiteboxDrawerTerminal?.mount?.(session, {
+        targetId: terminalTarget.id,
+        createIfMissing: createTerminalIfMissing,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
+      });
+    } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && attachableTerminalTargets.length === 0) {
+      window.WhiteboxDrawerTerminal?.mount?.(session, {
+        createIfMissing: createTerminalIfMissing,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
+      });
+    } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat) {
+      window.WhiteboxDrawerTerminal?.mount?.(session, {
+        targetId: attachableTerminalTargets[0].id,
+        createIfMissing: false,
+        forkIfOriginOwned: true,
+        forkCreationGesture,
+      });
+    }
+    restoreDisclosureStates(content);
+    content.classList.toggle("motion-content-in", shouldAnimateContent && !motionPreference.matches);
+    clearTimeout(motionState.drawerContentTimer);
+    if (shouldAnimateContent)
+      motionState.drawerContentTimer = setTimeout(() => content.classList.remove("motion-content-in"), motionPreference.matches ? 0 : 520);
+    if (!detailLoading && !actualTerminalChat) {
+      if (tabChanged) {
+        content.scrollTop = 0;
+        state.drawerForceLatest = false;
+      } else {
+        const scrollGeneration = (motionState.drawerScrollGeneration || 0) + 1;
+        motionState.drawerScrollGeneration = scrollGeneration;
+        requestAnimationFrame(() => {
+          if (motionState.drawerScrollGeneration !== scrollGeneration) return;
+          const forceLatest = state.drawerForceLatest;
+          if (state.drawerTab === "chat" && forceLatest) {
+            if (subagentMode || executionMode) content.scrollTop = 0;
+            else {
+              const rows = [...content.querySelectorAll(".chat-row")];
+              const latest = rows[rows.length - 1];
+              if (latest && latest.offsetHeight > content.clientHeight - 90) {
+                const contentTop = content.getBoundingClientRect().top;
+                const stickyHeight = content.querySelector(".chat-history-head")?.getBoundingClientRect().height || 0;
+                content.scrollTop = Math.max(0, content.scrollTop + latest.getBoundingClientRect().top - contentTop - stickyHeight - 12);
+              } else content.scrollTop = content.scrollHeight;
+            }
+          } else if (state.drawerTab === "chat" && wasAtBottom) content.scrollTop = content.scrollHeight;
+          else content.scrollTop = Math.min(previousTop, Math.max(0, content.scrollHeight - content.clientHeight));
+          state.drawerForceLatest = false;
+        });
+      }
+    }
   }
 
   return {
     openDrawer,
     openSubagentConversation,
     openExecutionActivity,
-    closeDrawer: () => false,
-    backToAgentFlow: () => false,
-    renderDrawer: () => {},
+    closeDrawer,
+    backToAgentFlow,
+    renderDrawer,
   };
 };

@@ -5,6 +5,15 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.15 - 2026-09-03
+
+- Restore the right-side read-only detail drawer for child nodes and execution
+  records while preserving the owning root task's mounted PTY underneath.
+- Remove the standalone review queue and the empty retired feature-navigation
+  region, routing completed-result review through the exact owning PTY.
+- Hide program/source rows such as `Whitebox · 0 tasks` when a project has no
+  sessions, while keeping the saved project itself available for selection.
+
 ## 1.7.14 - 2026-09-03
 
 - Open a running Codex Desktop main node in its existing signed fork PTY's

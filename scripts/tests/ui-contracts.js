@@ -49,6 +49,8 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app-management.js',
   'renderer/app-session-render.js',
   'renderer/app-pty-focus.js',
+  'renderer/app-drawer-data.js',
+  'renderer/app-drawer-content.js',
   'renderer/app-drawer.js',
   'renderer/app-run-modal.js',
   'renderer/app-quality.js',
@@ -76,7 +78,6 @@ const REQUIRED_UI_IDS = [
   'guideProgressBar',
   'dismissGuideBtn',
   'operationsOverview',
-  'attentionInbox',
   'providerOverview',
   'liveSection',
   'controlRoomProjectToolbar',
@@ -103,6 +104,11 @@ const REQUIRED_UI_IDS = [
   'ptyFocusFlow',
   'ptyFocusTerminalShell',
   'ptyFocusTerminalViewport',
+  'drawerBackdrop',
+  'detailDrawer',
+  'drawerTabChat',
+  'drawerContent',
+  'drawerComposer',
   'runModal',
   'quickPaletteModal',
   'quickPaletteInput',
@@ -131,10 +137,7 @@ const REMOVED_UI_IMPLEMENTATIONS = [
   'renderer/app-attention-popup-settings.js',
   'src/attentionPopupManager.js',
   'src/attentionPopupPreferenceStore.js',
-  'renderer/app-drawer-data.js',
-  'renderer/app-drawer-content.js',
   'renderer/drawer-terminal.js',
-  'renderer/styles-drawer-terminal.css',
   'renderer/app-runtime-overview.js',
   'renderer/app-tmux-render.js',
   'renderer/styles-runtime-overview.css',
@@ -145,10 +148,6 @@ const REMOVED_UI_IDS = [
   'mobileMoreBtn',
   'mobileToolsMenu',
   'advancedToolsNav',
-  'detailDrawer',
-  'drawerBackdrop',
-  'drawerContent',
-  'drawerComposer',
   'ptyFocusChildModal',
   'ptyFocusChildBody',
   'attentionPopupSettingsCard',
@@ -286,8 +285,6 @@ const MANAGEMENT_SEMANTIC_CONTRACTS = [
   'needsManagementReview',
   'needsManagementInbox',
   'data-attention-category',
-  'management-filter-group optional',
-  'management-filter-group response',
   'signals.length',
   'loggedRatio',
   'attention.kind === "approval"',
@@ -301,7 +298,6 @@ const MANAGEMENT_SEMANTIC_CONTRACTS = [
   'management.flow_agent_reply',
   'management.flow_my_check',
   'management.flow_my_reply',
-  'data-attention-draft',
   'attention-evidence-details',
   'sessionOrder',
   'function stableSessionSort',
@@ -345,6 +341,8 @@ const APP_MODULES = [
   'app-agent-actions.js',
   'app-management.js',
   'app-session-render.js',
+  'app-drawer-data.js',
+  'app-drawer-content.js',
   'app-pty-focus.js',
   'app-drawer.js',
   'app-run-modal.js',
@@ -368,6 +366,8 @@ const APP_PUBLIC_API_CONTRACTS = [
   'createSessionRenderer',
   'createAgentActions',
   'createManagement',
+  'createDrawerData',
+  'createDrawerContent',
   'createDrawer',
   'createRunModal',
   'createQualityEnhancements',
@@ -1145,12 +1145,12 @@ function registerUiContractTests(context) {
     assert.doesNotMatch(runtimeOverviewCompatibility,
       /automationOverview|runtimeOverview|selectView\s*\(\s*['"]runtime|tmuxSection|tmuxCreateModal/u,
       'compatibility visual entry가 삭제된 추가 기능 runtime/tmux 화면을 긍정 검증합니다.');
-    for (const removedScript of [
-      'app-drawer-data.js',
-      'app-drawer-content.js',
-      'drawer-terminal.js',
-      'app-attention-popup-settings.js',
-    ]) assert.equal(html.includes(`src="${removedScript}"`), false, `${removedScript} 삭제 화면 런타임이 다시 로드됩니다.`);
+    for (const restoredScript of ['app-drawer-data.js', 'app-drawer-content.js']) {
+      assert.equal(html.includes(`src="${restoredScript}"`), true, `${restoredScript} 상세 패널 런타임이 로드되지 않습니다.`);
+    }
+    for (const removedScript of ['drawer-terminal.js', 'app-attention-popup-settings.js']) {
+      assert.equal(html.includes(`src="${removedScript}"`), false, `${removedScript} 삭제 화면 런타임이 다시 로드됩니다.`);
+    }
     for (const id of RUN_COMPOSER_IDS) assert.ok(html.includes(`id="${id}"`));
     assertIncludesAll(html, BEGINNER_GUIDE_LABELS, label => `${label} 문구가 없습니다.`);
     assertExcludesAll(
@@ -1201,13 +1201,8 @@ function registerUiContractTests(context) {
     assert.ok(agentActions.includes('"status", "activityState", "statusDetail"'), '상세 화면이 최신 activityState를 덮어쓰지 못합니다.');
     assert.equal(html.includes('data-view="subagents"'), false);
     assert.equal(html.includes('id="navSubagentCount"'), false);
-    const projectContextTag = html.match(/<section id="projectContextNav"[^>]*>/)?.[0] || '';
-    assert.ok(
-      projectContextTag.includes(' hidden"')
-        && projectContextTag.includes('aria-hidden="true"')
-        && projectContextTag.includes(' inert'),
-      '이번 배포에서 프로젝트 탐색 영역 전체는 여백을 남기지 않고 화면과 보조 기기에서 모두 숨겨야 합니다.',
-    );
+    assert.equal(html.includes('id="projectContextNav"'), false,
+      '빈 추가 기능/프로젝트 탐색 영역은 여백을 남기지 않고 DOM에서 제거되어야 합니다.');
     const sidebarBlock = html.slice(html.indexOf('<aside class="sidebar"'), html.indexOf('<main id="mainContent"'));
     const liveBlock = html.slice(html.indexOf('id="liveSection"'), html.indexOf('id="globalStats"'));
     assert.equal(sidebarBlock.includes('id="workspaceList"'), false, '데스크톱 사이드바에 프로젝트 목록이 다시 들어가면 안 됩니다.');
@@ -1250,13 +1245,17 @@ function registerUiContractTests(context) {
     const ptyFocusSource = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     assert.match(drawerSource, /async function openOwnerPty\(id, options = \{\}\)[\s\S]*context\.openPtyFocusVerified\?\.\(root\.id,/u,
       '기존 작업 열기 진입점이 담당 root PTY 집중 모드로 라우팅되어야 합니다.');
-    assert.doesNotMatch(drawerSource, /innerHTML|drawerContent|drawerComposer|classList\.add\("open"\)/u,
-      'headless 호환 라우터가 대화/right drawer 화면을 다시 만들면 안 됩니다.');
+    assert.match(drawerSource, /function openSubagentConversation\(id, options = \{\}\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u,
+      '하위 작업은 복원된 오른쪽 상세 패널을 열어야 합니다.');
+    assert.match(drawerSource, /function openExecutionActivity\(ownerId, executionId\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u,
+      '실행 항목은 복원된 오른쪽 상세 패널을 열어야 합니다.');
     assert.match(ptyFocusSource, /function openPtyFocusForTerminal\(terminalId, options = \{\}\)[\s\S]*terminalId: id,[\s\S]*creationId:/u,
       '새 AI 작업은 정확한 PTY identity로 집중 모드를 열어야 합니다.');
-    for (const removedId of ['detailDrawer', 'drawerBackdrop', 'drawerTabChat', 'drawerComposer', 'ptyFocusChildModal']) {
-      assert.equal(html.includes(`id="${removedId}"`), false, `${removedId} 삭제 화면이 다시 노출되었습니다.`);
+    for (const restoredId of ['detailDrawer', 'drawerBackdrop', 'drawerTabChat', 'drawerContent']) {
+      assert.equal(html.includes(`id="${restoredId}"`), true, `${restoredId} 오른쪽 상세 패널이 누락됐습니다.`);
     }
+    assert.equal(html.includes('id="ptyFocusChildModal"'), false,
+      '과거의 별도 PTY 하위 팝업 대신 공용 상세 패널을 사용해야 합니다.');
     assert.match(html, /<div id="terminalRuntimeMount" hidden aria-hidden="true"><\/div>/u,
       '실제 xterm host를 옮겨 붙이는 hidden staging mount만 유지해야 합니다.');
 
@@ -1862,10 +1861,12 @@ function registerUiContractTests(context) {
       '저장한 완료 결과 stamp는 reload 뒤에도 유지되어야 합니다.');
     const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
     const sessionRenderSource = fs.readFileSync(path.join(root, 'renderer', 'app-session-render.js'), 'utf8');
-    assert.equal(sessionRenderSource.includes('sessionNeedsResultReview'), false,
-      '지난 기록 화면에 제거된 결과 확인 판정이 남아 있으면 안 됩니다.');
-    assert.equal(sessionRenderSource.includes('data-result-review'), false,
-      '지난 기록 카드에 제거된 결과 확인 저장 동작이 남아 있으면 안 됩니다.');
+    assert.match(sessionRenderSource,
+      /resultReviewTargets\(session, \{ allowPtyCreation: true \}\)\.length > 0/u,
+      '삭제된 확인 전용 페이지 대신 지난 기록 카드가 안전한 PTY 결과 확인 대상을 판정해야 합니다.');
+    assert.ok(sessionRenderSource.includes('data-result-review="true"')
+      && sessionRenderSource.includes('t("studio.review.open_result")'),
+    '지난 기록의 완료 카드는 담당 PTY 결과 확인 동작을 명확히 노출해야 합니다.');
     assert.ok(sessionRenderSource.includes('t("memory.recorded_decisions")')
       && sessionRenderSource.includes('t(`memory.stage_decision_${decisionState}`)')
       && !sessionRenderSource.includes('memory.no_result_to_review'),
@@ -2017,13 +2018,95 @@ function registerUiContractTests(context) {
     assert.strictEqual(selected.lifecycle, staleDetail.lifecycle);
   });
 
-  test('대화창 호환 진입점은 하위 작업도 담당 root PTY 집중 모드로 연다', async () => {
+  test('오른쪽 상세 패널은 보정 조회 중 도착한 최신 snapshot까지 따라잡는다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer-data.js'), 'utf8');
+    const pending = [];
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise(next => { resolve = next; });
+      return { promise, resolve };
+    };
+    const sandbox = {
+      window: {
+        WhiteboxAppFactories: {},
+        WhiteboxI18n: { t: key => key, errorText: error => String(error) },
+        whitebox: {
+          sessionDetail: () => {
+            const request = deferred();
+            pending.push(request);
+            return request.promise;
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'app-drawer-data.js' });
+    const sessionId = 'drawer-live-session';
+    let renderCount = 0;
+    const state = {
+      snapshot: { sessions: [{ id: sessionId, updatedAt: 'v1' }] },
+      details: new Map(),
+      detailErrors: new Map(),
+      detailLoadingIds: new Set(),
+      selectedId: sessionId,
+      drawerTab: 'chat',
+      drawerForceLatest: false,
+    };
+    const drawerData = sandbox.window.WhiteboxAppFactories.createDrawerData({
+      state,
+      renderDrawer() { renderCount += 1; },
+      renderPtyFocusDetail() {},
+      reportRecoverableError(error) { throw error; },
+    });
+
+    const first = drawerData.loadSessionDetail(sessionId, true, 'v1');
+    await Promise.resolve();
+    assert.equal(pending.length, 1);
+    drawerData.loadSessionDetail(sessionId, true, 'v2');
+    pending[0].resolve({ id: sessionId, updatedAt: 'v1' });
+    await first;
+    while (pending.length < 2) await Promise.resolve();
+
+    const second = drawerData.loadSessionDetail(sessionId, true, 'v3');
+    pending[1].resolve({ id: sessionId, updatedAt: 'v2' });
+    await second;
+    while (pending.length < 3) await Promise.resolve();
+    pending[2].resolve({ id: sessionId, updatedAt: 'v3' });
+    while (state.details.get(sessionId)?.updatedAt !== 'v3') await Promise.resolve();
+
+    assert.equal(pending.length, 3,
+      '보정 조회 중 더 최신 snapshot이 오면 최신 버전 하나를 추가 조회해야 합니다.');
+    assert.equal(state.detailLoadingIds.size, 0);
+
+    const parentId = 'drawer-parent-session';
+    state.snapshot.sessions = [
+      { id: parentId, updatedAt: 'parent-v2' },
+      { id: sessionId, parentId, updatedAt: 'child-v1' },
+    ];
+    state.selectedId = sessionId;
+    state.drawerMode = 'subagent';
+    const rendersBeforeParent = renderCount;
+    const parentRequest = drawerData.loadSessionDetail(parentId, true, 'parent-v2');
+    await Promise.resolve();
+    pending[3].resolve({ id: parentId, updatedAt: 'parent-v2', collaboration: { communications: ['new'] } });
+    await parentRequest;
+    assert.equal(state.details.get(parentId)?.updatedAt, 'parent-v2');
+    assert.ok(renderCount > rendersBeforeParent,
+      '선택한 하위 작업의 부모 detail이 갱신되면 열린 coordination 패널도 다시 그려야 합니다.');
+
+    const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
+    assert.match(bootstrapSource,
+      /card\?\.parentId[\s\S]*parentCard[\s\S]*parentCard\.updatedAt !== parentDetail\.updatedAt[\s\S]*loadSessionDetail\(card\.parentId, true, parentCard\.updatedAt\)/u,
+      '열린 하위·실행 drawer는 부모 snapshot 버전이 바뀌면 부모 전체 detail도 갱신해야 합니다.');
+  });
+
+  test('루트 작업은 PTY 집중 모드로, 하위 작업은 오른쪽 상세 패널로 연다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const sandbox = {
       CustomEvent: class CustomEvent { constructor(type) { this.type = type; } },
       window: {
         WhiteboxAppFactories: {},
         WhiteboxI18n: { t: key => key },
+        addEventListener: () => {},
         dispatchEvent: () => {},
       },
     };
@@ -2032,6 +2115,7 @@ function registerUiContractTests(context) {
     const child = { id: 'child', parentId: parent.id, provider: 'codex' };
     const sessions = new Map([[parent.id, parent], [child.id, child]]);
     const opened = [];
+    const reviewed = [];
     const state = { details: new Map(), selectedId: '' };
     const routerContext = {
       state,
@@ -2040,6 +2124,14 @@ function registerUiContractTests(context) {
       resultReviewPtyTarget: session => session === parent
         ? { id: 'terminal-root', terminalId: 'terminal-root' }
         : null,
+      resultReviewTargets: session => session === parent ? [parent] : [],
+      resultReviewStamp: session => `stamp:${session.id}`,
+      markResultReviewComplete: (session, options) => {
+        reviewed.push([session.id, options]);
+        return 1;
+      },
+      markGuideStep: () => {},
+      signalManualTerminalSelection: () => {},
       openPtyFocusVerified: async (id, options) => {
         opened.push([id, options.focus, options.targetId, options.terminalId]);
         return { opened: true };
@@ -2047,18 +2139,23 @@ function registerUiContractTests(context) {
     };
     const drawer = sandbox.window.WhiteboxAppFactories.createDrawer(routerContext);
 
-    assert.equal(await drawer.openSubagentConversation(child.id, { focus: true }), true);
+    assert.match(source, /function openSubagentConversation\(id, options = \{\}\)[\s\S]*state\.selectedId = id;[\s\S]*openDrawerSurface\("modal"\);[\s\S]*renderDrawer\(\);/u,
+      '하위 작업은 담당 root PTY로 전환하지 말고 상세 패널에 해당 대화를 보여야 합니다.');
+    assert.match(source, /function openExecutionActivity\(ownerId, executionId\)[\s\S]*state\.drawerMode = "execution";[\s\S]*openDrawerSurface\("modal"\);[\s\S]*renderDrawer\(\);/u,
+      '실행 항목도 공용 오른쪽 상세 패널에서 열려야 합니다.');
+    assert.equal(await drawer.openDrawer(parent.id, { focus: true, resultReview: true }), true);
     assert.deepStrictEqual(opened, [[parent.id, true, 'terminal-root', 'terminal-root']]);
-    assert.equal(state.selectedId, child.id, '상태 선택은 사용자가 누른 하위 작업을 보존해야 합니다.');
-    assert.equal(drawer.closeDrawer(), false, '삭제된 대화창을 닫는 동작은 no-op이어야 합니다.');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(reviewed)), [[parent.id, {
+      expectedTargets: [{ id: parent.id, stamp: `stamp:${parent.id}` }],
+    }]], 'PTY open 전에 캡처한 동일 결과 stamp만 확인 완료로 저장해야 합니다.');
+    assert.equal(state.selectedId, parent.id, '루트 PTY 진입은 열린 루트 선택을 보존해야 합니다.');
 
     let resolveStale;
     let activeFocus = false;
     const staleRoot = { id: 'stale-root', provider: 'codex' };
-    const staleChild = { id: 'stale-child', parentId: staleRoot.id, provider: 'codex' };
     const currentRoot = { id: 'current-root', provider: 'codex' };
     const raceSessions = new Map([
-      [staleRoot.id, staleRoot], [staleChild.id, staleChild], [currentRoot.id, currentRoot],
+      [staleRoot.id, staleRoot], [currentRoot.id, currentRoot],
     ]);
     const viewFallbacks = [];
     const fallbackToasts = [];
@@ -2067,6 +2164,8 @@ function registerUiContractTests(context) {
     const raceDrawer = sandbox.window.WhiteboxAppFactories.createDrawer({
       state: raceState,
       snapshotSession: id => raceSessions.get(id) || null,
+      markGuideStep: () => {},
+      signalManualTerminalSelection: () => {},
       canOpenPtyFocus: () => true,
       resultReviewPtyTarget: session => ({ id: `terminal-${session.id}`, terminalId: `terminal-${session.id}` }),
       isPtyFocusActive: () => activeFocus,
@@ -2082,7 +2181,7 @@ function registerUiContractTests(context) {
       selectView: view => viewFallbacks.push(view),
       toast: message => fallbackToasts.push(message),
     });
-    const staleOpen = raceDrawer.openSubagentConversation(staleChild.id, { focus: true });
+    const staleOpen = raceDrawer.openDrawer(staleRoot.id, { focus: true });
     await Promise.resolve();
     assert.equal(typeof resolveStale, 'function');
     assert.equal(await raceDrawer.openDrawer(currentRoot.id, { focus: true }), true);
@@ -2181,7 +2280,8 @@ function registerUiContractTests(context) {
       'createCore', 'createProviderVisibility', 'createDashboard',
       'createGraphModel', 'createGraphView', 'createGraphLayout', 'createGraphOrchestration',
       'createAgentActions', 'createManagement', 'createSessionRenderer',
-      'createPtyFocusMode', 'createDrawer', 'createRunModal', 'createQualityEnhancements',
+      'createDrawerData', 'createDrawerContent', 'createPtyFocusMode', 'createDrawer',
+      'createRunModal', 'createQualityEnhancements',
       'createNavigationEventBindings', 'createSessionEventBindings', 'createFilterEventBindings',
       'createDialogEventBindings', 'createEventBindings',
     ];
@@ -2384,7 +2484,7 @@ function registerUiContractTests(context) {
       'pending direct projection 뒤 사용자가 화면을 이동하면 늦게 도착한 projection이 PTY focus를 열면 안 됩니다.');
   });
 
-  test('PTY 집중 모드의 도움 AI와 실행 항목은 클릭 없는 상태 행으로만 표시한다', () => {
+  test('PTY 집중 모드의 도움 AI와 실행 항목은 오른쪽 상세 패널로 연다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     const element = (extra = {}) => ({
       className: '',
@@ -2451,10 +2551,16 @@ function registerUiContractTests(context) {
       'PTY focus의 담당·진행·완료 상태 레인이 모두 렌더링되어야 합니다.');
     assert.match(flowHtml, /도움 작업[\s\S]*npm test/u,
       '도움 AI와 실행 작업 상태가 PTY focus DOM에 렌더링되어야 합니다.');
-    assert.doesNotMatch(flowHtml, /<button|data-open-|aria-haspopup|role="button"/u,
-      '상태 행은 대화나 상세 팝업을 여는 인터랙션을 만들면 안 됩니다.');
+    assert.match(flowHtml, /<button[^>]*data-pty-focus-child="child"[^>]*aria-haspopup="dialog"[^>]*aria-controls="detailDrawer"/u,
+      '도움 AI 행은 공용 오른쪽 상세 패널을 여는 버튼이어야 합니다.');
+    assert.match(flowHtml, /<button[^>]*data-pty-focus-execution-owner="root"[^>]*data-pty-focus-execution="exec"[^>]*aria-haspopup="dialog"[^>]*aria-controls="detailDrawer"/u,
+      '실행 항목 행은 공용 오른쪽 상세 패널을 여는 버튼이어야 합니다.');
+    assert.match(source, /const child = event\.target\.closest\("\[data-pty-focus-child\]"\)[\s\S]*context\.openSubagentConversation\?\.\(child\.dataset\.ptyFocusChild/u,
+      '도움 AI 버튼이 상세 패널 진입점에 연결되지 않았습니다.');
+    assert.match(source, /const execution = event\.target\.closest\("\[data-pty-focus-execution\]"\)[\s\S]*context\.openExecutionActivity\?\.\(/u,
+      '실행 항목 버튼이 상세 패널 진입점에 연결되지 않았습니다.');
     assert.doesNotMatch(source, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
-      '삭제된 PTY 하위 대화/상세 팝업 코드가 남아 있습니다.');
+      '별도 PTY 하위 팝업을 복제하지 말고 공용 drawer 진입점을 사용해야 합니다.');
   });
 
   test('같은 세션의 최신 스냅샷에서 확인된 대화는 상세 캐시가 갱신될 때까지 보존한다', () => {
@@ -2520,7 +2626,7 @@ function registerUiContractTests(context) {
     assert.ok(source.includes('graph.progress_basis_note'), '기록된 단계 비율을 전체 계획 진척률로 오해하지 않도록 근거 안내가 필요합니다.');
   });
 
-  test('모든 작업 열기와 확인 완료는 담당 root PTY 집중 모드로 라우팅한다', () => {
+  test('루트 작업은 PTY로, 하위·실행 상세는 오른쪽 패널로 라우팅한다', () => {
     const graph = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
     const events = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
@@ -2556,13 +2662,21 @@ function registerUiContractTests(context) {
     assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*isAppOwnedBridgePty\(session\)[\s\S]*data-pty-focus-trigger=/u,
       '작업 흐름의 writable root와 새 bridge projection이 PTY 집중 모드로 연결되지 않습니다.');
     assert.doesNotMatch(graphNodeSource, /data-inline-pty-trigger=/u,
-      '작업 노드가 삭제 대상인 인라인/오른쪽 화면 경로를 다시 노출하고 있습니다.');
+      '루트 작업 노드가 과거 인라인 PTY 경로를 다시 노출하고 있습니다.');
     assert.match(controlRoomSource, /const controlRoomPtyAttributes = root\.parentId[\s\S]*data-pty-focus-trigger=/u,
       '작업 현황의 담당 root 노드가 PTY 집중 모드로 연결되지 않습니다.');
     assert.match(events, /const ptyFocus = event\.target\.closest\("\[data-pty-focus-trigger\]"\)[\s\S]*await openDrawer\(ptyFocus\.dataset\.ptyFocusTrigger, \{ trigger: ptyFocus, focus: true \}\)/u,
       '작업 노드 클릭이 full PTY 집중 모드를 열어야 합니다.');
     assert.match(drawerSource, /function ownerRoot\(value\)[\s\S]*while \(session\?\.parentId[\s\S]*context\.openPtyFocusVerified\?\.\(root\.id,/u,
-      '하위 작업·실행·기존 상세 진입은 담당 root PTY로 귀속되어야 합니다.');
+      '루트 PTY 진입은 담당 root의 exact terminal을 검증해야 합니다.');
+    assert.match(helperNodeSource, /data-open-subagent-chat=/u,
+      '하위 AI 노드가 복원된 오른쪽 상세 패널 진입점을 제공해야 합니다.');
+    assert.match(executionNodeSource, /data-open-execution-owner=[\s\S]*data-open-execution-id=/u,
+      '실행 항목이 복원된 오른쪽 상세 패널 진입점을 제공해야 합니다.');
+    assert.match(events, /const subagentChat = event\.target\.closest\("\[data-open-subagent-chat\]"\)[\s\S]*openSubagentConversation\(subagentChat\.dataset\.openSubagentChat/u,
+      '하위 AI 노드 클릭이 오른쪽 상세 패널에 연결되지 않았습니다.');
+    assert.match(events, /const execution = event\.target\.closest\("\[data-open-execution-id\]"\)[\s\S]*openExecutionActivity\(execution\.dataset\.openExecutionOwner, execution\.dataset\.openExecutionId\)/u,
+      '실행 항목 클릭이 오른쪽 상세 패널에 연결되지 않았습니다.');
     const ownerPtyRoute = drawerSource.slice(
       drawerSource.indexOf('async function openOwnerPty('),
       drawerSource.indexOf('function openDrawer('),
@@ -2597,17 +2711,10 @@ function registerUiContractTests(context) {
       events.indexOf('$("#operationsOverview").addEventListener("click"'),
       events.indexOf('$("#operationsOverview").addEventListener("input"'),
     );
-    const attentionInboxReviewHandler = events.slice(
-      events.indexOf('$("#attentionInbox").addEventListener("click"'),
-      events.indexOf('$("#attentionInbox").addEventListener("input"'),
-    );
-    for (const [surface, handler] of [
-      ['작업 현황', operationsReviewHandler],
-      ['확인 목록', attentionInboxReviewHandler],
-    ]) {
-      assert.match(handler, /event\.target\.closest\("\[data-result-review-complete\]"\)[\s\S]*await completeResultReview\(reviewComplete\)/u,
-        `${surface}의 확인 완료 동작이 공통 verified PTY handler에 연결되지 않았습니다.`);
-    }
+    assert.match(operationsReviewHandler, /event\.target\.closest\("\[data-result-review-complete\]"\)[\s\S]*await completeResultReview\(reviewComplete\)/u,
+      '작업 현황의 확인 완료 동작이 공통 verified PTY handler에 연결되지 않았습니다.');
+    assert.doesNotMatch(events, /attentionInbox|renderAttentionInbox|selectView\("waiting"\)/u,
+      '삭제된 독립 확인 페이지의 상호작용이 남아 있습니다.');
     assert.match(events, /if \(result\?\.requiresText\)[\s\S]*openPtyFocusVerified\(session\.id, \{[\s\S]*targetId: result\.target\.id,[\s\S]*terminalId: result\.target\.terminalId \|\| result\.target\.id/u,
       '화면에서 답한 추가 입력 요청은 응답한 exact PTY로 이동해야 합니다.');
     assert.match(bootstrap, /handleTerminalPromptResolved = async[\s\S]*openPtyFocusVerified\?\.\(session\.id, \{[\s\S]*targetId: resolution\.targetId,[\s\S]*terminalId: resolution\.terminalId/u,
@@ -2622,11 +2729,15 @@ function registerUiContractTests(context) {
       '일반 terminal 화면이나 전역 PTY 선택으로 우회하면 안 됩니다.');
     assert.ok(html.includes('id="ptyFocusSurface"') && html.includes('id="ptyFocusTerminalViewport"'),
       'full PTY 집중 surface와 실제 xterm viewport가 필요합니다.');
-    for (const removedId of ['detailDrawer', 'drawerBackdrop', 'ptyFocusChildModal']) {
-      assert.equal(html.includes(`id="${removedId}"`), false, `${removedId} 대화/오른쪽 팝업이 다시 생겼습니다.`);
+    for (const restoredId of ['detailDrawer', 'drawerBackdrop']) {
+      assert.equal(html.includes(`id="${restoredId}"`), true, `${restoredId} 오른쪽 상세 패널이 누락됐습니다.`);
     }
-    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|loadSessionDetail|data-open-subagent-chat/u,
-      'PTY 집중 모드 내부의 도움 AI/실행 행은 상태 전용이어야 합니다.');
+    assert.equal(html.includes('id="ptyFocusChildModal"'), false,
+      '별도 PTY 하위 팝업 대신 공용 상세 패널을 사용해야 합니다.');
+    assert.match(ptyFocus, /data-pty-focus-child=[\s\S]*aria-controls="detailDrawer"[\s\S]*data-pty-focus-execution=/u,
+      'PTY 집중 흐름의 하위·실행 행이 공용 상세 패널을 열어야 합니다.');
+    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
+      '별도 PTY 하위 팝업 구현이 다시 추가되면 안 됩니다.');
     assert.match(ptyFocus, /function openPtyFocusForTerminal\(terminalId, options = \{\}\)[\s\S]*pendingFocus = \{[\s\S]*creationId:/u,
       '새 작업은 exact terminalId/creationId를 보존해 같은 PTY를 집중 모드로 열어야 합니다.');
     assert.match(ptyFocus, /function tryPendingPtyFocus\(\)[\s\S]*const request = pendingFocus;[\s\S]*openPtyFocus\(session\.id, \{[\s\S]*targetId: request\.terminalId,[\s\S]*requireTargetId: true,/u,
@@ -2645,7 +2756,7 @@ function registerUiContractTests(context) {
       '수동 PTY 선택 신호가 attention controller의 stale 이동을 취소해야 합니다.');
     assert.match(core, /function selectViewFromUser\(view, options = \{\}\)[\s\S]*signalManualTerminalSelection\(\)[\s\S]*return selectView\(view, options\)/u,
       '사용자 화면 이동은 pending attention/direct PTY focus를 먼저 취소해야 합니다.');
-    assert.match(navigationEvents, /\.view-nav"\)\.addEventListener\("click"[\s\S]*selectViewFromUser\(button\.dataset\.view\)/u,
+    assert.match(navigationEvents, /const viewNavigation = \$\("\.view-nav"\);[\s\S]*viewNavigation\?\.addEventListener\("click"[\s\S]*selectViewFromUser\(button\.dataset\.view\)/u,
       '내비게이션 클릭은 수동 선택 신호를 포함한 화면 전환 경로를 사용해야 합니다.');
     assert.match(drawerSource, /async function openOwnerPty\(id, options = \{\}\)[\s\S]*if \(options\.attentionActivation !== true\) signalManualTerminalSelection\(\)/u,
       '다른 작업 노드 클릭은 target 확인 전 즉시 pending PTY 이동을 취소해야 합니다.');
@@ -2667,7 +2778,7 @@ function registerUiContractTests(context) {
     assert.doesNotMatch(ptyFocusStyles, /\.pty-focus-child-modal/u);
   });
 
-  test('확인 완료는 작업 현황과 확인 목록 모두 verified PTY 성공 뒤에만 처리한다', async () => {
+  test('인라인 작업 현황의 확인 완료는 verified PTY 성공 뒤에만 처리한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
     const elements = new Map();
     const element = id => {
@@ -2749,9 +2860,9 @@ function registerUiContractTests(context) {
         removeAttribute(name) { attributes.delete(name); },
       };
     };
-    const failedButton = reviewButton('review-from-inbox');
-    await elements.get('attentionInbox').listeners.get('click')({ target: failedButton });
-    assert.deepStrictEqual(opened[0], ['review-from-inbox', {
+    const failedButton = reviewButton('review-from-overview-failed');
+    await elements.get('operationsOverview').listeners.get('click')({ target: failedButton });
+    assert.deepStrictEqual(opened[0], ['review-from-overview-failed', {
       focus: true,
       targetId: 'terminal-bridge-exact',
       terminalId: 'terminal-bridge-exact',
@@ -2778,7 +2889,7 @@ function registerUiContractTests(context) {
     assert.equal(announcements.at(-1), 'management.result_review_completed_toast');
 
     const changedWhileOpening = reviewButton('review-raced-result');
-    await elements.get('attentionInbox').listeners.get('click')({ target: changedWhileOpening });
+    await elements.get('operationsOverview').listeners.get('click')({ target: changedWhileOpening });
     assert.equal(changedWhileOpening.disabled, false);
     assert.equal(changedWhileOpening.attributes.has('aria-busy'), false);
     assert.equal(rendered.length, 1, 'stamp race에서 결과 확인 완료 렌더를 실행하면 안 됩니다.');
@@ -2788,7 +2899,7 @@ function registerUiContractTests(context) {
     exactPtyTarget = null;
     const markAttemptsBeforeFork = completed.length;
     const forkedButton = reviewButton('review-safe-fork');
-    await elements.get('attentionInbox').listeners.get('click')({ target: forkedButton });
+    await elements.get('operationsOverview').listeners.get('click')({ target: forkedButton });
     assert.deepStrictEqual(drawerOpened[0], ['review-safe-fork', { focus: true, acknowledge: false }]);
     assert.equal(forkedButton.disabled, true);
     assert.equal(forkedButton.attributes.has('aria-busy'), true);
@@ -2807,7 +2918,7 @@ function registerUiContractTests(context) {
     assert.equal(announcements.at(-1), 'agent.open_terminal_failed');
 
     const rejectedForkButton = reviewButton('review-safe-fork-rejected');
-    await elements.get('attentionInbox').listeners.get('click')({ target: rejectedForkButton });
+    await elements.get('operationsOverview').listeners.get('click')({ target: rejectedForkButton });
     assert.equal(rejectedForkButton.disabled, false,
       'PTY open Promise가 reject해도 확인 완료 버튼을 다시 사용할 수 있어야 합니다.');
     assert.equal(rejectedForkButton.attributes.has('aria-busy'), false);
@@ -2844,8 +2955,8 @@ function registerUiContractTests(context) {
       '터미널 공개 API가 batch 사전 연결 함수를 전달하지 않습니다.');
     assert.ok(terminal.includes("if (agentSession.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };"),
       '중앙 mount API가 하위 AI의 PTY host 연결을 막지 않습니다.');
-    assert.match(drawer, /function openSubagentConversation\(id, options = \{\}\) \{[\s\S]*return openOwnerPty\(id, options\);/u,
-      '일반 진입점을 거친 하위 AI가 담당 root PTY 집중 모드로 전환되지 않습니다.');
+    assert.match(drawer, /function openSubagentConversation\(id, options = \{\}\) \{[\s\S]*state\.selectedId = id;[\s\S]*openDrawerSurface\("modal"\);[\s\S]*renderDrawer\(\);/u,
+      '일반 진입점을 거친 하위 AI가 오른쪽 상세 패널에서 열리지 않습니다.');
     assert.match(eventHelper, /void Promise\.resolve\(preconnectProjectAgentTerminals\(state\.workspace\)\)\.catch/,
       '프로젝트 PTY 사전 연결이 fire-and-forget으로 시작되지 않습니다.');
     assert.doesNotMatch(eventHelper, /await\s+(?:Promise\.resolve\()?preconnectProjectAgentTerminals/,
@@ -2980,7 +3091,7 @@ function registerUiContractTests(context) {
     assertIncludesAll(drawerSource, [
       'acknowledgeSessionNotices(selected || id)',
       'context.openPtyFocusVerified?.(root.id,',
-      'context.renderWorkspaces?.()',
+      'renderWorkspaces();',
     ]);
     assertIncludesAll(sidebarMarkup, [
       'data-attention-session-count=',
@@ -3239,7 +3350,7 @@ function registerUiContractTests(context) {
     const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
     const asideProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.aside'));
     // Direct root tasks open the full PTY focus surface; imported transcript-only
-    // records remain status-only and never create a conversation drawer.
+    // records use the shared read-only detail drawer through data-open-session.
     assertIncludesAll(directProgram, [
       'data-pty-focus-trigger="direct-root"',
       'data-pty-focus-trigger="direct-root-2"',
@@ -3437,6 +3548,27 @@ function registerUiContractTests(context) {
     assert.equal(sidebar.innerHTML.includes(`data-sidebar-project-key="${projectKey}"`), false);
     assert.equal(state.workspace, 'all');
     assert.equal(state.workspaceSource, 'all');
+
+    state.workspaces = [{ name: '빈 저장 프로젝트', path: cwd }];
+    state.workspace = cwd;
+    state.workspaceSource = 'direct';
+    dashboard.renderWorkspaces();
+    const emptySavedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
+    assert.ok(emptySavedProject.includes('빈 저장 프로젝트'),
+      '작업이 없는 저장 프로젝트 자체는 프로젝트 목록에 남아야 합니다.');
+    assert.equal((emptySavedProject.match(/data-sidebar-source-key=/g) || []).length, 0,
+      '작업이 없는 저장 프로젝트 아래에 Whitebox 또는 플러그인 source 행을 만들면 안 됩니다.');
+    assert.equal(emptySavedProject.includes(`data-sidebar-source-key="${sourceKey(projectKey, 'direct')}"`), false,
+      '작업 0건인 Whitebox source 행이 저장 프로젝트 아래에 남으면 안 됩니다.');
+    assert.equal(emptySavedProject.includes('data-sidebar-project-toggle'), false,
+      'source가 없는 프로젝트에 빈 disclosure를 표시하면 안 됩니다.');
+    assert.equal(emptySavedProject.includes('project-sidebar-source-list'), false,
+      'source가 없는 프로젝트에 빈 source 컨테이너를 표시하면 안 됩니다.');
+    assert.equal(emptySavedProject.includes('<small>'), false,
+      '빈 저장 프로젝트에 0건 source 요약을 표시하면 안 됩니다.');
+    assert.equal(state.workspace, cwd);
+    assert.equal(state.workspaceSource, 'all',
+      '사라진 direct source 선택은 저장 프로젝트 자체를 유지한 채 전체 source로 복구해야 합니다.');
   });
 
   test('플러그인 설정 응답은 응답 시점의 drawer 선택만 닫는다', () => {
@@ -3568,7 +3700,8 @@ function registerUiContractTests(context) {
       assert.ok(selection.includes(contract), `${contract} 프로젝트 선택 안내 요소가 없습니다.`);
     }
     assert.equal(selection.includes('project-selection-flow'), false, '프로젝트 선택 전에는 진행 작업 안내를 표시하지 않아야 합니다.');
-    assert.ok(themeStyles.includes('body[data-current-view="all"]:not([data-project-selected="true"]) #projectContextNav'), '프로젝트 선택 전에는 처리 중 작업 탭을 숨겨야 합니다.');
+    assert.equal(html.includes('id="projectContextNav"'), false,
+      '항목이 없은 프로젝트 탐색/추가 기능 영역은 빈 여백을 남기지 않고 제거되어야 합니다.');
     assert.match(historyEmptyRule, /grid-column:\s*1\s*\/\s*-1\s*;/, '지난 세션 빈 상태가 기록 그리드의 첫 열에만 갇혀 있습니다.');
     assert.match(historyEmptyRule, /align-content:\s*center\s*;/, '지난 세션 빈 상태의 문구 묶음이 세로 중앙에 정렬되지 않습니다.');
     assert.match(historyEmptyRule, /border:\s*1px\s+dashed/, '지난 세션 빈 상태의 경계가 주변 기록 카드와 구분되지 않습니다.');
@@ -3628,7 +3761,6 @@ function registerUiContractTests(context) {
     assert.ok(dashboard.includes('ui.open_the_installer_and_follow_its_instructions_to_finish_updating'), '수동 업데이트에는 설치 파일 안내가 표시되어야 합니다.');
     assert.ok(
       themeStyles.includes('body[data-current-view="settings"] .topbar')
-        && themeStyles.includes('body[data-current-view="settings"] #projectContextNav')
         && themeStyles.includes('body[data-current-view="settings"] .sidebar-projects')
         && themeStyles.includes('body[data-current-view="settings"] .project-sidebar-list')
         && themeStyles.includes('width: min(100%, 1040px);'),
