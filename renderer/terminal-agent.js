@@ -366,6 +366,14 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     };
   }
 
+  function forkAssociationSupport(agentSession) {
+    // Completion is required to create a new Codex fork, but an already
+    // running fork PTY must remain reachable if the source task becomes live
+    // again. Re-run every canonical/source/environment check while ignoring
+    // only that mutable presentation status; this path never creates a PTY.
+    return forkSupport(agentSession ? { ...agentSession, status: 'completed' } : agentSession);
+  }
+
   function resultError(result, fallback) {
     const error = new Error(result?.error || fallback);
     error.code = result?.code || 'DELIVERY_REJECTED';
@@ -854,35 +862,46 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   }
 
   function forkTargetForAgent(agentSession, options = {}) {
-    const support = forkSupport(agentSession);
+    const support = forkAssociationSupport(agentSession);
     if (!support.supported) return null;
     const excludedTerminalIds = new Set((options.excludeTerminalIds || [])
       .map(value => String(value || '')).filter(Boolean));
-    const persisted = state.sessions.find(terminal => forkTerminalMatches(terminal, support)
-      && !excludedTerminalIds.has(String(terminal.id || ''))) || null;
-    if (persisted) {
-      const record = forkAssociations.get(support.sourceSignature) || null;
-      return forkTargetFromTerminal(rememberForkTerminal(support, persisted, record), support);
-    }
-
     let record = forkAssociations.get(support.sourceSignature) || null;
-    if (record?.terminalId) {
-      const authoritative = state.sessions.find(terminal => (
-        String(terminal.id || '') === String(record.terminalId)
-        && forkTerminalIdentityMatches(terminal, support)
-      )) || null;
-      if (authoritative) {
+    const persistedCandidates = state.sessions.filter(terminal => forkTerminalMatches(terminal, support)
+      && !excludedTerminalIds.has(String(terminal.id || '')));
+    if (record) {
+      const recordCreationId = String(record.creationId || '').trim();
+      const recordTerminalId = String(record.terminalId || '').trim();
+      const authoritativeCandidates = persistedCandidates.filter(terminal => (
+        (!recordTerminalId || String(terminal.id || '') === recordTerminalId)
+        && recordCreationId
+        && String(terminal.creationId || '').trim() === recordCreationId
+      ));
+      if (authoritativeCandidates.length === 1) {
+        const [authoritative] = authoritativeCandidates;
         rememberForkTerminal(support, authoritative, record);
         record = forkAssociations.get(support.sourceSignature) || null;
+      } else if (authoritativeCandidates.length > 1 || persistedCandidates.length > 0) {
+        // Never replace an accepted creation identity with another terminal
+        // merely because it claims the same fork source/signature.
+        return null;
       }
+    } else if (persistedCandidates.length === 1) {
+      const [persisted] = persistedCandidates;
+      if (!String(persisted.creationId || '').trim()) return null;
+      rememberForkTerminal(support, persisted, record);
+      record = forkAssociations.get(support.sourceSignature) || null;
+    } else if (persistedCandidates.length > 1) {
+      return null;
     }
     if (!record) {
       // A stopped fork is not mountable, but its signed source metadata proves
       // that this source already consumed a creation gesture. Preserve that
       // evidence as a tombstone so renderer reload/host restart cannot turn a
       // passive sync into another `codex fork` invocation.
-      const evidence = state.sessions.find(terminal => forkTerminalIdentityMatches(terminal, support)) || null;
-      if (evidence) {
+      const evidenceCandidates = state.sessions.filter(terminal => forkTerminalIdentityMatches(terminal, support));
+      if (evidenceCandidates.length === 1 && String(evidenceCandidates[0].creationId || '').trim()) {
+        const [evidence] = evidenceCandidates;
         rememberForkTerminal(support, evidence);
         record = forkAssociations.get(support.sourceSignature) || null;
       }
@@ -915,6 +934,16 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     }
     const existing = forkTargetForAgent(agentSession, options);
     if (existing) return { ...existing, reused: true };
+
+    // A live terminal that claims this fork identity but cannot be selected
+    // authoritatively is a conflict, not an empty slot. Creating another fork
+    // here would turn an ambiguous inventory into an additional writer.
+    if (state.sessions.some(terminal => forkTerminalMatches(terminal, support))) {
+      throw rejectedError(
+        t('terminal.agent.fork_terminal_failed'),
+        'AGENT_FORK_TARGET_AMBIGUOUS',
+      );
+    }
 
     const pending = forkPromises.get(support.sourceSignature);
     if (pending) return pending;

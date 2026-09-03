@@ -54,7 +54,14 @@
     if (String(session.status || "").toLowerCase() === "completed"
       && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
-      && String(session.clientKind || "").toLowerCase() === "codex-desktop") return false;
+      && String(session.clientKind || "").toLowerCase() === "codex-desktop") {
+      try {
+        return Boolean(window.WhiteboxTerminal?.forkTargetForAgent?.(session));
+      } catch (error) {
+        report("inline-fork-target", error);
+        return false;
+      }
+    }
     return window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
       && session.controlCapabilities?.pty === true
       && session.presentation?.conversationSurface !== "transcript";

@@ -1098,6 +1098,13 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       || typeof terminal?.agentTargets !== "function") return null;
     const bridgeIdentity = window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity?.(owner);
     if (!bridgeIdentity) {
+      try {
+        const forkTarget = terminal.forkTargetForAgent?.(owner) || null;
+        if (forkTarget) return forkTarget;
+      } catch (error) {
+        reportRecoverableError("result-review-fork-target", error);
+        return null;
+      }
       if (String(owner.provider || "").toLowerCase() === "codex"
         && String(owner.clientKind || "").toLowerCase() === "codex-desktop") return null;
       if (window.WhiteboxRendererUtils.isWritableDirectSession?.(owner) !== true

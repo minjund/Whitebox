@@ -708,8 +708,17 @@ function registerAttentionActivationTests(context) {
         kind: 'bridge', terminalId: 'terminal:manual-b', creationId: 'creation:manual-b', provider: 'codex',
       }],
     };
+    const forkSession = {
+      id: 'codex:desktop-fork-source', externalId: 'desktop-fork-source',
+      provider: 'codex', clientKind: 'codex-desktop', status: 'running',
+      controlCapabilities: { pty: true }, presentation: { conversationSurface: 'transcript' },
+    };
+    const forkTarget = {
+      id: 'terminal:desktop-fork', terminalId: 'terminal:desktop-fork', kind: 'terminal',
+    };
     let embedded = { connected: true, agentSessionId: session.id, terminalId: 'terminal:exact' };
     const dispatched = [];
+    const forkTargetRequests = [];
     let cancelSlowActivationOnManualSelection = false;
     let slowActivationCurrent = true;
     const sandbox = {
@@ -729,10 +738,14 @@ function registerAttentionActivationTests(context) {
           canForkCodexDesktopSession: () => false,
         },
         WhiteboxTerminal: {
-          agentTargets: () => [
-            { id: 'terminal:exact', terminalId: 'terminal:exact', kind: 'terminal' },
-            { id: 'terminal:manual-b', terminalId: 'terminal:manual-b', kind: 'terminal' },
-          ],
+          agentTargets: value => value === forkSession ? [] : [
+              { id: 'terminal:exact', terminalId: 'terminal:exact', kind: 'terminal' },
+              { id: 'terminal:manual-b', terminalId: 'terminal:manual-b', kind: 'terminal' },
+            ],
+          forkTargetForAgent: value => {
+            forkTargetRequests.push(value?.id || '');
+            return value === forkSession ? forkTarget : null;
+          },
           embeddedState: () => ({ ...embedded }),
         },
       },
@@ -748,6 +761,31 @@ function registerAttentionActivationTests(context) {
       __closeSpy: options => closed.push(options),
     };
     const focus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode(focusContext);
+
+    focusState.snapshot.sessions.push(forkSession);
+    embedded = {
+      connected: true,
+      agentSessionId: forkSession.id,
+      terminalId: forkTarget.terminalId,
+    };
+    focusContext.__syncResult = { ok: true, target: forkTarget };
+    assert.deepEqual(await focus.openPtyFocusVerified(forkSession.id, {
+      targetId: forkTarget.terminalId,
+      terminalId: forkTarget.terminalId,
+      attentionActivation: true,
+    }), { opened: true, retryable: false, target: forkTarget },
+    '다시 실행 중이 된 Codex Desktop 메인 노드도 기존 signed fork target으로 PTY 집중모드를 열어야 합니다.');
+    assert.equal(forkTargetRequests.includes(forkSession.id), true,
+      'Codex Desktop 메인 노드 검증은 일반 agentTargets가 아니라 fork 전용 association을 조회해야 합니다.');
+    assert.deepEqual(await focus.openPtyFocusVerified(forkSession.id, {
+      targetId: 'terminal:fork-decoy',
+      terminalId: 'terminal:fork-decoy',
+    }), { opened: false, retryable: true, reason: 'target-expired' },
+    '서명된 fork target과 다른 PTY id를 메인 노드 focus 대상으로 받아들이면 안 됩니다.');
+    focus.closePtyFocus({ restore: false });
+    closed.length = 0;
+    embedded = { connected: true, agentSessionId: session.id, terminalId: 'terminal:exact' };
+    focusContext.__syncResult = { ok: true, target: { id: 'terminal:exact', terminalId: 'terminal:exact' } };
 
     assert.deepEqual(await focus.openPtyFocusVerified(session.id, {
       targetId: 'terminal:exact', terminalId: 'terminal:other',
