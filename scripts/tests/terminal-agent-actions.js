@@ -910,6 +910,24 @@ function registerTerminalAgentActionTests(context) {
       '원본 transcript composer가 fork PTY를 writable target으로 보면 안 됩니다.');
     assert.equal(actions.forkTargetForAgent(session).id, createdRecord.id,
       '별도 fork-source association으로만 새 PTY를 찾아야 합니다.');
+    assert.equal(actions.forkTargetForAgent({ ...session, status: 'running' }).id, createdRecord.id,
+      'source가 다시 실행 중이어도 이미 서명된 fork PTY association은 유지해야 합니다.');
+    const trustedRecord = createdRecord;
+    const decoyRecord = {
+      ...trustedRecord,
+      id: 'terminal:desktop-fork-decoy',
+      creationId: 'create:desktop-fork-decoy',
+    };
+    state.sessions = [decoyRecord, trustedRecord];
+    state.terminalSessionRevision += 1;
+    assert.equal(actions.forkTargetForAgent({ ...session, status: 'running' }).id, trustedRecord.id,
+      '같은 source 서명을 주장하는 decoy가 먼저 와도 기억한 terminalId + creationId만 열어야 합니다.');
+    state.sessions = [decoyRecord];
+    state.terminalSessionRevision += 1;
+    assert.equal(actions.forkTargetForAgent({ ...session, status: 'running' }), null,
+      '기억한 fork PTY가 사라지고 같은 source의 다른 creation만 남으면 fail closed해야 합니다.');
+    state.sessions = [trustedRecord];
+    state.terminalSessionRevision += 1;
     assert.equal(state.agentConnectionSignatures?.size || 0, 0,
       'fork-source association이 strong resume signature map을 오염시켰습니다.');
 
@@ -944,6 +962,161 @@ function registerTerminalAgentActionTests(context) {
     state.terminalSessionRevision += 1;
     assert.equal(actions.forkTargetForAgent(session), null,
       '원본 Desktop ID 또는 불일치 child binding은 fork PTY로 다시 노출하면 안 됩니다.');
+  });
+
+  test('Codex Desktop fork 후보가 모호하면 새 경쟁 PTY를 만들지 않는다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    const state = {
+      snapshot: null,
+      sessions: [],
+      terminalSessionRevision: 1,
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            createCalls.push(options);
+            return null;
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
+      state,
+      init: async () => {},
+      notice: () => {},
+      moveWorkbench: () => {},
+      selectSession: async () => {},
+      bindAgent: () => {},
+      queueHistoryRefresh: () => {},
+      renderTarget: () => {},
+      refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+      tmuxTargetKey: () => '',
+    });
+    const session = {
+      id: 'codex:019f-desktop-ambiguous',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-ambiguous',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+      status: 'completed',
+    };
+    const support = actions.forkSupport(session);
+    const candidate = (id, creationId) => ({
+      id,
+      type: 'agent',
+      provider: 'codex',
+      backend: 'direct',
+      conversationBound: false,
+      agentForkSourceSessionId: support.sourceSessionId,
+      agentForkSourceSignature: support.sourceSignature,
+      creationId,
+      status: 'running',
+      pid: id.endsWith(':a') ? 7401 : 7402,
+    });
+    state.sessions = [
+      candidate('terminal:desktop-fork-ambiguous:a', 'create:ambiguous-a'),
+      candidate('terminal:desktop-fork-ambiguous:b', 'create:ambiguous-b'),
+    ];
+
+    assert.equal(actions.forkTargetForAgent(session), null,
+      '복수 fork 후보에서는 임의 target을 선택하면 안 됩니다.');
+    await assert.rejects(
+      actions.forkForAgent(session, '', false, { focus: false }),
+      error => error?.code === 'AGENT_FORK_TARGET_AMBIGUOUS',
+    );
+    assert.equal(createCalls.length, 0,
+      '모호한 기존 fork 후보를 새 생성 권한으로 해석하면 안 됩니다.');
+  });
+
+  test('Codex Desktop fork 생성 대기 중에는 다른 creation 후보를 채택하지 않는다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const createCalls = [];
+    let rejectCreate;
+    let signalCreateStarted;
+    const createStarted = new Promise(resolve => { signalCreateStarted = resolve; });
+    const state = {
+      snapshot: null,
+      sessions: [],
+      terminalSessionRevision: 1,
+      platform: { id: 'win32' },
+      wslDistros: [],
+      suppressedTmuxTargets: new Set(),
+    };
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: options => {
+            createCalls.push(options);
+            signalCreateStarted();
+            return new Promise((_resolve, reject) => { rejectCreate = reject; });
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      $: () => null,
+      state,
+      init: async () => {},
+      notice: () => {},
+      moveWorkbench: () => {},
+      selectSession: async () => {},
+      bindAgent: () => {},
+      queueHistoryRefresh: () => {},
+      renderTarget: () => {},
+      refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+      terminalTypeLabel: () => 'Codex',
+      tmuxTargetKey: () => '',
+    });
+    const session = {
+      id: 'codex:019f-desktop-pending',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      externalId: '019f-desktop-pending',
+      cwd: 'D:\\workspace',
+      environment: { kind: 'windows', distro: '' },
+      status: 'completed',
+    };
+    const support = actions.forkSupport(session);
+    const pendingFork = actions.forkForAgent(session, '', false, { focus: false });
+    await createStarted;
+    state.sessions = [{
+      id: 'terminal:desktop-fork-pending-decoy',
+      type: 'agent',
+      provider: 'codex',
+      backend: 'direct',
+      conversationBound: false,
+      agentForkSourceSessionId: support.sourceSessionId,
+      agentForkSourceSignature: support.sourceSignature,
+      creationId: 'create:pending-decoy',
+      status: 'running',
+      pid: 7410,
+    }];
+    state.terminalSessionRevision += 1;
+
+    assert.equal(actions.forkTargetForAgent({ ...session, status: 'running' }), null,
+      'pending ledger와 creationId가 다른 단일 후보를 채택하면 안 됩니다.');
+    const rejected = new Error('fixture create rejected');
+    rejected.creationState = 'rejected';
+    rejectCreate(rejected);
+    await assert.rejects(pendingFork);
+    assert.equal(createCalls.length, 1,
+      '명시적으로 거절된 pending create를 재시도하면 안 됩니다.');
   });
 
   test('Codex Desktop fork 생성 응답 유실과 동시 요청은 같은 creationId로 실제 PTY를 한 번만 만든다', async () => {

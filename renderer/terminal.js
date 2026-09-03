@@ -369,9 +369,13 @@
     if (agentSession.parentId) return { ok: false, reason: 'parent-controlled', targets: [] };
     const generation = ++state.embeddedGeneration;
     const excludedTerminalIds = new Set((options.excludeTerminalIds || []).map(value => String(value || '')).filter(Boolean));
+    const forkCreationSupported = forkSupport(agentSession).supported;
+    const associatedForkTarget = options.forkIfOriginOwned === true
+      ? forkTargetForAgent(agentSession, { excludeTerminalIds: [...excludedTerminalIds] })
+      : null;
     const forkIfOriginOwned = options.forkIfOriginOwned === true
-      && forkSupport(agentSession).supported;
-    const forkCreationGesture = forkIfOriginOwned && options.forkCreationGesture === true;
+      && (forkCreationSupported || Boolean(associatedForkTarget));
+    const forkCreationGesture = forkCreationSupported && options.forkCreationGesture === true;
     const mountTargets = () => {
       if (forkIfOriginOwned) {
         const target = forkTargetForAgent(agentSession, {
@@ -940,6 +944,7 @@
     resumeForAgent,
     forkSupport,
     forkForAgent,
+    forkTargetForAgent,
     ensureForAgent,
     preconnectForAgents,
     bindAgentConnection,

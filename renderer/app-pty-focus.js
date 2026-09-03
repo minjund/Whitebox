@@ -72,7 +72,14 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     if (String(session.status || "").toLowerCase() === "completed"
       && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
-      && String(session.clientKind || "").toLowerCase() === "codex-desktop") return false;
+      && String(session.clientKind || "").toLowerCase() === "codex-desktop") {
+      try {
+        return Boolean(window.WhiteboxTerminal?.forkTargetForAgent?.(session));
+      } catch (error) {
+        reportRecoverableError("pty-focus-fork-target", error);
+        return false;
+      }
+    }
     return window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
       && session.controlCapabilities?.pty === true
       && session.presentation?.conversationSurface !== "transcript";
@@ -381,7 +388,13 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     }
     let targets;
     try {
-      targets = terminal.agentTargets(root).filter(target => target?.kind === "terminal");
+      // A Codex Desktop root owns its transcript writer, so agentTargets()
+      // intentionally never exposes that conversation as a writable target.
+      // Its user-created `codex fork` PTY is held under a separate, signed
+      // source association and must be verified through that exact path.
+      const forkTarget = terminal.forkTargetForAgent?.(root) || null;
+      targets = (forkTarget ? [forkTarget] : terminal.agentTargets(root))
+        .filter(target => target?.kind === "terminal");
     } catch (error) {
       reportRecoverableError("pty-focus-targets", error);
       return { opened: false, retryable: true, reason: "target-error" };

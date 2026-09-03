@@ -757,6 +757,8 @@ async function run() {
       provider: 'codex',
       clientKind: 'codex-desktop',
       status: 'completed',
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       cwd: root,
       environment: {
         kind: process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux'),
@@ -764,6 +766,8 @@ async function run() {
       },
       parentId: null,
       runId: '',
+      messages: [],
+      lifecycle: [],
     };
     const forkLaunch = await rendererValue(win, `(async () => {
       const source = ${JSON.stringify(codexForkSource)};
@@ -826,15 +830,49 @@ async function run() {
       && codexForkSession.conversationBound === false,
     `실제 Codex fork PTY가 원본 대화 writer에 attach되지 않은 새 세션이 아닙니다: ${JSON.stringify(codexForkSession)}`);
 
-    const codexFocusOpened = await rendererValue(win, `(async () => {
-      const source = ${JSON.stringify(codexForkSource)};
+    const codexMainRoute = await rendererValue(win, `(async () => {
+      const source = { ...${JSON.stringify(codexForkSource)}, status: 'running', completedAt: null };
+      window.WhiteboxApp.closePtyFocus({ restore: false });
+      window.WhiteboxApp.state.controlRoomObservedIds.add(source.id);
       window.interactionTest.addSession(source);
       window.interactionTest.emitSnapshot();
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      return window.WhiteboxApp.openPtyFocus(source.id, { focus: true });
+      const main = document.querySelector('.control-room-main[data-pty-focus-trigger="' + CSS.escape(source.id) + '"]');
+      if (!main) return { button: false, opened: false };
+      const support = window.WhiteboxTerminal.forkSupport(source);
+      const forkTarget = window.WhiteboxTerminal.forkTargetForAgent(source);
+      const regularTargets = window.WhiteboxTerminal.agentTargets(source);
+      const canOpen = window.WhiteboxApp.canOpenPtyFocus(source);
+      main.click();
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const embedded = window.WhiteboxTerminal.embeddedState();
+        if (window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === forkTarget?.terminalId) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return {
+        button: true,
+        opened: window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === forkTarget?.terminalId,
+        support,
+        forkTarget,
+        regularTargets,
+        canOpen,
+      };
     })()`);
-    assert(codexFocusOpened === true,
-      'Codex Desktop fork 소스가 full PTY focus 사용자 열기 경로를 시작하지 못했습니다.');
+    assert(codexMainRoute?.button === true
+      && codexMainRoute.opened === true
+      && codexMainRoute.support?.supported === false
+      && codexMainRoute.forkTarget?.terminalId === codexForkTerminalId
+      && codexMainRoute.regularTargets?.length === 0
+      && codexMainRoute.canOpen === true,
+      `Codex Desktop 메인 노드가 PTY 집중모드 route를 열지 못했습니다: ${JSON.stringify(codexMainRoute)}`);
     await waitForRenderer(win, `(() => {
       const embedded = window.WhiteboxTerminal.embeddedState();
       return embedded.connected

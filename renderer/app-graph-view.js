@@ -54,7 +54,18 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     }).format(date);
   };
   const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+  const isCodexDesktopSession = session => String(session?.provider || "").toLowerCase() === "codex"
+    && String(session?.clientKind || "").toLowerCase() === "codex-desktop";
+  const isAssociatedForkPty = session => {
+    if (!isCodexDesktopSession(session)) return false;
+    try {
+      return Boolean(window.WhiteboxTerminal?.forkTargetForAgent?.(session));
+    } catch (_error) {
+      return false;
+    }
+  };
   const isDirectWritablePty = session => window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
+    && !isCodexDesktopSession(session)
     && session?.controlCapabilities?.pty === true
     && session?.presentation?.conversationSurface !== "transcript";
   const isAppOwnedBridgePty = session => Boolean(window.WhiteboxRendererUtils.appOwnedBridgeTerminalIdentity?.(session));
@@ -114,7 +125,8 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : t("graph.assigned_ai");
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(session);
-    const writablePtySurface = !session.parentId && (completedMainPty || isDirectWritablePty(session) || isAppOwnedBridgePty(session));
+    const writablePtySurface = !session.parentId && (completedMainPty || isAssociatedForkPty(session)
+      || isDirectWritablePty(session) || isAppOwnedBridgePty(session));
     const transcriptSurface = !writablePtySurface;
     const inlinePtyAttributes = writablePtySurface
       ? ` data-pty-focus-trigger="${esc(session.id)}" aria-expanded="${state.ptyFocusSessionId === session.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
@@ -718,7 +730,8 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const unitCount = activeUnits.length;
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(root);
-    const transcriptSurface = !completedMainPty && !isDirectWritablePty(root) && !isAppOwnedBridgePty(root);
+    const transcriptSurface = !completedMainPty && !isAssociatedForkPty(root)
+      && !isDirectWritablePty(root) && !isAppOwnedBridgePty(root);
     const controlRoomPtyAttributes = root.parentId || root.sourcePluginId || transcriptSurface
       ? ""
       : ` data-pty-focus-trigger="${esc(root.id)}" aria-expanded="${state.ptyFocusSessionId === root.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`;
