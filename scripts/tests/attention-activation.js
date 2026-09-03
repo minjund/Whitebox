@@ -327,6 +327,7 @@ function registerAttentionActivationTests(context) {
         state: { details: new Map(), selectedId: '' },
         snapshotSession: id => id === scenario.session.id ? scenario.session : null,
         resultReviewPtyTarget: () => null,
+        markGuideStep: () => {},
         signalManualTerminalSelection: () => dispatchedEvents.push('manual-selection'),
         canOpenPtyFocus: session => session === scenario.session,
         openPtyFocusVerified: async (sessionId, options) => {

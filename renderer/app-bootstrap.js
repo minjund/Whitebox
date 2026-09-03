@@ -23,6 +23,8 @@
     "createAgentActions",
     "createManagement",
     "createSessionRenderer",
+    "createDrawerData",
+    "createDrawerContent",
     "createPtyFocusMode",
     "createDrawer",
     "createRunModal",
@@ -35,7 +37,7 @@
   ].forEach(install);
   window.WhiteboxApp = app;
 
-  const { $, esc, state, loadGuideState, loadQualityState = () => {}, saveDashboardPreferences = () => {}, loadProviderVisibility, projectVisibleSnapshot, visibleSnapshot, isProviderVisible, bindEvents, render, timeOnly, renderUpdateSettings, syncViewChrome, selectView, canOpenPtyFocus, isPtyFocusActive, ownerRootSession, openPtyFocusVerified, closePtyFocus, syncPendingPtyFocus = () => false, toast, refreshProviderUsage = async () => null } = app;
+  const { $, esc, state, loadGuideState, loadQualityState = () => {}, saveDashboardPreferences = () => {}, loadProviderVisibility, projectVisibleSnapshot, visibleSnapshot, isProviderVisible, bindEvents, render, timeOnly, loadSessionDetail, renderUpdateSettings, syncViewChrome, selectView, canOpenPtyFocus, isPtyFocusActive, ownerRootSession, openPtyFocusVerified, closePtyFocus, syncPendingPtyFocus = () => false, toast, refreshProviderUsage = async () => null } = app;
 
   let initializationError = "";
   const setConnectedAt = (value) => {
@@ -113,8 +115,8 @@
     state.platform = bootstrap.platform || state.platform;
     state.versions = bootstrap.versions || {};
     state.update = latestUpdateState || bootstrap.update || { status: "idle", currentVersion: state.versions.app || "" };
-    // A failed or non-PTY activation falls back to the existing work-status
-    // queue. It must not guess another terminal just to show context.
+    // A failed or non-PTY activation stays on the main work overview. It must
+    // not guess another terminal or revive the retired review-only page.
     let passiveFocusGeneration = 0;
     const showAttentionSession = (session = null) => {
       if (isPtyFocusActive?.()) return false;
@@ -122,7 +124,7 @@
       if (root && String(state.ptyFocusSessionId || "") === String(root.id || "")) {
         closePtyFocus?.({ restore: false, suppressManualSelection: true });
       }
-      selectView("waiting");
+      selectView("all");
       return true;
     };
     const attentionActivation = window.WhiteboxAttentionActivation?.createAttentionActivationController({
@@ -163,7 +165,7 @@
       const session = (state.snapshot && state.snapshot.sessions || []).find(item => item.id === sessionId);
       if (session && !isProviderVisible(session.provider)) return;
       if (!session) {
-        selectView(event === 'completed' ? 'active' : 'waiting');
+        selectView(event === 'completed' ? 'active' : 'all');
         toast(t("bootstrap.opened_attention_list"));
         return;
       }
@@ -249,6 +251,22 @@
         render();
         saveDashboardPreferences();
         syncPendingPtyFocus();
+        if (state.selectedId && $("#detailDrawer")?.classList.contains("open")) {
+          const card = (renderedSnapshot?.sessions || []).find(session => session.id === state.selectedId);
+          const detail = state.details.get(state.selectedId);
+          // Keep an open transcript current without polling: a newer monitor
+          // card is the bounded signal that its cached full detail is stale.
+          if (card && (!detail || card.updatedAt !== detail.updatedAt)) {
+            loadSessionDetail(state.selectedId, true, card.updatedAt);
+          }
+          if (card?.parentId && ["subagent", "execution"].includes(state.drawerMode)) {
+            const parentCard = (renderedSnapshot?.sessions || []).find(session => session.id === card.parentId);
+            const parentDetail = state.details.get(card.parentId);
+            if (parentCard && (!parentDetail || parentCard.updatedAt !== parentDetail.updatedAt)) {
+              loadSessionDetail(card.parentId, true, parentCard.updatedAt);
+            }
+          }
+        }
       });
     });
     window.addEventListener("whitebox:terminal-inventory-changed", () => {

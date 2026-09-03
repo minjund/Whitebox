@@ -1,8 +1,8 @@
 'use strict';
 
 // Keep this historical package entry point while exercising the current UX.
-// Deleted drawer/conversation/additional-tools surfaces are negative contracts;
-// every writable task interaction now opens the full-screen PTY focus surface.
+// Root tasks use the full-screen PTY focus surface. Subagent and execution rows
+// use the shared right-side detail drawer; retired additional-tools surfaces stay absent.
 const { app, BrowserWindow, session: electronSession } = require('electron');
 const fs = require('fs');
 const os = require('os');
@@ -16,8 +16,7 @@ const root = path.resolve(__dirname, '..');
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-interaction-pty-'));
 const roundCount = Math.max(1, Math.min(3, Number(process.env.WHITEBOX_INTERACTION_ROUNDS || 3)));
 const removedSelectors = [
-  '#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer',
-  '#drawerTerminalSurface', '#drawerTerminalViewport', '#ptyFocusChildModal',
+  '#ptyFocusChildModal',
   '#ptyFocusChildBody', '#mobileMoreBtn', '#mobileToolsMenu', '#advancedToolsNav',
   '#terminalSection', '#terminalHistoryPanel', '#terminalHistoryList',
   '#automationOverview', '#tmuxSection', '#tmuxCreateModal',
@@ -182,14 +181,15 @@ async function exerciseNavigationAndSettings(win) {
   await prepareProject(win);
   const navigation = await rendererValue(win, "(async()=>{"
     + "const result=[];"
-    + "for(const view of ['active','waiting','settings','all']){"
-      + "const button=document.querySelector('[data-view=\"'+view+'\"]');"
-      + "if(!button)return{ok:false,missing:view,result};button.click();"
+    + "for(const item of [{view:'active',selector:'#openProjectHistoryBtn'},"
+      + "{view:'settings',selector:'#sidebarSettingsBtn'},{view:'all',selector:'#backToProjectsBtn'}]){"
+      + "const button=document.querySelector(item.selector);"
+      + "if(!button)return{ok:false,missing:item.selector,result};button.click();"
       + "await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));"
-      + "result.push({requested:view,selected:window.WhiteboxApp.state.view});}"
+      + "result.push({requested:item.view,selected:window.WhiteboxApp.state.view});}"
     + "return{ok:result.every(item=>item.requested===item.selected),result,"
       + "removedNavigationAbsent:!document.querySelector("
-        + "'[data-view=\"runtime\"],[data-view=\"tmux\"],#advancedToolsNav,#mobileMoreBtn,#mobileToolsMenu')};"
+        + "'[data-view=\"waiting\"],[data-view=\"runtime\"],[data-view=\"tmux\"],#projectContextNav,#advancedToolsNav,#mobileMoreBtn,#mobileToolsMenu')};"
     + "})()");
   assert(navigation.ok && navigation.removedNavigationAbsent,
     '기본 화면 이동 또는 삭제된 추가 기능 영역 계약이 올바르지 않습니다: '
@@ -374,7 +374,7 @@ async function exerciseKeyboardAndRunModal(win) {
     + "return{empty,endSelected,activeDescendant:input.getAttribute('aria-activedescendant'),"
       + "labelled:Boolean(input.getAttribute('aria-label')),count:document.querySelectorAll('[data-quick-command]').length};})()");
   assert(quickKeyboard.empty && quickKeyboard.endSelected && quickKeyboard.activeDescendant
-    && quickKeyboard.labelled && quickKeyboard.count >= 8,
+    && quickKeyboard.labelled && quickKeyboard.count >= 7,
   '빠른 이동 검색의 빈 결과·Home/End·ARIA 계약이 올바르지 않습니다: ' + JSON.stringify(quickKeyboard));
   await rendererValue(win, "document.querySelector('#closeQuickPaletteBtn')?.click()");
   await waitFor(win,
@@ -392,10 +392,13 @@ async function exerciseKeyboardAndRunModal(win) {
     + "const modal=document.querySelector('#runModal .run-modal');const rect=modal?.getBoundingClientRect();"
     + "const prompt=document.querySelector('#runPrompt');const providers=document.querySelector('#runProviderPicker');"
     + "return{insideViewport:Boolean(rect&&rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight),"
-      + "promptFirst:Boolean(prompt&&providers&&(prompt.compareDocumentPosition(providers)"
+    + "promptFirst:Boolean(prompt&&providers&&(prompt.compareDocumentPosition(providers)"
         + "&Node.DOCUMENT_POSITION_FOLLOWING)),"
-      + "oldConversationAbsent:!document.querySelector('#drawerComposer,[data-conversation-shell]')};})()");
-  assert(runMetrics.insideViewport && runMetrics.promptFirst && runMetrics.oldConversationAbsent,
+      + "drawerClosed:Boolean(document.querySelector('#detailDrawer')?.getAttribute('aria-hidden')==='true'"
+        + "&&!document.querySelector('#detailDrawer')?.classList.contains('open')) ,"
+      + "legacyConversationAbsent:!document.querySelector('[data-conversation-shell]')};})()");
+  assert(runMetrics.insideViewport && runMetrics.promptFirst && runMetrics.drawerClosed
+    && runMetrics.legacyConversationAbsent,
     '새 AI 작업 modal 계약이 올바르지 않습니다: ' + JSON.stringify(runMetrics));
 
   await rendererValue(win, "(()=>{const prompt=document.querySelector('#runPrompt');"
@@ -453,10 +456,11 @@ async function exerciseKeyboardAndRunModal(win) {
     && submitted.payload.args.includes('workspace-write')
     && Boolean(submitted.payload.creationId),
   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));
-  await rendererValue(win, "document.querySelector('[data-view=\"all\"]')?.click();"
+  await rendererValue(win, "document.querySelector('#ptyFocusBackBtn')?.click();"
     + "window.interactionTest.restoreTerminals();window.interactionTest.clearCalls()");
   await waitFor(win,
     "document.querySelector('#runModal')?.classList.contains('hidden')"
+      + "&&document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')"
       + "&&!document.querySelector('#appShell')?.inert",
     '새 AI 작업 완료 뒤 배경과 작업 현황을 복원하지 못했습니다.');
 }
@@ -561,13 +565,16 @@ async function exerciseDashboardGraphAndManagement(win) {
   '작업 현황의 검색·정렬·관리 구조가 올바르지 않습니다: ' + JSON.stringify(overview));
 
   await rendererValue(win, "(()=>{const input=document.querySelector('#controlRoomSearchInput');"
-    + "input.value='화면 개선';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+    + "input.focus();input.value='화면 개선';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
   await waitFor(win,
     "window.WhiteboxApp.state.search==='화면 개선'"
       + "&&document.querySelectorAll('#liveSessionGrid [data-control-session]').length>=1",
     '작업 현황 검색이 실제 root 목록을 좁히지 못했습니다.');
-  await rendererValue(win, "(()=>{const input=document.querySelector('#controlRoomSearchInput');"
-    + "input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));})()");
+  const searchEscape = await rendererValue(win, "(()=>{const input=document.querySelector('#controlRoomSearchInput');"
+    + "const before=input?.value||'';const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});"
+    + "input?.dispatchEvent(event);return{before,after:input?.value||'',defaultPrevented:event.defaultPrevented};})()");
+  assert(searchEscape.before === '화면 개선' && searchEscape.after === '' && searchEscape.defaultPrevented,
+    '작업 현황 검색 Escape 이벤트가 입력값을 지우지 못했습니다: ' + JSON.stringify(searchEscape));
   await waitFor(win, "window.WhiteboxApp.state.search===''", '작업 현황 검색 Escape 초기화가 동작하지 않았습니다.');
 
   await rendererValue(win, "(()=>{const select=document.querySelector('#controlRoomSortSelect');"
@@ -604,7 +611,7 @@ async function exerciseDashboardGraphAndManagement(win) {
     '프로젝트 추가가 중복 없이 선택한 프로젝트를 열지 못했습니다.');
 
   await prepareProject(win);
-  await rendererValue(win, "document.querySelector('[data-view=\"active\"]')?.click()");
+  await rendererValue(win, "document.querySelector('#openProjectHistoryBtn')?.click()");
   await waitFor(win, "window.WhiteboxApp.state.view==='active'&&document.querySelector('#searchInput')",
     '지난 작업 검색 화면을 열지 못했습니다.');
   await rendererValue(win, "(()=>{const input=document.querySelector('#searchInput');"
@@ -669,24 +676,18 @@ async function exerciseDashboardGraphAndManagement(win) {
         + "actionable:true,kind:'paused',summary:session.statusDetail,requestText:'멈춘 작업을 처리해 주세요.',"
         + "requestedAt,source:'input-tool',confidence:'high'}};return session;});"
     + "app.state.managementFilter='all';app.state.search='화면 설명과 버튼을 쉽게 개선하기';"
-    + "app.selectViewFromUser?.('waiting',{motionKind:'filter'});"
-    + "if(app.state.view!=='waiting')app.selectView('waiting');else app.renderSessions?.('interaction-management');})()");
+    + "app.selectViewFromUser?.('all',{motionKind:'filter'});"
+    + "app.renderSessions?.('interaction-management');})()");
   const failureRoute = await rendererValue(win, "(async()=>{"
     + "await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));"
-    + "const card=document.querySelector('#attentionInbox [data-management-session=\"fixture-root\"]');"
-    + "const primary=card?.querySelector('.attention-primary-action[data-open-session=\"fixture-root\"]');"
+    + "const card=document.querySelector('#liveSessionGrid [data-control-review=\"fixture-root\"]');"
+    + "const primary=card?.querySelector('.control-review-open[data-open-session=\"fixture-root\"]');"
     + "const primaryRect=primary?.getBoundingClientRect();"
-    + "const hiddenControls=[...card?.querySelectorAll('[data-managed-run-action]')||[]].map(button=>{"
-      + "const rect=button.getBoundingClientRect();return{action:button.dataset.managedRunAction,"
-        + "display:getComputedStyle(button.closest('.management-control-buttons')).display,width:rect.width,height:rect.height};});"
     + "window.interactionTest.clearCalls();primary?.click();"
     + "return{found:Boolean(primary),visible:Boolean(primaryRect&&primaryRect.width>0&&primaryRect.height>0),"
-      + "hiddenControls};})()");
-  assert(failureRoute.found && failureRoute.visible
-    && failureRoute.hiddenControls.length >= 2
-    && failureRoute.hiddenControls.every(control => control.display === 'none'
-      && control.width === 0 && control.height === 0),
-  '확인 대기 실패 카드는 숨은 legacy 관리 버튼 대신 보이는 PTY 진입만 제공해야 합니다: '
+      + "retiredInboxAbsent:!document.querySelector('#attentionInbox')};})()");
+  assert(failureRoute.found && failureRoute.visible && failureRoute.retiredInboxAbsent,
+  '작업 흐름의 확인 카드는 삭제된 전용 페이지 대신 보이는 PTY 진입을 제공해야 합니다: '
     + JSON.stringify(failureRoute));
   await assertFocusedRoot(win, '실패 카드의 확인 버튼 클릭');
   const routeEvidence = await rendererValue(win, "({"
@@ -741,28 +742,75 @@ async function exercisePtyFocus(win, round) {
         + "&&document.querySelector('.sidebar')?.inert),"
       + "flowLanes:surface?.querySelectorAll('.pty-focus-flow-lane').length||0,"
       + "rootNodes:surface?.querySelectorAll('.pty-focus-root-node').length||0,"
-      + "statusOnly:!document.querySelector('#ptyFocusFlow button,#ptyFocusFlow a,"
+      + "detailTriggers:surface?.querySelectorAll('[data-pty-focus-child],[data-pty-focus-execution]').length||0,"
+      + "flowControlsAreDetailOnly:[...(surface?.querySelectorAll('#ptyFocusFlow button,#ptyFocusFlow a,"
         + "#ptyFocusFlow input,#ptyFocusFlow textarea,#ptyFocusFlow select,"
-        + "#ptyFocusFlow [contenteditable=\"true\"]'),"
+        + "#ptyFocusFlow [contenteditable=\"true\"]')||[])].every(control=>"
+          + "control.matches('[data-pty-focus-child],[data-pty-focus-execution]')),"
       + "composerAbsent:!surface?.querySelector('[data-inline-terminal-composer],"
         + "[data-agent-command-form],[data-conversation-shell]'),"
       + "removedAbsent:deleted.every(selector=>!document.querySelector(selector)),"
       + "terminalCreates:window.interactionTest.getCalls()"
         + ".filter(call=>call.name==='terminalCreate').length};})()");
   assert(metrics.surfaceInteractive && metrics.backgroundInert && metrics.flowLanes === 3
-    && metrics.rootNodes === 1 && metrics.statusOnly && metrics.composerAbsent
+    && metrics.rootNodes === 1 && metrics.detailTriggers >= 2 && metrics.flowControlsAreDetailOnly
+    && metrics.composerAbsent
     && metrics.removedAbsent && metrics.terminalCreates === 0,
   'PTY focus-only 상호작용 계약이 올바르지 않습니다: ' + JSON.stringify(metrics));
+
+  await rendererValue(win, "window.interactionTest.clearCalls();"
+    + "document.querySelector('[data-pty-focus-child=\"fixture-child\"]')?.click()");
+  await waitFor(win,
+    "window.WhiteboxApp.state.ptyFocusSessionId==='fixture-root'"
+      + "&&window.WhiteboxApp.state.selectedId==='fixture-child'"
+      + "&&window.WhiteboxApp.state.drawerMode==='subagent'"
+      + "&&document.querySelector('#detailDrawer')?.classList.contains('open')"
+      + "&&document.querySelector('#detailDrawer')?.getAttribute('aria-hidden')==='false'",
+    'PTY 흐름의 도움 AI가 루트 PTY 위 오른쪽 상세창으로 열리지 않았습니다.');
+  const focusedChildRoute = await rendererValue(win, "({"
+    + "terminalCreates:window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length,"
+    + "embeddedTerminal:window.WhiteboxTerminal.embeddedState().terminalId})");
+  assert(focusedChildRoute.terminalCreates === 0 && focusedChildRoute.embeddedTerminal === 'terminal-main',
+    '도움 AI 상세창이 기존 루트 PTY를 보존하지 못했습니다: ' + JSON.stringify(focusedChildRoute));
+  await rendererValue(win, "document.querySelector('#closeDrawerBtn')?.click()");
+  await waitFor(win,
+    "!document.querySelector('#detailDrawer')?.classList.contains('open')"
+      + "&&window.WhiteboxApp.state.ptyFocusSessionId==='fixture-root'"
+      + "&&window.WhiteboxTerminal.embeddedState().terminalId==='terminal-main'",
+    '도움 AI 상세창을 닫은 뒤 기존 루트 PTY로 돌아오지 못했습니다.');
   await closeFocusedRoot(win);
 
+  await rendererValue(win, "window.interactionTest.clearCalls()");
   const childClick = await rendererValue(win, "(()=>{"
     + "const child=document.querySelector('[data-open-subagent-chat=\"fixture-child\"]');"
     + "child?.click();return Boolean(child);})()");
   assert(childClick, '도움 AI 상태 노드가 작업 현황에 없습니다.');
-  await assertFocusedRoot(win, '도움 AI 클릭');
-  assert(await rendererValue(win, "window.WhiteboxApp.state.selectedId==='fixture-child'"),
-    '도움 AI 클릭 시 선택한 상태 노드 identity를 보존하지 못했습니다.');
-  await closeFocusedRoot(win);
+  await waitFor(win,
+    "!window.WhiteboxApp.state.ptyFocusSessionId"
+      + "&&window.WhiteboxApp.state.selectedId==='fixture-child'"
+      + "&&window.WhiteboxApp.state.drawerMode==='subagent'"
+      + "&&document.querySelector('#detailDrawer')?.classList.contains('open')",
+    '작업 현황의 도움 AI가 오른쪽 상세창으로 열리지 않았습니다.');
+  assert(await rendererValue(win,
+    "window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===0"),
+  '도움 AI 오른쪽 상세창이 새 PTY를 만들었습니다.');
+  await rendererValue(win, "document.querySelector('#closeDrawerBtn')?.click()");
+  await waitFor(win, "!document.querySelector('#detailDrawer')?.classList.contains('open')",
+    '도움 AI 오른쪽 상세창을 닫지 못했습니다.');
+
+  await rendererValue(win, "window.interactionTest.clearCalls();"
+    + "document.querySelector('[data-open-execution-id=\"fixture-shell-running\"]')?.click()");
+  await waitFor(win,
+    "window.WhiteboxApp.state.drawerMode==='execution'"
+      + "&&window.WhiteboxApp.state.drawerExecutionId==='fixture-shell-running'"
+      + "&&document.querySelector('#detailDrawer')?.classList.contains('open')",
+    '실행 항목이 오른쪽 상세창으로 열리지 않았습니다.');
+  assert(await rendererValue(win,
+    "window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===0"),
+  '실행 항목 오른쪽 상세창이 새 PTY를 만들었습니다.');
+  await rendererValue(win, "document.querySelector('#closeDrawerBtn')?.click()");
+  await waitFor(win, "!document.querySelector('#detailDrawer')?.classList.contains('open')",
+    '실행 항목 오른쪽 상세창을 닫지 못했습니다.');
 
   await rendererValue(win, "window.interactionTest.triggerAttention('fixture-root')");
   await assertFocusedRoot(win, '확인 필요 알림');
@@ -808,7 +856,6 @@ async function run() {
       await exerciseQualityAndProviderUsage(win);
       await exerciseUpdateDetails(win);
       await exerciseKeyboardAndRunModal(win);
-      await exerciseApprovalQuickResponse(win);
       await exerciseDashboardGraphAndManagement(win);
       reports.push(await exercisePtyFocus(win, round));
     }

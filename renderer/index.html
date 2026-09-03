@@ -69,22 +69,6 @@
         </div>
       </header>
 
-      <section id="projectContextNav" class="project-context-nav hidden" aria-labelledby="projectContextName" aria-hidden="true" inert>
-        <div class="project-context-identity">
-          <span class="project-context-mark" aria-hidden="true">□</span>
-          <div>
-            <small><span id="projectContextName" data-i18n="studio.sidebar.title">프로젝트</span><span id="projectContextEyebrow" data-i18n="studio.context.selected_label">선택한 프로젝트</span></small>
-            <strong id="projectContextHeading" data-i18n="studio.context.all_heading">프로젝트 작업</strong>
-            <span id="projectContextMeta" data-i18n="studio.context.loading">프로젝트 작업을 불러오는 중</span>
-          </div>
-        </div>
-        <nav id="projectViewTabs" class="view-nav project-view-tabs" aria-label="선택한 프로젝트 작업 보기" data-i18n-aria-label="studio.context.nav_label">
-          <button class="nav-item active" type="button" data-view="all" aria-label="처리 중" data-i18n-aria-label="app.nav.home" aria-keyshortcuts="Meta+1 Control+1" aria-controls="operationsOverview liveSection activeEmptyState beginnerGuide" title="처리 중" data-i18n-title="app.nav.home"><span class="nav-icon">◆</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.home">처리 중</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_home">처리 중</span></span><b><span id="navAllCount">0</span><small data-i18n="quality.unit.tasks">건</small></b></button>
-          <button class="nav-item" type="button" data-view="active" aria-label="지난 작업" data-i18n-aria-label="app.nav.active" aria-keyshortcuts="Meta+2 Control+2" aria-controls="sessionSection memoryHero" title="지난 작업" data-i18n-title="app.nav.active"><span class="nav-icon">○</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.active">지난 작업</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_active">지난 작업</span></span><b><span id="navActiveCount">0</span><small data-i18n="quality.unit.records">건</small></b></button>
-          <button class="nav-item" type="button" data-view="waiting" aria-label="확인 대기" data-i18n-aria-label="app.nav.needs_review" aria-keyshortcuts="Meta+3 Control+3" aria-controls="attentionInbox" title="확인 대기" data-i18n-title="app.nav.needs_review"><span class="nav-icon">!</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.needs_review">확인 대기</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_needs_review">확인 대기</span></span><b><span id="navWaitingCount">0</span><small id="navWaitingUnit" data-i18n="quality.unit.tasks">건</small></b></button>
-        </nav>
-      </section>
-
       <section id="projectSelectionPrompt" class="project-selection-prompt hidden" aria-live="polite">
         <div class="project-selection-content">
           <span class="project-selection-direction" aria-hidden="true"><i>←</i><b data-i18n="studio.project_selection_direction">왼쪽 프로젝트 목록</b></span>
@@ -138,8 +122,6 @@
       </section>
 
       <section id="operationsOverview" class="operations-overview hidden" aria-label="AI 작업 관리 상태" data-i18n-aria-label="management.operations_label"></section>
-
-      <section id="attentionInbox" class="attention-inbox hidden" aria-label="확인 또는 주의가 필요한 AI 작업" data-i18n-aria-label="management.inbox_label"></section>
 
       <section id="settingsSection" class="settings-section hidden" aria-labelledby="settingsTitle">
         <header class="settings-head">
@@ -398,6 +380,34 @@
     </section>
   </div>
 
+  <div id="drawerBackdrop" class="drawer-backdrop hidden"></div>
+  <aside id="detailDrawer" class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true" tabindex="-1" inert>
+    <div id="drawerResizeHandle" class="drawer-resize-handle hidden" role="separator" aria-orientation="vertical" aria-label="대화 패널 너비 조절" data-i18n-aria-label="drawer.resize_panel" aria-valuemin="560" aria-valuemax="860" aria-valuenow="640" tabindex="0"></div>
+    <div class="drawer-head">
+      <button id="drawerBackToFlowBtn" class="drawer-flow-button hidden" type="button" aria-label="AI 작업 흐름으로 돌아가기" data-i18n-aria-label="drawer.back_to_flow"><span aria-hidden="true">←</span><b data-i18n="drawer.agent_flow">AI 작업 흐름</b></button>
+      <div id="drawerProviderMark" class="provider-mark">AI</div>
+      <div class="drawer-title"><span id="drawerProvider" data-i18n="ui.ai_task">AI 작업</span><h2 id="drawerTitle" data-i18n="drawer.title">작업 자세히 보기</h2></div>
+      <button id="closeDrawerBtn" class="close-button" type="button" aria-label="닫기" data-i18n-aria-label="common.close">×</button>
+    </div>
+    <div id="drawerMeta" class="drawer-meta"></div>
+    <div class="drawer-tabs" role="tablist" aria-orientation="horizontal">
+      <button id="drawerTabSummary" class="drawer-tab" type="button" role="tab" aria-selected="false" aria-controls="drawerContent" tabindex="-1" data-tab="summary" aria-label="관리 요약">요약</button>
+      <button id="drawerTabChat" class="drawer-tab active" type="button" role="tab" aria-selected="true" aria-controls="drawerContent" tabindex="0" data-tab="chat" aria-label="대화 내용">대화</button>
+      <button id="drawerTabLifecycle" class="drawer-tab" type="button" role="tab" aria-selected="false" aria-controls="drawerContent" tabindex="-1" data-tab="lifecycle" aria-label="진행 과정">진행 과정</button>
+      <button id="drawerTabTokens" class="drawer-tab" type="button" role="tab" aria-selected="false" aria-controls="drawerContent" tabindex="-1" data-tab="tokens" aria-label="사용량">사용량</button>
+    </div>
+    <section id="drawerTerminalSurface" class="drawer-terminal-surface hidden" role="tabpanel" aria-labelledby="drawerTabChat" aria-hidden="true">
+      <header class="drawer-terminal-statusbar" data-tone="connecting">
+        <span class="drawer-terminal-connection"><i aria-hidden="true"></i><b id="drawerTerminalStatus" data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small id="drawerTerminalMeta"></small></span>
+      </header>
+      <div id="drawerTerminalViewport" class="drawer-terminal-viewport" aria-label="현재 AI 작업의 실제 PTY 출력 및 스크롤 기록" data-i18n-aria-label="drawer.terminal_viewport">
+        <div id="drawerTerminalEmpty" class="drawer-terminal-empty" role="status"><span aria-hidden="true">›_</span><b data-i18n="drawer.terminal_connecting">PTY 연결 중</b></div>
+      </div>
+    </section>
+    <div id="drawerContent" class="drawer-content" role="tabpanel" aria-labelledby="drawerTabChat" tabindex="0"></div>
+    <div id="drawerComposer" class="drawer-composer hidden" aria-hidden="true"></div>
+  </aside>
+
   <div id="runModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="runModalTitle" aria-describedby="runModalDescription" aria-hidden="true" inert>
     <form id="runForm" class="run-modal run-composer">
       <div class="modal-head">
@@ -476,6 +486,8 @@
   <script src="app-agent-actions.js"></script>
   <script src="app-management.js"></script>
   <script src="app-session-render.js"></script>
+  <script src="app-drawer-data.js"></script>
+  <script src="app-drawer-content.js"></script>
   <script src="app-pty-focus.js"></script>
   <script src="app-drawer.js"></script>
   <script src="app-run-modal.js"></script>

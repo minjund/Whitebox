@@ -32,8 +32,12 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  cursor: pointer;
 }
+
+.home-attention-item,
+.home-attention-more { cursor: pointer; }
+
+.home-attention-title { cursor: default; }
 
 .home-attention-title {
   min-width: 0;
@@ -45,7 +49,6 @@
   text-align: left;
 }
 
-.home-attention-title:hover,
 .home-attention-item:hover,
 .home-attention-more:hover {
   background: rgba(255,255,255,.035);

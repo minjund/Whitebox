@@ -130,22 +130,28 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     const current = controlRoomSummary(latestWorkCopy(child) || child.statusDetail || child.title, 58);
     const ongoing = isOngoingSubagent(child);
     const waiting = child.status === "waiting" || child.status === "paused";
-    return `<div class="pty-focus-node ${ongoing ? "is-running" : "is-complete"} ${waiting ? "is-waiting" : ""}" style="${providerStyle(child.provider)}">
+    return `<button type="button" class="pty-focus-node ${ongoing ? "is-running" : "is-complete"} ${waiting ? "is-waiting" : ""}"
+      data-pty-focus-child="${esc(child.id)}" style="${providerStyle(child.provider)}"
+      aria-haspopup="dialog" aria-controls="detailDrawer"
+      aria-label="${esc(t("pty_focus.open_child", { title: title.text }))}">
       <span class="pty-focus-node-mark">${esc(provider.mark)}</span>
       <span class="pty-focus-node-copy"><small>${esc(t("pty_focus.readonly_node"))}</small><b title="${esc(title.full)}">${esc(title.text)}</b><em title="${esc(current.full)}">${esc(current.text)}</em></span>
       <span class="pty-focus-node-state">${esc(subagentWorkLabel(child))}</span>
-    </div>`;
+    </button>`;
   }
 
   function executionNodeHtml(owner, activity) {
     const purpose = inferredExecutionSummary(activity);
     const command = controlRoomSummary(activity.command || activity.description || activity.label || purpose.full, 58);
     const running = activity.status === "running";
-    return `<div class="pty-focus-node ${running ? "is-running" : "is-complete"}" style="${providerStyle(owner.provider)}">
+    return `<button type="button" class="pty-focus-node ${running ? "is-running" : "is-complete"}"
+      data-pty-focus-execution-owner="${esc(owner.id)}" data-pty-focus-execution="${esc(activity.id)}"
+      style="${providerStyle(owner.provider)}" aria-haspopup="dialog" aria-controls="detailDrawer"
+      aria-label="${esc(t("pty_focus.open_execution", { title: purpose.text }))}">
       <span class="pty-focus-node-mark">${activity.kind === "shell" ? "›_" : "◌"}</span>
       <span class="pty-focus-node-copy"><small>${esc(t("pty_focus.readonly_execution"))}</small><b title="${esc(purpose.full)}">${esc(purpose.text)}</b><em title="${esc(command.full)}">${esc(command.text)}</em></span>
       <span class="pty-focus-node-state">${esc(executionActivityStatus(activity))}</span>
-    </div>`;
+    </button>`;
   }
 
   function laneHtml(label, units, emptyKey) {
@@ -533,6 +539,23 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     if (eventsBound) return;
     eventsBound = true;
     $("#ptyFocusBackBtn")?.addEventListener("click", () => closePtyFocus());
+    focusSurface()?.addEventListener("click", event => {
+      const child = event.target.closest("[data-pty-focus-child]");
+      if (child) {
+        event.stopPropagation();
+        context.openSubagentConversation?.(child.dataset.ptyFocusChild, { presentation: "modal" });
+        return;
+      }
+      const execution = event.target.closest("[data-pty-focus-execution]");
+      if (execution) {
+        event.stopPropagation();
+        context.openExecutionActivity?.(
+          execution.dataset.ptyFocusExecutionOwner,
+          execution.dataset.ptyFocusExecution,
+          { presentation: "modal" },
+        );
+      }
+    });
     window.addEventListener("whitebox:terminal-manual-selection", () => {
       pendingFocus = null;
     });

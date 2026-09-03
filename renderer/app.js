@@ -49,6 +49,13 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     projectNoticeAcks: new Map(),
     controlRoomObservedIds: new Set(),
     selectedId: null,
+    drawerTab: "chat",
+    drawerMode: "session",
+    drawerPresentation: "modal",
+    drawerExecutionId: null,
+    drawerCreateTerminalIfMissing: false,
+    drawerMountTerminal: false,
+    drawerForkCreationGesture: false,
     runProvider: "claude",
     runSource: "direct",
     sourcePlugins: [],
@@ -59,6 +66,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     },
     sourcePluginSettingRequests: new Set(),
     details: new Map(),
+    detailLoadingIds: new Set(),
+    detailErrors: new Map(),
+    drawerForceLatest: false,
     visibleLimit: 30,
     graphFocusId: null,
     inlineTerminalSessionId: null,
@@ -114,6 +124,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
   const motionState = {
     ready: false, modalTimer: 0, modalFocusTimer: 0, toastTimer: 0,
+    drawerTimer: 0, drawerContentTimer: 0, drawerRenderKey: "", drawerTab: "", drawerScrollGeneration: 0,
     focusScopes: [], focusScopeSequence: 0,
   };
   function disclosureElements(root = document) {
@@ -371,13 +382,12 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return STATUS[status] || status;
   };
   const VIEW_TITLES = localizedLookup({
-    all: "ui.recent_conversations_and_tasks", active: "ui.active_tasks", waiting: "ui.tasks_needing_review",
+    all: "ui.recent_conversations_and_tasks", active: "ui.active_tasks",
     settings: "settings.title",
   });
   const VIEW_META_KEYS = {
     all: ["ui.ai_work_overview", "ui.see_all_ai_work_at_a_glance", "ui.active_work_and_items_needing_your_review_appear_first_find"],
     active: ["memory.eyebrow", "ui.see_which_ai_is_working_now", "ui.see_what_is_being_handled_then_open_a_task_for"],
-    waiting: ["ui.your_turn", "ui.handle_items_that_need_your_review_first", "ui.only_tasks_waiting_for_your_response_or_choice_are_shown"],
     settings: ["ui.application_management", "ui.check_versions_and_updates", "ui.compare_the_installed_and_latest_stable_versions_then_download_a"],
   };
   const VIEW_META = new Proxy(Object.create(null), {
@@ -468,14 +478,19 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     }
   }
   function selectView(view, options = {}) {
-    if (!["all", "active", "waiting", "settings"].includes(view)) view = "all";
+    if (!["all", "active", "settings"].includes(view)) view = "all";
     if (view !== state.view && state.ptyFocusSessionId) {
       context.closePtyFocus?.({ restore: false });
     }
+    if (
+      view !== state.view
+      && $("#detailDrawer")?.classList.contains("open")
+      && $("#detailDrawer")?.dataset.presentation !== "modal"
+    ) context.closeDrawer?.(false);
     state.view = view;
-    state.managementFilter = view === "waiting" ? (options.managementFilter || "all") : "all";
+    state.managementFilter = "all";
     state.visibleLimit = 30;
-    if (view === "active" || view === "waiting") markGuideStep(view);
+    if (view === "active") markGuideStep(view);
     syncViewChrome();
     context.renderSessions(options.motionKind || "view");
     document.querySelector(".main-stage")?.scrollTo({ top: 0, behavior: "auto" });
@@ -499,7 +514,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       }
     }
     if (options.focusMain) $("#mainContent")?.focus({ preventScroll: true });
-    const resultCount = ["all", "active", "waiting"].includes(view) && typeof context.filteredSessions === "function"
+    const resultCount = ["all", "active"].includes(view) && typeof context.filteredSessions === "function"
       ? context.filteredSessions().length
       : null;
     announce(resultCount == null
@@ -511,10 +526,14 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return selectView(view, options);
   }
   function currentDialog() {
-    if (!$("#ptyFocusSurface")?.classList.contains("hidden")) return $("#ptyFocusSurface");
+    if (
+      $("#detailDrawer")?.classList.contains("open")
+      && $("#detailDrawer")?.dataset.presentation === "modal"
+    ) return $("#detailDrawer");
     if (!$("#quickPaletteModal")?.classList.contains("hidden")) return $("#quickPaletteModal");
     if (!$("#shortcutHelpModal")?.classList.contains("hidden")) return $("#shortcutHelpModal");
     if (!$("#runModal").classList.contains("hidden")) return $("#runModal");
+    if (!$("#ptyFocusSurface")?.classList.contains("hidden")) return $("#ptyFocusSurface");
     return null;
   }
   function dialogFocusable(dialog) {

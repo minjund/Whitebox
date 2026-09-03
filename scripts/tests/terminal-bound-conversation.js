@@ -1268,7 +1268,7 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     }
   });
 
-  test('bound PTY UI는 대화창 없이 집중 xterm stdin과 전용 respond API를 노출한다', () => {
+  test('bound PTY 루트는 집중 xterm을 열고 읽기 전용 상세 패널과 공존한다', () => {
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
     const ptyFocus = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
     const drawerView = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
@@ -1282,9 +1282,12 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     assert.match(workbench, /if \(!inputDisabled\) \{\s*terminal\.onData/u);
     assert.equal(fs.existsSync(path.join(root, 'renderer', 'drawer-terminal.js')), false);
     assert.match(html, /id="ptyFocusTerminalViewport"[^>]*data-agent-terminal-viewport/u);
+    assert.match(html, /id="detailDrawer"[^>]*role="dialog"/u);
+    assert.match(html, /id="drawerContent"[^>]*role="tabpanel"/u);
     assert.match(ptyFocus, /openPtyFocusVerified/u);
     assert.match(drawerView, /context\.openPtyFocusVerified\?\.\(root\.id,/u);
-    assert.doesNotMatch(drawerView, /actualTerminalChat|drawerTerminalSurface|drawerComposer/u);
+    assert.match(drawerView, /function openSubagentConversation\(id, options = \{\}\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u);
+    assert.match(drawerView, /function openExecutionActivity\(ownerId, executionId\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u);
     assert.equal(graph.includes('data-inline-terminal-composer'), false);
     assert.equal(graph.includes('data-inline-terminal-focus'), false);
     assert.equal(messages.includes('"drawer.terminal_focus"'), false);

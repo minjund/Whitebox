@@ -6,11 +6,12 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
     $, state, motionPreference, saveGuideState, selectView, selectViewFromUser = selectView, renderUpdateSettings,
-    filteredSessions, renderSessions, openRunModal, openDrawer, toast, performUiAction,
+    filteredSessions, renderSessions, openRunModal, openDrawer, toast, performUiAction, markGuideStep = () => {},
   } = context;
 
   function bindNavigationAndUpdateEvents() {
-    $(".view-nav").addEventListener("click", (event) => {
+    const viewNavigation = $(".view-nav");
+    viewNavigation?.addEventListener("click", (event) => {
       const button = event.target.closest(".nav-item");
       if (!button || !button.dataset.view) return;
       selectViewFromUser(button.dataset.view);
@@ -21,7 +22,7 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
     $("#backToProjectsBtn")?.addEventListener("click", () => {
       selectViewFromUser("all", { focusMain: true });
     });
-    $(".view-nav").addEventListener("keydown", (event) => {
+    viewNavigation?.addEventListener("keydown", (event) => {
       if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
       const buttons = Array.from(document.querySelectorAll(".view-nav .nav-item[data-view]"))
         .filter((button) => !button.hidden && button.getClientRects().length > 0 && getComputedStyle(button).visibility !== "hidden");
@@ -59,7 +60,19 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
       const action = event.target.closest("[data-guide-action]")?.dataset.guideAction;
       if (!action) return;
       if (action === "create") return openRunModal();
-      if (action === "active" || action === "waiting") return selectViewFromUser(action, { focusMain: true });
+      if (action === "active") return selectViewFromUser(action, { focusMain: true });
+      if (action === "waiting") {
+        markGuideStep("waiting");
+        selectViewFromUser("all");
+        requestAnimationFrame(() => {
+          const overview = $("#operationsOverview");
+          if (!overview) return;
+          overview.setAttribute("tabindex", "-1");
+          overview.scrollIntoView({ behavior: motionPreference.matches ? "auto" : "smooth", block: "start" });
+          overview.focus({ preventScroll: true });
+        });
+        return;
+      }
       if (action === "detail") {
         const first = filteredSessions()[0] || ((state.snapshot && state.snapshot.sessions) || [])[0];
         if (first) openDrawer(first.id);

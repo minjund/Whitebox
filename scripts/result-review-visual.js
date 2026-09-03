@@ -1,8 +1,9 @@
 'use strict';
 
-// This historical visual entry point now verifies the active result-review
-// contract: completion is acknowledged only after the owning PTY is mounted
-// in the full focus surface. No drawer or transcript UI participates.
+// This historical visual entry point verifies the active result-review
+// contract: the completed record acknowledges review only after the owning PTY
+// is mounted. The retired attention page stays absent and the restored right
+// drawer stays closed for this writable root-task action.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -61,8 +62,8 @@ function installWorktreeDependencyRedirect() {
   });
 }
 
-const resultCardSelector = `.attention-card[data-management-session="${resultSessionId}"]`;
-const completeButtonSelector = `${resultCardSelector} [data-result-review-complete="${resultSessionId}"]`;
+const resultCardSelector = `.memory-record[data-session-id="${resultSessionId}"][data-result-review="true"]`;
+const completeButtonSelector = resultCardSelector;
 
 async function resultState(win) {
   return win.webContents.executeJavaScript(`(() => {
@@ -72,7 +73,6 @@ async function resultState(win) {
       .find(item => item.dataset.workspace === session.cwd);
     const card = document.querySelector(${JSON.stringify(resultCardSelector)});
     const complete = document.querySelector(${JSON.stringify(completeButtonSelector)});
-    const detail = card?.querySelector('[data-open-session]');
     const target = window.WhiteboxTerminal.agentTargets(session)
       .find(item => (item.terminalId || item.id) === ${JSON.stringify(resultTerminalId)});
     return {
@@ -82,16 +82,19 @@ async function resultState(win) {
       storedReview: Boolean(localStorage.getItem(appControl.RESULT_REVIEW_STORAGE_KEY)),
       cardVisible: Boolean(card?.getBoundingClientRect().height),
       completeVisible: Boolean(complete?.getBoundingClientRect().height),
-      completeLabel: complete?.textContent.trim() || '',
-      primaryBeforeDetail: Boolean(complete && detail && (complete.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      completeLabel: complete?.querySelector('.memory-record-open')?.textContent.replace('→', '').trim() || '',
       quickResponseAbsent: !card?.querySelector('[data-attention-quick], [data-agent-command-form]'),
       projectCount: Number(projectButton?.dataset.resultReadyCount || 0),
       projectBadge: Boolean(projectButton?.closest('.project-sidebar-project')?.classList.contains('has-result-ready')),
       ptyEligible: appControl.canOpenPtyFocus(session),
       exactTarget: target ? { id: target.id, terminalId: target.terminalId || target.id } : null,
-      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer', '#ptyFocusChildModal',
-        '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
+      retiredDomAbsent: ['#ptyFocusChildModal', '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
         .every(selector => !document.querySelector(selector)),
+      drawerReady: (() => {
+        const drawer = document.querySelector('#detailDrawer');
+        return Boolean(drawer && document.querySelector('#drawerBackdrop') && document.querySelector('#drawerContent')
+          && document.querySelector('#drawerComposer') && !drawer.classList.contains('open') && drawer.inert);
+      })(),
     };
   })()`);
 }
@@ -151,7 +154,7 @@ async function run() {
       appControl.state.workspace = updated.cwd;
       appControl.state.providerFilters.clear();
       appControl.state.search = '';
-      appControl.selectView('waiting');
+      appControl.selectView('active');
       appControl.render();
       return { cwd: updated.cwd, signature };
     })()`);
@@ -164,15 +167,15 @@ async function run() {
         && window.WhiteboxTerminal.agentTargets(session).some(target =>
           (target.terminalId || target.id) === ${JSON.stringify(resultTerminalId)})
         && Boolean(document.querySelector(${JSON.stringify(completeButtonSelector)}));
-    })()`, '확인 목록에 exact PTY가 연결된 완료 결과 카드를 찾지 못했습니다.');
+    })()`, '지난 기록의 완료 카드에서 exact PTY가 연결된 완료 결과를 찾지 못했습니다.');
 
     const initial = await resultState(win);
     if (initial.pending !== 1 || initial.complete || initial.storedReview
-      || !initial.cardVisible || !initial.completeVisible || initial.completeLabel !== '확인 완료'
-      || !initial.primaryBeforeDetail || !initial.quickResponseAbsent
+      || !initial.cardVisible || !initial.completeVisible || initial.completeLabel !== 'PTY에서 결과 확인'
+      || !initial.quickResponseAbsent
       || initial.projectCount < 1 || !initial.projectBadge
       || !initial.ptyEligible || initial.exactTarget?.terminalId !== resultTerminalId
-      || !initial.oldDomAbsent) {
+      || !initial.retiredDomAbsent || !initial.drawerReady) {
       throw new Error(`완료 결과의 초기 확인/PTY 계약이 올바르지 않습니다: ${JSON.stringify(initial)}`);
     }
 
@@ -191,13 +194,15 @@ async function run() {
         const bounds = button?.getBoundingClientRect();
         return {
           buttonVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
-          label: button?.textContent.trim() || '',
-          oldDomAbsent: ['#detailDrawer', '#drawerContent', '#drawerComposer',
-            '#automationOverview', '#tmuxSection', '#tmuxCreateModal'].every(selector => !document.querySelector(selector)),
+          label: button?.querySelector('.memory-record-open')?.textContent.replace('→', '').trim() || '',
+          retiredDomAbsent: ['#ptyFocusChildModal', '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
+            .every(selector => !document.querySelector(selector)),
+          drawerClosed: Boolean(document.querySelector('#detailDrawer')?.inert
+            && !document.querySelector('#detailDrawer')?.classList.contains('open')),
         };
       })()`);
-      if (!themeStates[theme].buttonVisible || themeStates[theme].label !== '확인 완료'
-        || !themeStates[theme].oldDomAbsent) {
+      if (!themeStates[theme].buttonVisible || themeStates[theme].label !== 'PTY에서 결과 확인'
+        || !themeStates[theme].retiredDomAbsent || !themeStates[theme].drawerClosed) {
         throw new Error(`${theme} 테마의 완료 결과 primary 동작이 올바르지 않습니다: ${JSON.stringify(themeStates[theme])}`);
       }
       outputs[theme] = await capture(win, path.join(outputDir, `whitebox-result-review-${theme}.png`));
@@ -247,14 +252,16 @@ async function run() {
       calls: window.interactionTest.getCalls(),
       focusVisible: !document.querySelector('#ptyFocusSurface')?.classList.contains('hidden'),
       backgroundInactive: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
-      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerContent', '#drawerComposer', '#ptyFocusChildModal',
-        '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
+      retiredDomAbsent: ['#ptyFocusChildModal', '#automationOverview', '#tmuxSection', '#tmuxCreateModal']
         .every(selector => !document.querySelector(selector)),
+      drawerClosed: Boolean(document.querySelector('#detailDrawer')?.inert
+        && !document.querySelector('#detailDrawer')?.classList.contains('open')),
       composerAbsent: !document.querySelector('[data-inline-terminal-composer]'),
     }))()`);
-    if (!firstReview.focusVisible || !firstReview.backgroundInactive || !firstReview.oldDomAbsent
-      || !firstReview.composerAbsent || firstReview.calls.some(call => call.name === 'terminalCreate')) {
-      throw new Error(`확인 완료가 기존 담당 PTY만 여는 focus-only 경로가 아닙니다: ${JSON.stringify(firstReview)}`);
+    if (!firstReview.focusVisible || !firstReview.backgroundInactive || !firstReview.retiredDomAbsent
+      || !firstReview.drawerClosed || !firstReview.composerAbsent
+      || firstReview.calls.some(call => call.name === 'terminalCreate')) {
+      throw new Error(`인라인 확인 동작이 기존 담당 PTY만 여는 경로가 아닙니다: ${JSON.stringify(firstReview)}`);
     }
 
     const newResult = await win.webContents.executeJavaScript(`(() => {
@@ -271,7 +278,7 @@ async function run() {
         outcome: { status: 'completed', verified: true, completedAt, summary: '두 번째 완료 결과가 도착했습니다.' },
       });
       window.interactionTest.emitSnapshot();
-      appControl.selectView('waiting');
+      appControl.selectView('active');
       appControl.render();
       return { previousStamp };
     })()`);
@@ -311,7 +318,7 @@ async function run() {
       throw new Error(`새 stamp 확인도 동일한 담당 PTY를 재사용해야 합니다: ${JSON.stringify(secondReview)}`);
     }
 
-    process.stdout.write(`완료 결과 → verified PTY focus → 확인 저장/재등장 검증 통과\n${JSON.stringify({
+    process.stdout.write(`완료 기록 → verified PTY focus → 확인 저장/재등장 검증 통과\n${JSON.stringify({
       setup, initial, projectAcknowledged, firstReview, reappeared, secondReview, themeStates,
     }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);
   } catch (error) {

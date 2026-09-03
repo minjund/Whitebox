@@ -128,9 +128,8 @@ html[data-theme="light"] {
   border-radius: 10px;
   background: #101a26;
   color: inherit;
-  cursor: pointer;
+  cursor: default;
 }
-.operations-review-total:hover { border-color: #48738c; background: #122230; }
 .operations-review-total i { color: #75d8ee; font-style: normal; }
 .operations-review-total strong { color: #f4f8fa; font-size: 21px; font-variant-numeric: tabular-nums; line-height: 1; }
 .operations-review-total span { color: #a7b6c2; font-size: 12px; white-space: nowrap; }
@@ -402,13 +401,11 @@ html[data-theme="light"] {
   background: #09111a;
 }
 .supervision-attention-bar > span:first-child { margin-right: auto; color: #8596a2; font-size: 12px; }
-.supervision-attention-bar button,
+.supervision-attention-bar [data-management-metric],
 .supervision-clear { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid #263746; border-radius: 8px; color: #b7c4cd; background: #0e1823; font-size: 12px; }
-.supervision-attention-bar button { cursor: pointer; }
-.supervision-attention-bar button:hover { border-color: #466376; color: #edf6f8; }
-.supervision-attention-bar button i { width: 6px; height: 6px; border-radius: 50%; background: #6ad0e7; }
-.supervision-attention-bar [data-management-filter="critical"] i { background: #ff6b76; }
-.supervision-attention-bar [data-management-filter="warning"] i { background: #e9b949; }
+.supervision-attention-bar [data-management-metric] i { width: 6px; height: 6px; border-radius: 50%; background: #6ad0e7; }
+.supervision-attention-bar [data-management-metric="critical"] i { background: #ff6b76; }
+.supervision-attention-bar [data-management-metric="warning"] i { background: #e9b949; }
 .supervision-attention-bar b,
 .supervision-clear b { color: #edf5f8; font-variant-numeric: tabular-nums; }
 .supervision-clear { color: #82cfa9; }

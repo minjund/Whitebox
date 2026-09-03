@@ -772,7 +772,7 @@ html[data-theme] :is(.home-attention-title, .home-attention-item, .home-attentio
   color: var(--theme-text);
 }
 
-html[data-theme] :is(.home-attention-title, .home-attention-item, .home-attention-more):hover {
+html[data-theme] :is(.home-attention-item, .home-attention-more):hover {
   background: var(--theme-surface-subtle);
 }
 
@@ -3358,10 +3358,6 @@ html[data-theme] body[data-current-view="all"] .home-attention-title {
   border-radius: 0;
   background: var(--theme-warning-soft);
   text-align: left;
-}
-
-html[data-theme] body[data-current-view="all"] .home-attention-title:hover {
-  background: color-mix(in srgb, var(--theme-warning) 12%, var(--theme-surface));
 }
 
 html[data-theme] body[data-current-view="all"] .home-attention-signal {

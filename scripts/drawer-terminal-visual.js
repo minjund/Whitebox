@@ -1,7 +1,8 @@
 'use strict';
 
-// Keep this historical entry-point name stable for CI. The product surface it
-// verifies is now the full PTY focus view; no drawer/conversation UI is used.
+// Keep this historical entry-point name stable for CI. The main/root task uses
+// the full PTY focus view, while child and execution rows open the read-only
+// right detail drawer over that exact PTY.
 const { app, BrowserWindow, session: electronSession } = require('electron');
 const fs = require('fs');
 const os = require('os');
@@ -15,6 +16,7 @@ const root = path.resolve(__dirname, '..');
 const outputDir = path.join(root, 'artifacts');
 const logPath = path.join(outputDir, 'drawer-terminal-visual.log');
 const screenshotPath = path.join(outputDir, 'whitebox-pty-focus-visual.png');
+const drawerScreenshotPath = path.join(outputDir, 'whitebox-drawer-subnode.png');
 const failureScreenshotPath = path.join(outputDir, 'whitebox-pty-focus-visual-failure.png');
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-pty-focus-visual-'));
 
@@ -126,10 +128,11 @@ async function run() {
       const host = viewport?.querySelector(':scope > .terminal-screen');
       const helper = host?.querySelector('.xterm-helper-textarea');
       const deletedSelectors = [
-        '#detailDrawer', '#drawerBackdrop', '#drawerTerminalViewport', '#drawerContent',
-        '#drawerComposer', '#agentInlineTerminalViewport', '#ptyFocusChildModal',
+        '#agentInlineTerminalViewport', '#ptyFocusChildModal',
         '#automationOverview', '#tmuxSection', '#tmuxCreateModal',
       ];
+      const drawer = document.querySelector('#detailDrawer');
+      const backdrop = document.querySelector('#drawerBackdrop');
       helper?.focus({ preventScroll: true });
       window.__whiteboxPtyFocusVisualIdentity = { surface, viewport, host, helper };
       return {
@@ -140,8 +143,12 @@ async function run() {
         backgroundInactive: Boolean(document.querySelector('#mainContent')?.inert && document.querySelector('.sidebar')?.inert),
         rootNodes: surface?.querySelectorAll('.pty-focus-root-node').length || 0,
         flowLanes: surface?.querySelectorAll('.pty-focus-flow-lane').length || 0,
-        writableFlowControls: document.querySelector('#ptyFocusFlow')?.querySelectorAll('button, a, input, textarea, select, [contenteditable="true"]').length || 0,
+        detailFlowControls: document.querySelector('#ptyFocusFlow')?.querySelectorAll('button[data-pty-focus-child], button[data-pty-focus-execution]').length || 0,
+        writableFlowInputs: document.querySelector('#ptyFocusFlow')?.querySelectorAll('input, textarea, select, [contenteditable="true"]').length || 0,
         oldDomAbsent: deletedSelectors.every(selector => !document.querySelector(selector)),
+        drawerDomPresent: Boolean(drawer && backdrop && document.querySelector('#drawerContent') && document.querySelector('#closeDrawerBtn')),
+        drawerClosed: Boolean(drawer && !drawer.classList.contains('open') && drawer.inert
+          && drawer.getAttribute('aria-hidden') === 'true' && backdrop?.classList.contains('hidden')),
         focused: document.activeElement === helper,
         xtermMounted: Boolean(host?.querySelector('.xterm')),
         emptyHidden: Boolean(surface?.querySelector('[data-inline-terminal-empty]')?.classList.contains('hidden')),
@@ -155,11 +162,87 @@ async function run() {
     assert(initial.sessionId === 'fixture-root' && initial.targetId === 'terminal-main'
       && initial.rootNodes === 1 && initial.flowLanes === 3,
     `PTY focus 담당 노드/흐름 구성이 올바르지 않습니다: ${JSON.stringify(initial)}`);
-    assert(initial.oldDomAbsent && initial.writableFlowControls === 0 && initial.composerAbsent,
-      `삭제된 drawer/conversation UI 또는 별도 입력 UI가 남아 있습니다: ${JSON.stringify(initial)}`);
+    assert(initial.oldDomAbsent && initial.drawerDomPresent && initial.drawerClosed
+      && initial.detailFlowControls >= 2 && initial.writableFlowInputs === 0 && initial.composerAbsent,
+      `PTY와 오른쪽 상세 패널의 역할 분리가 올바르지 않습니다: ${JSON.stringify(initial)}`);
     assert(initial.focused && initial.xtermMounted && initial.emptyHidden
       && initial.connectionTone === 'connected' && initial.terminalCreates === 0,
       `기존 PTY의 focus-only xterm mount가 올바르지 않습니다: ${JSON.stringify(initial)}`);
+
+    await rendererValue(win, `(() => {
+      const child = document.querySelector('[data-pty-focus-child="fixture-child"]');
+      child?.focus({ preventScroll: true });
+      child?.click();
+    })()`);
+    await waitForRenderer(win, `(() => {
+      const app = window.WhiteboxApp;
+      const drawer = document.querySelector('#detailDrawer');
+      const surface = document.querySelector('#ptyFocusSurface');
+      return app.state.ptyFocusSessionId === 'fixture-root'
+        && app.state.selectedId === 'fixture-child' && app.state.drawerMode === 'subagent'
+        && drawer?.classList.contains('open') && !drawer.inert
+        && drawer.getAttribute('aria-hidden') === 'false'
+        && !document.querySelector('#drawerBackdrop')?.classList.contains('hidden')
+        && surface && !surface.classList.contains('hidden');
+    })()`, '서브노드가 기존 PTY 위의 오른쪽 상세 패널을 열지 못했습니다.');
+    const childDrawer = await rendererValue(win, `(() => {
+      const content = document.querySelector('#drawerContent');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return {
+        drawerMode: document.querySelector('#detailDrawer')?.dataset.mode || '',
+        contentLength: content?.textContent?.trim().length || 0,
+        hasConversation: Boolean(content?.querySelector('.subagent-conversation, .chat-list, .chat-turn')),
+        terminalConnected: embedded.connected,
+        terminalId: embedded.terminalId || '',
+        terminalCreates: window.interactionTest.getCalls().filter(call => call.name === 'terminalCreate').length,
+      };
+    })()`);
+    assert(childDrawer.drawerMode === 'subagent' && childDrawer.contentLength > 80 && childDrawer.hasConversation,
+      `서브노드 상세 패널에 읽기 전용 대화가 표시되지 않았습니다: ${JSON.stringify(childDrawer)}`);
+    assert(childDrawer.terminalConnected && childDrawer.terminalId === 'terminal-main' && childDrawer.terminalCreates === 0,
+      `서브노드 상세 패널이 기존 root PTY 연결을 바꿨습니다: ${JSON.stringify(childDrawer)}`);
+    win.show();
+    win.webContents.invalidate();
+    await wait(300);
+    fs.writeFileSync(drawerScreenshotPath, (await win.webContents.capturePage()).toPNG());
+    await rendererValue(win, `document.querySelector('#closeDrawerBtn')?.click()`);
+    await waitForRenderer(win, `(() => {
+      const app = window.WhiteboxApp;
+      const drawer = document.querySelector('#detailDrawer');
+      const surface = document.querySelector('#ptyFocusSurface');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return app.state.ptyFocusSessionId === 'fixture-root'
+        && drawer && !drawer.classList.contains('open') && drawer.inert
+        && drawer.getAttribute('aria-hidden') === 'true'
+        && surface && !surface.classList.contains('hidden') && !surface.inert
+        && embedded.connected && embedded.terminalId === 'terminal-main'
+        && document.activeElement?.dataset.ptyFocusChild === 'fixture-child';
+    })()`, '서브노드 상세 패널을 닫은 뒤 기존 PTY와 포커스가 복원되지 않았습니다.');
+
+    await rendererValue(win, `(() => {
+      const execution = document.querySelector('[data-pty-focus-execution="fixture-shell-running"]');
+      execution?.focus({ preventScroll: true });
+      execution?.click();
+    })()`);
+    await waitForRenderer(win, `(() => {
+      const app = window.WhiteboxApp;
+      const drawer = document.querySelector('#detailDrawer');
+      const content = document.querySelector('#drawerContent');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return app.state.ptyFocusSessionId === 'fixture-root'
+        && app.state.selectedId === 'fixture-root' && app.state.drawerMode === 'execution'
+        && app.state.drawerExecutionId === 'fixture-shell-running'
+        && drawer?.classList.contains('open') && !drawer.inert
+        && embedded.connected && embedded.terminalId === 'terminal-main'
+        && content?.textContent.includes('npm run dev');
+    })()`, '실행 항목이 기존 PTY 위의 오른쪽 상세 패널을 열지 못했습니다.');
+    await rendererValue(win, `document.querySelector('#closeDrawerBtn')?.click()`);
+    await waitForRenderer(win, `(() => {
+      const drawer = document.querySelector('#detailDrawer');
+      return window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+        && drawer && !drawer.classList.contains('open') && drawer.inert
+        && window.WhiteboxTerminal.embeddedState().terminalId === 'terminal-main';
+    })()`, '실행 상세 패널을 닫은 뒤 기존 PTY가 유지되지 않았습니다.');
 
     const marker = `PTY_FOCUS_VISUAL_REFRESH_${Date.now()}`;
     await rendererValue(win, `(() => {
@@ -223,9 +306,9 @@ async function run() {
     })()`, 'PTY focus 종료 후 원래 작업 화면 상태가 복원되지 않았습니다.');
 
     assert(rendererErrors.length === 0, `renderer 오류가 발생했습니다: ${rendererErrors.join(' | ')}`);
-    const summary = { ...initial, marker, screenshotPath };
+    const summary = { ...initial, marker, screenshotPath, drawerScreenshotPath };
     log(`passed ${JSON.stringify(summary)}`);
-    process.stdout.write(`✓ full PTY focus-only 시각/mount 검증\n${JSON.stringify(summary, null, 2)}\n`);
+    process.stdout.write(`✓ root PTY와 서브노드/실행 오른쪽 상세 패널 시각·mount 검증\n${JSON.stringify(summary, null, 2)}\n`);
   } catch (error) {
     log(`failed ${error.stack || error}`);
     try {

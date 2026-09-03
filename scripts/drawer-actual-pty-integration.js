@@ -344,15 +344,19 @@ async function run() {
       const rootSession = window.WhiteboxApp.state.snapshot.sessions.find(item => item.id === 'fixture-root');
       const terminal = window.interactionTest.getTerminals().find(item =>
         item.id === ${JSON.stringify(terminalId)});
-      const oldDomAbsent = [
-        '#detailDrawer', '#drawerBackdrop', '#drawerTerminalViewport', '#drawerContent',
-        '#drawerComposer', '#agentInlineTerminalViewport', '#ptyFocusChildModal',
+      const retiredDomAbsent = [
+        '#agentInlineTerminalViewport', '#ptyFocusChildModal',
       ].every(selector => !document.querySelector(selector));
+      const drawer = document.querySelector('#detailDrawer');
+      const drawerReady = Boolean(drawer && document.querySelector('#drawerBackdrop')
+        && document.querySelector('#drawerTerminalViewport') && document.querySelector('#drawerContent')
+        && document.querySelector('#drawerComposer') && !drawer.classList.contains('open')
+        && drawer.inert && drawer.getAttribute('aria-hidden') === 'true');
       return surface && !surface.classList.contains('hidden') && !surface.inert
         && surface.getAttribute('aria-hidden') === 'false'
         && document.body.classList.contains('pty-focus-open')
         && shell
-        && oldDomAbsent
+        && retiredDomAbsent && drawerReady
         && document.querySelector('#mainContent')?.inert
         && document.querySelector('.sidebar')?.inert
         && embedded.connected
@@ -367,7 +371,7 @@ async function run() {
         && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')
         && document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')
         && !document.querySelector('[data-inline-terminal-composer]');
-    })()`, 'full PTY focus-only 화면에 별도 메시지 입력란 없는 실제 PTY가 연결되지 않았습니다.');
+    })()`, 'root PTY 화면과 닫힌 오른쪽 상세 패널이 실제 PTY에 연결되지 않았습니다.');
 
     const terminalTextExpression = `(() => {
       const screen = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen');
@@ -456,12 +460,20 @@ async function run() {
       embedded: window.WhiteboxTerminal.embeddedState(),
       focusMounted: Boolean(document.querySelector('#ptyFocusTerminalShell[data-inline-agent-terminal="fixture-root"]')),
       focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
-      oldDomAbsent: ['#detailDrawer', '#drawerBackdrop', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+      retiredDomAbsent: ['#agentInlineTerminalViewport', '#ptyFocusChildModal']
         .every(selector => !document.querySelector(selector)),
+      drawerReady: (() => {
+        const drawer = document.querySelector('#detailDrawer');
+        return Boolean(drawer && document.querySelector('#drawerBackdrop')
+          && document.querySelector('#drawerTerminalViewport') && document.querySelector('#drawerContent')
+          && !drawer.classList.contains('open') && drawer.inert);
+      })(),
       xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')),
       composerAbsent: !document.querySelector('[data-inline-terminal-composer]'),
-      writableFlowControls: document.querySelector('#ptyFocusFlow')
-        ?.querySelectorAll('button, a, input, textarea, select, [contenteditable="true"]').length || 0,
+      detailFlowControls: document.querySelector('#ptyFocusFlow')
+        ?.querySelectorAll('button[data-pty-focus-child], button[data-pty-focus-execution]').length || 0,
+      writableFlowInputs: document.querySelector('#ptyFocusFlow')
+        ?.querySelectorAll('input, textarea, select, [contenteditable="true"]').length || 0,
       calls: window.interactionTest.getCalls(),
       text: ${terminalTextExpression},
     }))()`);
@@ -470,15 +482,43 @@ async function run() {
       .filter(call => call.args[0] === terminalId)
       .map(call => String(call.args[1] || ''))
       .join('');
-    assert(rendererResult.focusMounted && rendererResult.focusVisible && rendererResult.oldDomAbsent
-      && rendererResult.xtermMounted && rendererResult.composerAbsent && rendererResult.writableFlowControls === 0,
-    `full PTY focus-only 영역이 실제 PTY 전용 화면이 아닙니다: ${JSON.stringify(rendererResult)}`);
+    assert(rendererResult.focusMounted && rendererResult.focusVisible && rendererResult.retiredDomAbsent
+      && rendererResult.drawerReady && rendererResult.xtermMounted && rendererResult.composerAbsent
+      && rendererResult.detailFlowControls >= 2 && rendererResult.writableFlowInputs === 0,
+    `root PTY와 오른쪽 상세 패널의 역할 분리가 올바르지 않습니다: ${JSON.stringify(rendererResult)}`);
     assert(rendererWriteText.endsWith(`${liveCommand}\r`),
       `xterm 직접 입력이 terminalWrite IPC로 전달되지 않았습니다: ${JSON.stringify(rendererWrites)}`);
     assert(!rendererResult.calls.some(call => call.name === 'terminalCreate'),
       '기존 실제 PTY가 있는데 PTY focus 화면이 별도 터미널을 생성했습니다.');
     assert(!rendererResult.calls.some(call => call.name === 'terminalCommand'),
       'PTY 직접 입력 중 별도 메시지 command 경로가 호출되었습니다.');
+
+    await rendererValue(win, `(() => {
+      const child = document.querySelector('[data-pty-focus-child="fixture-child"]');
+      child?.focus({ preventScroll: true });
+      child?.click();
+    })()`);
+    await waitForRenderer(win, `(() => {
+      const app = window.WhiteboxApp;
+      const drawer = document.querySelector('#detailDrawer');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return app.state.ptyFocusSessionId === 'fixture-root'
+        && app.state.selectedId === 'fixture-child' && app.state.drawerMode === 'subagent'
+        && drawer?.classList.contains('open') && !drawer.inert
+        && drawer.dataset.mode === 'subagent'
+        && embedded.connected && embedded.terminalId === ${JSON.stringify(terminalId)}
+        && (document.querySelector('#drawerContent')?.textContent?.trim().length || 0) > 80;
+    })()`, '실제 root PTY 위에서 서브노드 오른쪽 상세 패널을 열지 못했습니다.');
+    await rendererValue(win, `document.querySelector('#closeDrawerBtn')?.click()`);
+    await waitForRenderer(win, `(() => {
+      const drawer = document.querySelector('#detailDrawer');
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return window.WhiteboxApp.state.ptyFocusSessionId === 'fixture-root'
+        && drawer && !drawer.classList.contains('open') && drawer.inert
+        && embedded.connected && embedded.terminalId === ${JSON.stringify(terminalId)};
+    })()`, '서브노드 상세 패널을 닫은 뒤 실제 root PTY가 유지되지 않았습니다.');
+    assert(!(await rendererValue(win, `window.interactionTest.getCalls().some(call => call.name === 'terminalCreate')`)),
+      '서브노드 상세 패널이 별도 PTY를 생성했습니다.');
     assert(ipcCalls.some(call => call.operation === 'list')
       && ipcCalls.some(call => call.operation === 'get' && call.args[0] === terminalId)
       && ipcCalls.filter(call => call.operation === 'write' && call.args[0] === terminalId)
@@ -888,8 +928,13 @@ async function run() {
         focusTargetId: window.WhiteboxApp.state.ptyFocusTargetId || '',
         focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
         xtermMounted: Boolean(document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')),
-        oldDomAbsent: ['#detailDrawer', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+        retiredDomAbsent: ['#agentInlineTerminalViewport', '#ptyFocusChildModal']
           .every(selector => !document.querySelector(selector)),
+        drawerReady: (() => {
+          const drawer = document.querySelector('#detailDrawer');
+          return Boolean(drawer && document.querySelector('#drawerTerminalViewport')
+            && !drawer.classList.contains('open') && drawer.inert);
+        })(),
         terminalCreateCount: window.interactionTest.getCalls()
           .filter(call => call.name === 'terminalCreate').length,
       }))()`);
@@ -898,7 +943,7 @@ async function run() {
       && codexMount.embedded?.terminalId === codexForkTerminalId
       && codexMount.focusSessionId === codexForkSource.id
       && codexMount.focusTargetId === codexForkTerminalId
-      && codexMount.focusVisible && codexMount.xtermMounted && codexMount.oldDomAbsent
+      && codexMount.focusVisible && codexMount.xtermMounted && codexMount.retiredDomAbsent && codexMount.drawerReady
       && codexMount.terminalCreateCount === 1,
     `Codex fork 실제 PTY가 full PTY focus xterm에 정확히 한 번 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLaunchMarker)})`,
@@ -964,7 +1009,7 @@ async function run() {
             focusSessionId: window.WhiteboxApp?.state?.ptyFocusSessionId || '',
             focusTargetId: window.WhiteboxApp?.state?.ptyFocusTargetId || '',
             focusVisible: Boolean(document.querySelector('#ptyFocusSurface:not(.hidden):not([inert])')),
-            oldDomPresent: ['#detailDrawer', '#drawerTerminalViewport', '#agentInlineTerminalViewport']
+            unexpectedDomPresent: ['#agentInlineTerminalViewport', '#ptyFocusChildModal']
               .filter(selector => document.querySelector(selector)),
             viewportHtml: viewport?.innerHTML?.slice(0, 2_000) || '',
             rows: [...(screen?.querySelectorAll('.xterm-rows > div') || [])]
