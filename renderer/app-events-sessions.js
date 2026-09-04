@@ -17,6 +17,10 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     resultReviewPtyTarget = () => null,
     resultReviewStamp = () => "",
     markResultReviewComplete = () => 0,
+    canOpenPtyFocus = () => false,
+    canOpenResponsibleFocus = () => false,
+    ownerRootSession = () => null,
+    openResponsibleFocus = () => false,
     openPtyFocusVerified = async () => ({ opened: false }),
   } = context;
 
@@ -422,7 +426,16 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       const ptyFocus = event.target.closest("[data-pty-focus-trigger]");
       if (ptyFocus && !ptyFocus.hasAttribute("data-transcript-source")) {
         event.stopPropagation();
-        await openDrawer(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true });
+        const requestedId = ptyFocus.dataset.ptyFocusTrigger;
+        const root = ownerRootSession(requestedId);
+        const focusId = String(root?.id || requestedId || "");
+        if (canOpenPtyFocus(root)) {
+          await openDrawer(focusId, { trigger: ptyFocus, focus: true });
+        } else if (canOpenResponsibleFocus(root)) {
+          await openResponsibleFocus(focusId, { trigger: ptyFocus, focus: true });
+        } else {
+          await openDrawer(requestedId, { trigger: ptyFocus, focus: true });
+        }
         return;
       }
       const terminalInterrupt = event.target.closest("[data-terminal-interrupt]");

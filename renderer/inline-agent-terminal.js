@@ -90,6 +90,15 @@
     return root?.dataset?.inlineAgentTerminal === sessionId ? root : null;
   }
 
+  function isReadOnlyResponsibleFocus(instance = app()) {
+    const sessionId = String(instance?.state?.ptyFocusSessionId || "");
+    if (!sessionId) return false;
+    const surface = document.querySelector("#ptyFocusSurface");
+    return Boolean(isVisibleFocusSurface(surface)
+      && String(surface?.dataset?.ptyFocusSession || "") === sessionId
+      && surface?.dataset?.ptyFocusMode === "transcript");
+  }
+
   function shell() {
     const instance = app();
     if (instance?.state?.ptyFocusSessionId) return focusShell(instance);
@@ -232,7 +241,9 @@
     const instance = app();
     const session = selectedSession();
     const terminal = window.WhiteboxTerminal;
-    if (!instance?.state || !session || !terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
+    if (!instance?.state || !session) return { ok: false, reason: "not-ready" };
+    if (isReadOnlyResponsibleFocus(instance)) return { ok: false, reason: "read-only-focus" };
+    if (!terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
     if (!isMainSession(session)) return { ok: false, reason: "not-main-session" };
     if (!isFocusEligibleSession(session)) {
       if (String(instance.state.ptyFocusSessionId || "") === String(session.id || "")) {

@@ -2491,7 +2491,7 @@ function registerUiContractTests(context) {
       dataset: {},
       innerHTML: '',
       textContent: '',
-      classList: { contains: () => false },
+      classList: { contains: () => false, toggle: () => false },
       setAttribute() {},
       hasChildNodes() { return false; },
       querySelector: () => null,
@@ -2503,11 +2503,15 @@ function registerUiContractTests(context) {
       ['ptyFocusSurface', element()],
       ['ptyFocusProviderMark', element()],
       ['ptyFocusTerminalMark', element()],
+      ['ptyFocusEyebrow', element()],
       ['ptyFocusTitle', element()],
       ['ptyFocusSummary', element()],
       ['ptyFocusTerminalTitle', element()],
+      ['ptyFocusTerminalHelp', element()],
       ['ptyFocusRootStatus', element({ querySelector: selector => selector === 'b' ? statusLabel : statusTime })],
       ['ptyFocusTerminalShell', element()],
+      ['ptyFocusTerminalViewport', element()],
+      ['ptyFocusTranscriptContent', element()],
       ['ptyFocusFlow', element()],
     ]);
     const rootSession = {
@@ -2559,7 +2563,7 @@ function registerUiContractTests(context) {
       '도움 AI 버튼이 상세 패널 진입점에 연결되지 않았습니다.');
     assert.match(source, /const execution = event\.target\.closest\("\[data-pty-focus-execution\]"\)[\s\S]*context\.openExecutionActivity\?\.\(/u,
       '실행 항목 버튼이 상세 패널 진입점에 연결되지 않았습니다.');
-    assert.doesNotMatch(source, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
+    assert.doesNotMatch(source, /ptyFocusChildModal|subagentConversationHtml/u,
       '별도 PTY 하위 팝업을 복제하지 말고 공용 drawer 진입점을 사용해야 합니다.');
   });
 
@@ -2659,14 +2663,16 @@ function registerUiContractTests(context) {
     const graphFilterSource = dashboard.slice(dashboard.indexOf('function graphFilteredSessions()'), dashboard.indexOf('function renderProviderVisibilitySettings()'));
     const historyEvents = filterEvents.slice(filterEvents.indexOf('$("#projectHistoryRail")'), filterEvents.indexOf('const controlProjectSelect'));
 
-    assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*isAppOwnedBridgePty\(session\)[\s\S]*data-pty-focus-trigger=/u,
-      '작업 흐름의 writable root와 새 bridge projection이 PTY 집중 모드로 연결되지 않습니다.');
+    assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*const responsibleFocus = canOpenResponsibleFocus\(session\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
+      '선택한 작업 흐름의 담당 root가 PTY 또는 읽기 전용 집중 모드로 연결되지 않습니다.');
     assert.doesNotMatch(graphNodeSource, /data-inline-pty-trigger=/u,
       '루트 작업 노드가 과거 인라인 PTY 경로를 다시 노출하고 있습니다.');
-    assert.match(controlRoomSource, /const controlRoomPtyAttributes = root\.parentId[\s\S]*data-pty-focus-trigger=/u,
-      '작업 현황의 담당 root 노드가 PTY 집중 모드로 연결되지 않습니다.');
-    assert.match(events, /const ptyFocus = event\.target\.closest\("\[data-pty-focus-trigger\]"\)[\s\S]*await openDrawer\(ptyFocus\.dataset\.ptyFocusTrigger, \{ trigger: ptyFocus, focus: true \}\)/u,
-      '작업 노드 클릭이 full PTY 집중 모드를 열어야 합니다.');
+    assert.match(controlRoomSource, /const responsibleFocus = canOpenResponsibleFocus\(root\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
+      '작업 현황의 담당 root 노드가 PTY 또는 읽기 전용 집중 모드로 연결되지 않습니다.');
+    assert.match(sharedSource, /function canOpenResponsibleFocus\(session\)[\s\S]*session\.parentId[\s\S]*session\.clientKind[\s\S]*session\.controlAuthority[\s\S]*session\.importMode/u,
+      '담당 집중 모드는 하위·플러그인·외부 제어 projection과 native root를 구분해야 합니다.');
+    assert.match(events, /const ptyFocus = event\.target\.closest\("\[data-pty-focus-trigger\]"\)[\s\S]*const requestedId = ptyFocus\.dataset\.ptyFocusTrigger[\s\S]*const root = ownerRootSession\(requestedId\)[\s\S]*const focusId = String\(root\?\.id \|\| requestedId \|\| ""\)[\s\S]*if \(canOpenPtyFocus\(root\)\)[\s\S]*await openDrawer\(focusId,[\s\S]*else if \(canOpenResponsibleFocus\(root\)\)[\s\S]*await openResponsibleFocus\(focusId,[\s\S]*await openDrawer\(requestedId,/u,
+      '담당 노드 클릭은 클릭 시점의 PTY 상태를 다시 확인해 exact PTY 또는 읽기 전용 집중 모드로 분기되어야 합니다.');
     assert.match(drawerSource, /function ownerRoot\(value\)[\s\S]*while \(session\?\.parentId[\s\S]*context\.openPtyFocusVerified\?\.\(root\.id,/u,
       '루트 PTY 진입은 담당 root의 exact terminal을 검증해야 합니다.');
     assert.match(helperNodeSource, /data-open-subagent-chat=/u,
@@ -2727,8 +2733,10 @@ function registerUiContractTests(context) {
       'PTY 열기 동작은 선택된 exact target을 full focus verifier로 전달해야 합니다.');
     assert.doesNotMatch(openAgentTerminalSource, /selectView\(["']terminal["']\)|selectSession\(/u,
       '일반 terminal 화면이나 전역 PTY 선택으로 우회하면 안 됩니다.');
-    assert.ok(html.includes('id="ptyFocusSurface"') && html.includes('id="ptyFocusTerminalViewport"'),
-      'full PTY 집중 surface와 실제 xterm viewport가 필요합니다.');
+    assert.ok(html.includes('id="ptyFocusSurface"')
+      && html.includes('id="ptyFocusTerminalViewport"')
+      && html.includes('id="ptyFocusTranscriptContent"'),
+    '담당 노드 집중 surface에는 실제 xterm과 읽기 전용 작업 기록 viewport가 모두 필요합니다.');
     for (const restoredId of ['detailDrawer', 'drawerBackdrop']) {
       assert.equal(html.includes(`id="${restoredId}"`), true, `${restoredId} 오른쪽 상세 패널이 누락됐습니다.`);
     }
@@ -2736,8 +2744,16 @@ function registerUiContractTests(context) {
       '별도 PTY 하위 팝업 대신 공용 상세 패널을 사용해야 합니다.');
     assert.match(ptyFocus, /data-pty-focus-child=[\s\S]*aria-controls="detailDrawer"[\s\S]*data-pty-focus-execution=/u,
       'PTY 집중 흐름의 하위·실행 행이 공용 상세 패널을 열어야 합니다.');
-    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
+    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|subagentConversationHtml/u,
       '별도 PTY 하위 팝업 구현이 다시 추가되면 안 됩니다.');
+    assert.match(ptyFocus, /function openResponsibleFocus\(sessionId, options = \{\}\)[\s\S]*activeFocusMode = "transcript"[\s\S]*refreshTranscriptDetail\(root\)/u,
+      '독립 PTY가 없는 담당 노드는 full-screen 읽기 전용 작업 기록으로 열려야 합니다.');
+    assert.match(ptyFocus, /function mergedTranscriptMessages\(detail, live\)[\s\S]*function refreshTranscriptDetail\(root\)[\s\S]*loadSessionDetail\(id, true, snapshotVersion\)[\s\S]*function syncPendingPtyFocus\(\)[\s\S]*activeFocusMode === "transcript"\) refreshTranscriptDetail\(root\)/u,
+      '열린 읽기 전용 집중 화면은 최신 snapshot을 즉시 합치고 버전이 바뀐 전체 기록을 다시 읽어야 합니다.');
+    assert.match(ptyFocus, /const previousText = String\(previous\?\.text \|\| ""\)[\s\S]*const liveText = String\(message\?\.text \|\| ""\)[\s\S]*previousText\.length > liveText\.length \? previousText : liveText/u,
+      'snapshot 카드의 축약 메시지가 같은 ID의 전체 상세 메시지를 다시 잘라내면 안 됩니다.');
+    assert.match(inlineTerminal, /isReadOnlyResponsibleFocus\(instance\)[\s\S]*reason: "read-only-focus"/u,
+      '수동 PTY 동기화가 읽기 전용 담당 노드 집중 화면을 닫으면 안 됩니다.');
     assert.match(ptyFocus, /function openPtyFocusForTerminal\(terminalId, options = \{\}\)[\s\S]*pendingFocus = \{[\s\S]*creationId:/u,
       '새 작업은 exact terminalId/creationId를 보존해 같은 PTY를 집중 모드로 열어야 합니다.');
     assert.match(ptyFocus, /function tryPendingPtyFocus\(\)[\s\S]*const request = pendingFocus;[\s\S]*openPtyFocus\(session\.id, \{[\s\S]*targetId: request\.terminalId,[\s\S]*requireTargetId: true,/u,

@@ -351,7 +351,7 @@
         </button>
         <span id="ptyFocusProviderMark" class="provider-mark" aria-hidden="true">AI</span>
         <div class="pty-focus-heading">
-          <p data-i18n="pty_focus.eyebrow">담당 노드 터미널</p>
+          <p id="ptyFocusEyebrow" data-i18n="pty_focus.eyebrow">담당 노드 터미널</p>
           <h1 id="ptyFocusTitle" data-i18n="pty_focus.title">담당 노드 PTY</h1>
           <span id="ptyFocusSummary"></span>
         </div>
@@ -366,7 +366,7 @@
       <section id="ptyFocusTerminalShell" class="agent-inline-terminal pty-focus-terminal" data-inline-agent-terminal="" aria-label="담당 노드 실제 PTY">
         <header class="agent-inline-terminal-head">
           <span id="ptyFocusTerminalMark" class="provider-mark" aria-hidden="true">AI</span>
-          <span class="agent-inline-terminal-title"><b id="ptyFocusTerminalTitle" data-i18n="pty_focus.terminal_title">실제 PTY</b><small data-i18n="pty_focus.terminal_help">담당 노드의 같은 터미널과 scrollback을 이어서 표시합니다.</small></span>
+          <span class="agent-inline-terminal-title"><b id="ptyFocusTerminalTitle" data-i18n="pty_focus.terminal_title">실제 PTY</b><small id="ptyFocusTerminalHelp" data-i18n="pty_focus.terminal_help">담당 노드의 같은 터미널과 scrollback을 이어서 표시합니다.</small></span>
           <span class="agent-inline-terminal-state"><i aria-hidden="true"></i><b data-inline-terminal-status data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small data-inline-terminal-meta></small></span>
           <span class="agent-inline-terminal-actions"><button type="button" data-inline-terminal-reconnect title="PTY 새로 연결" aria-label="PTY 새로 연결" data-i18n-title="drawer.terminal_reconnect" data-i18n-aria-label="drawer.terminal_reconnect">↻</button></span>
         </header>
@@ -376,6 +376,7 @@
             <button class="primary-button hidden" type="button" data-inline-terminal-resume data-i18n="drawer.terminal_resume_action">같은 작업을 PTY로 이어서 열기</button>
           </div>
         </div>
+        <div id="ptyFocusTranscriptContent" class="pty-focus-transcript-content hidden" role="region" tabindex="0" aria-label="담당 노드 작업 기록" data-i18n-aria-label="pty_focus.transcript_viewport"></div>
       </section>
     </section>
   </div>
