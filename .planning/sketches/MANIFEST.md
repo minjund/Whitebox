@@ -27,3 +27,4 @@ LoadToAgent의 핵심 정보인 사용자 판단, 실행 관계, 완료 기록�
 | 008 | current-shell-terminal-only | 현재 LoadToAgent 디자인을 전혀 바꾸지 않고 세션 대화 영역만 동일 PTY 터미널로 교체할 수 있는가? | — | current-ui, terminal-only, drawer, pty, minimal-change |
 | 009 | inline-pty-toggle | 현재 화면을 그대로 둔 채 오른쪽 세션 팝업만 클릭한 AI 에이전트 행 바로 아래의 PTY로 바꾸고 기존 상세 정보를 작업 진행 화면에 넣을 수 있는가? | 최소 변경안 | current-ui, inline-pty, detail-view, minimal-change |
 | 010 | comprehension-packet-placement | 이해 패킷이 PTY 문맥을 끊지 않으면서 어디에 떠야 하는가? | A · 중앙 이해 브리핑 | comprehension, packet, pty-focus, modal, layout, open-book |
+| 011 | comprehension-remediation-flow | 오답→해설→변형 문제 전환을 같은 팝업에서 어떻게 보여줄 것인가? | C · 카드 제자리 변환 | comprehension, remediation, quiz, feedback, cognitive-debt |
