@@ -17,6 +17,8 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
     markResultReviewComplete = () => 0,
     controlSourceSession = async () => {},
     sendSourceMessage = async () => {},
+    closePtyFocus = () => false,
+    isPtyFocusActive = () => false,
   } = context;
 
   function bindRunComposerEvents() {
@@ -701,8 +703,8 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
     document.addEventListener("keydown", (event) => {
       trapDialogFocus(event);
       const editable = event.target instanceof HTMLElement && Boolean(event.target.closest("input, textarea, select, [contenteditable='true']"));
-      const dialogOpen = Boolean(currentDialog?.());
-      const viewShortcuts = ["all", "active", "waiting", "runtime", null, "tmux", "settings"];
+      const dialogOpen = Boolean(currentDialog?.() || isPtyFocusActive());
+      const viewShortcuts = ["all", "active", null, "runtime", null, "tmux", "settings"];
       const shortcutView = viewShortcuts[Number(event.key) - 1];
       if (!editable && !dialogOpen && shortcutView && (event.metaKey || event.ctrlKey) && /^[1-7]$/.test(event.key)) {
         event.preventDefault();
@@ -726,11 +728,14 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
       } else if (!$("#sessionResetModal")?.classList.contains("hidden")) {
         closeSessionResetDialog();
       } else if (!$("#runModal").classList.contains("hidden")) closeRunModal();
-      else closeDrawer();
+      else if ($("#detailDrawer")?.classList.contains("open")) closeDrawer();
+      else if (isPtyFocusActive()) closePtyFocus();
     });
     window.addEventListener("resize", () => {
       scheduleAgentWorkflowConnections();
-      if (window.innerWidth < CONTEXT_DRAWER_MIN_WIDTH && state.drawerPresentation === "context") closeDrawer(false);
+      if (window.innerWidth < CONTEXT_DRAWER_MIN_WIDTH && state.drawerPresentation === "context") {
+        if (!isPtyFocusActive()) closeDrawer(false);
+      }
     });
   }
 

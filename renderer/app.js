@@ -70,6 +70,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     visibleLimit: 30,
     graphFocusId: null,
     inlineTerminalSessionId: null,
+    ptyFocusSessionId: null,
     workflowDetailTab: "summary",
     controlRoomSort: "recent",
     supervisionFocusId: null,
@@ -93,7 +94,6 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     sourceActionRequests: new Set(),
     sourceMessageDrafts: new Map(),
     runControlRequests: new Set(),
-    managementFilter: "all",
     detailErrors: new Map(),
     disclosureStates: new Map(),
     guideCompleted: new Set(),
@@ -378,13 +378,12 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return STATUS[status] || status;
   };
   const VIEW_TITLES = localizedLookup({
-    all: "ui.recent_conversations_and_tasks", active: "ui.active_tasks", waiting: "ui.tasks_needing_review",
+    all: "ui.recent_conversations_and_tasks", active: "ui.active_tasks",
     runtime: "runtime.title", terminal: "app.nav.session_terminal", tmux: "app.nav.tmux", settings: "settings.title",
   });
   const VIEW_META_KEYS = {
     all: ["ui.ai_work_overview", "ui.see_all_ai_work_at_a_glance", "ui.active_work_and_items_needing_your_review_appear_first_find"],
     active: ["memory.eyebrow", "ui.see_which_ai_is_working_now", "ui.see_what_is_being_handled_then_open_a_task_for"],
-    waiting: ["ui.your_turn", "ui.handle_items_that_need_your_review_first", "ui.only_tasks_waiting_for_your_response_or_choice_are_shown"],
     runtime: ["runtime.eyebrow", "runtime.title", "runtime.description"],
     terminal: ["ui.continue_an_existing_conversation", "ui.continue_ai_sessions_in_the_terminal", "ui.continue_the_same_task_with_its_previous_conversation_beside_the"],
     tmux: ["ui.advanced_work_tools", "ui.manage_multi_terminal_work_in_one_place", "ui.this_view_is_only_for_existing_tmux_workflows_home_and"],
@@ -449,7 +448,9 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     const navigation = $("#projectContextNav");
     if (!navigation) return false;
     const mobileLayout = window.matchMedia("(max-width: 720px)").matches;
-    const visible = mobileLayout || state.view !== "all" || state.workspace !== "all";
+    // The desktop project tabs and Additional features menu were retired. Keep
+    // this container only as the mobile navigation bar.
+    const visible = mobileLayout;
     navigation.classList.toggle("hidden", !visible);
     navigation.setAttribute("aria-hidden", visible ? "false" : "true");
     navigation.toggleAttribute("inert", !visible);
@@ -479,15 +480,18 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     else $("#mobileMoreBtn")?.removeAttribute("aria-current");
   }
   function selectView(view, options = {}) {
+    if (!Object.prototype.hasOwnProperty.call(VIEW_META_KEYS, view)) view = "all";
+    if (view !== state.view && state.ptyFocusSessionId) {
+      context.closePtyFocus?.({ restore: false });
+    }
     if (
       view !== state.view
       && $("#detailDrawer")?.classList.contains("open")
       && $("#detailDrawer")?.dataset.presentation !== "modal"
     ) context.closeDrawer?.(false);
     state.view = view;
-    state.managementFilter = view === "waiting" ? (options.managementFilter || "all") : "all";
     state.visibleLimit = 30;
-    if (view === "active" || view === "waiting") markGuideStep(view);
+    if (view === "active") markGuideStep(view);
     syncViewChrome();
     context.renderSessions(options.motionKind || "view");
     const mobileToolsMenu = $("#mobileToolsMenu");
@@ -520,7 +524,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       }
     }
     if (options.focusMain) $("#mainContent")?.focus({ preventScroll: true });
-    const resultCount = ["all", "active", "waiting"].includes(view) && typeof context.filteredSessions === "function"
+    const resultCount = ["all", "active"].includes(view) && typeof context.filteredSessions === "function"
       ? context.filteredSessions().length
       : null;
     announce(resultCount == null
@@ -538,6 +542,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       $("#detailDrawer").classList.contains("open")
       && $("#detailDrawer").dataset.presentation === "modal"
     ) return $("#detailDrawer");
+    if (!$("#ptyFocusSurface")?.classList.contains("hidden")) return $("#ptyFocusSurface");
     return null;
   }
   function dialogFocusable(dialog) {
@@ -681,11 +686,12 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
   let memoryFiltersDesktopLayout = window.innerWidth > 720;
   function syncMemoryFilterDisclosure(force = false) {
     const desktopLayout = window.innerWidth > 720;
-    if (!force && desktopLayout === memoryFiltersDesktopLayout) return;
+    const layoutChanged = desktopLayout !== memoryFiltersDesktopLayout;
     memoryFiltersDesktopLayout = desktopLayout;
     if (typeof document.querySelector !== "function") return;
     const filters = document.querySelector(".mobile-memory-filters");
-    if (filters) filters.open = desktopLayout;
+    if (!filters || (!force && !layoutChanged && filters.open === desktopLayout)) return;
+    filters.open = desktopLayout;
   }
   function handleResponsiveResize() {
     closeMobileToolsAboveBreakpoint();

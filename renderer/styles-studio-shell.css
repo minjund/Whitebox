@@ -1063,11 +1063,11 @@ body:is(
   text-align: left;
 }
 
-/* The active/past/review tabs are retired from the project header; the DOM
- * stays because count elements inside them are still updated by render code. */
+/* Desktop project tabs and the advanced-tools menu are retired. The parent
+ * container is exposed only on mobile, where it holds the More button. */
 #projectViewTabs .nav-item[data-view="all"],
 #projectViewTabs .nav-item[data-view="active"],
-#projectViewTabs .nav-item[data-view="waiting"] {
+#projectViewTabs .advanced-tools-nav {
   display: none;
 }
 

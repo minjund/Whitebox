@@ -293,7 +293,12 @@ app.whenReady().then(async () => {
         projectTabVisible: visible(projectTab),
         projectTabWidth: projectTab?.getBoundingClientRect().width || 0,
         projectTabCount: projectList?.querySelectorAll('.project-sidebar-item[data-workspace][data-project-source="all"]').length || 0,
-        workTabsVisible: visible(contextNav),
+        workTabsHidden: !visible(contextNav),
+        workTabsState: {
+          hidden: contextNav?.classList.contains('hidden') || false,
+          ariaHidden: contextNav?.getAttribute('aria-hidden') || '',
+          inert: contextNav?.hasAttribute('inert') || false,
+        },
         workTabCount: [...(contextNav?.querySelectorAll('[data-view]') || [])].filter(visible).length,
         legacyHelpCopyVisible: [...document.querySelectorAll('h1, h2, h3, p, span, b, small')]
           .some(node => node.getClientRects().length && /도움말 및 상태|사용 안내와 앱 상태|기본 사용법 완료/.test(node.textContent || '')),
@@ -310,8 +315,11 @@ app.whenReady().then(async () => {
       || !settingsHelpLayout.projectTabVisible
       || settingsHelpLayout.projectTabWidth < 160
       || settingsHelpLayout.projectTabCount < 1
-      || !settingsHelpLayout.workTabsVisible
-      || settingsHelpLayout.workTabCount < 3
+      || !settingsHelpLayout.workTabsHidden
+      || !settingsHelpLayout.workTabsState.hidden
+      || settingsHelpLayout.workTabsState.ariaHidden !== 'true'
+      || !settingsHelpLayout.workTabsState.inert
+      || settingsHelpLayout.workTabCount !== 0
       || settingsHelpLayout.legacyHelpCopyVisible) {
       throw new Error(`설정 도움말 제거·탐색 탭·브랜드 단축키 배치 검증 실패: ${JSON.stringify(settingsHelpLayout)}`);
     }
@@ -386,7 +394,8 @@ app.whenReady().then(async () => {
           detail: card.querySelector(':scope > p')?.textContent.trim() || '',
           action: card.querySelector('[data-open-session]')?.textContent.trim() || '',
         })),
-        genericAttentionInboxVisible: visible(document.querySelector('#attentionInbox')),
+        standaloneAttentionRemoved: !document.querySelector('#attentionInbox')
+          && !document.querySelector('[data-view="waiting"]'),
         contextNavigationVisible: visible(document.querySelector('#projectContextNav')),
         contextNavigationState: {
           hidden: document.querySelector('#projectContextNav')?.classList.contains('hidden') || false,
@@ -404,9 +413,9 @@ app.whenReady().then(async () => {
       || !selected.taskToolbarVisible || !selected.taskButtonInProject || selected.taskProjectPath !== selectedWorkspace
       || selected.taskButtonText !== '＋새 AI 작업 시작' || !selected.taskButtonShortcutRemoved
       || selected.mainProjects.length !== 1 || selected.reviewCards.length !== 0
-      || selected.genericAttentionInboxVisible || !selected.contextNavigationVisible
-      || selected.contextNavigationState.hidden || selected.contextNavigationState.ariaHidden !== 'false'
-      || selected.contextNavigationState.inert) {
+      || !selected.standaloneAttentionRemoved || selected.contextNavigationVisible
+      || !selected.contextNavigationState.hidden || selected.contextNavigationState.ariaHidden !== 'true'
+      || !selected.contextNavigationState.inert) {
       throw new Error(`전체 프로젝트 유지·선택 프로젝트 단일 행 검증 실패: ${JSON.stringify(selected)}`);
     }
 

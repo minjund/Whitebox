@@ -146,7 +146,6 @@ app.whenReady().then(async () => {
       document.querySelector('#liveSection')?.classList.remove('hidden');
       document.querySelector('#navAllCount').textContent = '48';
       document.querySelector('#navActiveCount').textContent = '9';
-      document.querySelector('#navWaitingCount').textContent = '3';
       document.querySelector('#advancedToolsCount').textContent = '17';
       document.querySelector('#beginnerGuide')?.classList.add('hidden');
       const primaryProjectGroup = [...document.querySelectorAll('.control-room-project-group')]
@@ -359,7 +358,6 @@ app.whenReady().then(async () => {
       }
       document.querySelector('#navAllCount').textContent = '48';
       document.querySelector('#navActiveCount').textContent = '9';
-      document.querySelector('#navWaitingCount').textContent = '3';
       document.querySelector('#advancedToolsCount').textContent = '17';
       return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     })()`);
@@ -402,6 +400,11 @@ app.whenReady().then(async () => {
       projectFlowLinkHidden: document.querySelector('.control-project-flow-link')?.getBoundingClientRect().height === 0,
       projectFrameFlattened: getComputedStyle(document.querySelector('.control-room-project-frame')).borderTopWidth === '0px',
       contextNavigationVisible: Boolean(document.querySelector('#projectContextNav')?.getBoundingClientRect().height),
+      contextNavigationState: {
+        hidden: document.querySelector('#projectContextNav')?.classList.contains('hidden') || false,
+        ariaHidden: document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') || '',
+        inert: document.querySelector('#projectContextNav')?.hasAttribute('inert') || false,
+      },
       history: (() => {
         const rail = document.querySelector('#projectHistoryRail');
         const current = document.querySelector('#liveSessionGrid');
@@ -429,7 +432,10 @@ app.whenReady().then(async () => {
       duplicateProgressHeadingHidden: document.querySelector('.live-section-title')?.getBoundingClientRect().height === 0,
     }))()`);
     if (projectContextMetrics.project !== 'CMS_WEB'
-      || !projectContextMetrics.contextNavigationVisible
+      || projectContextMetrics.contextNavigationVisible
+      || !projectContextMetrics.contextNavigationState.hidden
+      || projectContextMetrics.contextNavigationState.ariaHidden !== 'true'
+      || !projectContextMetrics.contextNavigationState.inert
       || !projectContextMetrics.tokenScope.includes('선택한 AI')
       || projectContextMetrics.tokenScope.includes('CMS_WEB')
       || projectContextMetrics.tokenItems !== 4

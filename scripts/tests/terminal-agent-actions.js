@@ -44,6 +44,57 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(Object.hasOwn(claude, 'recoveryArgs'), false, '새 대화에는 아직 복구할 대화 ID가 없으므로 복구 인자를 만들지 않아야 합니다.');
   });
 
+  test('Whitebox 소유 새 PTY 작업은 최초 요청에 이해 패킷 계약을 정확히 한 번 주입한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const creates = [];
+    const commands = [];
+    const injected = [];
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        WhiteboxComprehension: {
+          injectPrompt: prompt => {
+            injected.push(prompt);
+            return `<contract>same-generation-only</contract>\n\n${prompt}`;
+          },
+        },
+        whitebox: {
+          terminalCreate: async options => {
+            creates.push(options);
+            return { id: 'terminal:contract', status: 'running', deliveryState: '' };
+          },
+          terminalCommand: async (id, prompt, options) => {
+            commands.push([id, prompt, options]);
+            return { ok: true, deliveryState: 'accepted' };
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state: { snapshot: null, sessions: [] },
+      init: async () => {},
+      refreshSessions: async () => {},
+      moveWorkbench: () => {},
+      selectSession: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+    });
+
+    await actions.startAgent({ provider: 'codex', prompt: '원래 사용자 요청', cwd: 'D:\\workspace' });
+
+    assert.deepStrictEqual(injected, ['원래 사용자 요청']);
+    assert.equal(creates.length, 1, '계약 주입은 추가 AI 실행이나 PTY 생성을 만들면 안 됩니다.');
+    assert.equal(creates[0].initialCommand, '<contract>same-generation-only</contract>\n\n원래 사용자 요청');
+    assert.equal(creates[0].initialCommandInArgs, false);
+    assert(!creates[0].args.some(argument => String(argument).includes('<contract>')),
+      '여러 줄 계약을 AI 실행 인자로 전달하면 안 됩니다.');
+    assert.equal(commands.length, 1, '계약이 포함된 최초 요청은 같은 PTY에 정확히 한 번 전달해야 합니다.');
+    assert.equal(commands[0][0], 'terminal:contract');
+    assert.equal(commands[0][1], creates[0].initialCommand);
+    assert.equal(creates[0].title, 'codex · 원래 사용자 요청', '내부 계약은 사용자에게 보이는 제목에 섞이면 안 됩니다.');
+  });
+
   test('새 AI 작업은 PTY를 생성하고 초기 요청을 그 터미널에 한 번만 전달한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const creates = [];
@@ -997,6 +1048,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-deduped',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     const [first, second] = await Promise.all([
@@ -1068,6 +1120,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-unknown',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     await assert.rejects(
@@ -1139,6 +1192,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-inventory-grace',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     const created = await actions.forkForAgent(session, '', false, { focus: false });
@@ -1287,6 +1341,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-explicit',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
+      status: 'completed',
     };
 
     for (const invalidSession of [
@@ -1299,6 +1354,9 @@ function registerTerminalAgentActionTests(context) {
       { ...session, sourcePlugin: { id: 'builtin.omo' } },
       { ...session, sourcePlugin: 'builtin.omo' },
       { ...session, sourcePlugin: {} },
+      { ...session, provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...session, source: 'opencode' },
+      { ...session, status: 'running' },
       { ...session, readOnly: true },
       { ...session, controlAuthority: 'read-only-import' },
       { ...session, importMode: 'local-history' },
@@ -2093,6 +2151,20 @@ function registerTerminalAgentActionTests(context) {
     }];
     assert.deepStrictEqual(Array.from(actions.agentTargets(firstIdentity), target => target.id), ['terminal:public-signature']);
     assert.deepStrictEqual(Array.from(actions.agentTargets(secondIdentity), target => target.id), []);
+    for (const projection of [
+      { ...firstIdentity, readOnly: true },
+      { ...firstIdentity, sourcePlugin: {} },
+      { ...firstIdentity, provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...firstIdentity, source: 'opencode' },
+      { ...firstIdentity, clientKind: 'aside-browser' },
+      { ...firstIdentity, controlAuthority: 'read-only-import' },
+      { ...firstIdentity, importMode: 'local-history' },
+    ]) {
+      assert.deepStrictEqual(Array.from(actions.agentTargets(projection)), [],
+        `읽기 전용 projection이 기존 strong target을 재사용했습니다: ${JSON.stringify(projection)}`);
+      assert.throws(() => actions.requiredAgentTarget(projection, 'terminal:public-signature'),
+        /terminal\.agent\.no_input_target/);
+    }
     assert.equal(actions.bindAgentConnection(secondIdentity, {
       id: 'terminal:public-signature', kind: 'terminal', terminalId: 'terminal:public-signature',
     }), false, '공개 서명 불일치는 renderer 메모리 fallback으로 덮어쓰면 안 됩니다.');
@@ -3320,7 +3392,10 @@ function registerTerminalAgentActionTests(context) {
       window: {
         WhiteboxAppFactories: {},
         WhiteboxI18n: { t: key => key, errorText: (_error, key) => key },
-        WhiteboxRendererUtils: { reportRecoverableError: () => {} },
+        WhiteboxRendererUtils: {
+          reportRecoverableError: () => {},
+          isWritableDirectSession: () => true,
+        },
         WhiteboxTerminal: {
           agentTargets: () => [],
           resumeSupport: () => ({ supported: true, provider: 'gemini', sessionId: 'resume-unknown' }),

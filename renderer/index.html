@@ -81,7 +81,6 @@
         <nav id="projectViewTabs" class="view-nav project-view-tabs" aria-label="선택한 프로젝트 작업 보기" data-i18n-aria-label="studio.context.nav_label">
           <button class="nav-item active" type="button" data-view="all" aria-label="처리 중" data-i18n-aria-label="app.nav.home" aria-keyshortcuts="Meta+1 Control+1" aria-controls="operationsOverview liveSection activeEmptyState beginnerGuide" title="처리 중" data-i18n-title="app.nav.home"><span class="nav-icon">◆</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.home">처리 중</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_home">처리 중</span></span><b><span id="navAllCount">0</span><small data-i18n="quality.unit.tasks">건</small></b></button>
           <button class="nav-item" type="button" data-view="active" aria-label="지난 작업" data-i18n-aria-label="app.nav.active" aria-keyshortcuts="Meta+2 Control+2" aria-controls="sessionSection memoryHero" title="지난 작업" data-i18n-title="app.nav.active"><span class="nav-icon">○</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.active">지난 작업</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_active">지난 작업</span></span><b><span id="navActiveCount">0</span><small data-i18n="quality.unit.records">건</small></b></button>
-          <button class="nav-item" type="button" data-view="waiting" aria-label="확인 대기" data-i18n-aria-label="app.nav.needs_review" aria-keyshortcuts="Meta+3 Control+3" aria-controls="attentionInbox" title="확인 대기" data-i18n-title="app.nav.needs_review"><span class="nav-icon">!</span><span class="nav-label"><span class="desktop-nav-label" data-i18n="app.nav.needs_review">확인 대기</span><span class="mobile-nav-label" data-i18n="app.nav.mobile_needs_review">확인 대기</span></span><b><span id="navWaitingCount">0</span><small id="navWaitingUnit" data-i18n="quality.unit.tasks">건</small></b></button>
           <details id="advancedToolsNav" class="advanced-tools-nav project-tools-menu">
             <summary><span class="nav-icon">›_</span><span data-i18n="management.advanced_tools">추가 기능</span><b><span id="advancedToolsCount">2</span><small data-i18n="quality.unit.types">개</small></b><i aria-hidden="true">⌄</i></summary>
             <div class="advanced-tools-list">
@@ -148,8 +147,6 @@
       <section id="automationOverview" class="automation-overview hidden" aria-label="반복 실행 작업 화면" data-i18n-aria-label="runtime.section_label"></section>
 
       <section id="operationsOverview" class="operations-overview hidden" aria-label="AI 작업 관리 상태" data-i18n-aria-label="management.operations_label"></section>
-
-      <section id="attentionInbox" class="attention-inbox hidden" aria-label="확인 또는 주의가 필요한 AI 작업" data-i18n-aria-label="management.inbox_label"></section>
 
       <section id="settingsSection" class="settings-section hidden" aria-labelledby="settingsTitle">
         <header class="settings-head">
@@ -520,6 +517,42 @@
         </div>
       </section>
     </main>
+
+    <section id="ptyFocusSurface" class="pty-focus-surface hidden" aria-labelledby="ptyFocusTitle" aria-hidden="true" inert>
+      <header class="pty-focus-header">
+        <button id="ptyFocusBackBtn" class="pty-focus-back" type="button" aria-label="관제 모드로 돌아가기" data-i18n-aria-label="pty_focus.back">
+          <span aria-hidden="true">←</span><b data-i18n="pty_focus.back">관제 모드로 돌아가기</b>
+        </button>
+        <span id="ptyFocusProviderMark" class="provider-mark" aria-hidden="true">AI</span>
+        <div class="pty-focus-heading">
+          <p data-i18n="pty_focus.eyebrow">담당 노드 터미널</p>
+          <h1 id="ptyFocusTitle" data-i18n="pty_focus.title">담당 노드 PTY</h1>
+          <span id="ptyFocusSummary"></span>
+        </div>
+        <div id="ptyFocusRootStatus" class="pty-focus-root-status" role="status"><i aria-hidden="true"></i><b></b><small></small></div>
+      </header>
+
+      <section class="pty-focus-flow-region" aria-labelledby="ptyFocusFlowTitle">
+        <header><span><b id="ptyFocusFlowTitle" data-i18n="pty_focus.flow_title">이 담당 노드의 흐름</b><small data-i18n="pty_focus.flow_hint">하위 노드는 보기 전용이며, 누르면 기존 오른쪽 상세창이 열립니다.</small></span></header>
+        <div id="ptyFocusFlow" class="pty-focus-flow" role="group"></div>
+      </section>
+
+      <section id="ptyFocusTerminalShell" class="agent-inline-terminal pty-focus-terminal" data-inline-agent-terminal="" aria-label="담당 노드 실제 PTY">
+        <header class="agent-inline-terminal-head">
+          <span id="ptyFocusTerminalMark" class="provider-mark" aria-hidden="true">AI</span>
+          <span class="agent-inline-terminal-title"><b id="ptyFocusTerminalTitle" data-i18n="pty_focus.terminal_title">실제 PTY</b><small data-i18n="pty_focus.terminal_help">담당 노드의 같은 터미널과 scrollback을 이어서 표시합니다.</small></span>
+          <span class="agent-inline-terminal-state"><i aria-hidden="true"></i><b data-inline-terminal-status data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small data-inline-terminal-meta></small></span>
+          <span class="agent-inline-terminal-actions"><button type="button" data-inline-terminal-reconnect title="PTY 새로 연결" aria-label="PTY 새로 연결" data-i18n-title="drawer.terminal_reconnect" data-i18n-aria-label="drawer.terminal_reconnect">↻</button></span>
+        </header>
+        <div id="ptyFocusTerminalViewport" class="agent-inline-terminal-viewport pty-focus-terminal-viewport" data-agent-terminal-viewport aria-label="담당 노드의 실제 PTY 출력 및 스크롤 기록" data-i18n-aria-label="pty_focus.terminal_viewport">
+          <div class="agent-inline-terminal-empty" data-inline-terminal-empty aria-live="polite">
+            <span aria-hidden="true">›_</span><b data-i18n="drawer.terminal_connecting">PTY 연결 중</b><small data-i18n="drawer.terminal_connecting_help">같은 세션의 실행 화면과 scrollback을 불러오고 있습니다.</small>
+            <button class="primary-button hidden" type="button" data-inline-terminal-resume data-i18n="drawer.terminal_resume_action">같은 대화 이어서 열기</button>
+          </div>
+        </div>
+        <div id="ptyFocusTranscriptContent" class="pty-focus-transcript-content hidden" role="region" tabindex="0" aria-label="담당 노드 작업 내용" data-i18n-aria-label="pty_focus.transcript_viewport"></div>
+      </section>
+    </section>
   </div>
 
   <aside id="mobileToolsMenu" class="mobile-tools-menu hidden" role="dialog" aria-modal="true" aria-labelledby="mobileToolsTitle" aria-hidden="true" tabindex="-1" inert>
@@ -682,6 +715,9 @@
   <script src="app-session-render.js"></script>
   <script src="app-drawer-data.js"></script>
   <script src="app-drawer-content.js"></script>
+  <script src="app-pty-focus.js"></script>
+  <script src="comprehension-packet.js"></script>
+  <script src="comprehension-output-filter.js"></script>
   <script src="app-drawer.js"></script>
   <script src="app-run-modal.js"></script>
   <script src="app-quality.js"></script>

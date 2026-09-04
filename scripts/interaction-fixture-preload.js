@@ -84,11 +84,83 @@ const messages = [
   { id: 'm-assistant', role: 'assistant', text: '버튼과 입력 동작을 확인하고 있습니다.', timestamp: now },
 ];
 
+const comprehensionPacket = {
+  schemaVersion: 1,
+  id: 'fixture-comprehension-v1',
+  title: 'PTY 집중 모드 개선 작업 이해 브리핑',
+  summary: '완료된 메인 노드의 실제 PTY 문맥 안에서만 이해 패킷을 열고, 다음 지시를 더 정확히 만들 수 있도록 변경 내용과 판단 근거를 확인합니다.',
+  difficulty: 3,
+  difficultyReason: 'UI 상태 전환과 PTY 보존 조건을 함께 이해해야 합니다.',
+  evidence: [
+    { id: 'e-main', label: '메인 구현 기록', detail: '중앙 오픈북 브리핑과 노드 귀속 배지를 구현했습니다.' },
+    { id: 'e-subagent', label: '도움 AI 검토 기록', detail: '도움 AI가 PTY 포커스와 스크롤 보존 조건을 검토했습니다.' },
+    { id: 'e-risk', label: '회귀 검증', detail: '키보드 포커스, 실제 PTY 입력, 375px 레이아웃을 확인합니다.' },
+  ],
+  questions: [
+    {
+      id: 'q-change', kind: '변경 사항', topics: ['change'],
+      prompt: '이해 패킷은 어디에서 처음 자동으로 나타나나요?',
+      options: [
+        { id: 'q-change-a', label: '완료된 메인 노드의 PTY 집중 모드' },
+        { id: 'q-change-b', label: '모든 프로젝트의 첫 화면' },
+      ],
+      answerId: 'q-change-a', explanation: '관제실의 본질을 흐리지 않도록 완료된 메인 노드의 PTY 집중 모드에만 귀속됩니다.',
+      evidenceIds: ['e-main'],
+      variant: {
+        prompt: '실행 중인 서브에이전트 노드를 열면 이해 패킷이 자동 표시되어야 하나요?',
+        options: [
+          { id: 'q-change-va', label: '아니요. 완료된 메인 노드만 대상입니다.' },
+          { id: 'q-change-vb', label: '예. 모든 노드가 대상입니다.' },
+        ],
+        answerId: 'q-change-va', explanation: '실행 중·실패·취소 작업과 서브에이전트는 대상에서 제외됩니다.',
+      },
+    },
+    {
+      id: 'q-decision', kind: '선택 이유', topics: ['decision'],
+      prompt: '왼쪽 작업 설명과 실제 근거를 먼저 보여주는 이유는 무엇인가요?',
+      options: [
+        { id: 'q-decision-a', label: '암기 시험이 아니라 다음 지시를 정확히 만들도록 돕기 위해서' },
+        { id: 'q-decision-b', label: '문항 수를 숨기기 위해서' },
+      ],
+      answerId: 'q-decision-a', explanation: '사용자는 오픈북 근거를 보며 AI의 작업 흐름과 판단을 이해해야 합니다.',
+      evidenceIds: ['e-main', 'e-subagent'],
+      variant: {
+        prompt: '난이도 선정 이유를 팝업에 길게 공개하는 것이 승인안에 맞나요?',
+        options: [
+          { id: 'q-decision-va', label: '아니요. 난이도 숫자만 표시합니다.' },
+          { id: 'q-decision-vb', label: '예. 내부 추론을 모두 표시합니다.' },
+        ],
+        answerId: 'q-decision-va', explanation: '승인안은 난이도 숫자만 노출하고 선정 이유는 숨기도록 정했습니다.',
+      },
+    },
+    {
+      id: 'q-risk', kind: '제약·위험', topics: ['constraint-risk'],
+      prompt: '문제를 두 번 틀린 뒤 이해했음을 누르면 무엇이 바뀌나요?',
+      options: [
+        { id: 'q-risk-a', label: '이해 부채만 해소되고 오답 점수는 유지됩니다.' },
+        { id: 'q-risk-b', label: '오답이 정답으로 바뀌어 점수가 올라갑니다.' },
+      ],
+      answerId: 'q-risk-a', explanation: '이해했음은 학습 흐름을 마치는 확인이며 채점 결과를 바꾸는 장치가 아닙니다.',
+      evidenceIds: ['e-risk'],
+      variant: {
+        prompt: '문제 오류로 표시한 문항은 최종 점수에서 어떻게 처리되나요?',
+        options: [
+          { id: 'q-risk-va', label: '점수 분모와 이해 부채에서 함께 제외됩니다.' },
+          { id: 'q-risk-vb', label: '오답으로 남아 분모에 계속 포함됩니다.' },
+        ],
+        answerId: 'q-risk-va', explanation: '원문과 변형 문제를 하나의 문항으로 묶어 분모와 부채에서 제외합니다.',
+      },
+    },
+  ],
+};
+
 const rootSession = {
   id: 'fixture-root', externalId: 'fixture-root-external', provider: 'claude', model: 'Claude',
   title: '화면 설명과 버튼을 쉽게 개선하기', shortTitle: '화면 개선 결과를 확인하고 필요한 문구 수정', displayName: '화면 개선 결과를 확인하고 필요한 문구 수정', cwd: realTerminalFixture?.cwd || 'D:\\fixture', originCwd: realTerminalFixture?.cwd || 'D:\\fixture', workspace: realTerminalFixture ? '실제 PTY 통합 검증' : '화면 개선 작업', status: 'running',
+  comprehensionContractInjected: true,
   statusDetail: '화면 개선 결과를 확인하고 필요한 문구를 수정하는 중', startedAt: lastDaily(22), updatedAt: now, parentId: null, childIds: ['fixture-child', 'fixture-resting'],
   messages, usage, turnUsage: usage, context, runId: 'fixture-run',
+  comprehension: { status: 'ready', schemaVersion: 1, packet: comprehensionPacket },
   lifecycle: [{ type: 'tool', status: 'running', label: '화면 개선 결과를 확인하고 필요한 문구를 수정하는 중', detail: '결과를 확인한 뒤 버튼 설명과 화면 배치를 수정', timestamp: now }],
   executions: [
     { id: 'fixture-shell-running', callId: 'fixture-shell-running', kind: 'shell', mode: 'background', tool: 'exec_command', runtime: 'PowerShell', label: '프로그램 실행 작업', command: 'npm run dev', cwd: 'D:\\fixture', status: 'running', statusDetail: '다른 화면을 보고 있어도 계속 실행됨', output: '화면 미리보기가 실행 중입니다.', backgroundId: 'fixture-cell-1', backgroundIdType: 'cell', exitCode: null, startedAt: now, updatedAt: now, completedAt: null, source: 'tool-call' },
@@ -132,6 +204,7 @@ function resumeIdForTerminalOptions(options = {}) {
 }
 
 const rootConnectionSignature = connectionSignatureForSession(rootSession);
+const rootComprehensionPromptFingerprint = 'a'.repeat(64);
 
 const childSession = {
   ...rootSession, id: 'fixture-child', externalId: 'fixture-child-external', provider: 'gpt', model: 'GPT',
@@ -459,9 +532,14 @@ const initialTerminals = [
     cwd: realTerminalFixture?.cwd || 'D:\\fixture',
     provider: rootSession.provider,
     bridgeId: rootSession.id,
+    agentLinkedSessionId: realTerminalFixture ? '' : rootSession.id,
+    agentLinkedExternalId: realTerminalFixture ? '' : rootSession.externalId,
+    agentLinkedPromptFingerprint: realTerminalFixture ? '' : rootComprehensionPromptFingerprint,
+    initialPromptFingerprint: realTerminalFixture ? '' : rootComprehensionPromptFingerprint,
     agentResumeSessionId: rootSession.externalId,
     agentConnectionSignature: rootConnectionSignature,
     conversationBound: true,
+    comprehensionContractInjected: true,
     background: true,
     backend: 'direct',
     distro: '',
@@ -701,6 +779,8 @@ const api = {
       agentForkSourceSessionId: options.agentForkSourceSessionId || '',
       agentForkSourceSignature: options.agentForkSourceSignature || '',
       creationId: options.creationId || '',
+      comprehensionContractInjected: String(options.initialCommand || '')
+        .startsWith('<whitebox-comprehension-contract version="1">'),
       conversationBound,
       distro: options.distro || '',
       tmuxSession: options.tmuxSession || '',

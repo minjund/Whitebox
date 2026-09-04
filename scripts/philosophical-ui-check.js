@@ -337,19 +337,26 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`window.WhiteboxApp.closeDrawer?.(false)`);
 
     const toolViews = await win.webContents.executeJavaScript(`(async () => {
-      const checks = {};
-      for (const [view, selector] of [['waiting','#attentionInbox'],['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
+      const checks = {
+        standaloneAttentionRemoved: !document.querySelector('#attentionInbox')
+          && !document.querySelector('[data-view="waiting"]'),
+      };
+      window.WhiteboxApp.selectView('all');
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      checks.attentionStaysInline = document.body.dataset.currentView === 'all'
+        && Boolean(document.querySelector('.home-attention-mount .home-attention-item[data-open-session]'));
+      for (const [view, selector] of [['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
         window.WhiteboxApp.selectView(view);
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         checks[view] = document.body.dataset.currentView === view && !document.querySelector(selector)?.classList.contains('hidden');
-        if (view === 'waiting') checks.waitingHasNoInternalKeys = !document.querySelector(selector)?.textContent.includes('management.category.');
       }
       return checks;
     })()`);
     if (Object.values(toolViews).some(value => !value)) throw new Error(`기존 기능 화면 전환 실패: ${JSON.stringify(toolViews)}`);
 
     const auditOutputs = [];
-    for (const [view, selector] of [['waiting','#attentionInbox'],['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
+    auditOutputs.push(await capture(win, 'round43-attention-inline.png', 'all', '#operationsOverview'));
+    for (const [view, selector] of [['runtime','#automationOverview'],['terminal','#terminalSection'],['tmux','#tmuxSection'],['settings','#settingsSection']]) {
       auditOutputs.push(await capture(win, `round43-${view}.png`, view, selector));
     }
 

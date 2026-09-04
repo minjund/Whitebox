@@ -3,6 +3,14 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
+const { PassThrough } = require('stream');
+const {
+  PACKET_CLOSE,
+  PACKET_OPEN,
+  comprehensionPromptFingerprint,
+  injectComprehensionContract,
+} = require('../../src/comprehensionPacket');
 const {
   ASIDE_MANIFEST,
   OMO_MANIFEST,
@@ -26,6 +34,7 @@ const {
   normalizeSettings,
 } = require('../../src/sourcePlugins/settingsStore');
 const { discoverAsideTools } = require('../../src/sourcePlugins/bundled/aside/capabilities');
+const { normalizeOfficialTask } = require('../../src/sourcePlugins/bundled/aside');
 const { scanAsideHistoryFolders } = require('../../src/sourcePlugins/bundled/aside/folderHistory');
 const {
   OmoOpenCodeMonitor,
@@ -258,6 +267,299 @@ function registerSourcePluginTests(context) {
     assert.equal(spawnCalls[0].args.includes('--session'), false);
     host.children.clear();
     await host.dispose();
+  });
+
+  test('Whitebox source 최초 작업만 계약을 주입하고 첫 top-level ID ownership을 재시작 뒤에도 보존한다', async () => {
+    const settingsFile = path.join(temp, 'source-comprehension-settings.json');
+    const settings = { version: 2, enabledPluginIds: [OPENCODE_MANIFEST.id], asideHistoryFolders: [] };
+    const settingsStore = {
+      file: settingsFile,
+      snapshot: () => ({ ...settings, enabledPluginIds: [...settings.enabledPluginIds] }),
+    };
+    const launches = [];
+    const children = [];
+    const makeChild = () => {
+      const child = new EventEmitter();
+      child.pid = 610000 + children.length;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      children.push(child);
+      return child;
+    };
+    const host = new SourcePluginControlHost({
+      platform: 'linux',
+      settingsStore,
+      findExecutable: name => name === 'opencode' ? '/fixture/opencode' : '',
+      spawn: (executable, args) => {
+        launches.push({ executable, args: [...args] });
+        return makeChild();
+      },
+      now: () => Date.parse('2026-09-04T00:00:00.000Z'),
+    });
+    await host.initialize();
+
+    const originalPrompt = '사용자에게 보일 원문 source 작업';
+    const started = await host.start(OPENCODE_MANIFEST.id, {
+      prompt: originalPrompt, cwd: temp, requestId: 'source-owned-start',
+    });
+    assert.equal(started.ok, true);
+    const injectedPrompt = launches[0].args.at(-1);
+    assert.equal(injectedPrompt.endsWith(originalPrompt), true);
+    assert.equal(injectedPrompt.split('<whitebox-comprehension-contract').length - 1, 1);
+    assert.notEqual(injectedPrompt, originalPrompt);
+
+    children[0].stdout.write(`${JSON.stringify({ sessionID: 'source-owned-session' })}\n`);
+    const ownerships = host.monitorState().snapshots[OPENCODE_MANIFEST.id].comprehensionOwnerships;
+    assert.equal(ownerships.length, 1);
+    assert.equal(ownerships[0].externalId, 'source-owned-session');
+    assert.equal(ownerships[0].promptFingerprint, comprehensionPromptFingerprint(injectedPrompt));
+    assert.equal(Object.hasOwn(host.listSources()[0], 'comprehensionOwnerships'), false,
+      'ownership proof는 renderer용 source status에 노출하면 안 됩니다.');
+
+    const reloaded = new SourcePluginControlHost({
+      platform: 'linux', settingsStore, findExecutable: () => '',
+    });
+    assert.equal(
+      reloaded.monitorState().snapshots[OPENCODE_MANIFEST.id].comprehensionOwnerships[0].externalId,
+      'source-owned-session',
+    );
+
+    await host.start(OPENCODE_MANIFEST.id, {
+      prompt: '기존 source 세션 후속 지시', cwd: temp, externalId: 'source-owned-session', requestId: 'source-followup',
+    }, { allowExistingSession: true });
+    assert.equal(launches[1].args.at(-1), '기존 source 세션 후속 지시');
+    assert.equal(launches[1].args.at(-1).includes('whitebox-comprehension-contract'), false);
+
+    children[0].stdout.write(`${JSON.stringify({ sessionID: 'conflicting-top-level-session' })}\n`);
+    assert.deepEqual(host.monitorState().snapshots[OPENCODE_MANIFEST.id].comprehensionOwnerships, [],
+      '한 child가 다른 top-level ID를 주장하면 기존 ownership도 폐기해야 합니다.');
+    const afterConflict = new SourcePluginControlHost({
+      platform: 'linux', settingsStore, findExecutable: () => '',
+    });
+    assert.deepEqual(afterConflict.comprehensionOwnershipSnapshot(OPENCODE_MANIFEST.id), [],
+      'ownership 충돌 폐기는 재시작 뒤에도 유지되어야 합니다.');
+
+    const asidePrompt = 'Aside에서 사용자에게 보일 원문 작업';
+    let asideInput = null;
+    const asideChanges = [];
+    const asideHost = new SourcePluginControlHost({
+      platform: 'darwin',
+      comprehensionOwnershipFile: path.join(temp, 'aside-comprehension-ownership.json'),
+      findExecutable: () => '',
+      now: () => Date.parse('2026-09-04T00:00:00.000Z'),
+    });
+    asideHost.statuses.set(ASIDE_MANIFEST.id, {
+      id: ASIDE_MANIFEST.id, enabled: true, available: true,
+      capabilities: { start: true },
+    });
+    asideHost.aside = {
+      start: async input => { asideInput = input; return { taskId: 'aside-owned-session' }; },
+      detail: async () => normalizeOfficialTask({
+        taskId: 'aside-owned-session',
+        status: 'completed',
+        updatedAt: '2026-09-04T00:01:00.000Z',
+        messages: [
+          { role: 'user', text: asideInput.prompt, timestamp: '2026-09-04T00:00:00.000Z' },
+          { role: 'assistant', text: `${'Aside 원문 완료 응답'}\n\n${PACKET_OPEN}\n${JSON.stringify({
+            schemaVersion: 1,
+            id: 'aside-source-packet',
+            title: 'Aside source 이해 패킷',
+            summary: 'Aside 작업의 변경과 판단을 설명합니다.',
+            difficulty: 2,
+            difficultyReason: '작업 흐름과 제약을 함께 이해해야 합니다.',
+            evidence: [{ id: 'aside-evidence', label: 'Aside 기록', detail: '공식 완료 기록입니다.' }],
+            questions: [{
+              id: 'aside-question', kind: 'source-flow', topics: ['change', 'decision', 'constraint-risk'],
+              prompt: '이 작업의 핵심은?',
+              options: [{ id: 'aside-answer', label: '근거와 제약' }, { id: 'aside-wrong', label: '점수만' }],
+              answerId: 'aside-answer', explanation: '근거와 제약을 확인합니다.', evidenceIds: ['aside-evidence'],
+              variant: {
+                prompt: '다음 작업에서는?',
+                options: [{ id: 'aside-variant-answer', label: '맥락을 확인' }, { id: 'aside-variant-wrong', label: '무시' }],
+                answerId: 'aside-variant-answer', explanation: '맥락을 확인해야 합니다.',
+              },
+            }],
+          })}\n${PACKET_CLOSE}`, timestamp: '2026-09-04T00:01:00.000Z' },
+        ],
+      }, { capabilities: {} }, { fullHistory: true }),
+      dispose: async () => {},
+    };
+    asideHost.on('changed', state => asideChanges.push(state));
+    const asideStarted = await asideHost.start(ASIDE_MANIFEST.id, {
+      prompt: asidePrompt, cwd: temp, requestId: 'aside-owned-start',
+    });
+    assert.equal(asideStarted.ok, true);
+    assert.equal(asideInput.userPrompt, asidePrompt);
+    assert.equal(asideInput.title, asidePrompt);
+    assert.equal(asideInput.prompt.endsWith(asidePrompt), true);
+    assert.equal(
+      asideChanges.at(-1).snapshots[ASIDE_MANIFEST.id].comprehensionOwnerships[0].externalId,
+      'aside-owned-session',
+      '동기 start 결과의 ownership도 즉시 worker snapshot에 전달해야 합니다.',
+    );
+    const asideDetail = await asideHost.detail({
+      sourcePluginId: ASIDE_MANIFEST.id, externalId: 'aside-owned-session',
+    });
+    assert.equal(asideDetail.completionObserved, true);
+    assert.equal(asideDetail.completedAt, '2026-09-04T00:01:00.000Z');
+    assert.equal(asideDetail.comprehensionContractInjected, true);
+    assert.equal(asideDetail.comprehension.status, 'ready');
+    assert.equal(asideDetail.messages[0].text, asidePrompt);
+    assert.equal(asideDetail.messages[1].text, 'Aside 원문 완료 응답');
+
+    const persistenceBlocker = path.join(temp, 'ownership-parent-file');
+    fs.writeFileSync(persistenceBlocker, 'not a directory');
+    const persistenceHost = new SourcePluginControlHost({
+      comprehensionOwnershipFile: path.join(persistenceBlocker, 'ownership.json'),
+    });
+    let persistenceError = null;
+    persistenceHost.on('cleanup-error', error => { persistenceError = error; });
+    const persistedOwnership = persistenceHost.rememberComprehensionOwnership(OPENCODE_MANIFEST.id, 'persistence-error-session', {
+      requestId: 'persistence-error-request', promptFingerprint: 'f'.repeat(64),
+    });
+    assert.ok(persistenceError, 'ownership 저장 실패는 기존 recoverable error 채널로 보고해야 합니다.');
+    assert.equal(persistedOwnership, false,
+      'ownership 저장 실패를 성공으로 보고하면 재시작 후 패킷 상태가 달라질 수 있습니다.');
+    assert.deepEqual(
+      persistenceHost.comprehensionOwnershipSnapshot(OPENCODE_MANIFEST.id),
+      [],
+      '디스크에 남길 수 없는 ownership은 현재 실행에서도 승인 근거로 노출하면 안 됩니다.',
+    );
+    host.children.clear();
+    reloaded.children.clear();
+    afterConflict.children.clear();
+    await host.dispose();
+    await reloaded.dispose();
+    await afterConflict.dispose();
+    await asideHost.dispose();
+    await persistenceHost.dispose();
+  });
+
+  test('source monitor는 persisted ownership을 복원하되 관측된 계약 prompt hash 불일치는 거절한다', async () => {
+    const originalPrompt = 'source ownership 검증 작업';
+    const injectedPrompt = injectComprehensionContract(originalPrompt);
+    const packet = {
+      schemaVersion: 1,
+      id: 'source-packet',
+      title: 'Source 이해 패킷',
+      summary: 'source task가 수행한 변경과 판단을 설명합니다.',
+      difficulty: 2,
+      difficultyReason: 'source 흐름과 제약을 함께 이해해야 합니다.',
+      evidence: [{ id: 'source-evidence', label: 'source 기록', detail: '동일 source 세션의 실제 완료 기록입니다.' }],
+      questions: [{
+        id: 'source-question', kind: 'source-flow', topics: ['change', 'decision', 'constraint-risk'],
+        prompt: '이 source 작업에서 확인해야 할 핵심은?',
+        options: [{ id: 'source-answer', label: '변경과 판단 및 위험' }, { id: 'source-wrong', label: '점수만 확인' }],
+        answerId: 'source-answer', explanation: '다음 지시를 정확히 하기 위한 오픈북 확인입니다.',
+        evidenceIds: ['source-evidence'],
+        variant: {
+          prompt: '같은 원리를 다음 작업에 적용한다면?',
+          options: [{ id: 'source-variant-answer', label: '근거와 제약을 함께 본다' }, { id: 'source-variant-wrong', label: '결과만 본다' }],
+          answerId: 'source-variant-answer', explanation: '근거와 제약이 후속 지시의 정확도를 높입니다.',
+        },
+      }],
+    };
+    const visibleAnswer = 'source 작업을 완료했고 원문 응답은 보존됩니다.';
+    const response = `${visibleAnswer}\n\n${PACKET_OPEN}\n${JSON.stringify(packet)}\n${PACKET_CLOSE}`;
+    const row = externalId => ({
+      externalId,
+      title: injectedPrompt.slice(0, 240),
+      status: 'completed',
+      completionObserved: true,
+      updatedAt: '2026-09-04T00:01:00.000Z',
+      startedAt: '2026-09-04T00:00:00.000Z',
+      messages: [
+        { id: `${externalId}-user`, role: 'user', text: injectedPrompt, timestamp: '2026-09-04T00:00:00.000Z' },
+        { id: `${externalId}-assistant`, role: 'assistant', text: response, timestamp: '2026-09-04T00:01:00.000Z' },
+      ],
+      result: response,
+      outcome: { verification: 'source finish event', summary: response },
+      comprehensionContractInjected: true,
+      comprehension: { status: 'ready', schemaVersion: 1, packet },
+    });
+    const trimmedOwned = row('source-owned-trimmed');
+    trimmedOwned.title = '최근 후속 지시';
+    trimmedOwned.messages = [
+      { id: 'trimmed-followup', role: 'user', text: '최근 후속 지시', timestamp: '2026-09-04T00:00:30.000Z' },
+      { id: 'trimmed-assistant', role: 'assistant', text: response, timestamp: '2026-09-04T00:01:00.000Z' },
+    ];
+    const externalWithoutContract = row('source-external-no-contract');
+    externalWithoutContract.messages[0].text = '외부 세션의 일반 프롬프트';
+    externalWithoutContract.title = '외부 세션의 일반 프롬프트';
+    const rows = [
+      row('source-owned-session'),
+      trimmedOwned,
+      row('source-external-spoof'),
+      externalWithoutContract,
+    ];
+    const definition = {
+      manifest: OPENCODE_MANIFEST,
+      createMonitor: () => ({
+        scan: () => rows,
+        detail: externalId => rows.find(item => item.externalId === externalId),
+      }),
+    };
+    const ownership = {
+      pluginId: OPENCODE_MANIFEST.id,
+      externalId: 'source-owned-session',
+      promptFingerprint: comprehensionPromptFingerprint(injectedPrompt),
+      requestId: 'persisted-source-start',
+      boundAt: '2026-09-04T00:00:00.000Z',
+    };
+    const monitor = new SourcePluginMonitorHost({ platform: 'linux', definitions: [definition] });
+    monitor.setRuntimeStatuses([{
+      id: OPENCODE_MANIFEST.id, enabled: true, available: true, capabilities: { start: true },
+    }]);
+    monitor.setExternalSnapshot(OPENCODE_MANIFEST.id, {
+      comprehensionOwnerships: [
+        ownership,
+        { ...ownership, externalId: 'source-owned-trimmed', requestId: 'persisted-source-trimmed' },
+      ],
+    });
+    const scanned = await monitor.scan();
+    const owned = scanned.sessions.find(session => session.externalId === 'source-owned-session');
+    const trimmed = scanned.sessions.find(session => session.externalId === 'source-owned-trimmed');
+    const spoof = scanned.sessions.find(session => session.externalId === 'source-external-spoof');
+    const noContractSpoof = scanned.sessions.find(session => session.externalId === 'source-external-no-contract');
+    assert.equal(owned.comprehensionContractInjected, true);
+    assert.equal(owned.comprehension.status, 'ready');
+    assert.equal(owned.comprehension.packet.id, 'source-packet');
+    assert.equal(owned.messages[0].text, originalPrompt);
+    assert.equal(owned.messages[1].text, visibleAnswer);
+    assert.equal(owned.result, visibleAnswer);
+    assert.equal(owned.title, originalPrompt);
+    assert.equal(spoof.comprehensionContractInjected, false);
+    assert.equal(spoof.comprehension.status, 'unsupported');
+    assert.equal(spoof.comprehensionCandidate.status, 'ready');
+    assert.equal(trimmed.comprehensionContractInjected, true,
+      '최초 prompt가 잘린 최근 기록 창은 exact persisted binding으로 복원해야 합니다.');
+    assert.equal(trimmed.comprehension.status, 'ready');
+    assert.equal(trimmed.messages[0].text, '최근 후속 지시',
+      '최근 plain follow-up은 최초 prompt hash 불일치 증거가 아닙니다.');
+    assert.equal(trimmed.messages[1].text, visibleAnswer);
+    assert.equal(noContractSpoof.comprehensionContractInjected, false);
+    assert.equal(noContractSpoof.comprehension.status, 'unsupported');
+    assert.equal(noContractSpoof.messages[1].text, visibleAnswer,
+      '외부 packet envelope는 승격하지 않되 transcript에는 누출하지 않습니다.');
+
+    const detail = await monitor.detail(owned.id);
+    assert.equal(detail.comprehensionContractInjected, true);
+    assert.equal(detail.comprehension.status, 'ready');
+    assert.equal(detail.messages[1].text, visibleAnswer);
+
+    const mismatched = new SourcePluginMonitorHost({ platform: 'linux', definitions: [definition] });
+    mismatched.setRuntimeStatuses([{
+      id: OPENCODE_MANIFEST.id, enabled: true, available: true, capabilities: { start: true },
+    }]);
+    mismatched.setExternalSnapshot(OPENCODE_MANIFEST.id, {
+      comprehensionOwnerships: [{ ...ownership, promptFingerprint: '0'.repeat(64) }],
+    });
+    const mismatch = (await mismatched.scan()).sessions.find(session => session.externalId === 'source-owned-session');
+    assert.equal(mismatch.comprehensionContractInjected, false);
+    assert.equal(mismatch.comprehension.status, 'unsupported');
+    await monitor.dispose();
+    await mismatched.dispose();
   });
 
   test('OpenCode adapter가 OMO parser 결과의 canonical ID·provenance·하위 작업을 OpenCode 출처로 교체한다', () => {

@@ -4621,8 +4621,14 @@ html[data-theme] body[data-current-view="all"][data-project-selected="true"] .co
 }
 
 html[data-theme] body[data-current-view="all"][data-project-selected="true"] .control-room-session.has-attention > header > .control-session-flow,
-html[data-theme] body[data-current-view="all"][data-project-selected="true"] .control-room-session.has-attention > .control-room-flow {
+html[data-theme] body[data-current-view="all"][data-project-selected="true"] .control-room-session.has-attention:not(.has-inline-terminal) > .control-room-flow {
   display: none;
+}
+
+/* A review card that hosts the inline PTY keeps its flow visible so the
+ * terminal opened from the task list has somewhere to mount. */
+html[data-theme] body[data-current-view="all"][data-project-selected="true"] .control-room-session.has-attention.has-inline-terminal > .control-room-flow {
+  display: grid;
 }
 
 /* Result and problem reviews are one compact decision row. The task header

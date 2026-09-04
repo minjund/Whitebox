@@ -37,6 +37,70 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   });
 }
 
+function isWritableDirectSession(session) {
+  if (!session || session.parentId || session.readOnly === true) return false;
+  const sourcePlugin = session.sourcePlugin;
+  const sourcePluginPresent = typeof sourcePlugin === 'string'
+    || (sourcePlugin !== null && typeof sourcePlugin === 'object');
+  const sourcePluginId = String(session.sourcePluginId || '').trim();
+  const provenancePluginId = String(session.provenance?.source?.pluginId || '').trim();
+  const controlAuthority = String(session.controlAuthority || '').trim();
+  const importMode = String(session.importMode || '').trim();
+  const externalSourcePattern = /(?:^|[.:/_-])(?:opencode|omo|aside)(?:$|[.:/_-])/i;
+  const sourceMarkers = [session.source, session.clientKind, session.provenance?.source?.id]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  return !sourcePluginPresent
+    && !sourcePluginId
+    && !provenancePluginId
+    && !controlAuthority
+    && !importMode
+    && !sourceMarkers.some(value => String(value).toLowerCase() === 'whitebox-bridge' || externalSourcePattern.test(value));
+}
+
+function canForkCodexDesktopSession(session) {
+  const sourcePlugin = session?.sourcePlugin;
+  const sourcePluginId = String(session?.sourcePluginId
+    || (typeof sourcePlugin === 'string' ? sourcePlugin : sourcePlugin?.id || (sourcePlugin ? '__present__' : ''))).trim();
+  const controlAuthority = String(session?.controlAuthority || '').trim();
+  const importMode = String(session?.importMode || '').trim();
+  if (String(session?.provider || '').toLowerCase() !== 'codex'
+    || String(session?.clientKind || '').toLowerCase() !== 'codex-desktop'
+    || String(session?.status || '').toLowerCase() !== 'completed'
+    || session?.parentId
+    || sourcePluginId
+    || session?.readOnly === true
+    || controlAuthority
+    || importMode
+    || !isWritableDirectSession(session)) return false;
+  const externalId = String(session.externalId || '').trim();
+  const sourceSessionId = String(session.id || '').trim();
+  const runId = String(session.runId || '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(externalId)
+    && sourceSessionId === `codex:${externalId}`
+    && !/^(?:terminal|bridge):/i.test(externalId)
+    && !/^process-\d+$/i.test(externalId)
+    && (!runId || runId !== externalId);
+}
+
+function canUseWritablePtySurface(session) {
+  if (!session || session.parentId || session.sourcePluginId) return false;
+  if (canForkCodexDesktopSession(session)) return true;
+  // A live Codex Desktop task is owned by the Codex app. Whitebox must not
+  // advertise an attachable PTY for it because there is no independent PTY
+  // writer to mount; completed canonical tasks can still use the safe fork
+  // path above.
+  if (String(session.provider || '').toLowerCase() === 'codex'
+    && String(session.clientKind || '').toLowerCase() === 'codex-desktop') return false;
+  return isWritableDirectSession(session)
+    && session.controlCapabilities?.pty === true
+    && session.presentation?.conversationSurface !== 'transcript';
+}
+
+function canOpenResponsibleFocus(session) {
+  return Boolean(session && !session.parentId);
+}
+
 window.WhiteboxRendererUtils = Object.freeze({
   // Intl.DateTimeFormat construction is far more expensive than format();
   // reuse one instance per locale+options combination across render passes.
@@ -64,28 +128,10 @@ window.WhiteboxRendererUtils = Object.freeze({
   providerLabel(provider) {
     return ({ claude: 'Claude', gpt: 'GPT', codex: 'GPT', gemini: 'Gemini', grok: 'Grok' })[provider] || 'AI';
   },
-  canForkCodexDesktopSession(session) {
-    const sourcePlugin = session?.sourcePlugin;
-    const sourcePluginId = String(session?.sourcePluginId
-      || (typeof sourcePlugin === 'string' ? sourcePlugin : sourcePlugin?.id || (sourcePlugin ? '__present__' : ''))).trim();
-    const controlAuthority = String(session?.controlAuthority || '').trim();
-    const importMode = String(session?.importMode || '').trim();
-    if (String(session?.provider || '').toLowerCase() !== 'codex'
-      || String(session?.clientKind || '').toLowerCase() !== 'codex-desktop'
-      || session?.parentId
-      || sourcePluginId
-      || session?.readOnly === true
-      || controlAuthority
-      || importMode) return false;
-    const externalId = String(session.externalId || '').trim();
-    const sourceSessionId = String(session.id || '').trim();
-    const runId = String(session.runId || '').trim();
-    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(externalId)
-      && sourceSessionId === `codex:${externalId}`
-      && !/^(?:terminal|bridge):/i.test(externalId)
-      && !/^process-\d+$/i.test(externalId)
-      && (!runId || runId !== externalId);
-  },
+  isWritableDirectSession,
+  canForkCodexDesktopSession,
+  canUseWritablePtySurface,
+  canOpenResponsibleFocus,
   preserveScrollPositions(targets) {
     const positions = (Array.isArray(targets) ? targets : [targets]).map(target => {
       const element = typeof target === 'string' ? document.querySelector(target) : target;

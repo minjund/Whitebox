@@ -5,6 +5,12 @@ const { finalizedActivityState, observeActivity } = require('./activityState');
 const { createCodexCollaboration } = require('./codexCollaboration');
 const { createExecutionTracker, reconcileExecutionActivities } = require('./executionActivity');
 const { structuredInputRequest, structuredInputRequestText } = require('./responseIntent');
+const {
+  stageComprehensionCandidate,
+  normalizedComprehensionContractPromptFingerprints,
+  observeComprehensionContractPrompt,
+  stripComprehensionContract,
+} = require('../comprehensionPacket');
 
 const COLLABORATION_TOOLS = new Set([
   'spawn_agent',
@@ -49,6 +55,33 @@ function createCodexParser(dependencies) {
     storageOps: { readJsonLines },
     timeOps: { timestamp },
   } = dependencies;
+
+  function rawContentText(value) {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.map(rawContentText).filter(Boolean).join('\n').trim();
+    if (typeof value !== 'object') return String(value);
+    for (const key of ['text', 'input_text', 'output_text', 'message']) {
+      if (typeof value[key] === 'string') return value[key];
+    }
+    return '';
+  }
+
+  function visibleUserText(state, value) {
+    const raw = rawContentText(value);
+    observeComprehensionContractPrompt(state, raw);
+    return codexVisibleUserText(stripComprehensionContract(raw));
+  }
+
+  function replaceFinalAssistantMessage(session, messageBody) {
+    const text = compactText(messageBody, session.fullHistory ? Number.MAX_SAFE_INTEGER : 6000);
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      if (session.messages[index]?.role !== 'assistant') continue;
+      if (text) session.messages[index].text = text;
+      else session.messages.splice(index, 1);
+      return;
+    }
+  }
 
   function initializeSession(fileInfo, parsed, options = {}) {
     const metaRow = parsed.rows.find(row => row.type === 'session_meta');
@@ -119,8 +152,12 @@ function createCodexParser(dependencies) {
       lastTurnCompleted: false,
       turnHadMeaningfulOutput: false,
       lastFinalAnswer: '',
+      lastFinalAnswerRaw: '',
       lastAssistantText: '',
+      lastAssistantRaw: '',
       lastConversationRole: '',
+      comprehensionContractObserved: false,
+      comprehensionContractPromptFingerprints: [],
       pendingUserInputCalls: new Set(),
       pendingUserInputAt: new Map(),
       pendingUserInputText: new Map(),
@@ -161,7 +198,9 @@ function createCodexParser(dependencies) {
     if (startingNewTurn) {
       state.turnHadMeaningfulOutput = false;
       state.lastFinalAnswer = '';
+      state.lastFinalAnswerRaw = '';
       state.lastAssistantText = '';
+      state.lastAssistantRaw = '';
       state.lastConversationRole = '';
       if (!observedTurnId) state.activeTurnId = '';
     }
@@ -259,8 +298,10 @@ function createCodexParser(dependencies) {
       state.pendingUserInputRequests.clear();
       observeActivity(state, session.completionObserved ? 'attention' : 'idle', payload.completed_at || row.timestamp);
       if (payload.last_agent_message) {
-        state.lastFinalAnswer = compactText(payload.last_agent_message, 6000);
+        state.lastFinalAnswerRaw = rawContentText(payload.last_agent_message);
+        state.lastFinalAnswer = compactText(state.lastFinalAnswerRaw, 6000);
         state.lastAssistantText = state.lastFinalAnswer;
+        state.lastAssistantRaw = state.lastFinalAnswerRaw;
         state.lastConversationRole = 'assistant';
       }
       addLifecycle(session, {
@@ -274,8 +315,8 @@ function createCodexParser(dependencies) {
     } else if (payload.type === 'sub_agent_activity') {
       recordSubagentActivity(session, state, payload, row, timing);
     } else if (payload.type === 'user_message') {
-      const rawUser = compactText(payload.message || payload.text_elements, 12000);
-      const text = codexVisibleUserText(rawUser);
+      const rawUser = rawContentText(payload.message || payload.text_elements);
+      const text = visibleUserText(state, rawUser);
       if (!text) return;
       if (/<codex_internal_context(?:\s|>)/i.test(rawUser)) {
         state.latestInternalGoal = text;
@@ -293,13 +334,18 @@ function createCodexParser(dependencies) {
       const key = `u:${payload.client_id || row.timestamp}:${text}`;
       addCodexMessage(session, state.messageObservations, { id: key, role: 'user', text, timestamp: row.timestamp }, 'event');
     } else if (payload.type === 'agent_message') {
-      const text = compactText(payload.message);
+      const rawText = rawContentText(payload.message);
+      const text = compactText(rawText);
       if (text) resumeAfterObservedCompletion(session, state, row.timestamp);
       if (text) observeActivity(state, 'working', row.timestamp);
       if (text) state.latestDelegationNarration = text;
-      if (payload.phase === 'final_answer') state.lastFinalAnswer = text;
+      if (payload.phase === 'final_answer') {
+        state.lastFinalAnswer = text;
+        state.lastFinalAnswerRaw = rawText;
+      }
       if (text) {
         state.lastAssistantText = text;
+        state.lastAssistantRaw = rawText;
         state.lastConversationRole = 'assistant';
         state.turnHadMeaningfulOutput = true;
       }
@@ -321,7 +367,9 @@ function createCodexParser(dependencies) {
       state.activeTurnId = '';
       state.lastTurnCompleted = false;
       state.lastFinalAnswer = '';
+      state.lastFinalAnswerRaw = '';
       state.lastAssistantText = '';
+      state.lastAssistantRaw = '';
       state.lastConversationRole = '';
       state.pendingUserInputCalls.clear();
       state.pendingUserInputAt.clear();
@@ -547,8 +595,8 @@ function createCodexParser(dependencies) {
     }
     if (payload.role !== 'assistant' && payload.role !== 'user') return;
     const role = payload.role;
-    const rawText = codexContentText(payload.content);
-    const text = role === 'user' ? codexVisibleUserText(rawText) : rawText;
+    const rawText = rawContentText(payload.content);
+    const text = role === 'user' ? visibleUserText(state, rawText) : rawText;
     if (!text) return;
     if (role === 'user' && /<codex_internal_context(?:\s|>)/i.test(rawText)) {
       state.latestInternalGoal = text;
@@ -570,6 +618,7 @@ function createCodexParser(dependencies) {
       observeActivity(state, 'working', row.timestamp);
       state.latestDelegationNarration = text;
       state.lastAssistantText = text;
+      state.lastAssistantRaw = rawText;
       state.lastConversationRole = 'assistant';
       state.turnHadMeaningfulOutput = true;
     }
@@ -689,6 +738,34 @@ function createCodexParser(dependencies) {
         session.statusDetail = state.activeTurn ? '마지막 요청 처리 기록이 종료됨' : '다음 요청 대기';
         session.statusObserved = observationAge < ACTIVE_THRESHOLD_MS;
       }
+    }
+    const rawFinalResponse = state.lastFinalAnswerRaw
+      || (state.lastTurnCompleted ? state.lastAssistantRaw : '');
+    session.comprehensionContractObserved = state.comprehensionContractObserved;
+    session.comprehensionContractPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
+      state.comprehensionContractPromptFingerprints,
+    );
+    session.comprehensionContractInjected = false;
+    const finalizedComprehension = stageComprehensionCandidate(session, rawFinalResponse, {
+      stageCandidate: true,
+    });
+    if (finalizedComprehension.comprehension) {
+      session.comprehension = finalizedComprehension.comprehension;
+    }
+    if (finalizedComprehension.candidate) {
+      session.comprehensionCandidate = finalizedComprehension.candidate;
+    }
+    if (finalizedComprehension.candidateEligibility?.eligible) {
+      const visibleFinalResponse = finalizedComprehension.body;
+      session.result = compactText(visibleFinalResponse, 6000);
+      state.lastFinalAnswer = session.result;
+      state.lastAssistantText = session.result;
+      replaceFinalAssistantMessage(session, visibleFinalResponse);
+      const visibleIntent = assistantResponseIntent(visibleFinalResponse);
+      session.responseIntent = {
+        ...visibleIntent,
+        source: visibleIntent.category === 'none' ? 'none' : 'assistant-message',
+      };
     }
     session.activityState = finalizedActivityState({
       status: session.status,

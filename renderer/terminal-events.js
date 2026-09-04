@@ -78,6 +78,9 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
       requestAnimationFrame(() => requestAnimationFrame(restoreViewport));
     });
   };
+  // Workbench boundary and authority refreshes must use the same viewport-aware
+  // writer as live terminal events. Raw replay and parser sources remain intact.
+  state.writeTerminalOutput = writeTerminalOutput;
 
   bindTerminalSessionEvents();
   bindTmuxEvents();
@@ -623,6 +626,14 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
     window.whitebox.onTerminalConnection?.(payload => {
       const tone = payload?.state === 'failed' ? 'error' : payload?.state === 'connected' ? 'success' : 'info';
       notice(payload?.message || t('terminal.error.input_failed'), tone);
+    });
+    window.addEventListener('whitebox:terminal-command-delivery', event => {
+      const target = event?.detail?.target || {};
+      const terminalId = String(target.terminalId || event?.detail?.terminalId || '');
+      const entry = terminalId ? state.terminals.get(terminalId) : null;
+      if (entry?.comprehensionOutputFilter?.hasPending?.()) {
+        writeTerminalOutput(entry, entry.comprehensionOutputFilter.releasePending());
+      }
     });
   }
 };

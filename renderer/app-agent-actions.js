@@ -113,6 +113,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         reason: fork?.reason || t("terminal.resume.codex_desktop_live"),
       };
     }
+    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
+      return { supported: false, reason: t("terminal.agent.no_input_target") };
+    }
     try {
       return window.WhiteboxTerminal && typeof window.WhiteboxTerminal.resumeSupport === "function"
         ? window.WhiteboxTerminal.resumeSupport(session)
@@ -584,7 +587,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const routeContext = routedAgentCommandContext(session, requestedRoute);
     const targets = routeContext.targets;
     const saved = state.agentCommandTargets.get(agentCommandTargetKey(session, routeContext.route)) || "";
-    if (saved) return targets.find((target) => target.id === saved) || null;
+    if (saved) {
+      const selected = targets.find((target) => target.id === saved) || null;
+      if (selected) return selected;
+    }
     return targets.length === 1 ? targets[0] : null;
   }
 
@@ -736,9 +742,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       return resumeAgentTerminal(sessionId, true);
     }
     const savedTarget = state.agentCommandTargets.get(agentCommandTargetKey(session, routeContext.route)) || "";
-    const target = savedTarget
+    const saved = savedTarget
       ? routeContext.targets.find((item) => item.id === savedTarget) || null
-      : routeContext.targets.length === 1 ? routeContext.targets[0] : null;
+      : null;
+    const target = saved || (routeContext.targets.length === 1 ? routeContext.targets[0] : null);
     if (!target)
       return context.toast(t(agentCommandTargets(session).length ? "agent.select_target_first" : "agent.no_writable_terminal"));
     if (!command) return context.toast(t("agent.enter_command"));
@@ -856,6 +863,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const session = snapshotSession(sessionId) || state.details.get(sessionId);
     if (!session || !window.WhiteboxTerminal?.resetForAgent) return context.toast(t("agent.session_not_found"));
     if (session.parentId) return context.toast(t("terminal.resume.parent_controlled"));
+    if (window.WhiteboxRendererUtils.isWritableDirectSession?.(session) !== true) {
+      return context.toast(t("terminal.agent.no_input_target"));
+    }
     state.agentCommandSending.add(sessionId);
     try {
       if ($("#detailDrawer").classList.contains("open")) context.closeDrawer(false);
@@ -1036,6 +1046,9 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const submit = form?.querySelector?.('[type="submit"]');
     const route = form?.dataset?.agentCommandRouteSelected || "";
     const target = session ? chosenAgentCommandTarget(session, route) : null;
+    const detachedSourceReady = options.sourceForm === true
+      && form?.isConnected === false
+      && session?.controlCapabilities?.sendInstruction === true;
     // The submit button also reflects whether the ordinary draft was blank at
     // render time. quickRespond fills that draft programmatically, so transport
     // readiness comes from the live state and data attributes below instead.
@@ -1045,8 +1058,8 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       && form?.dataset?.agentCommandProvider === session.provider
       && form?.dataset?.agentCommandRouting === "conversation"
       && ["terminal", "conversation"].includes(form?.dataset?.agentCommandInputModeSelected)
-      && form?.dataset?.agentTerminalReady === "true"
-      && form?.dataset?.agentSendAvailable === "true"
+      && (detachedSourceReady || (form?.dataset?.agentTerminalReady === "true"
+        && form?.dataset?.agentSendAvailable === "true"))
       && target?.kind === "terminal"
       && Boolean(input)
       && input?.dataset?.agentCommandDraft === sessionId
@@ -1151,7 +1164,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       // this action; it is safe only while the owned drawer and exact signed
       // embedded target below still match this session.
       const drawerForm = composer?.querySelector?.(`[data-agent-command-form="${CSS.escape(sessionId)}"]`);
-      const form = drawerForm || (sourceForm?.isConnected ? sourceForm : null);
+      const form = drawerForm || sourceForm;
       const ready = readyQuickResponseForm(sessionId, form, {
         drawer,
         composer,
@@ -1171,7 +1184,12 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       // duplicate PTY-ready events and quick-button double clicks exactly-once.
       finish(false);
       try {
-        form.requestSubmit();
+        if (!drawerForm && form === sourceForm && form.isConnected === false) {
+          Promise.resolve(dispatchAgentCommand(sessionId, form)).catch((error) => {
+            window.WhiteboxRendererUtils.reportRecoverableError("quick-response-submit", error);
+            context.toast?.(t("agent.delivery_retry_ready"));
+          });
+        } else form.requestSubmit();
       } catch (error) {
         window.WhiteboxRendererUtils.reportRecoverableError("quick-response-submit", error);
         context.toast?.(t("agent.delivery_retry_ready"));

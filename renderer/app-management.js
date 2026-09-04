@@ -395,56 +395,6 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     </article>`;
   }
 
-  function renderAttentionInbox() {
-    const section = $("#attentionInbox");
-    if (!section) return 0;
-    const preserveFocusedComposer = document.activeElement?.matches?.("[data-agent-command-draft]")
-      && section.contains(document.activeElement);
-    const reviewSessions = context.filteredSessions().filter(needsManagementInbox);
-    const filter = ["critical", "warning", "attention", "answer", "approval", "optional"].includes(state.managementFilter) ? state.managementFilter : "all";
-    const sessions = reviewSessions.filter((session) => {
-      if (filter === "all") return !matchesManagementFilter(session, "optional");
-      if (filter === "answer") return matchesManagementFilter(session, "attention") && session.attention?.kind !== "approval";
-      if (filter === "approval") return matchesManagementFilter(session, "attention") && session.attention?.kind === "approval";
-      return matchesManagementFilter(session, filter);
-    });
-    const counts = {
-      critical: reviewSessions.filter(session => matchesManagementFilter(session, "critical")).length,
-      warning: reviewSessions.filter(session => matchesManagementFilter(session, "warning")).length,
-      attention: reviewSessions.filter(session => matchesManagementFilter(session, "attention")).length,
-      optional: reviewSessions.filter(session => matchesManagementFilter(session, "optional")).length,
-    };
-    const answerCount = reviewSessions.filter(session =>
-      matchesManagementFilter(session, "attention") && session.attention?.kind !== "approval").length;
-    const approvalCount = reviewSessions.filter(session =>
-      matchesManagementFilter(session, "attention") && session.attention?.kind === "approval").length;
-    const filterButton = (value, label, count, showCount = true) => `<button type="button" data-management-inbox-filter="${value}" aria-pressed="${filter === value ? "true" : "false"}"><i></i><span>${esc(label)}</span>${showCount ? `<b>· ${count}건</b>` : ""}</button>`;
-    const activeCount = Math.max(0, reviewSessions.length - counts.optional);
-    const navWaitingCount = $("#navWaitingCount");
-    if (navWaitingCount) {
-      navWaitingCount.textContent = activeCount;
-    }
-    const countLabel = filter === "all"
-      ? `확인 대기 ${activeCount}건`
-      : `${sessions.length}건`;
-    const firstSession = sessions[0] || null;
-    const remainingSessions = sessions.slice(1);
-    const remainingLabel = `나머지 ${remainingSessions.length}건 보기`;
-    const cardsHtml = firstSession
-      ? `${attentionCardHtml(firstSession, 0)}${remainingSessions.length ? `<details class="attention-more-cards"><summary>${esc(remainingLabel)} <i aria-hidden="true">⌄</i></summary><div>${remainingSessions.map((session, index) => attentionCardHtml(session, index + 1)).join("")}</div></details>` : ""}`
-      : `<div class="management-empty"><b>${esc(t("management.inbox_empty"))}</b><span>${esc(t("management.inbox_empty_detail"))}</span></div>`;
-    const nextHtml = `<header class="attention-inbox-head"><div><p>${esc(t("management.inbox_eyebrow"))}</p><h2>${esc(t("management.inbox_title"))}</h2><span>${firstSession ? `AI 작업 ${activeCount}건이 사용자의 선택을 기다리며 멈춰 있습니다. 가장 오래 기다린 1건부터 보여드립니다.` : esc(t("management.inbox_description", { active: activeCount, completed: counts.optional }))}</span></div><strong>${esc(countLabel)}</strong></header>
-      <div class="attention-inbox-summary" role="toolbar" aria-label="${esc(t("management.operations_severity_buckets"))}">
-        ${filterButton("all", t("management.filter_all_split", { count: reviewSessions.length }), reviewSessions.length, false)}
-        <span class="management-filter-group response"><small>요청 종류</small>${filterButton("answer", t("management.filter_answer", { count: answerCount }), answerCount, false)}${filterButton("approval", t("management.filter_approval", { count: approvalCount }), approvalCount, false)}${filterButton("critical", t("management.filter_completion", { count: counts.critical }), counts.critical, false)}${filterButton("warning", t("management.filter_problem", { count: counts.warning }), counts.warning, false)}</span>
-        <span class="management-filter-group optional"><small>처리 상태</small>${filterButton("optional", t("management.filter_handled", { count: counts.optional }), counts.optional, false)}</span>
-      </div>
-      <p class="attention-filter-note">${esc(t("management.filter_overlap_help"))}</p>
-      <div class="attention-card-list">${cardsHtml}</div>`;
-    if (!preserveFocusedComposer) section.innerHTML = nextHtml;
-    return sessions.length;
-  }
-
   function renderHomeAttention(section) {
     const sessions = typeof context.graphFilteredSessions === "function"
       ? context.graphFilteredSessions()
@@ -515,12 +465,11 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
       </button>`;
     };
     section.innerHTML = `<div class="home-attention-strip ${ordered.length ? "has-items" : "is-clear"}" data-home-attention="${ordered.length}">
-      <button type="button" class="home-attention-title" data-management-filter="all" aria-label="${esc(t("control.attention_title", { active: activeItems, completed: completedItems, total: totalItems, shown: shown.length }))}">
+      <div class="home-attention-title" role="heading" aria-level="2" aria-label="${esc(t("control.attention_title", { active: activeItems, completed: completedItems, total: totalItems, shown: shown.length }))}">
         <span class="home-attention-signal" aria-hidden="true"><i>!</i></span>
         <span class="home-attention-title-copy"><b>${esc(t("control.attention_eyebrow"))}</b><small>${esc(t("control.attention_compact_count", { count: activeItems }))}</small></span>
-      </button>
+      </div>
       <div class="home-attention-list">${shown.map(item).join("")}</div>
-      ${activeItems > 1 ? `<button type="button" class="home-attention-more" data-management-filter="all">${esc(t("control.attention_view_queue", { count: activeItems }))}<i aria-hidden="true">→</i></button>` : ""}
     </div>`;
     return totalItems;
   }
@@ -819,7 +768,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
         <header><div><span>${esc(t("management.outcome"))}</span><h3>${esc(t(`management.outcome.${outcome.status || "in-progress"}`))}</h3></div><em class="${outcome.verified ? "verified" : "unverified"}">${esc(outcome.verified ? t("management.verified") : t("management.unverified"))}</em></header>
         <p>${esc(outcome.summary || t("management.outcome_pending"))}</p>
       </section>
-      ${(session.attention?.category && session.attention.category !== "none") || session.attention?.required ? `<section class="management-attention-detail"><header><span>${esc(attentionLabel(session.attention.kind))}</span><b>${esc(session.attention.summary)}</b></header>${quickActionsHtml(session)}${controls.sendInstruction ? context.agentCommandComposer(session) : ""}</section>` : ""}
+      ${(session.attention?.category && session.attention.category !== "none") || session.attention?.required ? `<section class="management-attention-detail"><header><span>${esc(attentionLabel(session.attention.kind))}</span><b>${esc(session.attention.summary)}</b></header>${quickActionsHtml(session)}${controls.sendInstruction ? session.attention?.kind === "approval" ? `<details class="approval-custom-answer"><summary>원하는 이름 직접 입력하기 <i aria-hidden="true">⌄</i></summary>${context.agentCommandComposer(session, { conversation: true })}</details>` : context.agentCommandComposer(session) : ""}</section>` : ""}
       ${progressHtml(session)}
       ${healthHtml(session)}
       ${browserTabs.length ? `<section class="management-browser-tabs"><header><span>브라우저 탭</span><b>${esc(t("common.items", { count: browserTabs.length }))}</b></header><ul>${browserTabs.map(tab => `<li><i aria-hidden="true">↗</i><div><b title="${esc(tab.title || tab.url || "")}">${esc(tab.title || tab.url || "제목 없는 탭")}</b><small title="${esc(tab.url || "")}">${esc(tab.url || "")}</small></div><span>${esc(tab.status || "open")}</span></li>`).join("")}</ul></section>` : ""}
@@ -844,7 +793,6 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     healthHtml,
     outcomeHtml,
     progressHtml,
-    renderAttentionInbox,
     renderOperationsOverview,
     refreshProviderUsage,
     supervisionFreshnessScore,

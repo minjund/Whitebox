@@ -11,6 +11,10 @@ const { ManagedTmuxRuntime } = require('./managedTmuxRuntime');
 const { createTmuxControlProxyHandle } = require('./tmuxControlProxy');
 const { ensureMacNodePtyRuntime } = require('./nodePtyRuntime');
 const {
+  comprehensionPromptFingerprint,
+  hasComprehensionContract,
+} = require('./comprehensionPacket');
+const {
   retentionDays,
   shouldRetainTerminalSession,
   restrictPathPermissions,
@@ -22,9 +26,11 @@ const MAX_AGENT_ARGUMENT_CHARS = 8 * 1024;
 const MAX_AGENT_SESSION_ID_CHARS = 200;
 const MAX_REPLAY_CHARS = 2 * 1024 * 1024;
 const MAX_DELIVERY_RECORDS = 256;
+const MAX_COMPREHENSION_PROVENANCE_RECORDS = 256;
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_BRIDGE_ID_CHARS = 256;
 const STORE_VERSION = 2;
+const RAW_PROMPT_FINGERPRINT_VERSION = 'raw-v1';
 // Full-screen AI TUIs redraw spinners and status bars continuously. Rewriting
 // every retained replay (up to 64 MiB total) six times per second stalls the
 // terminal-host event loop and delays input/host responses. Exit transitions
@@ -332,6 +338,104 @@ function agentResumeSessionId(options = {}) {
   const resumeIndex = args.indexOf('--resume');
   const sessionId = resumeIndex >= 0 ? args[resumeIndex + 1] : '';
   return validAgentSessionId(sessionId) ? sessionId : '';
+}
+
+function normalizedComprehensionProvenanceRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const terminalId = cleanText(value.terminalId, 200);
+  const boundSessionId = cleanText(value.boundSessionId, MAX_AGENT_SESSION_ID_CHARS);
+  const provider = cleanText(value.provider, 30).toLowerCase();
+  const environment = normalizedEnvironmentKind(value.environment);
+  const distro = cleanText(value.distro, 100);
+  const launchPromptFingerprint = validFingerprint(value.launchPromptFingerprint);
+  const bindingPromptFingerprint = validFingerprint(value.bindingPromptFingerprint);
+  const promptFingerprintVersion = value.promptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
+    ? RAW_PROMPT_FINGERPRINT_VERSION
+    : '';
+  const createdAtText = cleanText(value.createdAt, 50);
+  const boundAtText = cleanText(value.boundAt, 50);
+  const retiredAtText = cleanText(value.retiredAt, 50);
+  if (!/^terminal:[A-Za-z0-9][A-Za-z0-9:._-]{0,190}$/u.test(terminalId)
+    || !AGENT_PROVIDERS[provider]
+    || !validAgentSessionId(boundSessionId)
+    || !boundSessionId.startsWith(`${provider}:`)
+    || !environment
+    || (environment === 'wsl' ? !distro : Boolean(distro))
+    || !launchPromptFingerprint
+    || bindingPromptFingerprint !== launchPromptFingerprint
+    || !Number.isFinite(Date.parse(createdAtText))
+    || !Number.isFinite(Date.parse(boundAtText))
+    || !Number.isFinite(Date.parse(retiredAtText))) {
+    return null;
+  }
+  return {
+    terminalId,
+    boundSessionId,
+    provider,
+    environment,
+    distro,
+    launchPromptFingerprint,
+    bindingPromptFingerprint,
+    promptFingerprintVersion,
+    createdAt: new Date(Date.parse(createdAtText)).toISOString(),
+    boundAt: new Date(Date.parse(boundAtText)).toISOString(),
+    retiredAt: new Date(Date.parse(retiredAtText)).toISOString(),
+  };
+}
+
+function comprehensionProvenanceForSession(session, retiredAt = new Date().toISOString()) {
+  const binding = session?.agentBinding;
+  if (!session
+    || session.options?.transient
+    || session.options?.type !== 'agent'
+    || session.options?.sessionBackend !== 'direct'
+    || session.comprehensionContractInjected !== true
+    || !binding) return null;
+  return normalizedComprehensionProvenanceRecord({
+    terminalId: session.id,
+    boundSessionId: binding.sessionId,
+    provider: binding.provider,
+    environment: binding.environment,
+    distro: binding.distro,
+    launchPromptFingerprint: session.initialPromptFingerprint,
+    bindingPromptFingerprint: binding.promptFingerprint,
+    promptFingerprintVersion: session.initialPromptFingerprintVersion,
+    createdAt: session.createdAt,
+    boundAt: binding.boundAt,
+    retiredAt,
+  });
+}
+
+function publicComprehensionProvenance(record) {
+  return {
+    id: record.terminalId,
+    type: 'agent',
+    provider: record.provider,
+    bridgeId: record.boundSessionId,
+    agentLinkedSessionId: record.boundSessionId,
+    agentLinkedPromptFingerprint: record.bindingPromptFingerprint,
+    initialPromptFingerprint: record.launchPromptFingerprint,
+    initialPromptFingerprintVersion: record.promptFingerprintVersion,
+    comprehensionContractInjected: true,
+    comprehensionProvenanceOnly: true,
+    transient: true,
+    background: false,
+    pid: null,
+    status: 'exited',
+    createdAt: record.createdAt,
+    updatedAt: record.retiredAt,
+    cwd: '',
+    distro: record.environment === 'wsl' ? record.distro : '',
+  };
+}
+
+function isWhiteboxOwnedComprehensionLaunch(options = {}, initialCommand = '') {
+  return options.type === 'agent'
+    && options.sessionBackend === 'direct'
+    && !options.bridgeId
+    && !options.agentForkSourceSessionId
+    && !agentResumeSessionId(options)
+    && hasComprehensionContract(initialCommand);
 }
 
 function agentBridgeKey(options = {}) {
@@ -1528,7 +1632,10 @@ function publicSession(session, includeReplay = false) {
     agentLinkedExternalId: binding?.externalId || '',
     agentLinkedEnvironment: binding?.environment || '',
     agentLinkedDistro: binding?.distro || '',
+    agentLinkedPromptFingerprint: binding?.promptFingerprint || '',
     initialPromptFingerprint: session.initialPromptFingerprint || '',
+    initialPromptFingerprintVersion: session.initialPromptFingerprintVersion || '',
+    comprehensionContractInjected: session.comprehensionContractInjected === true,
     creationId: session.creationId || '',
     conversationBound: Boolean(binding) || isExactBoundAgentOptions(session.options),
     transient: Boolean(session.options.transient),
@@ -1740,6 +1847,10 @@ function persistedSession(session) {
     deliveries: restoredDeliveries(session.deliveries),
     rawInputDeliveries: restoredRawInputDeliveries(session.rawInputDeliveries),
     initialPromptFingerprint: validFingerprint(session.initialPromptFingerprint),
+    initialPromptFingerprintVersion: session.initialPromptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
+      ? RAW_PROMPT_FINGERPRINT_VERSION
+      : '',
+    comprehensionContractInjected: session.comprehensionContractInjected === true,
     creationId: normalizedCreationId(session.creationId),
     creationPayloadFingerprint: validFingerprint(session.creationPayloadFingerprint),
     agentBinding: session.agentBinding ? { ...session.agentBinding } : null,
@@ -1759,11 +1870,17 @@ function persistedSession(session) {
   };
 }
 
-function serializedStorePayload(sessions, maxStoreBytes) {
+function serializedStorePayload(sessions, comprehensionProvenance, maxStoreBytes) {
   const records = sessions.map(persistedSession);
+  const provenanceRecords = (comprehensionProvenance || [])
+    .map(normalizedComprehensionProvenanceRecord)
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right.retiredAt) - Date.parse(left.retiredAt))
+    .slice(0, MAX_COMPREHENSION_PROVENANCE_RECORDS);
   const replays = records.map(record => String(record.replay || ''));
   for (const record of records) record.replay = '';
   const payload = { version: STORE_VERSION, sessions: records };
+  if (provenanceRecords.length) payload.comprehensionProvenance = provenanceRecords;
   const replayless = JSON.stringify(payload);
   const replaylessBytes = Buffer.byteLength(replayless, 'utf8');
   if (replaylessBytes > maxStoreBytes) {
@@ -1854,6 +1971,7 @@ class TerminalManager extends EventEmitter {
     this.storeWriteBlocked = false;
     this.quarantinedStoreFile = '';
     this.sessions = new Map();
+    this.comprehensionProvenanceLedger = new Map();
     this.transitionPromises = new Map();
     this.persistedSessionReconciliationDeferred = options.deferPersistedSessionReconciliation === true;
     this.loadPersistedSessions();
@@ -1897,6 +2015,25 @@ class TerminalManager extends EventEmitter {
       const parsed = JSON.parse(this.fileSystem.readFileSync(this.storeFile, 'utf8'));
       if (![1, STORE_VERSION].includes(parsed?.version) || !Array.isArray(parsed.sessions)) throw new Error('이 버전에서 읽을 수 없는 명령창 기록입니다.');
       let hasUnreadableRecord = false;
+      if (parsed.comprehensionProvenance != null && !Array.isArray(parsed.comprehensionProvenance)) {
+        throw new Error('저장된 이해 패킷 소유권 기록을 읽을 수 없습니다.');
+      }
+      for (const [index, value] of (parsed.comprehensionProvenance || [])
+        .slice(0, MAX_COMPREHENSION_PROVENANCE_RECORDS).entries()) {
+        const provenance = normalizedComprehensionProvenanceRecord(value);
+        if (!provenance) {
+          hasUnreadableRecord = true;
+          this.persistenceError(
+            'load-comprehension-provenance',
+            new Error(`저장된 이해 패킷 소유권 기록 #${index + 1}을(를) 건너뛰었습니다.`),
+          );
+          continue;
+        }
+        const previous = this.comprehensionProvenanceLedger.get(provenance.boundSessionId);
+        if (!previous || Date.parse(provenance.retiredAt) > Date.parse(previous.retiredAt)) {
+          this.comprehensionProvenanceLedger.set(provenance.boundSessionId, provenance);
+        }
+      }
       for (const [index, value] of parsed.sessions.slice(0, MAX_SESSIONS).entries()) {
         try {
           if (!shouldRetainTerminalSession(value, this.retentionDays, this.now())) continue;
@@ -1920,6 +2057,12 @@ class TerminalManager extends EventEmitter {
           const createdAt = validTimestamp(value.createdAt, now);
           const updatedAt = validTimestamp(value.updatedAt, createdAt);
           const initialPromptFingerprint = validFingerprint(value.initialPromptFingerprint);
+          const persistedComprehensionContractInjected = value.comprehensionContractInjected === true
+            && Boolean(initialPromptFingerprint);
+          const initialPromptFingerprintVersion = persistedComprehensionContractInjected
+            && value.initialPromptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
+            ? RAW_PROMPT_FINGERPRINT_VERSION
+            : '';
           const rawCreationId = String(value.creationId || '').trim();
           const creationId = normalizedCreationId(rawCreationId);
           const creationPayloadFingerprint = validFingerprint(value.creationPayloadFingerprint);
@@ -1950,6 +2093,12 @@ class TerminalManager extends EventEmitter {
               );
           if (internalProjectionResume) agentBinding = null;
           const invalidAgentBinding = Boolean((value.agentBinding || hasPersistedForkAudit) && !agentBinding);
+          const comprehensionContractInjected = persistedComprehensionContractInjected
+            && (agentBinding
+              ? agentBinding.promptFingerprint === initialPromptFingerprint
+              : !agentResumeSessionId(options)
+                && !options.bridgeId
+                && !options.agentForkSourceSessionId);
           if (internalProjectionResume) {
             options.bridgeId = '';
             options.agentConnectionSignature = '';
@@ -2003,6 +2152,8 @@ class TerminalManager extends EventEmitter {
             deliveries: restoredDeliveries(value.deliveries),
             rawInputDeliveries: restoredRawInputDeliveries(value.rawInputDeliveries),
             initialPromptFingerprint,
+            initialPromptFingerprintVersion,
+            comprehensionContractInjected,
             creationId,
             creationPayloadFingerprint,
             agentBinding,
@@ -2090,7 +2241,11 @@ class TerminalManager extends EventEmitter {
       const sessions = [...this.sessions.values()]
         .filter(session => !session.options.transient)
         .filter(session => shouldRetainTerminalSession(session, this.retentionDays, this.now()));
-      const serialized = serializedStorePayload(sessions, this.maxStoreBytes);
+      const serialized = serializedStorePayload(
+        sessions,
+        [...this.comprehensionProvenanceLedger.values()],
+        this.maxStoreBytes,
+      );
       this.fileSystem.mkdirSync(path.dirname(this.storeFile), { recursive: true, mode: 0o700 });
       this.fileSystem.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
       replaceStoreFileSync(this.fileSystem, temporary, this.storeFile);
@@ -2389,9 +2544,19 @@ class TerminalManager extends EventEmitter {
   }
 
   deduplicateAgentBridgeSessions({ bootstrap = false, managedPresenceCache = null } = {}) {
+    const previousSessions = new Map(this.sessions);
+    const previousProvenance = new Map(this.comprehensionProvenanceLedger);
+    const previousReplay = new Map([...this.sessions.values()].map(session => [session, {
+      replay: session.replay,
+      replayPendingChunks: Array.isArray(session.replayPendingChunks)
+        ? [...session.replayPendingChunks]
+        : session.replayPendingChunks,
+      replayPendingChars: session.replayPendingChars,
+    }]));
     const groups = new Map();
     const removed = [];
     const removedByKey = new Map();
+    const deduplicatedAt = new Date(this.now()).toISOString();
     for (const session of this.sessions.values()) {
       const key = agentBridgeKey(session.options);
       if (!key) continue;
@@ -2470,6 +2635,7 @@ class TerminalManager extends EventEmitter {
             );
           }
         } else {
+          this.rememberComprehensionProvenance(duplicate, deduplicatedAt);
           this.sessions.delete(duplicate.id);
         }
         removed.push(duplicate.id);
@@ -2481,7 +2647,20 @@ class TerminalManager extends EventEmitter {
         appendSessionReplay(survivor, message, { immediate: true });
       }
     }
-    if (removed.length) this.persistNow();
+    if (removed.length && !this.persistNow()) {
+      this.sessions = previousSessions;
+      this.comprehensionProvenanceLedger = previousProvenance;
+      for (const [session, replay] of previousReplay) {
+        session.replay = replay.replay;
+        session.replayPendingChunks = Array.isArray(replay.replayPendingChunks)
+          ? [...replay.replayPendingChunks]
+          : replay.replayPendingChunks;
+        session.replayPendingChars = replay.replayPendingChars;
+      }
+      const error = new Error('중복된 AI 명령창 정리 상태를 저장하지 못했습니다.');
+      error.code = 'AGENT_CONNECTION_DEDUPLICATE_PERSIST_FAILED';
+      throw error;
+    }
     return removed;
   }
 
@@ -2567,11 +2746,22 @@ class TerminalManager extends EventEmitter {
       .sort((left, right) => (
         (Date.parse(left.updatedAt || 0) || 0) - (Date.parse(right.updatedAt || 0) || 0)
       ));
+    const previousSessions = new Map(this.sessions);
+    const previousProvenance = new Map(this.comprehensionProvenanceLedger);
+    const reclaimedAt = new Date(this.now()).toISOString();
     const removed = [];
     for (const session of removable) {
       if (this.sessions.size + required <= MAX_SESSIONS) break;
+      this.rememberComprehensionProvenance(session, reclaimedAt);
       this.sessions.delete(session.id);
       removed.push(session.id);
+    }
+    if (removed.length && !this.persistNow()) {
+      this.sessions = previousSessions;
+      this.comprehensionProvenanceLedger = previousProvenance;
+      const error = new Error('완료된 명령창 자동 정리 상태를 저장하지 못했습니다.');
+      error.code = 'TERMINAL_RECLAIM_PERSIST_FAILED';
+      throw error;
     }
     return removed;
   }
@@ -2903,6 +3093,12 @@ class TerminalManager extends EventEmitter {
       }
     }
     const fingerprint = initialCommand ? deliveryFingerprint(initialCommand) : '';
+    const comprehensionContractInjected = isWhiteboxOwnedComprehensionLaunch(launchOptions, initialCommand);
+    const initialPromptFingerprint = initialCommand
+      ? (comprehensionContractInjected
+        ? comprehensionPromptFingerprint(initialCommand)
+        : promptFingerprint(initialCommand))
+      : '';
     const deliveryTarget = agentBridgeKey(launchOptions)
       || `agent:${launchOptions.provider}:${launchOptions.cwd}`;
     const creationFingerprint = creationId ? creationPayloadFingerprint(launchOptions, {
@@ -3071,7 +3267,11 @@ class TerminalManager extends EventEmitter {
       replayPendingChars: 0,
       deliveries: [],
       rawInputDeliveries: [],
-      initialPromptFingerprint: initialCommand ? promptFingerprint(initialCommand) : '',
+      initialPromptFingerprint,
+      initialPromptFingerprintVersion: comprehensionContractInjected
+        ? RAW_PROMPT_FINGERPRINT_VERSION
+        : '',
+      comprehensionContractInjected,
       creationId,
       creationPayloadFingerprint: creationFingerprint,
       agentBinding: null,
@@ -3661,7 +3861,27 @@ class TerminalManager extends EventEmitter {
   }
 
   list() {
-    return [...this.sessions.values()].map(session => publicSession(session, false));
+    const sessions = [...this.sessions.values()].map(session => publicSession(session, false));
+    for (const provenance of this.comprehensionProvenanceLedger.values()) {
+      if (!this.sessions.has(provenance.terminalId)) {
+        sessions.push(publicComprehensionProvenance(provenance));
+      }
+    }
+    return sessions;
+  }
+
+  rememberComprehensionProvenance(session, retiredAt) {
+    const provenance = comprehensionProvenanceForSession(session, retiredAt);
+    if (!provenance) return null;
+    this.comprehensionProvenanceLedger.delete(provenance.boundSessionId);
+    this.comprehensionProvenanceLedger.set(provenance.boundSessionId, provenance);
+    while (this.comprehensionProvenanceLedger.size > MAX_COMPREHENSION_PROVENANCE_RECORDS) {
+      const oldest = [...this.comprehensionProvenanceLedger.entries()]
+        .sort((left, right) => Date.parse(left[1].retiredAt) - Date.parse(right[1].retiredAt))[0];
+      if (!oldest) break;
+      this.comprehensionProvenanceLedger.delete(oldest[0]);
+    }
+    return provenance;
   }
 
   bindAgentSession(id, rawBinding = {}) {
@@ -4281,8 +4501,11 @@ class TerminalManager extends EventEmitter {
 
     if (operation === 'close' || operation === 'retire') {
       session.status = 'exited';
+      const previousProvenance = new Map(this.comprehensionProvenanceLedger);
+      this.rememberComprehensionProvenance(session, session.updatedAt);
       this.sessions.delete(terminalId);
       if (!this.persistNow()) {
+        this.comprehensionProvenanceLedger = previousProvenance;
         this.sessions.set(terminalId, session);
         const error = new Error('명령창 종료 완료 상태를 저장하지 못했습니다.');
         error.code = 'TERMINATION_STATE_PERSIST_FAILED';

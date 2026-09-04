@@ -5,7 +5,7 @@ window.WhiteboxAppFactories = window.WhiteboxAppFactories || {};
 window.WhiteboxAppFactories.createNavigationEventBindings = function createNavigationEventBindings(context = {}) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
-    $, state, motionPreference, saveGuideState, selectView, renderUpdateSettings,
+    $, state, motionPreference, saveGuideState, markGuideStep, selectView, renderUpdateSettings,
     filteredSessions, renderSessions, openRunModal, openDrawer, toast, performUiAction,
     rememberDialogTrigger, restoreDialogTrigger, discardDialogTrigger, setDialogOpenState, trapDialogFocus,
   } = context;
@@ -86,7 +86,18 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
       const action = event.target.closest("[data-guide-action]")?.dataset.guideAction;
       if (!action) return;
       if (action === "create") return openRunModal();
-      if (action === "active" || action === "waiting") return selectView(action, { focusMain: true });
+      if (action === "active") return selectView(action, { focusMain: true });
+      if (action === "waiting") {
+        markGuideStep("waiting");
+        selectView("all", { focusMain: true });
+        requestAnimationFrame(() => {
+          const item = $("#operationsOverview")?.querySelector(".home-attention-item");
+          const target = item || $("#operationsOverview");
+          target?.scrollIntoView({ behavior: motionPreference.matches ? "auto" : "smooth", block: "center" });
+          item?.focus({ preventScroll: true });
+        });
+        return;
+      }
       if (action === "detail") {
         const first = filteredSessions()[0] || ((state.snapshot && state.snapshot.sessions) || [])[0];
         if (first) openDrawer(first.id);

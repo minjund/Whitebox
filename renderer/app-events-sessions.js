@@ -13,6 +13,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     moveProjectOrder = () => false,
     archiveSession = () => false,
     refreshProviderUsage = async () => null,
+    openPtyFocus = () => false,
   } = context;
 
   let sessionDragJustEnded = false;
@@ -211,18 +212,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     });
   };
 
-  const managementFilterLabel = value => {
-    if (value === "all") return window.WhiteboxI18n.t("management.filter_all");
-    if (value === "optional") return window.WhiteboxI18n.t("management.attention.optional");
-    if (value === "answer") return window.WhiteboxI18n.t("management.filter_answer", { count: "" });
-    if (value === "approval") return window.WhiteboxI18n.t("management.filter_approval", { count: "" });
-    return window.WhiteboxI18n.t(`management.health.${value}`);
-  };
-  const announceManagementFilter = value => announce(window.WhiteboxI18n.t("management.filter_results", {
-    filter: managementFilterLabel(value),
-    count: $("#attentionInbox")?.querySelectorAll("[data-management-session]").length || 0,
-  }));
-
   function bindManagementEvents() {
     $("#operationsOverview").addEventListener("click", async (event) => {
       const usageRefresh = event.target.closest("[data-provider-usage-refresh]");
@@ -271,10 +260,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       if (sourceAction) return controlSourceSession(sourceAction.dataset.sourceSessionId, sourceAction.dataset.sourceSessionAction);
       const reassign = event.target.closest("[data-reassign-session]");
       if (reassign) return prepareReassignment(reassign.dataset.reassignSession);
-      const filter = event.target.closest("[data-management-filter]");
-      if (!filter) return;
-      selectView("waiting", { focusMain: true, managementFilter: filter.dataset.managementFilter });
-      announceManagementFilter(filter.dataset.managementFilter);
     });
     $("#operationsOverview").addEventListener("input", (event) => {
       const input = event.target.closest("[data-agent-command-draft]");
@@ -295,78 +280,6 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
       input.closest("form")?.requestSubmit();
     });
     $("#operationsOverview").addEventListener("submit", (event) => {
-      const form = event.target.closest("[data-agent-command-form]");
-      if (!form) return;
-      event.preventDefault();
-      dispatchAgentCommand(form.dataset.agentCommandForm, form);
-    });
-    $("#attentionInbox").addEventListener("click", async (event) => {
-      const filter = event.target.closest("[data-management-inbox-filter]");
-      if (filter) {
-        state.managementFilter = filter.dataset.managementInboxFilter;
-        renderSessions("filter");
-        announceManagementFilter(state.managementFilter);
-        requestAnimationFrame(() => $("#attentionInbox")?.querySelector(`[data-management-inbox-filter="${CSS.escape(state.managementFilter)}"]`)?.focus({ preventScroll: true }));
-        return;
-      }
-      const draft = event.target.closest("[data-attention-draft]");
-      if (draft) {
-        const sessionId = draft.dataset.attentionSessionId;
-        const value = draft.dataset.attentionDraft || "";
-        state.agentCommandDrafts.set(sessionId, value);
-        const input = $("#attentionInbox")?.querySelector(`[data-agent-command-draft="${CSS.escape(sessionId)}"]`);
-        if (input) {
-          input.value = value;
-          input.focus({ preventScroll: true });
-          input.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-        return;
-      }
-      const open = event.target.closest("[data-open-session]");
-      if (open) {
-        const session = (state.snapshot?.sessions || []).find(item => item.id === open.dataset.openSession);
-        const options = open.hasAttribute("data-result-review") ? { tab: "summary", resultReview: true } : {};
-        return session?.parentId ? openSubagentConversation(session.id, options) : openDrawer(open.dataset.openSession, options);
-      }
-      const quick = event.target.closest("[data-attention-quick]");
-      if (quick) return quickRespond(quick.dataset.attentionSessionId, quick.dataset.attentionQuick, $("#attentionInbox"));
-      const managed = event.target.closest("[data-managed-run-action]");
-      if (managed) return controlManagedRun(managed.dataset.managementSessionId, managed.dataset.managedRunAction);
-      const sourceAction = event.target.closest("[data-source-session-action]");
-      if (sourceAction) return controlSourceSession(sourceAction.dataset.sourceSessionId, sourceAction.dataset.sourceSessionAction);
-      const reassign = event.target.closest("[data-reassign-session]");
-      if (reassign) prepareReassignment(reassign.dataset.reassignSession);
-    });
-    $("#attentionInbox").addEventListener("input", (event) => {
-      const input = event.target.closest("[data-agent-command-draft]");
-      if (!input) return;
-      state.agentCommandDrafts.set(input.dataset.agentCommandDraft, input.value);
-      const form = input.closest("form");
-      const count = form?.querySelector("[data-conversation-draft-count]");
-      if (count) {
-        count.textContent = window.WhiteboxI18n.t("agent.input_count", { count: input.value.length.toLocaleString() });
-        count.classList.toggle("hidden", input.value.length < 7200);
-        count.classList.toggle("limit-near", input.value.length >= 7800);
-      }
-      const submit = form?.querySelector(".conversation-send");
-      if (submit && !submit.matches('[aria-busy="true"]')) {
-        submit.disabled = form.dataset.agentSendAvailable !== "true" || !input.value.trim();
-      }
-    });
-    $("#attentionInbox").addEventListener("change", (event) => {
-      const picker = event.target.closest("[data-agent-command-target]");
-      if (!picker) return;
-      if (picker.value) state.agentCommandTargets.set(picker.dataset.agentCommandTarget, picker.value);
-      else state.agentCommandTargets.delete(picker.dataset.agentCommandTarget);
-      picker.closest("form")?.querySelectorAll("[data-agent-terminal-open], button[type='submit']").forEach(button => { button.disabled = !picker.value; });
-    });
-    $("#attentionInbox").addEventListener("keydown", (event) => {
-      const input = event.target.closest("[data-agent-command-draft]");
-      if (!input || event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
-      event.preventDefault();
-      input.closest("form")?.requestSubmit();
-    });
-    $("#attentionInbox").addEventListener("submit", (event) => {
       const form = event.target.closest("[data-agent-command-form]");
       if (!form) return;
       event.preventDefault();
@@ -477,6 +390,12 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
         const tab = $("#liveSessionGrid").querySelector(`[data-workflow-detail-tab="${CSS.escape(detailScroll.dataset.workflowDetailScroll || "summary")}"]`);
         tab?.click();
         $("#workflowDetail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      const ptyFocus = event.target.closest("[data-pty-focus-trigger]");
+      if (ptyFocus && !ptyFocus.hasAttribute("data-transcript-source")) {
+        event.stopPropagation();
+        openPtyFocus(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true });
         return;
       }
       const inlineTerminal = event.target.closest("[data-inline-pty-trigger]");

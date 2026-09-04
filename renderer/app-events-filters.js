@@ -52,7 +52,11 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         ? (requested + items.length) % items.length
         : Math.max(0, Math.min(items.length - 1, requested));
       event.preventDefault();
-      if (roving) setRovingTreeItem(container, items[next]);
+      if (roving) {
+        items.forEach((item, index) => {
+          item.tabIndex = index === next ? 0 : -1;
+        });
+      }
       items[next].focus();
       return true;
     };
@@ -207,9 +211,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         ? event.target.closest("[data-inline-pty-trigger]")
         : null;
       if (inlinePty) {
-        // A sidebar task opens its project workspace with the PTY attached —
-        // the same gesture as pressing PTY on the agent node — instead of the
-        // side drawer.
+        // A sidebar task opens its project's task list with the PTY attached to
+        // that task's card — it must not enter the focused work-progress
+        // screen, so the graph focus is cleared and the toggle skips focusing.
         event.preventDefault();
         event.stopPropagation();
         const scope = inlinePty.closest(".project-sidebar-source")?.querySelector("[data-source-workspace]");
@@ -221,7 +225,28 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         }
         if (state.view !== "all") selectView("all", { motionKind: "filter" });
         if ($("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
-        window.WhiteboxInlineTerminal?.toggle?.(inlinePty.dataset.inlinePtyTrigger);
+        state.graphFocusId = null;
+        window.WhiteboxInlineTerminal?.toggle?.(inlinePty.dataset.inlinePtyTrigger, { focus: false });
+        // The task card hosting the PTY can hide inside a closed project group
+        // or sit below the fold. Open its disclosure and bring it on screen
+        // after the view-switch renders of the same gesture settle. rAF can be
+        // starved while the window is occluded, so a timer backs it up.
+        let inlineTerminalRevealed = false;
+        const revealInlineTerminal = () => {
+          if (inlineTerminalRevealed) return;
+          const panel = $("#agentInlineTerminal");
+          if (!panel) return;
+          inlineTerminalRevealed = true;
+          const group = panel.closest(".control-room-project-group");
+          if (group && !group.open) {
+            group.open = true;
+            if (group.dataset.disclosureKey) state.disclosureStates.set(group.dataset.disclosureKey, true);
+            syncControlRoomDisclosureButtons();
+          }
+          panel.scrollIntoView({ behavior: "auto", block: "nearest" });
+        };
+        requestAnimationFrame(() => requestAnimationFrame(revealInlineTerminal));
+        setTimeout(revealInlineTerminal, 180);
         saveDashboardPreferences();
         return;
       }
@@ -261,20 +286,17 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       const item = event.target.closest("[data-workspace], [data-source-workspace]");
       if (item) {
-        // A click on an already-open sidebar project row closes it (accordion);
-        // selecting the project happens on the click that opens it. Moving a
-        // project is reserved for its six-dot drag handle.
+        // Clicking a project row selects the project — its AI list always
+        // shows on the right — and toggles the accordion in the same gesture.
+        // Moving a project stays on its six-dot drag handle.
+        let projectAccordionToggled = false;
         if (activeList.id === "projectSidebarList" && item.classList.contains("project-sidebar-item")) {
           const projectKey = String(item.dataset.sidebarProjectRef || "");
           if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
-          if (projectKey && !state.sidebarCollapsedProjects.has(projectKey)) {
-            state.sidebarCollapsedProjects.add(projectKey);
-            renderWorkspaces();
-            saveDashboardPreferences();
-            requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-project-key="${CSS.escape(projectKey)}"] .project-sidebar-item[role="treeitem"]`)
-              ?.focus({ preventScroll: true }));
-            announce(t("studio.sidebar.collapse_project", { project: item.getAttribute("aria-label") || "" }));
-            return;
+          if (projectKey) {
+            if (state.sidebarCollapsedProjects.has(projectKey)) state.sidebarCollapsedProjects.delete(projectKey);
+            else state.sidebarCollapsedProjects.add(projectKey);
+            projectAccordionToggled = true;
           }
         }
         const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;
@@ -288,7 +310,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         if (activeList.id === "projectSidebarList") {
           const projectKey = String(item.dataset.sidebarProjectRef || "");
           const sourceKey = String(item.dataset.sidebarSourceRef || "");
-          if (projectKey) state.sidebarCollapsedProjects?.delete(projectKey);
+          // A project-row click already chose its expand/collapse state above;
+          // only source/session picks force the parent project open.
+          if (projectKey && !projectAccordionToggled) state.sidebarCollapsedProjects?.delete(projectKey);
           if (sourceKey) state.sidebarCollapsedSources?.delete(sourceKey);
           if (requestedSource !== "all") {
             const source = (state.sourcePlugins || []).find((item) => item.id === requestedSource);
@@ -623,7 +647,14 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       saveDashboardPreferences();
     });
     $("#providerFilter").addEventListener("keydown", (event) => {
-      moveFocus(event, event.currentTarget, "[data-provider-filter]", ["ArrowLeft", "ArrowUp"], ["ArrowRight", "ArrowDown"]);
+      moveFocus(
+        event,
+        event.currentTarget,
+        "[data-provider-filter]",
+        ["ArrowLeft", "ArrowUp"],
+        ["ArrowRight", "ArrowDown"],
+        { roving: true },
+      );
     });
     $("#sortSelect").addEventListener("change", (event) => {
       state.sort = event.target.value;

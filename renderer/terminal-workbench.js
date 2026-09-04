@@ -150,6 +150,9 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   function enqueueRawInput(entry, key, value) {
     const data = String(value || '');
     if (!data || entry.inputClosed) return false;
+    // User input is an explicit turn boundary. Release every incomplete or
+    // still-unauthorized candidate before sending the next bytes to the PTY.
+    if (entry.comprehensionOutputFilter?.hasPending?.()) releasePendingComprehensionOutput(entry);
     if (entry.inputPumpHalted) entry.inputPumpHalted = false;
     const available = Math.max(0, MAX_RAW_INPUT_QUEUE_CHARS - entry.inputQueueChars);
     if (data.length > RAW_INPUT_BATCH_CHARS || data.length > available) {
@@ -177,6 +180,95 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const hours = Math.floor(minutes / 60);
     if (hours < 24) return t('time.hours_ago', { count: hours });
     return t('time.days_ago', { count: Math.floor(hours / 24) });
+  }
+
+  function terminalComprehensionOwnershipVerified(session) {
+    const linkedSessionId = String(session?.agentLinkedSessionId || '').trim();
+    const bridgeId = String(session?.bridgeId || '').trim();
+    const initialPromptFingerprint = String(session?.initialPromptFingerprint || '').trim().toLowerCase();
+    const bindingPromptFingerprint = String(session?.agentLinkedPromptFingerprint || '').trim().toLowerCase();
+    return session?.type === 'agent'
+      && session?.comprehensionContractInjected === true
+      && Boolean(linkedSessionId)
+      && linkedSessionId === bridgeId
+      && /^[a-f0-9]{64}$/u.test(initialPromptFingerprint)
+      && bindingPromptFingerprint === initialPromptFingerprint;
+  }
+
+  function comprehensionTerminalSession(terminalId) {
+    return (Array.isArray(state.sessions) ? state.sessions : [])
+      .find(session => String(session?.id || '') === String(terminalId || '')) || null;
+  }
+
+  function comprehensionPacketAuthority(terminalId) {
+    const terminalSession = comprehensionTerminalSession(terminalId);
+    if (!terminalComprehensionOwnershipVerified(terminalSession)) return { state: 'release' };
+    if (['failed', 'cancelled', 'canceled'].includes(String(terminalSession.status || '').toLowerCase())) {
+      return { state: 'release' };
+    }
+    const linkedSessionId = String(terminalSession.agentLinkedSessionId || '').trim();
+    const agents = Array.isArray(state.snapshot?.sessions) ? state.snapshot.sessions : [];
+    const agent = agents.find(session => String(session?.id || '') === linkedSessionId) || null;
+    if (!agent) {
+      return ['starting', 'running'].includes(String(terminalSession.status || '').toLowerCase())
+        ? { state: 'pending', sessionId: linkedSessionId }
+        : { state: 'release' };
+    }
+    const terminalProvider = String(terminalSession.provider || '').trim().toLowerCase();
+    const agentProvider = String(agent.provider || '').trim().toLowerCase();
+    const linkedExternalId = String(terminalSession.agentLinkedExternalId || '').trim();
+    if (!terminalProvider || terminalProvider !== agentProvider
+      || (linkedExternalId && linkedExternalId !== String(agent.externalId || '').trim())
+      || agent.parentId || Number(agent.depth || 0) > 0) return { state: 'release' };
+
+    if (['starting', 'running', 'waiting'].includes(String(agent.status || '').toLowerCase())) {
+      return { state: 'pending', sessionId: linkedSessionId };
+    }
+    const api = window.WhiteboxComprehensionPacket;
+    if (!api?.isEligibleSession?.(agent)) return { state: 'release' };
+    const packetFingerprint = api.packetContentFingerprint?.(agent.comprehension.packet) || '';
+    const completionGeneration = api.completionGenerationIdentity?.(agent) || '';
+    if (!packetFingerprint || !completionGeneration) return { state: 'release' };
+    return {
+      state: 'ready',
+      sessionId: linkedSessionId,
+      packetFingerprint,
+      completionGeneration,
+    };
+  }
+
+  function createComprehensionOutputFilter(terminalId) {
+    const api = window.WhiteboxComprehensionPacket;
+    return window.WhiteboxComprehensionOutput?.createFilter?.({
+      contractBlock: api?.CONTRACT_BLOCK || '',
+      packetFingerprint: packet => api?.packetContentFingerprint?.(packet) || '',
+      getPacketAuthority: () => comprehensionPacketAuthority(terminalId),
+      isOwnedTerminal: () => {
+        const session = comprehensionTerminalSession(terminalId);
+        return terminalComprehensionOwnershipVerified(session)
+          || window.WhiteboxComprehensionOutput?.hasTrustedContractLaunchProvenance?.(session) === true;
+      },
+    }) || null;
+  }
+
+  function writeReleasedComprehensionOutput(entry, data) {
+    const text = String(data || '');
+    if (!entry || !text) return;
+    if (typeof state.writeTerminalOutput === 'function') state.writeTerminalOutput(entry, text);
+    else entry.terminal.write(text);
+  }
+
+  function releasePendingComprehensionOutput(entry) {
+    const released = entry?.comprehensionOutputFilter?.releasePending?.() || '';
+    writeReleasedComprehensionOutput(entry, released);
+    return released;
+  }
+
+  function refreshComprehensionOutput(entry) {
+    if (!entry || entry.outputHydrating) return '';
+    const released = entry.comprehensionOutputFilter?.refresh?.() || '';
+    writeReleasedComprehensionOutput(entry, released);
+    return released;
   }
 
   function createXtermHost(key, readOnly = false, session = null) {
@@ -226,6 +318,9 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       outputHydrating: !readOnly,
       outputSequence: null,
       outputHydrationBuffer: [],
+      comprehensionOutputFilter: !readOnly && session?.comprehensionContractInjected === true
+        ? createComprehensionOutputFilter(key)
+        : null,
     };
     entry.acceptOutput = payload => {
       const data = String(payload?.data || '');
@@ -242,7 +337,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         if (entry.outputSequence != null && outputSequence <= entry.outputSequence) return null;
         entry.outputSequence = outputSequence;
       }
-      return data;
+      return entry.comprehensionOutputFilter?.consume(data) ?? data;
     };
     const syncScrollState = viewportY => {
       const normalizedViewport = Number(viewportY) || 0;
@@ -393,8 +488,9 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     });
   }
 
-  async function writeTerminalReplay(terminal, replay) {
-    const text = String(replay || '');
+  async function writeTerminalReplay(entry, replay) {
+    const raw = String(replay || '');
+    const text = entry.comprehensionOutputFilter?.consume(raw) ?? raw;
     const chunkChars = 32 * 1024;
     for (let offset = 0; offset < text.length;) {
       let end = Math.min(text.length, offset + chunkChars);
@@ -403,7 +499,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       if (end < text.length && lastCode >= 0xd800 && lastCode <= 0xdbff
         && nextCode >= 0xdc00 && nextCode <= 0xdfff) end -= 1;
       const chunk = text.slice(offset, end);
-      await new Promise(resolve => terminal.write(chunk, resolve));
+      await new Promise(resolve => entry.terminal.write(chunk, resolve));
       offset = end;
     }
   }
@@ -418,6 +514,9 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       state.terminals.delete(session.id);
       entry = null;
     }
+    if (entry && !entry.comprehensionOutputFilter && session?.comprehensionContractInjected === true) {
+      entry.comprehensionOutputFilter = createComprehensionOutputFilter(session.id);
+    }
     if (!entry) {
       entry = createXtermHost(session.id, false, session);
       state.terminals.set(session.id, entry);
@@ -431,7 +530,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         // A retained full-screen TUI replay can be multiple MiB of ANSI redraw
         // traffic. Parse it in bounded xterm writes so opening an old task does
         // not monopolize the renderer and delay fresh AI output.
-        if (detail && detail.replay) await writeTerminalReplay(entry.terminal, detail.replay);
+        if (detail && detail.replay) await writeTerminalReplay(entry, detail.replay);
         const buffered = entry.outputHydrationBuffer.splice(0).sort((left, right) => (
           left.outputSequence != null && right.outputSequence != null
             ? left.outputSequence - right.outputSequence || left.arrival - right.arrival
@@ -441,6 +540,13 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         for (const payload of buffered) {
           const data = entry.acceptOutput(payload);
           if (data) entry.terminal.write(data);
+        }
+        const authorizedTail = entry.comprehensionOutputFilter?.refresh?.() || '';
+        if (authorizedTail) entry.terminal.write(authorizedTail);
+        const detailStatus = String(detail?.status || session?.status || '').toLowerCase();
+        if (entry.comprehensionOutputFilter && !['starting', 'running'].includes(detailStatus)) {
+          const tail = entry.comprehensionOutputFilter.flush();
+          if (tail) entry.terminal.write(tail);
         }
         return entry;
       })().catch(error => {
@@ -689,6 +795,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   function renderTarget() {
     const session = currentSession();
     const remote = currentTmux();
+    // Embedded PTY focus can keep a live xterm while the general terminal view
+    // has no selected session. Re-evaluate every mounted local filter whenever
+    // either agent snapshots or terminal inventory cause this render pass.
+    for (const entry of state.terminals.values()) refreshComprehensionOutput(entry);
     const bound = visibleBoundAgent() || linkedAgentSession(session);
     const boundProvider = bound ? providerLabel(bound.provider || session?.provider) : '';
     const aiTerminal = isAiTerminalSession(session);
@@ -1178,6 +1288,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     if (state.interactionMode === 'question' && !hasRunningQuestionTarget(session, remote)) {
       notice(t('terminal.agent.no_input_target'), 'error');
       return false;
+    }
+    if (session) {
+      const entry = state.terminals.get(session.id);
+      if (entry?.comprehensionOutputFilter?.hasPending?.()) releasePendingComprehensionOutput(entry);
     }
     const questionDelivery = state.interactionMode === 'question';
     const targetId = session?.id || (remote ? `tmux:${remote.distro.name}:${remote.pane.nativeId}` : '');

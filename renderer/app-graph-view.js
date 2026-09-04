@@ -54,6 +54,8 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     }).format(date);
   };
   const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+  const canUseWritablePtySurface = session => window.WhiteboxRendererUtils.canUseWritablePtySurface?.(session) === true;
+  const canOpenResponsibleFocus = session => window.WhiteboxRendererUtils.canOpenResponsibleFocus?.(session) === true;
   const statusLabel = (status, session) => session ? sessionStatusLabel(session, status) : ({
     starting: t("ui.preparing"), running: t("ui.working"), waiting: t("ui.waiting_for_review"), idle: t("ui.idle"),
     completed: t("ui.completed"), failed: t("ui.problem"), cancelled: t("ui.stopped"),
@@ -110,11 +112,11 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       : t("graph.assigned_ai");
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(session);
-    const transcriptSurface = (session.presentation?.conversationSurface === "transcript" || session.controlCapabilities?.pty === false)
-      && !completedMainPty;
-    const inlinePtyAttributes = session.parentId || session.sourcePluginId
-      ? ""
-      : ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+    const writablePtySurface = canUseWritablePtySurface(session);
+    const transcriptSurface = !writablePtySurface;
+    const inlinePtyAttributes = writablePtySurface
+      ? ` data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+      : "";
     const conversationAttributes = transcriptSurface ? ` data-open-session="${esc(session.id)}"` : inlinePtyAttributes;
     const conversationLabel = completedMainPty
       ? t("drawer.terminal_fork_action")
@@ -714,14 +716,14 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const unitCount = activeUnits.length;
     const completedMainPty = presentationStatus === "completed"
       && canForkCodexDesktopSession(root);
-    const transcriptSurface = (root.presentation?.conversationSurface === "transcript" || root.controlCapabilities?.pty === false)
-      && !completedMainPty;
-    const controlRoomPtyAttributes = root.parentId || root.sourcePluginId || transcriptSurface
-      ? ""
-      : ` data-inline-pty-trigger="${esc(root.id)}" aria-expanded="${state.inlineTerminalSessionId === root.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+    const writablePtySurface = canUseWritablePtySurface(root);
+    const responsibleFocus = canOpenResponsibleFocus(root);
+    const controlRoomPtyAttributes = responsibleFocus
+      ? ` data-pty-focus-trigger="${esc(root.id)}" data-focus-surface="${writablePtySurface ? "pty" : "transcript"}" aria-expanded="${state.ptyFocusSessionId === root.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
+      : "";
     const main = `<button type="button" class="control-room-main"${controlRoomPtyAttributes}
       ${completedMainPty ? `aria-label="${esc(t("drawer.terminal_fork_action"))}" title="${esc(t("agent.codex_desktop_fork_help"))}"` : ""}
-      ${transcriptSurface ? `data-open-session="${esc(root.id)}" data-transcript-source="true"` : ""}
+      ${!responsibleFocus ? `data-open-session="${esc(root.id)}" data-transcript-source="true"` : ""}
       data-control-summary="${esc(title.text)}"
       data-motion-key="control-main:${esc(root.id)}" data-motion-value="${esc(root.updatedAt || "")}:${esc(root.status || "")}"
       style="${providerStyle(root.provider)}">
@@ -729,7 +731,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ${sessionBadgesHtml(root, { compact: true })}
       <strong title="${esc(title.full)}">${esc(title.text)}</strong>
       <span class="control-main-now"><small>${esc(t("graph.current_work"))}</small><b title="${esc(current.full)}">${esc(current.text)}</b></span>
-      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : `PTY ${state.inlineTerminalSessionId === root.id ? "↑" : "↓"}`}</b></span>
+      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : writablePtySurface ? `PTY ${state.inlineTerminalSessionId === root.id ? "↑" : "↓"}` : esc(t("pty_focus.readonly_short"))}</b></span>
     </button>`;
     const shownActiveUnits = activeUnits.slice(0, 6);
     const hiddenActiveUnits = Math.max(0, activeUnits.length - shownActiveUnits.length);

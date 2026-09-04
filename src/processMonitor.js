@@ -1,6 +1,11 @@
 'use strict';
 
 const crypto = require('crypto');
+const {
+  injectComprehensionContract,
+  normalizedComprehensionContractPromptFingerprints,
+  promoteComprehensionCandidate,
+} = require('./comprehensionPacket');
 const { execFileSync } = require('child_process');
 const { blankUsage } = require('./providerRegistry');
 
@@ -566,10 +571,53 @@ function bridgePromptMatches(session, bridge) {
   const expected = String(bridge?.initialPromptFingerprint || '').trim().toLowerCase();
   const bridgeStart = Date.parse(bridge?.startedAt || 0);
   if (!/^[a-f0-9]{64}$/u.test(expected) || !Number.isFinite(bridgeStart)) return false;
+  if (bridge?.initialPromptFingerprintVersion === 'raw-v1') {
+    const exactPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
+      session.comprehensionContractPromptFingerprints,
+    );
+    // raw-v1 bridge provenance is paired only with the exact parser proof.
+    // Missing, malformed, or mismatched proof must not fall back to the legacy
+    // display-clipped comparison.
+    return session.comprehensionContractObserved === true
+      && exactPromptFingerprints.length > 0
+      && exactPromptFingerprints.includes(expected);
+  }
   return (session?.messages || []).some(message => {
     if (message?.role !== 'user' || !withinBridgeDiscoveryWindow(message.timestamp, bridgeStart)) return false;
-    return cachedMessagePromptFingerprint(message) === expected;
+    if (cachedMessagePromptFingerprint(message) === expected) return true;
+    if (session.comprehensionContractObserved !== true) return false;
+    try {
+      return promptFingerprint(injectComprehensionContract(message.text)) === expected;
+    } catch (_invalidComprehensionPrompt) {
+      return false;
+    }
   });
+}
+
+function bridgeComprehensionLaunchOwned(bridge) {
+  return bridge?.comprehensionContractInjected === true
+    && /^[a-f0-9]{64}$/u.test(String(bridge?.initialPromptFingerprint || '').trim().toLowerCase());
+}
+
+function bridgeComprehensionBindingOwned(session, bridge) {
+  const sessionId = String(session?.id || '').trim();
+  const linkedSessionId = String(bridge?.linkedSessionId || '').trim();
+  const boundSessionId = String(bridge?.comprehensionBoundSessionId || '').trim();
+  const initialPromptFingerprint = String(bridge?.initialPromptFingerprint || '').trim().toLowerCase();
+  const bindingPromptFingerprint = String(bridge?.comprehensionPromptFingerprint || '').trim().toLowerCase();
+  return bridgeComprehensionLaunchOwned(bridge)
+    && bridge?.comprehensionOwnershipVerified === true
+    && Boolean(sessionId)
+    && linkedSessionId === sessionId
+    && boundSessionId === sessionId
+    && bindingPromptFingerprint === initialPromptFingerprint;
+}
+
+function promoteBridgeComprehension(session, bridge, authority) {
+  if (!bridgeComprehensionLaunchOwned(bridge)
+    || session?.comprehensionContractObserved !== true
+    || !bridgePromptMatches(session, bridge)) return false;
+  return promoteComprehensionCandidate(session, authority);
 }
 
 function normalizedConnectionPath(value, caseInsensitive = false) {
@@ -830,13 +878,34 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
   const usedBridgeIds = new Set();
   const bridgePairs = [];
   for (const bridge of bridges || []) {
-    const explicitId = [bridge.linkedSessionId, bridge.sessionId, bridge.bridgeId, bridge.id]
+    if (bridge?.comprehensionProvenanceOnly === true) {
+      // This record exists only to restore packet provenance after the PTY has
+      // exited. It must never create a synthetic/live runtime presence or a
+      // writable terminal target.
+      usedBridgeIds.add(bridge.id);
+      const linkedSessionId = String(bridge.linkedSessionId || '').trim();
+      const linked = linkedSessionId ? byId.get(linkedSessionId) : null;
+      if (linked
+        && linked.provider === bridge.provider
+        && !utilitySession(linked)
+        && bridgeComprehensionBindingOwned(linked, bridge)) {
+        promoteComprehensionCandidate(linked, 'whitebox-terminal-binding');
+      }
+      continue;
+    }
+    // Only a binding that TerminalManager already authenticated and persisted
+    // is authoritative here. A generic bridge id/sessionId is merely a runtime
+    // hint and must go through the exact prompt candidate graph below.
+    const explicitId = [bridge.linkedSessionId, bridge.bridgeId]
       .map(value => String(value || ''))
       .find(id => id && byId.has(id));
     const linked = explicitId && byId.get(explicitId);
     if (!linked || linked.provider !== bridge.provider || utilitySession(linked)) continue;
     usedBridgeIds.add(bridge.id);
     usedSessionIds.add(linked.id);
+    if (bridgeComprehensionBindingOwned(linked, bridge)) {
+      promoteComprehensionCandidate(linked, 'whitebox-terminal-binding');
+    }
     markRuntime(linked, { ...bridge, kind: 'bridge', label: 'Whitebox AI 명령창', linkScore: 'explicit' });
   }
   for (const bridge of bridges || []) {
@@ -870,6 +939,7 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
     }
     usedBridgeIds.add(pair.bridge.id);
     usedSessionIds.add(pair.session.id);
+    promoteBridgeComprehension(pair.session, pair.bridge, 'whitebox-terminal-bridge');
     markRuntime(pair.session, {
       ...pair.bridge,
       kind: 'bridge',

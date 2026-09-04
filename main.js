@@ -79,7 +79,7 @@ const BRAND_ICON_PATH = path.join(__dirname, 'build', 'icon.png');
 const BRAND_WINDOWS_ICON_PATH = path.join(__dirname, 'build', 'icon.ico');
 const BRAND_WINDOW_ICON_PATH = process.platform === 'win32' ? BRAND_WINDOWS_ICON_PATH : BRAND_ICON_PATH;
 const DEFAULT_LOCALE = 'en';
-const MONITOR_INTERVAL_MS = 5_000;
+const MONITOR_INTERVAL_MS = 2_000;
 const WSL_DISTRO_CACHE_MS = 60_000;
 const ALLOW_UNSIGNED_WINDOWS_UPDATES = packageMetadata.whitebox?.distributionChannel === 'internal'
   && packageMetadata.whitebox?.allowUnsignedWindowsUpdates === true;
@@ -1929,6 +1929,17 @@ async function setupRuntime() {
   });
 }
 
+function terminalComprehensionOwnershipVerified(session) {
+  const linkedSessionId = String(session?.agentLinkedSessionId || '').trim();
+  const initialPromptFingerprint = String(session?.initialPromptFingerprint || '').trim().toLowerCase();
+  const bindingPromptFingerprint = String(session?.agentLinkedPromptFingerprint || '').trim().toLowerCase();
+  return session?.comprehensionContractInjected === true
+    && Boolean(linkedSessionId)
+    && linkedSessionId === String(session?.bridgeId || '').trim()
+    && /^[a-f0-9]{64}$/u.test(initialPromptFingerprint)
+    && bindingPromptFingerprint === initialPromptFingerprint;
+}
+
 function bridgePresenceSessionEligible(session) {
   const live = session?.status === 'running' || session?.status === 'starting';
   const provisionalFork = Boolean(session?.agentForkSourceSessionId
@@ -1941,37 +1952,65 @@ function bridgePresenceSessionEligible(session) {
   const forkExitUnconfirmed = provisionalFork && (session?.status === 'stopping'
     || session?.terminationPending === true
     || session?.terminationUncertain === true);
-  return live || forkExitUnconfirmed;
+  // A completed app-owned task no longer has a live PTY to discover. Retain a
+  // provenance-only projection only when TerminalManager restored the exact
+  // fresh-launch contract and its persisted prompt-bound agentBinding.
+  return live || forkExitUnconfirmed || terminalComprehensionOwnershipVerified(session);
 }
 
 function projectTerminalBridgePresence(sessions, platform = process.platform) {
   const localEnvironment = platform === 'win32' ? 'windows' : (platform === 'darwin' ? 'macos' : 'linux');
   return (Array.isArray(sessions) ? sessions : [])
-    .filter(session => !session.transient
-      && session.type === 'agent'
+    .filter(session => {
+      const persistedProvenance = session?.comprehensionProvenanceOnly === true
+        && session?.transient === true
+        && session?.status === 'exited'
+        && session?.pid == null
+        && terminalComprehensionOwnershipVerified(session);
+      return (!session?.transient || persistedProvenance)
+      && session?.type === 'agent'
       && bridgePresenceSessionEligible(session)
       // A still-running v1.7.3 host may retain these records until its next
       // safe restart. Do not project the recursive chain into agent cards.
-      && !isInternalTerminalProjectionSessionId(session.bridgeId))
-    .map(session => ({
-      id: session.bridgeId || session.id,
-      bridgeId: session.bridgeId || '',
-      linkedSessionId: session.bridgeId || '',
-      terminalId: session.id,
-      provider: session.provider,
-      pid: session.pid,
-      cwd: session.cwd,
-      startedAt: session.createdAt,
-      environment: session.distro && platform === 'win32' ? 'wsl' : localEnvironment,
-      distro: session.distro || '',
-      initialPromptFingerprint: session.initialPromptFingerprint || '',
-      agentForkSourceSessionId: session.agentForkSourceSessionId || '',
-      agentForkSourceSignature: session.agentForkSourceSignature || '',
-      creationId: session.creationId || '',
-      forkProofAuthority: session.agentForkSourceSessionId ? 'codex-fork-lineage-v1' : '',
-      kind: 'bridge',
-      label: 'Whitebox 외부 명령창 연결',
-    }));
+      && !isInternalTerminalProjectionSessionId(session.bridgeId);
+    })
+    .map(session => {
+      const comprehensionOwnershipVerified = terminalComprehensionOwnershipVerified(session);
+      const live = session.status === 'running' || session.status === 'starting';
+      const forkExitUnconfirmed = Boolean(session.agentForkSourceSessionId
+        && session.agentForkSourceSignature
+        && (session.status === 'stopping'
+          || session.terminationPending === true
+          || session.terminationUncertain === true));
+      return {
+        id: session.bridgeId || session.id,
+        bridgeId: session.bridgeId || '',
+        linkedSessionId: session.bridgeId || '',
+        terminalId: session.id,
+        provider: session.provider,
+        pid: session.pid,
+        cwd: session.cwd,
+        startedAt: session.createdAt,
+        environment: session.distro && platform === 'win32' ? 'wsl' : localEnvironment,
+        distro: session.distro || '',
+        initialPromptFingerprint: session.initialPromptFingerprint || '',
+        initialPromptFingerprintVersion: session.initialPromptFingerprintVersion || '',
+        comprehensionContractInjected: session.comprehensionContractInjected === true,
+        comprehensionOwnershipVerified,
+        comprehensionBoundSessionId: comprehensionOwnershipVerified ? session.agentLinkedSessionId : '',
+        comprehensionPromptFingerprint: comprehensionOwnershipVerified
+          ? session.agentLinkedPromptFingerprint
+          : '',
+        comprehensionProvenanceOnly: session.comprehensionProvenanceOnly === true
+          || (comprehensionOwnershipVerified && !live && !forkExitUnconfirmed),
+        agentForkSourceSessionId: session.agentForkSourceSessionId || '',
+        agentForkSourceSignature: session.agentForkSourceSignature || '',
+        creationId: session.creationId || '',
+        forkProofAuthority: session.agentForkSourceSessionId ? 'codex-fork-lineage-v1' : '',
+        kind: 'bridge',
+        label: 'Whitebox 외부 명령창 연결',
+      };
+    });
 }
 
 function bridgePresence() {

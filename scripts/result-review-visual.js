@@ -204,24 +204,14 @@ app.whenReady().then(async () => {
       throw new Error(`홈 확인 목록이 실제 답변 요청과 완료 결과를 구분하지 못했습니다: ${JSON.stringify(home)}`);
     }
 
-    await win.webContents.executeJavaScript(`(() => {
-      const control = window.WhiteboxApp;
-      control.selectView('waiting');
-      control.render();
-    })()`);
-    await waitFor(
-      win,
-      `Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]'))`,
-      '확인 대기 화면에서 구조화된 답변 요청을 찾지 못했습니다.',
-    );
-    const waiting = await win.webContents.executeJavaScript(`(() => ({
-      request: Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]')),
-      ended: Boolean(document.querySelector('.attention-card[data-management-session="fixture-ended"]')),
-      projectResult: Boolean(document.querySelector('.attention-card[data-management-session="fixture-project-result-ready"]')),
-      resultReviewEntry: Boolean(document.querySelector('.attention-card [data-result-review]')),
+    const standaloneAttention = await win.webContents.executeJavaScript(`(() => ({
+      inboxRemoved: !document.querySelector('#attentionInbox'),
+      waitingNavigationRemoved: !document.querySelector('[data-view="waiting"]'),
+      inlineRequest: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-waiting"]')),
     }))()`);
-    if (!waiting.request || waiting.ended || waiting.projectResult || waiting.resultReviewEntry) {
-      throw new Error(`확인 대기 화면이 실제 답변 요청과 완료 결과를 구분하지 못했습니다: ${JSON.stringify(waiting)}`);
+    if (!standaloneAttention.inboxRemoved || !standaloneAttention.waitingNavigationRemoved
+      || !standaloneAttention.inlineRequest) {
+      throw new Error(`확인 필요 항목의 인라인 표시 계약이 올바르지 않습니다: ${JSON.stringify(standaloneAttention)}`);
     }
 
     await win.reload();
@@ -229,7 +219,7 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`(() => {
       const control = window.WhiteboxApp;
       control.state.workspace = control.state.snapshot.sessions.find(item => item.id === 'fixture-root').cwd;
-      control.selectView('waiting');
+      control.selectView('all');
       control.render();
     })()`);
     const persisted = await win.webContents.executeJavaScript(`(() => {
@@ -239,16 +229,18 @@ app.whenReady().then(async () => {
         storedReview: Boolean(localStorage.getItem(control.RESULT_REVIEW_STORAGE_KEY)),
         pending: control.resultReviewTargets(ended).length,
         complete: control.isResultReviewComplete(ended),
-        waiting: Boolean(document.querySelector('.attention-card[data-management-session="fixture-waiting"]')),
-        ended: Boolean(document.querySelector('.attention-card[data-management-session="fixture-ended"]')),
+        waiting: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-waiting"]')),
+        ended: Boolean(document.querySelector('.home-attention-item[data-open-session="fixture-ended"]')),
+        standaloneAttentionRemoved: !document.querySelector('#attentionInbox')
+          && !document.querySelector('[data-view="waiting"]'),
       };
     })()`);
     if (persisted.storedReview || persisted.pending !== 0 || persisted.complete
-      || !persisted.waiting || persisted.ended) {
+      || !persisted.waiting || persisted.ended || !persisted.standaloneAttentionRemoved) {
       throw new Error(`재시작 후 불필요한 결과 확인 상태가 되살아났습니다: ${JSON.stringify(persisted)}`);
     }
 
-    process.stdout.write(`확인 필요·작업 완료 UI 검증 통과\n${JSON.stringify({ completion, home, waiting, persisted, themeStates }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);
+    process.stdout.write(`확인 필요·작업 완료 UI 검증 통과\n${JSON.stringify({ completion, home, standaloneAttention, persisted, themeStates }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);
   } catch (error) {
     process.stderr.write(`${error.stack || error.message}\n`);
     process.exitCode = 1;

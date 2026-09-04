@@ -50,7 +50,6 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     executionModeBadge,
     renderAgentMap,
     renderTmuxMap,
-    renderAttentionInbox,
     renderOperationsOverview,
     progressHtml,
     healthHtml,
@@ -269,7 +268,6 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const terminalView = state.view === "terminal";
     const settingsView = state.view === "settings";
     const runtimeView = state.view === "runtime";
-    const attentionView = state.view === "waiting";
     const memoryView = state.view === "active";
     const homeView = state.view === "all";
     const projectSelected = state.workspace !== "all";
@@ -282,11 +280,10 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     $("#terminalSection").classList.toggle("hidden", !terminalView);
     $("#tmuxSection").classList.toggle("hidden", !tmuxView);
     $("#settingsSection").classList.toggle("hidden", !settingsView);
-    $("#globalStats").classList.toggle("hidden", focusedToolView || homeView || memoryView || attentionView);
+    $("#globalStats").classList.toggle("hidden", focusedToolView || homeView || memoryView);
     $("#providerOverview").classList.add("hidden");
     $("#sessionSection").classList.toggle("hidden", !memoryView);
     $("#operationsOverview").classList.toggle("hidden", !operationsView);
-    $("#attentionInbox").classList.toggle("hidden", !attentionView);
     if (runtimeView) renderRuntimeOverview();
     $("#automationOverview").classList.toggle("hidden", !runtimeView);
     const guideVisible = state.view === "all" && projectSelected && state.guideExpanded && !state.graphFocusId;
@@ -328,18 +325,13 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     if (window.WhiteboxTerminal) window.WhiteboxTerminal.deactivate();
     const sessions = filteredSessions();
     if (operationsView) renderOperationsOverview();
-    const attentionCount = attentionView ? renderAttentionInbox() : 0;
     const showMap = homeView && projectSelected;
     const graphLiveCount = showMap ? renderAgentMap(graphFilteredSessions(), motionKind) : 0;
     const regular = memoryView ? [...sessions] : [];
     const compactMemory = memoryView && window.matchMedia("(max-width: 760px)").matches;
     const effectiveLimit = compactMemory && state.visibleLimit === 30 ? 2 : state.visibleLimit;
     const visible = regular.slice(0, effectiveLimit);
-    const resultCount = attentionView
-      ? attentionCount
-      : memoryView
-        ? regular.length
-        : regular.length;
+    const resultCount = regular.length;
     const resultSummaryKey = window.matchMedia("(max-width: 760px)").matches
       ? "quality.results_summary_mobile"
       : "quality.results_summary";
@@ -362,7 +354,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     $("#sessionGrid").classList.toggle("hidden", visible.length === 0);
     $("#loadMoreBtn").classList.toggle("hidden", regular.length <= effectiveLimit);
     $("#loadMoreBtn").textContent = window.WhiteboxI18n.t("common.remaining", { count: Math.max(0, regular.length - visible.length) });
-    $("#emptyState").classList.toggle("hidden", attentionView || graphLiveCount + regular.length !== 0);
+    $("#emptyState").classList.toggle("hidden", graphLiveCount + regular.length !== 0);
     const hasConditions = Boolean(state.search || state.providerFilters.size || state.workspace !== "all" || state.sort !== "recent");
     $("#emptyClearFiltersBtn").classList.toggle("hidden", resultCount !== 0 || !hasConditions);
     if (graphLiveCount + regular.length === 0) {
@@ -370,12 +362,11 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
         ? [window.WhiteboxI18n.t("ui.no_search_results"), window.WhiteboxI18n.t("ui.clear_the_search_or_change_the_ai_and_workspace_filters")]
         : memoryView
           ? [window.WhiteboxI18n.t("memory.empty_title"), window.WhiteboxI18n.t("memory.empty_description")]
-          : state.view === "waiting"
-            ? [window.WhiteboxI18n.t("ui.all_caught_up"), window.WhiteboxI18n.t("ui.no_tasks_are_waiting_for_your_response_or_choice")]
-            : [window.WhiteboxI18n.t("ui.no_tasks_to_show_yet"), window.WhiteboxI18n.t("ui.check_ai_readiness_then_start_your_first_task")];
+          : [window.WhiteboxI18n.t("ui.no_tasks_to_show_yet"), window.WhiteboxI18n.t("ui.check_ai_readiness_then_start_your_first_task")];
       $("#emptyState h3").textContent = emptyCopy[0];
       $("#emptyState p").textContent = emptyCopy[1];
     }
+    context.renderPtyFocus?.();
     if (!deferMotion) playMotionLayout(previousLayout, motionKind);
     if (motionKind === "view") animateVisibleSections();
   }

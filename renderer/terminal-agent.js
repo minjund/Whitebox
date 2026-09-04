@@ -270,6 +270,30 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     );
   }
 
+  function hasNonDirectSessionMarkers(agentSession) {
+    if (!agentSession) return true;
+    const sourcePlugin = agentSession.sourcePlugin;
+    const sourcePluginPresent = typeof sourcePlugin === 'string'
+      || (sourcePlugin !== null && typeof sourcePlugin === 'object');
+    const sourceMarkers = [agentSession.source, agentSession.clientKind, agentSession.provenance?.source?.id]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    const externalSourcePattern = /(?:^|[.:/_-])(?:opencode|omo|aside)(?:$|[.:/_-])/i;
+    return sourcePluginPresent
+      || Boolean(String(agentSession.sourcePluginId || '').trim())
+      || Boolean(String(agentSession.provenance?.source?.pluginId || '').trim())
+      || agentSession.readOnly === true
+      || Boolean(String(agentSession.controlAuthority || '').trim())
+      || Boolean(String(agentSession.importMode || '').trim())
+      || sourceMarkers.some(value => String(value).toLowerCase() === 'whitebox-bridge' || externalSourcePattern.test(value));
+  }
+
+  function nonDirectSessionError(agentSession) {
+    return hasNonDirectSessionMarkers(agentSession)
+      ? rejectedError(t('terminal.agent.no_input_target'), 'AGENT_SESSION_NOT_WRITABLE')
+      : null;
+  }
+
   function originOwnedSessionError(agentSession) {
     if (isCodexDesktopSession(agentSession)) return codexDesktopOriginOwnedError();
     if (isWhiteboxBridgeProjection(agentSession)) return whiteboxBridgeProjectionOriginOwnedError();
@@ -298,6 +322,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
     const runId = String(agentSession.runId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(sessionId)
+      || String(agentSession.status || '').toLowerCase() !== 'completed'
       || sourceSessionId !== canonicalSourceSessionId
       || /^(?:terminal|bridge):/i.test(sessionId)
       || /^process-\d+$/i.test(sessionId)
@@ -305,7 +330,8 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       || sourcePluginId
       || agentSession.readOnly === true
       || controlAuthority
-      || importMode) {
+      || importMode
+      || hasNonDirectSessionMarkers(agentSession)) {
       return {
         supported: false,
         code: 'CODEX_DESKTOP_FORK_INVALID_SESSION',
@@ -476,6 +502,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!agentSession || !agentSession.id) return [];
     if (agentSession.parentId) return [];
     if (isOriginOwnedSession(agentSession)) return [];
+    if (hasNonDirectSessionMarkers(agentSession)) return [];
     const targets = [];
     const connectionSignature = agentConnectionSignature(agentSession);
     const blockedTerminalIds = new Set(state.sessions
@@ -518,7 +545,12 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
 
   function freshAgentLaunchOptions(options = {}) {
     const provider = String(options.provider || '').trim().toLowerCase();
-    const prompt = String(options.prompt || '').trim();
+    const userPrompt = String(options.prompt || '').trim();
+    const injectComprehensionPrompt = window.WhiteboxComprehension?.injectPrompt;
+    const comprehensionPromptInjected = typeof injectComprehensionPrompt === 'function';
+    const prompt = comprehensionPromptInjected
+      ? injectComprehensionPrompt(userPrompt)
+      : userPrompt;
     const model = String(options.model || '').trim();
     const allowWrites = Boolean(options.allowWrites);
     const requestedPermissionMode = String(options.permissionMode || '').trim();
@@ -526,7 +558,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!['claude', 'codex', 'gemini', 'grok'].includes(provider)) {
       throw rejectedError(t('terminal.resume.unsupported_provider', { provider: providerLabel(provider) }));
     }
-    if (!prompt) throw rejectedError(t('terminal.agent.command_required'));
+    if (!userPrompt) throw rejectedError(t('terminal.agent.command_required'));
 
     if (provider === 'claude') {
       if (model) args.push('--model', model);
@@ -548,11 +580,15 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       if (allowWrites) args.push('--always-approve');
     }
 
-    let initialCommandInArgs = true;
-    if (provider === 'gemini') args.push('--prompt-interactive', prompt);
-    else if (provider === 'grok') initialCommandInArgs = false;
-    else args.push(prompt);
-    return { provider, prompt, args, initialCommandInArgs };
+    // The comprehension contract is intentionally multiline. Deliver an owned
+    // task through the PTY input ledger after the interactive provider starts;
+    // command-line arguments reject newlines and are the wrong trust boundary
+    // for an arbitrary user prompt. The fallback path without the packet
+    // module keeps the historical argv launch behavior.
+    let initialCommandInArgs = !comprehensionPromptInjected && provider !== 'grok';
+    if (initialCommandInArgs && provider === 'gemini') args.push('--prompt-interactive', prompt);
+    else if (initialCommandInArgs) args.push(prompt);
+    return { provider, prompt, userPrompt, args, initialCommandInArgs };
   }
 
   async function startAgent(options = {}) {
@@ -562,7 +598,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const launch = freshAgentLaunchOptions(options);
     const creationId = String(options.creationId || '').trim() || nextCreationId();
     const deliveryId = `start:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
-    const titlePrompt = launch.prompt.replace(/\s+/g, ' ').slice(0, 72);
+    const titlePrompt = launch.userPrompt.replace(/\s+/g, ' ').slice(0, 72);
     const createOptions = {
       type: 'agent',
       provider: launch.provider,
@@ -1176,6 +1212,8 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     // independent resume for this origin.
     const originOwnedError = originOwnedSessionError(agentSession);
     if (originOwnedError) throw originOwnedError;
+    const nonDirectError = nonDirectSessionError(agentSession);
+    if (nonDirectError) throw nonDirectError;
     await initializeBeforeDelivery();
     const connectionSignature = agentConnectionSignature(agentSession);
     const excludedTerminalIds = new Set((options.excludeTerminalIds || []).map(value => String(value || '')).filter(Boolean));
@@ -1427,6 +1465,8 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     }
     const originOwnedError = originOwnedSessionError(agentSession);
     if (originOwnedError) throw originOwnedError;
+    const nonDirectError = nonDirectSessionError(agentSession);
+    if (nonDirectError) throw nonDirectError;
 
     const signature = agentConnectionSignature(agentSession);
     const excludedTerminalIds = new Set((options.excludeTerminalIds || []).map(value => String(value || '')).filter(Boolean));
@@ -1579,6 +1619,8 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   async function resetForAgent(agentSession, options = {}) {
     if (!agentSession?.id) throw rejectedError(t('terminal.resume.no_session_info'));
     if (agentSession.parentId) throw rejectedError(t('terminal.resume.parent_controlled'));
+    const nonDirectError = nonDirectSessionError(agentSession);
+    if (nonDirectError) throw nonDirectError;
     await init();
     const provider = String(agentSession?.provider || '').toLowerCase();
     if (!['claude', 'codex', 'gemini', 'grok'].includes(provider)) {

@@ -30,6 +30,8 @@
     "createDrawerContent",
     "createDrawer",
     "createRunModal",
+    "createPtyFocusMode",
+    "createComprehensionPacketMode",
     "createQualityEnhancements",
     "createNavigationEventBindings",
     "createSessionEventBindings",
@@ -126,7 +128,7 @@
       focus: false,
     };
     const showAttentionSession = (session) => {
-      selectView("waiting");
+      selectView("all");
       if (session.parentId) openSubagentConversation(session.id, safeAttentionDrawerOptions);
       else openDrawer(session.id, safeAttentionDrawerOptions);
     };
@@ -188,6 +190,7 @@
       if (session && !session.sourcePluginId && !isProviderVisible(session.provider)) return;
       if (event === 'terminal') {
         if (!session) {
+          selectView('all');
           toast(t('bootstrap.opened_attention_list'));
           return;
         }
@@ -212,7 +215,7 @@
         });
         return;
       }
-      selectView(event === 'completed' ? 'active' : 'waiting');
+      selectView(event === 'completed' ? 'active' : 'all');
       if (session) {
         const options = event === 'attention'
           ? safeAttentionDrawerOptions

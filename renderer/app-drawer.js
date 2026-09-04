@@ -113,7 +113,10 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
   }
 
   function openDrawerSurface(presentation) {
-    window.WhiteboxInlineTerminal?.close?.({ render: false });
+    // A drawer opened from inside full-screen focus overlays that surface and
+    // must not discard an inline PTY that focus temporarily borrowed. It will
+    // be remounted in its original panel when focus closes.
+    if (!state.ptyFocusSessionId) window.WhiteboxInlineTerminal?.close?.({ render: false });
     clearTimeout(motionState.drawerTimer);
     setDrawerPresentation(presentation);
     $("#detailDrawer").classList.add("open");
@@ -268,27 +271,22 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
   function renderDrawer() {
     const session = selectedSession();
     if (!session) return closeDrawer();
+    const ptyFocusActive = Boolean(state.ptyFocusSessionId);
     const provider = providerInfo(session.provider);
     const presentationStatus = controlRoomStatus(session);
     const delivery = pendingConversationDelivery(session);
     const presentationLabel = delivery ? t(deliveryLabelKey(delivery.phase)) : sessionStatusLabel(session, presentationStatus);
     const subagentMode = state.drawerMode === "subagent" && Boolean(session.parentId);
     const executionMode = state.drawerMode === "execution" && Boolean(state.drawerExecutionId);
-    // A main conversation is an actual terminal surface, not a terminal-styled
-    // transcript. Reuse its exact PTY when one exists. Desktop-owned Codex
-    // history is instead forked into a separate app-owned PTY so its writer is
-    // never attached from two apps; other providers use canonical resume.
-    // Parent-controlled subagents and execution details remain read-only.
+    // Reuse an eligible main conversation's exact PTY. Completed canonical
+    // Codex Desktop history can fork into an app-owned PTY, while a live
+    // origin-owned Desktop task and parent-controlled subagents stay read-only.
     const conversationTab = state.drawerTab === "chat";
-    // A top-level session's conversation is the PTY itself. The terminal
-    // surface stays visible while it connects or reports that no PTY exists;
-    // it must never fall back to a second transcript/chat transport.
-    const forkableCompletedDesktop = String(session.status || "") === "completed"
-      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
-    const conversationSurface = forkableCompletedDesktop
+    // Use the same eligibility decision as the graph and focus surfaces so an
+    // origin-owned live Codex Desktop task is never presented as attachable.
+    const conversationSurface = window.WhiteboxRendererUtils.canUseWritablePtySurface?.(session) === true
       ? "pty"
-      : session.presentation?.conversationSurface
-        || (session.controlCapabilities?.pty === false ? "transcript" : "pty");
+      : "transcript";
     const ptyConversation = conversationTab && !session.parentId && !subagentMode && !executionMode;
     const terminalPtyConversation = ptyConversation && conversationSurface === "pty";
     const terminalTargets = terminalPtyConversation
@@ -364,11 +362,12 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
           ${stopping ? 'disabled aria-busy="true"' : ""}>
           ${esc(t(stopping ? "drawer.stop_requested" : "drawer.stop_run"))}</button>`
         : "";
-    const reset = session.sourcePluginId ? "" : `<button type="button" class="meta-chip session-reset-button" data-session-reset="${esc(session.id)}"
-      aria-label="${esc(t("session.reset"))}" title="${esc(t("session.reset_help"))}">↻ <b>${esc(t("session.reset"))}</b></button>`;
+    const writableDirectSession = window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true;
+    const reset = writableDirectSession ? `<button type="button" class="meta-chip session-reset-button" data-session-reset="${esc(session.id)}"
+      aria-label="${esc(t("session.reset"))}" title="${esc(t("session.reset_help"))}">↻ <b>${esc(t("session.reset"))}</b></button>` : "";
     const runtime = session.runtimePresence || [];
     const resume =
-      !session.sourcePluginId && !isLiveSession(session) && agentResumeSupport(session).supported
+      writableDirectSession && !isLiveSession(session) && agentResumeSupport(session).supported
         ? `<button type="button" class="meta-chip resume-agent" data-resume-agent="${esc(session.id)}">▶
           <b>${esc(t(originAppInfo(session) ? "drawer.continue_background_terminal" : "drawer.resume_in_terminal"))}</b>
         </button>`
@@ -441,7 +440,7 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     content.classList.toggle("hidden", actualTerminalChat);
     terminalSurface.classList.toggle("hidden", !actualTerminalChat);
     terminalSurface.setAttribute("aria-hidden", actualTerminalChat ? "false" : "true");
-    if (!actualTerminalChat) window.WhiteboxDrawerTerminal?.unmount?.();
+    if (!actualTerminalChat && !ptyFocusActive) window.WhiteboxDrawerTerminal?.unmount?.();
     if (actualTerminalChat) {
       content.removeAttribute("aria-label");
       content.removeAttribute("aria-labelledby");
@@ -578,20 +577,20 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     const forkCreationGesture = actualTerminalChat
       && state.drawerMountTerminal !== false
       && forkCreationGestureArmed;
-    if (state.drawerMountTerminal !== false && actualTerminalChat && terminalTarget) {
+    if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && terminalTarget) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: terminalTarget.id,
         createIfMissing: createTerminalIfMissing,
         forkIfOriginOwned: true,
         forkCreationGesture,
       });
-    } else if (state.drawerMountTerminal !== false && actualTerminalChat && attachableTerminalTargets.length === 0) {
+    } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && attachableTerminalTargets.length === 0) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         createIfMissing: createTerminalIfMissing,
         forkIfOriginOwned: true,
         forkCreationGesture,
       });
-    } else if (state.drawerMountTerminal !== false && actualTerminalChat) {
+    } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: attachableTerminalTargets[0].id,
         createIfMissing: false,

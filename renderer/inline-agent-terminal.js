@@ -7,6 +7,7 @@
     targetSignatures: new Map(),
     autoFailures: new Map(),
     pendingMount: null,
+    pendingResume: null,
     pendingReconnect: null,
     focusSessionId: "",
     focusRequestToken: 0,
@@ -25,22 +26,96 @@
     return window.WhiteboxApp;
   }
 
-  function selectedSession() {
+  function sessionById(sessionId) {
     const instance = app();
-    const id = String(instance?.state?.inlineTerminalSessionId || "");
+    const id = String(sessionId || "");
     if (!id) return null;
-    return instance.snapshotSession?.(id)
-      || instance.state?.details?.get?.(id)
-      || (instance.state?.snapshot?.sessions || []).find(session => session.id === id)
+    return instance?.snapshotSession?.(id)
+      || instance?.state?.details?.get?.(id)
+      || (instance?.state?.snapshot?.sessions || []).find(session => session.id === id)
       || null;
+  }
+
+  function activeSessionId(instance = app()) {
+    return String(instance?.state?.ptyFocusSessionId
+      || instance?.state?.inlineTerminalSessionId
+      || "");
+  }
+
+  function selectedSession() {
+    return sessionById(activeSessionId());
   }
 
   function isMainSession(session) {
     return Boolean(session && !session.parentId);
   }
 
+  function isFocusEligibleSession(session) {
+    return window.WhiteboxRendererUtils.canUseWritablePtySurface?.(session) === true;
+  }
+
+  function isReadOnlyResponsibleFocus(instance = app()) {
+    const sessionId = String(instance?.state?.ptyFocusSessionId || "");
+    if (!sessionId) return false;
+    const surface = document.querySelector("#ptyFocusSurface");
+    return Boolean(surface
+      && isVisibleFocusSurface(surface)
+      && surface.dataset?.ptyFocusSession === sessionId
+      && surface.dataset?.ptyFocusMode === "transcript");
+  }
+
+  function isVisibleFocusSurface(surface) {
+    if (!surface || surface.isConnected === false) return false;
+    for (let node = surface; node; node = node.parentElement) {
+      if (node.hidden
+        || node.classList?.contains?.("hidden")
+        || node.getAttribute?.("aria-hidden") === "true"
+        || node.style?.display === "none"
+        || node.style?.visibility === "hidden") return false;
+    }
+    const view = surface.ownerDocument?.defaultView || window;
+    const style = view.getComputedStyle?.(surface);
+    return !style || (style.display !== "none" && style.visibility !== "hidden");
+  }
+
+  function focusShell(instance = app()) {
+    const sessionId = String(instance?.state?.ptyFocusSessionId || "");
+    if (!sessionId) return null;
+    const surface = document.querySelector("#ptyFocusSurface");
+    if (!isVisibleFocusSurface(surface)) return null;
+    const root = surface.querySelector?.("[data-inline-agent-terminal]") || null;
+    return root?.dataset?.inlineAgentTerminal === sessionId ? root : null;
+  }
+
   function shell() {
-    return document.querySelector("[data-inline-agent-terminal]");
+    const instance = app();
+    if (instance?.state?.ptyFocusSessionId) return focusShell(instance);
+    return document.querySelector("#agentInlineTerminal[data-inline-agent-terminal]")
+      || document.querySelector("[data-inline-agent-terminal]");
+  }
+
+  function terminalViewport(root = shell()) {
+    return root?.querySelector?.("[data-agent-terminal-viewport]")
+      || root?.querySelector?.("#agentInlineTerminalViewport")
+      || null;
+  }
+
+  function isCurrentSurface(sessionId, root, instance = app()) {
+    const id = String(sessionId || "");
+    return Boolean(id
+      && root
+      && activeSessionId(instance) === id
+      && shell() === root
+      && root.dataset.inlineAgentTerminal === id);
+  }
+
+  function isFocusSurface(root, instance = app()) {
+    return Boolean(root && focusShell(instance) === root);
+  }
+
+  function ownsViewportMount(viewport, mountId) {
+    const id = String(mountId || "");
+    return Boolean(viewport && id && String(viewport.id || "") === id);
   }
 
   function mountedTerminalHost(viewport, terminalId) {
@@ -96,7 +171,7 @@
       const active = document.activeElement;
       const root = shell();
       const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
-      const viewport = root?.querySelector("#agentInlineTerminalViewport");
+      const viewport = terminalViewport(root);
       const ownsEmbeddedHost = root?.dataset.inlineAgentTerminal === sessionId
         && embedded.agentSessionId === sessionId
         && Boolean(mountedTerminalHost(viewport, embedded.terminalId));
@@ -111,7 +186,7 @@
         && documentFocused
         && documentVisible
         && ownsEmbeddedHost
-        && app()?.state?.inlineTerminalSessionId === sessionId) {
+        && activeSessionId() === sessionId) {
         window.WhiteboxTerminal?.focusEmbedded?.();
       }
     });
@@ -159,16 +234,34 @@
   async function sync(options = {}) {
     const instance = app();
     const session = selectedSession();
-    const root = shell();
     const terminal = window.WhiteboxTerminal;
-    if (!instance?.state || !session || !root || !terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
+    if (!instance?.state || !session || !terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
+    // The responsible-node focus screen can intentionally show a read-only
+    // transcript for an origin-owned desktop task. Passive PTY reconciliation
+    // must ignore that surface instead of closing it as an ineligible PTY.
+    if (isReadOnlyResponsibleFocus(instance)) return { ok: false, reason: "read-only-focus" };
     if (!isMainSession(session)) return { ok: false, reason: "not-main-session" };
+    if (!isFocusEligibleSession(session)) {
+      if (String(instance.state.ptyFocusSessionId || "") === String(session.id || "")) {
+        if (typeof instance.closePtyFocus === "function") {
+          instance.closePtyFocus({ restore: true, reason: "missing" });
+        } else closeFocus();
+      } else if (String(instance.state.inlineTerminalSessionId || "") === String(session.id || "")) {
+        close();
+      } else if (terminal.embeddedState?.().agentSessionId === session.id) {
+        terminal.unmountEmbedded?.();
+      }
+      return { ok: false, reason: "not-eligible" };
+    }
+    const root = shell();
+    if (!root) return { ok: false, reason: "not-ready" };
     if (root.dataset.inlineAgentTerminal !== session.id) return { ok: false, reason: "stale-shell" };
-    const viewport = root.querySelector("#agentInlineTerminalViewport");
+    const viewport = terminalViewport(root);
     if (!viewport) return { ok: false, reason: "missing-viewport" };
 
     const signature = connectionSignature(session, terminal);
-    const forkCreationGesture = local.forkCreationGestures.get(session.id) === signature
+    const explicitOpenGesture = local.forkCreationGestures.get(session.id) === signature;
+    const forkCreationGesture = explicitOpenGesture
       && launchSupport(terminal, session).action === "fork";
     // Consume the gesture before any early return. If a live target is already
     // mounted, this open action has been satisfied and must not remain armed
@@ -191,7 +284,8 @@
     if (embedded.connected
       && embedded.agentSessionId === session.id
       && embedded.terminalId
-      && !mountedHost) {
+      && !mountedHost
+      && !(explicitOpenGesture && isFocusSurface(root, instance))) {
       // The terminal module has one embedded host shared by the inline panel
       // and drawer. A passive snapshot or reconnect must never pull a host
       // back after the drawer has taken ownership of it.
@@ -274,7 +368,7 @@
           forkIfOriginOwned: true,
           forkCreationGesture,
         });
-        if (generation !== local.generation || instance.state.inlineTerminalSessionId !== session.id) {
+        if (generation !== local.generation || !isCurrentSurface(session.id, root, instance)) {
           return { ok: false, reason: "cancelled" };
         }
         const currentSession = selectedSession();
@@ -290,7 +384,7 @@
           local.targetSignatures.delete(session.id);
           local.autoFailures.delete(session.id);
           setTimeout(() => {
-            if (app()?.state?.inlineTerminalSessionId === session.id) sync({ force: true });
+            if (activeSessionId() === session.id) sync({ force: true });
           }, 0);
           return { ok: false, reason: "stale-identity" };
         }
@@ -348,17 +442,99 @@
     const instance = app();
     const sessionId = String(instance?.state?.inlineTerminalSessionId || "");
     if (!instance?.state || !sessionId) return false;
-    local.generation += 1;
-    local.pendingMount = null;
-    local.focusSessionId = "";
-    local.focusOrigin = null;
-    local.forkCreationGestures.delete(sessionId);
+    const activeFocusSessionId = String(instance.state.ptyFocusSessionId || "");
+    if (!activeFocusSessionId) {
+      releasePendingSurfaceControls();
+      local.generation += 1;
+      local.pendingMount = null;
+      local.focusSessionId = "";
+      local.focusOrigin = null;
+    }
+    if (activeFocusSessionId !== sessionId) local.forkCreationGestures.delete(sessionId);
     instance.state.inlineTerminalSessionId = null;
     const embedded = window.WhiteboxTerminal?.embeddedState?.();
-    if (!embedded?.agentSessionId || embedded.agentSessionId === sessionId) {
+    if (!activeFocusSessionId
+      && (!embedded?.agentSessionId || embedded.agentSessionId === sessionId)) {
       window.WhiteboxTerminal?.unmountEmbedded?.();
     }
     if (options.render !== false) instance.renderSessions?.("focus");
+    return true;
+  }
+
+  function markPendingButton(record, button) {
+    if (!record || !button) return;
+    record.buttons.add(button);
+    button.setAttribute("aria-busy", "true");
+    button.disabled = true;
+  }
+
+  function releasePendingButtons(record) {
+    for (const button of record?.buttons || []) {
+      button.removeAttribute?.("aria-busy");
+      button.disabled = false;
+    }
+    record?.buttons?.clear?.();
+  }
+
+  function releasePendingSurfaceControls() {
+    releasePendingButtons(local.pendingResume);
+    releasePendingButtons(local.pendingReconnect);
+  }
+
+  function activeIdentityMatches(sessionId, signature, terminal = window.WhiteboxTerminal) {
+    const current = selectedSession();
+    return Boolean(current
+      && activeSessionId() === String(sessionId || "")
+      && String(current.id || "") === String(sessionId || "")
+      && isFocusEligibleSession(current)
+      && connectionSignature(current, terminal) === signature);
+  }
+
+  function enterFocus(sessionId, options = {}) {
+    const instance = app();
+    const id = String(sessionId || "");
+    if (!instance?.state || !id) return false;
+    const session = sessionById(id);
+    if (!isFocusEligibleSession(session)) return false;
+
+    const previousSessionId = String(instance.state.ptyFocusSessionId || "");
+    if (previousSessionId && previousSessionId !== id) closeFocus();
+    releasePendingSurfaceControls();
+    local.generation += 1;
+    local.pendingMount = null;
+    clearForeignEmbeddedOwner(id);
+    local.autoFailures.delete(id);
+    if (options.focus !== false) requestTerminalFocus(id);
+    else {
+      local.focusSessionId = "";
+      local.focusOrigin = null;
+    }
+    // This token is consumed by the first sync against the visible focus
+    // surface. Passive state restoration never grants provider fork creation.
+    local.forkCreationGestures.set(id, connectionSignature(session));
+    instance.state.ptyFocusSessionId = id;
+    return true;
+  }
+
+  function closeFocus(options = {}) {
+    const instance = app();
+    const sessionId = String(instance?.state?.ptyFocusSessionId || "");
+    if (!instance?.state || !sessionId) return false;
+    releasePendingSurfaceControls();
+    local.generation += 1;
+    local.pendingMount = null;
+    if (local.focusSessionId === sessionId) {
+      local.focusSessionId = "";
+      local.focusOrigin = null;
+    }
+    local.forkCreationGestures.delete(sessionId);
+    instance.state.ptyFocusSessionId = null;
+    if (options.unmount !== false) {
+      // Focus owns both the visible host and any async mount still targeting
+      // its viewport. Always advance the shared mount generation so a delayed
+      // completion cannot strand xterm inside the now-hidden focus surface.
+      window.WhiteboxTerminal?.unmountEmbedded?.();
+    }
     return true;
   }
 
@@ -366,11 +542,8 @@
     const instance = app();
     const id = String(sessionId || "");
     if (!instance?.state || !id) return;
-    const session = instance.snapshotSession?.(id)
-      || instance.state?.details?.get?.(id)
-      || (instance.state?.snapshot?.sessions || []).find(item => item.id === id)
-      || null;
-    if (!isMainSession(session)) {
+    const session = sessionById(id);
+    if (!isFocusEligibleSession(session)) {
       if (instance.state.inlineTerminalSessionId === id) close();
       return;
     }
@@ -396,29 +569,30 @@
     const session = selectedSession();
     const root = shell();
     const button = root?.querySelector("[data-inline-terminal-resume]");
-    if (!session || !button || button.getAttribute("aria-busy") === "true") return;
-    if (!isMainSession(session)) return;
+    if (!session || !button || !isFocusEligibleSession(session)) return;
     const sessionId = String(session.id || "");
     const signature = connectionSignature(session);
     const support = launchSupport(window.WhiteboxTerminal, session);
     const forking = support.action === "fork";
     if (!support.supported) return;
-    const stillCurrent = () => {
-      const currentSession = selectedSession();
-      return instance?.state?.inlineTerminalSessionId === sessionId
-        && shell() === root
-        && root.dataset.inlineAgentTerminal === sessionId
-        && currentSession?.id === sessionId
-        && connectionSignature(currentSession) === signature;
-    };
+    const existing = local.pendingResume;
+    if (existing?.sessionId === sessionId && existing.signature === signature && existing.action === support.action) {
+      markPendingButton(existing, button);
+      setEmpty(root, true,
+        forking ? "drawer.terminal_forking" : "drawer.terminal_resuming",
+        forking ? "drawer.terminal_forking_help" : "drawer.terminal_resuming_help");
+      setStatus(root, forking ? "drawer.terminal_forking" : "drawer.terminal_resuming");
+      return existing.promise;
+    }
+    if (button.getAttribute("aria-busy") === "true") return;
     let focusRequestToken = 0;
     const clearOwnFocusIntent = () => {
       if (local.focusSessionId !== sessionId || local.focusRequestToken !== focusRequestToken) return;
       local.focusSessionId = "";
       local.focusOrigin = null;
     };
-    button.setAttribute("aria-busy", "true");
-    button.disabled = true;
+    const record = { sessionId, signature, action: support.action, buttons: new Set(), promise: null };
+    markPendingButton(record, button);
     setEmpty(
       root,
       true,
@@ -430,50 +604,56 @@
     // reopening its history. Later interaction changes userFocusRevision and
     // must not be erased when this await eventually resolves.
     focusRequestToken = requestTerminalFocus(sessionId);
-    try {
-      const resumed = forking
-        ? await window.WhiteboxTerminal.forkForAgent(session, "", false, { focus: false })
-        : await window.WhiteboxTerminal.resumeForAgent(session, "", false, { focus: false });
-      const targetId = String(resumed?.terminalId || resumed?.id || "");
-      if (!targetId) throw new Error(t(forking
-        ? "terminal.agent.fork_terminal_failed"
-        : "terminal.agent.resume_terminal_failed"));
-      if (!stillCurrent()) {
+    const task = (async () => {
+      try {
+        const resumed = forking
+          ? await window.WhiteboxTerminal.forkForAgent(session, "", false, { focus: false })
+          : await window.WhiteboxTerminal.resumeForAgent(session, "", false, { focus: false });
+        const targetId = String(resumed?.terminalId || resumed?.id || "");
+        if (!targetId) throw new Error(t(forking
+          ? "terminal.agent.fork_terminal_failed"
+          : "terminal.agent.resume_terminal_failed"));
+        if (!activeIdentityMatches(sessionId, signature)) {
+          clearOwnFocusIntent();
+          return;
+        }
+        clearForeignEmbeddedOwner(sessionId);
+        local.targetIds.set(sessionId, targetId);
+        local.targetSignatures.set(sessionId, signature);
+        local.autoFailures.delete(sessionId);
+        await sync({ force: true });
+      } catch (error) {
+        if (!activeIdentityMatches(sessionId, signature)) {
+          clearOwnFocusIntent();
+          return;
+        }
         clearOwnFocusIntent();
-        return;
+        const currentRoot = shell();
+        if (currentRoot) {
+          setEmpty(
+            currentRoot,
+            true,
+            forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
+            forking ? "drawer.terminal_fork_failed_help" : "drawer.terminal_resume_failed_help",
+            true,
+            support.action,
+          );
+          setStatus(
+            currentRoot,
+            forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
+            window.WhiteboxI18n.errorText(error, forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed"),
+            "error",
+          );
+        }
+        report(forking ? "inline-agent-terminal-fork" : "inline-agent-terminal-resume", error);
+      } finally {
+        if (local.pendingResume === record) local.pendingResume = null;
+        releasePendingButtons(record);
       }
-      clearForeignEmbeddedOwner(sessionId);
-      local.targetIds.set(sessionId, targetId);
-      local.targetSignatures.set(sessionId, signature);
-      local.autoFailures.delete(sessionId);
-      await sync({ force: true });
-    } catch (error) {
-      if (!stillCurrent()) {
-        clearOwnFocusIntent();
-        return;
-      }
-      clearOwnFocusIntent();
-      setEmpty(
-        root,
-        true,
-        forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
-        forking ? "drawer.terminal_fork_failed_help" : "drawer.terminal_resume_failed_help",
-        true,
-        support.action,
-      );
-      setStatus(
-        root,
-        forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
-        window.WhiteboxI18n.errorText(error, forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed"),
-        "error",
-      );
-      report(forking ? "inline-agent-terminal-fork" : "inline-agent-terminal-resume", error);
-    } finally {
-      if (shell() === root) {
-        button.removeAttribute("aria-busy");
-        button.disabled = false;
-      }
-    }
+    })();
+    record.promise = task;
+    local.pendingResume = record;
+    return task;
   }
 
   async function reconnect(button) {
@@ -485,18 +665,9 @@
     const terminalId = String(embedded.agentSessionId === session?.id
       ? embedded.terminalId
       : local.targetIds.get(session?.id) || '');
-    if (!session || !root || !button || button.getAttribute("aria-busy") === "true") return;
-    if (!isMainSession(session)) return;
+    if (!session || !root || !button || !isFocusEligibleSession(session)) return;
     const sessionId = String(session.id || "");
     const signature = connectionSignature(session, terminal);
-    const stillCurrent = () => {
-      const currentSession = selectedSession();
-      return instance?.state?.inlineTerminalSessionId === sessionId
-        && shell() === root
-        && root.dataset.inlineAgentTerminal === sessionId
-        && currentSession?.id === sessionId
-        && connectionSignature(currentSession, terminal) === signature;
-    };
     if (!terminalId || !terminal?.restartForAgent) {
       // No app-owned PTY exists to restart. Keep creation behind the explicit
       // resume action so refresh cannot start a competing provider writer.
@@ -515,9 +686,15 @@
     }
     if (local.pendingReconnect?.sessionId === sessionId
       && local.pendingReconnect.terminalId === terminalId
-      && local.pendingReconnect.signature === signature) return local.pendingReconnect.promise;
-    button.setAttribute("aria-busy", "true");
-    button.disabled = true;
+      && local.pendingReconnect.signature === signature) {
+      markPendingButton(local.pendingReconnect, button);
+      setEmpty(root, true);
+      setStatus(root, "drawer.terminal_connecting");
+      return local.pendingReconnect.promise;
+    }
+    if (button.getAttribute("aria-busy") === "true") return;
+    const record = { sessionId, terminalId, signature, buttons: new Set(), promise: null };
+    markPendingButton(record, button);
     clearForeignEmbeddedOwner(sessionId);
     local.autoFailures.delete(sessionId);
     requestTerminalFocus(sessionId);
@@ -527,28 +704,29 @@
       try {
         const restarted = await terminal.restartForAgent(session, { terminalId });
         if (!restarted?.ok) throw new Error(t("agent.reconnect_failed"));
-        if (!stillCurrent()) return;
+        if (!activeIdentityMatches(sessionId, signature, terminal)) return;
         local.targetIds.set(sessionId, terminalId);
         local.targetSignatures.set(sessionId, signature);
         terminal.unmountEmbedded?.();
         await sync({ force: true });
       } catch (error) {
-        if (!stillCurrent()) return;
+        if (!activeIdentityMatches(sessionId, signature, terminal)) return;
         local.autoFailures.set(sessionId, signature);
         local.focusSessionId = "";
         local.focusOrigin = null;
-        setEmpty(root, true, "drawer.terminal_unavailable", "drawer.terminal_unavailable_help");
-        setStatus(root, "drawer.terminal_unavailable", window.WhiteboxI18n.errorText(error, "drawer.terminal_unavailable"), "error");
+        const currentRoot = shell();
+        if (currentRoot) {
+          setEmpty(currentRoot, true, "drawer.terminal_unavailable", "drawer.terminal_unavailable_help");
+          setStatus(currentRoot, "drawer.terminal_unavailable", window.WhiteboxI18n.errorText(error, "drawer.terminal_unavailable"), "error");
+        }
         report("inline-agent-terminal-reconnect", error);
       } finally {
-        if (local.pendingReconnect?.promise === task) local.pendingReconnect = null;
-        if (shell() === root) {
-          button.removeAttribute("aria-busy");
-          button.disabled = false;
-        }
+        if (local.pendingReconnect === record) local.pendingReconnect = null;
+        releasePendingButtons(record);
       }
     })();
-    local.pendingReconnect = { sessionId, terminalId, signature, promise: task };
+    record.promise = task;
+    local.pendingReconnect = record;
     return task;
   }
 
@@ -600,7 +778,7 @@
     const session = selectedSession();
     const root = shell();
     const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
-    const viewport = root?.querySelector("#agentInlineTerminalViewport");
+    const viewport = terminalViewport(root);
     const host = mountedTerminalHost(viewport, terminalId);
     if (!terminalId
       || !session
@@ -617,7 +795,7 @@
     const session = selectedSession();
     const root = shell();
     const embedded = window.WhiteboxTerminal?.embeddedState?.() || {};
-    const viewport = root?.querySelector("#agentInlineTerminalViewport");
+    const viewport = terminalViewport(root);
     const host = mountedTerminalHost(viewport, terminalId);
     if (terminalId
       && event.detail?.mountId === "drawerTerminalViewport"
@@ -637,7 +815,7 @@
       return;
     }
     if (!terminalId
-      || event.detail?.mountId !== "agentInlineTerminalViewport"
+      || !ownsViewportMount(viewport, event.detail?.mountId)
       || !session
       || root?.dataset.inlineAgentTerminal !== session.id
       || embedded.agentSessionId !== session.id
@@ -675,5 +853,5 @@
     setTimeout(() => sync({ force: true }), 0);
   });
 
-  window.WhiteboxInlineTerminal = { toggle, close, sync };
+  window.WhiteboxInlineTerminal = { toggle, close, enterFocus, closeFocus, sync };
 })();

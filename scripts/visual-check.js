@@ -192,8 +192,9 @@ app.whenReady().then(() => {
           cardVisible: Boolean(card && card.getBoundingClientRect().height > 0),
           noOverflow: Boolean(section && section.scrollWidth <= section.clientWidth + 2),
           focusedChrome: isHidden(document.querySelector('.topbar'))
-            && !isHidden(document.querySelector('#projectContextNav'))
-            && document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') === 'false',
+            && isHidden(document.querySelector('#projectContextNav'))
+            && document.querySelector('#projectContextNav')?.getAttribute('aria-hidden') === 'true'
+            && document.querySelector('#projectContextNav')?.hasAttribute('inert'),
           headerVisible: !isHidden(document.querySelector('.settings-head')),
           noDiagnosticCards: !document.querySelector('.settings-meta-grid'),
           noProviderCompanyLabels: !document.querySelector('.provider-visibility-name small'),
@@ -605,7 +606,7 @@ app.whenReady().then(() => {
         const app = window.WhiteboxApp;
         const sessions = app.state.snapshot?.sessions || [];
         const base = sessions.find(item => !item.parentId) || sessions[0];
-        if (!base) return { cards: 0 };
+        if (!base) return { items: 0 };
         const now = new Date().toISOString();
         const make = (id, status, kind, level, title) => ({
           ...base, id, externalId: id + '-external', parentId: null, childIds: [], title, status,
@@ -629,24 +630,24 @@ app.whenReady().then(() => {
           if (index >= 0) sessions[index] = fixture;
           else sessions.unshift(fixture);
         }
-        app.state.view = 'waiting';
+        app.state.view = 'all';
         app.state.search = '';
         app.state.workspace = base.originCwd || base.cwd || '';
         app.state.providerFilters.clear();
         app.renderSessions('view');
-        const section = document.querySelector('#attentionInbox');
+        const section = document.querySelector('.home-attention-mount');
+        const items = [...(section?.querySelectorAll('.home-attention-item[data-open-session]') || [])];
+        const sectionRect = section?.getBoundingClientRect();
         return {
-          cards: section?.querySelectorAll('.attention-card').length || 0,
-          progress: section?.querySelectorAll('[role="progressbar"]').length || 0,
-          health: section?.querySelectorAll('.management-health').length || 0,
-          controls: section?.querySelectorAll('[data-managed-run-action], [data-reassign-session]').length || 0,
-          quickActions: section?.querySelectorAll('[data-attention-quick]').length || 0,
-          flows: section?.querySelectorAll('.attention-decision-flow').length || 0,
-          flowSteps: section?.querySelectorAll('.attention-decision-flow > section').length || 0,
-          replyTemplates: section?.querySelectorAll('[data-attention-draft]').length || 0,
-          answerComposers: section?.querySelectorAll('.attention-card.question .conversation-composer').length || 0,
-          evidenceDetails: section?.querySelectorAll('.attention-evidence-details').length || 0,
-          visible: Boolean(section && !section.classList.contains('hidden')),
+          items: items.length,
+          expectedItems: fixtures.every(fixture => items.some(item => item.dataset.openSession === fixture.id)),
+          allItemsOpenSessions: items.every(item => Boolean(item.dataset.openSession)),
+          titlePresent: Boolean(section?.querySelector('.home-attention-title')),
+          visible: Boolean(section && !section.classList.contains('hidden')
+            && sectionRect && sectionRect.width > 0 && sectionRect.height > 0),
+          firstItemVisible: Boolean(items[0]?.getBoundingClientRect().height),
+          standaloneAttentionRemoved: !document.querySelector('#attentionInbox')
+            && !document.querySelector('[data-view="waiting"]'),
           noHorizontalOverflow: Boolean(section && section.scrollWidth <= section.clientWidth + 2),
           scrollWidth: section?.scrollWidth || 0,
           clientWidth: section?.clientWidth || 0,
@@ -658,11 +659,35 @@ app.whenReady().then(() => {
       })()`);
       await new Promise(resolve => setTimeout(resolve, 250));
       const managementImage = await win.webContents.capturePage();
-      const managementOutput = path.join(outputDir, 'whitebox-management-inbox.png');
+      const managementOutput = path.join(outputDir, 'whitebox-attention-inline.png');
       fs.writeFileSync(managementOutput, managementImage.toPNG());
-      if (!managementMetrics.visible || managementMetrics.cards < 4 || managementMetrics.progress < managementMetrics.cards || managementMetrics.health < managementMetrics.cards || managementMetrics.controls < 5 || managementMetrics.quickActions < 2 || managementMetrics.flows !== managementMetrics.cards || managementMetrics.flowSteps !== managementMetrics.cards * 3 || managementMetrics.answerComposers < 1 || managementMetrics.evidenceDetails !== managementMetrics.cards || !managementMetrics.noHorizontalOverflow) {
-        throw new Error(`관리 확인함 시각 구성이 올바르지 않습니다: ${JSON.stringify(managementMetrics)}`);
+      if (!managementMetrics.visible || managementMetrics.items < 4 || !managementMetrics.expectedItems
+        || !managementMetrics.allItemsOpenSessions || !managementMetrics.titlePresent
+        || !managementMetrics.firstItemVisible || !managementMetrics.standaloneAttentionRemoved
+        || !managementMetrics.noHorizontalOverflow) {
+        throw new Error(`인라인 확인 항목 시각 구성이 올바르지 않습니다: ${JSON.stringify(managementMetrics)}`);
       }
+      await win.webContents.executeJavaScript(`document.querySelector('.home-attention-item[data-open-session="visual-management-approval"]')?.click()`);
+      await waitForRenderer(
+        win,
+        `document.querySelector('#detailDrawer')?.classList.contains('open')
+          && window.WhiteboxApp.state.drawerSessionId === 'visual-management-approval'`,
+        80,
+        100,
+      );
+      const managementDrawerMetrics = await win.webContents.executeJavaScript(`(() => ({
+        open: document.querySelector('#detailDrawer')?.classList.contains('open') || false,
+        mode: window.WhiteboxApp.state.drawerMode || '',
+        sessionId: window.WhiteboxApp.state.drawerSessionId || '',
+        titleVisible: (document.querySelector('#detailDrawer')?.innerText || '').includes('배포 승인 요청'),
+        viewStayedAll: window.WhiteboxApp.state.view === 'all',
+      }))()`);
+      if (!managementDrawerMetrics.open || managementDrawerMetrics.mode !== 'session'
+        || managementDrawerMetrics.sessionId !== 'visual-management-approval'
+        || !managementDrawerMetrics.titleVisible || !managementDrawerMetrics.viewStayedAll) {
+        throw new Error(`인라인 확인 항목의 오른쪽 상세창 연결이 올바르지 않습니다: ${JSON.stringify(managementDrawerMetrics)}`);
+      }
+      await win.webContents.executeJavaScript(`document.querySelector('#closeDrawerBtn')?.click()`);
       await win.webContents.executeJavaScript(`(() => { window.WhiteboxApp.state.view = 'all'; window.WhiteboxApp.renderSessions('view'); document.querySelector('.main-stage')?.scrollTo(0, 0); })()`);
       const densityMetrics = await win.webContents.executeJavaScript(`(() => {
         window.__ensureWhiteboxDensityFixture?.();
@@ -1164,7 +1189,7 @@ app.whenReady().then(() => {
       fs.writeFileSync(drawerOutput, drawerImage.toPNG());
       await win.webContents.executeJavaScript(`window.whitebox.terminalList().then(items => Promise.all(items.map(item => window.whitebox.terminalClose(item.id).catch(() => null))))`);
       await new Promise(resolve => setTimeout(resolve, 250));
-      process.stdout.write(`${output}\n${compactOutput}\n${settingsOutput}\n${terminalOutput}\n${sessionTerminalOutput}\n${terminalCompactOutput}\n${tmuxOutput}\n${tmuxControlOutput}\n${tmuxFocusOutput}\n${tmuxDetailOutput}\n${structuredOutput}\n${deliveryOutput}\n${treeOutput}\n${managementOutput}\n${focusOutput}\n${communicationOutput}\n${childFocusOutput}\n${subagentStateOutput}\n${subagentConversationOutput}\n${workflowCompactOutput}\n${drawerOutput}\n${JSON.stringify({ bridge: bridgeInfo, beginner: beginnerMetrics, compact: compactMetrics, settings: settingsMetrics, terminal: terminalMetrics, sessionTerminal: sessionTerminalMetrics, terminalCompact: terminalCompactMetrics, terminalContinuity: continuityMetrics, drawerCommand: commandUiMetrics, tmuxControl: tmuxControlMetrics, dashboard: metrics, density: densityMetrics, management: managementMetrics, motion: { ...motionMetrics, ...refreshMotionMetrics, ...motionClosedMetrics }, workflowChild: childMetrics, workflowReturn: returnMetrics, subagentConversation: subagentConversationMetrics, workflowCompact: workflowCompactMetrics, tmux: tmuxMetrics, tmuxDetail: tmuxDetailMetrics, structuredDetail: structuredMetrics, deliveryStatus: deliveryMetrics })}\n`);
+      process.stdout.write(`${output}\n${compactOutput}\n${settingsOutput}\n${terminalOutput}\n${sessionTerminalOutput}\n${terminalCompactOutput}\n${tmuxOutput}\n${tmuxControlOutput}\n${tmuxFocusOutput}\n${tmuxDetailOutput}\n${structuredOutput}\n${deliveryOutput}\n${treeOutput}\n${managementOutput}\n${focusOutput}\n${communicationOutput}\n${childFocusOutput}\n${subagentStateOutput}\n${subagentConversationOutput}\n${workflowCompactOutput}\n${drawerOutput}\n${JSON.stringify({ bridge: bridgeInfo, beginner: beginnerMetrics, compact: compactMetrics, settings: settingsMetrics, terminal: terminalMetrics, sessionTerminal: sessionTerminalMetrics, terminalCompact: terminalCompactMetrics, terminalContinuity: continuityMetrics, drawerCommand: commandUiMetrics, tmuxControl: tmuxControlMetrics, dashboard: metrics, density: densityMetrics, management: managementMetrics, managementDrawer: managementDrawerMetrics, motion: { ...motionMetrics, ...refreshMotionMetrics, ...motionClosedMetrics }, workflowChild: childMetrics, workflowReturn: returnMetrics, subagentConversation: subagentConversationMetrics, workflowCompact: workflowCompactMetrics, tmux: tmuxMetrics, tmuxDetail: tmuxDetailMetrics, structuredDetail: structuredMetrics, deliveryStatus: deliveryMetrics })}\n`);
     } catch (error) {
       const detail = `${error.stack || error.message}\n`;
       process.stderr.write(detail);

@@ -3,8 +3,141 @@
 const { normalizeSourceSession, normalizedCapabilities, validateManifest } = require('./contracts');
 const { bundledSourceDefinitions } = require('./bundled');
 const { isSourcePluginEnabled } = require('./settingsStore');
+const {
+  MAX_CONTRACT_PROMPT_FINGERPRINTS,
+  comprehensionPromptFingerprint,
+  hasComprehensionContract,
+  normalizedComprehensionContractPromptFingerprints,
+  promoteComprehensionCandidate,
+  stageComprehensionCandidate,
+  stripComprehensionContract,
+} = require('../comprehensionPacket');
 
 const SCAN_TIMEOUT_MS = 12_000;
+
+function normalizedOwnerships(status, pluginId) {
+  const records = Array.isArray(status?.comprehensionOwnerships) ? status.comprehensionOwnerships : [];
+  const seen = new Set();
+  return records.slice(-500).map(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const externalId = String(value.externalId || '').trim();
+    const promptFingerprint = String(value.promptFingerprint || '').trim().toLowerCase();
+    const requestId = String(value.requestId || '').trim();
+    const boundAt = String(value.boundAt || '').trim();
+    if (String(value.pluginId || '') !== pluginId
+      || !externalId
+      || externalId.length > 500
+      || /[\u0000-\u001f\u007f]/u.test(externalId)
+      || !/^[a-f0-9]{64}$/u.test(promptFingerprint)
+      || !requestId
+      || requestId.length > 160
+      || !Number.isFinite(Date.parse(boundAt))) return null;
+    const key = `${externalId}\u0000${promptFingerprint}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return { pluginId, externalId, promptFingerprint, requestId, boundAt };
+  }).filter(Boolean);
+}
+
+function latestMessageIndex(messages, role) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === role) return index;
+  }
+  return -1;
+}
+
+function replaceFinalResponseCopies(session, response, body) {
+  if (typeof response !== 'string' || typeof body !== 'string' || response === body) return;
+  session.result = body;
+  if (session.outcome && typeof session.outcome === 'object') {
+    session.outcome = { ...session.outcome, summary: body };
+  }
+  if (Array.isArray(session.outcomes)) {
+    session.outcomes = session.outcomes.map(outcome => (
+      outcome && outcome.text === response ? { ...outcome, text: body } : outcome
+    ));
+  }
+}
+
+function stageSourceComprehension(session) {
+  const messages = Array.isArray(session?.messages)
+    ? session.messages.map(message => message && typeof message === 'object' ? { ...message } : message)
+    : [];
+  const contractUserIndexes = [];
+  const contractPromptFingerprints = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message?.role !== 'user' || !hasComprehensionContract(message.text)) continue;
+    contractUserIndexes.push(index);
+    const fingerprint = comprehensionPromptFingerprint(String(message.text || ''));
+    if (!contractPromptFingerprints.includes(fingerprint)
+      && contractPromptFingerprints.length < MAX_CONTRACT_PROMPT_FINGERPRINTS) {
+      contractPromptFingerprints.push(fingerprint);
+    }
+  }
+  const contractObserved = contractUserIndexes.length > 0;
+  const next = {
+    ...session,
+    messages,
+    comprehensionContractObserved: contractObserved,
+    comprehensionContractPromptFingerprints: normalizedComprehensionContractPromptFingerprints(
+      contractPromptFingerprints,
+    ),
+    comprehensionContractInjected: false,
+  };
+  delete next.comprehension;
+  delete next.comprehensionCandidate;
+  delete next.comprehensionOrigin;
+
+  let visiblePrompt = '';
+  for (const index of contractUserIndexes) {
+    const text = String(messages[index]?.text || '');
+    const visible = stripComprehensionContract(text);
+    if (!visiblePrompt) visiblePrompt = visible;
+    messages[index] = { ...messages[index], text: visible };
+  }
+  if (/^<whitebox-comprehension-contract\b/iu.test(String(next.title || ''))) {
+    next.title = visiblePrompt.replace(/\s+/gu, ' ').slice(0, 240) || 'Whitebox source task';
+  }
+
+  const assistantIndex = latestMessageIndex(messages, 'assistant');
+  const response = assistantIndex >= 0
+    ? String(messages[assistantIndex]?.text || '')
+    : String(next.result || '');
+  const staged = stageComprehensionCandidate(next, response, {
+    contractObserved: true,
+    stageCandidate: true,
+  });
+  next.comprehension = staged.comprehension;
+  if (staged.candidate) next.comprehensionCandidate = staged.candidate;
+  if (assistantIndex >= 0) messages[assistantIndex] = { ...messages[assistantIndex], text: staged.body };
+  replaceFinalResponseCopies(next, response, staged.body);
+  return { session: next, contractObserved, contractPromptFingerprints };
+}
+
+function applySourceComprehension(session, ownership = null) {
+  let staged = stageSourceComprehension(session);
+  if (!ownership) return staged.session;
+
+  // A visible contract is useful corroboration and must match exactly. Source
+  // scans are allowed to contain only a recent message window, however, so an
+  // absent contract is not negative evidence for an exact persisted binding.
+  if (staged.contractObserved && staged.contractPromptFingerprints.some(
+    fingerprint => fingerprint !== ownership.promptFingerprint,
+  )) return staged.session;
+
+  const projected = staged.session;
+  if (projected.comprehensionCandidate) {
+    promoteComprehensionCandidate(projected, 'whitebox-source-plugin-binding');
+  } else {
+    projected.comprehensionContractInjected = true;
+    projected.comprehensionOrigin = {
+      contractInjected: true,
+      authority: 'whitebox-source-plugin-binding',
+    };
+  }
+  return projected;
+}
 
 function withTimeout(value, timeoutMs, label) {
   let timer = null;
@@ -32,6 +165,7 @@ class SourcePluginMonitorHost {
     this.sessions = new Map();
     this.external = new Map();
     this.runtimeStatuses = new Map();
+    this.comprehensionOwnerships = new Map();
     this.initialize();
   }
 
@@ -112,8 +246,23 @@ class SourcePluginMonitorHost {
   setRuntimeStatuses(statuses = []) {
     this.runtimeStatuses.clear();
     for (const status of Array.isArray(statuses) ? statuses : []) {
-      if (status && status.id) this.runtimeStatuses.set(String(status.id), status);
+      if (!status || !status.id) continue;
+      const pluginId = String(status.id);
+      this.runtimeStatuses.set(pluginId, { ...status });
     }
+  }
+
+  comprehensionOwnership(pluginId, externalId) {
+    const id = String(externalId || '');
+    return (this.comprehensionOwnerships.get(String(pluginId || '')) || [])
+      .find(record => record.externalId === id) || null;
+  }
+
+  normalizeSession(raw, manifest) {
+    const normalized = normalizeSourceSession(raw, manifest, { platform: this.platform });
+    if (!normalized) return null;
+    const ownership = this.comprehensionOwnership(manifest.id, normalized.externalId);
+    return applySourceComprehension(normalized, ownership);
   }
 
   setExternalSnapshot(pluginId, payload = {}) {
@@ -122,8 +271,10 @@ class SourcePluginMonitorHost {
     if (!definition) return false;
     if (!this.pluginEnabled(id) || this.runtimeDisabled(id)) {
       this.external.delete(id);
+      this.comprehensionOwnerships.delete(id);
       return false;
     }
+    this.comprehensionOwnerships.set(id, normalizedOwnerships(payload, id));
     this.external.set(id, {
       sessions: Array.isArray(payload.sessions) ? payload.sessions : [],
       status: payload.status || null,
@@ -231,13 +382,13 @@ class SourcePluginMonitorHost {
           stop: Boolean(readOnlyImport && managedStop), resume: false, archive: false, delete: false, pty: false,
         }
         : observedRuntimeIntersection;
-      return normalizeSourceSession({
+      return this.normalizeSession({
         ...raw,
         sourceControlCapabilities: capabilities,
         controlUnavailableReasons: readOnlyImport
           ? { ...(raw.controlUnavailableReasons || {}), sendInstruction: '선택 폴더 기록은 읽기 전용입니다.', stop: '선택 폴더 기록은 읽기 전용입니다.', archive: '선택 폴더 기록은 읽기 전용입니다.', delete: '선택 폴더 기록은 읽기 전용입니다.' }
           : runtime?.controlUnavailableReasons || raw.controlUnavailableReasons,
-      }, manifest, { platform: this.platform });
+      }, manifest);
     }).filter(Boolean);
   }
 
@@ -292,7 +443,10 @@ class SourcePluginMonitorHost {
     if (!external && owner && typeof owner.monitor.detail === 'function') {
       raw = await withTimeout(owner.monitor.detail(card.externalId), SCAN_TIMEOUT_MS, `${owner.manifest.name} 상세 기록 조회`) || card;
     }
-    return normalizeSourceSession(raw, owner?.manifest || this.definitions.find(item => item.manifest.id === card.sourcePluginId).manifest, { platform: this.platform });
+    return this.normalizeSession(
+      raw,
+      owner?.manifest || this.definitions.find(item => item.manifest.id === card.sourcePluginId).manifest,
+    );
   }
 
   async dispose() {
@@ -304,7 +458,8 @@ class SourcePluginMonitorHost {
     await Promise.allSettled(tasks);
     this.monitors.clear();
     this.sessions.clear();
+    this.comprehensionOwnerships.clear();
   }
 }
 
-module.exports = { SCAN_TIMEOUT_MS, SourcePluginMonitorHost, withTimeout };
+module.exports = { SCAN_TIMEOUT_MS, SourcePluginMonitorHost, applySourceComprehension, withTimeout };

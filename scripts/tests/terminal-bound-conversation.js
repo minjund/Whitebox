@@ -6,6 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const {
+  comprehensionPromptFingerprint,
+  injectComprehensionContract,
+} = require('../../src/comprehensionPacket');
+const {
   applyRuntimePresence,
   forkBridgeBindingGuardSessionIds,
   forkBridgeProcessProof,
@@ -131,7 +135,7 @@ function managerFixture(root, overrides = {}) {
 
 function mainBridgePresenceProjector(root) {
   const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  const start = source.indexOf('function bridgePresenceSessionEligible(session)');
+  const start = source.indexOf('function terminalComprehensionOwnershipVerified(session)');
   const end = source.indexOf('function bridgePresence()', start);
   if (start < 0 || end <= start) throw new Error('main.js bridge presence projector를 찾지 못했습니다.');
   const sandbox = {
@@ -512,6 +516,392 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
         && error.creationState === 'rejected',
     );
     assert.equal(blockedCreation.spawns.length, 0, '생성 장부 영속화 실패 시 spawn 전에 fail closed해야 합니다.');
+  });
+
+  test('fresh 계약 PTY 소유권만 binding과 함께 영속되고 종료 후 provenance-only로 복원된다', async () => {
+    const storeFile = path.join(temp, 'fresh-comprehension-ownership.json');
+    const { manager } = managerFixture(root, { storeFile });
+    const originalPrompt = `완료 뒤 이해 패킷까지 같은 응답에서 만들어 주세요\n${'긴'.repeat(7_500)}\nTERMINAL-LONG-PROMPT-TAIL`;
+    const injectedPrompt = injectComprehensionContract(originalPrompt);
+    const created = manager.create({
+      type: 'agent', provider: 'grok', cwd: root,
+      args: ['--no-auto-update'],
+      initialCommand: injectedPrompt, initialCommandInArgs: false,
+      creationId: 'create:fresh-comprehension-owned',
+      deliveryId: 'start:fresh-comprehension-owned',
+      sessionBackend: 'direct', transient: false,
+    });
+    assert.equal(created.comprehensionContractInjected, true);
+    assert.equal(created.initialPromptFingerprintVersion, 'raw-v1');
+    assert.equal(created.initialPromptFingerprint, comprehensionPromptFingerprint(injectedPrompt),
+      'TerminalManager는 6000자 display clip이 아니라 전체 raw injected prompt를 hash해야 합니다.');
+    assert.notEqual(created.initialPromptFingerprint,
+      comprehensionPromptFingerprint(`${injectedPrompt.slice(0, 6_000)}…`));
+    assert.equal(created.agentLinkedPromptFingerprint, '');
+    const bound = manager.bindAgentSession(created.id, {
+      sessionId: 'grok:fresh-comprehension-owned',
+      externalId: 'fresh-comprehension-owned',
+      provider: 'grok', environment: 'macos', distro: '',
+      promptFingerprint: created.initialPromptFingerprint,
+      linkScore: 19_000,
+    });
+    assert.equal(bound.comprehensionContractInjected, true);
+    assert.equal(bound.agentLinkedPromptFingerprint, bound.initialPromptFingerprint);
+    const ownedState = manager.sessions.get(created.id);
+    ownedState.status = 'exited';
+    ownedState.pid = null;
+    ownedState.updatedAt = new Date().toISOString();
+    manager.persistNow();
+
+    const restarted = managerFixture(root, { storeFile }).manager;
+    const restoredOwned = restarted.get(created.id);
+    assert.equal(restoredOwned.status, 'exited');
+    assert.equal(restoredOwned.comprehensionContractInjected, true);
+    assert.equal(restoredOwned.initialPromptFingerprintVersion, 'raw-v1');
+    assert.equal(restoredOwned.agentLinkedSessionId, 'grok:fresh-comprehension-owned');
+    assert.equal(restoredOwned.agentLinkedPromptFingerprint, restoredOwned.initialPromptFingerprint);
+    const projectBridgePresence = mainBridgePresenceProjector(root);
+    const ownedProvenance = projectBridgePresence(restarted.list());
+    assert.equal(ownedProvenance.length, 1);
+    assert.equal(ownedProvenance[0].comprehensionOwnershipVerified, true);
+    assert.equal(ownedProvenance[0].comprehensionProvenanceOnly, true);
+    assert.equal(ownedProvenance[0].comprehensionBoundSessionId, 'grok:fresh-comprehension-owned');
+    assert.equal(ownedProvenance[0].comprehensionPromptFingerprint, restoredOwned.initialPromptFingerprint);
+    assert.equal(ownedProvenance[0].initialPromptFingerprintVersion, 'raw-v1');
+
+    const legacyLongStoreFile = path.join(temp, 'legacy-long-comprehension-ownership.json');
+    const legacyLongStore = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+    const legacyLongSession = legacyLongStore.sessions.find(item => item.id === created.id);
+    const legacyLongFingerprint = promptFingerprint(injectedPrompt);
+    assert.notEqual(legacyLongFingerprint, comprehensionPromptFingerprint(injectedPrompt),
+      'legacy long-prompt fixture가 실제 6000자 clip fingerprint를 사용하지 않습니다.');
+    legacyLongSession.initialPromptFingerprint = legacyLongFingerprint;
+    delete legacyLongSession.initialPromptFingerprintVersion;
+    legacyLongSession.agentBinding.promptFingerprint = legacyLongFingerprint;
+    fs.writeFileSync(legacyLongStoreFile, JSON.stringify(legacyLongStore), 'utf8');
+    const legacyLongRestart = managerFixture(root, { storeFile: legacyLongStoreFile }).manager;
+    const restoredLegacyLong = legacyLongRestart.get(created.id);
+    assert.equal(restoredLegacyLong.initialPromptFingerprint, legacyLongFingerprint);
+    assert.equal(restoredLegacyLong.initialPromptFingerprintVersion, '');
+    assert.equal(restoredLegacyLong.agentLinkedPromptFingerprint, legacyLongFingerprint);
+    const legacyLongProjection = projectBridgePresence(legacyLongRestart.list());
+    assert.equal(legacyLongProjection.length, 1,
+      '기존 persisted long-prompt terminal ownership은 clipped fingerprint로 계속 복원되어야 합니다.');
+    assert.equal(legacyLongProjection[0].initialPromptFingerprintVersion, '');
+    assert.deepStrictEqual(projectBridgePresence([{
+      ...restoredOwned,
+      comprehensionContractInjected: false,
+    }]), [], 'owned 표식이 없으면 종료 provenance를 만들면 안 됩니다.');
+    assert.deepStrictEqual(projectBridgePresence([{
+      ...restoredOwned,
+      agentLinkedSessionId: '',
+    }]), [], '검증된 agentBinding이 없으면 종료 provenance를 만들면 안 됩니다.');
+    assert.deepStrictEqual(projectBridgePresence([{
+      ...restoredOwned,
+      agentLinkedPromptFingerprint: 'f'.repeat(64),
+    }]), [], 'binding prompt 지문이 launch 지문과 다르면 종료 provenance를 만들면 안 됩니다.');
+
+    for (const status of ['missing', 'invalid', 'ready']) {
+      const reparsed = applyRuntimePresence([{
+        id: 'grok:fresh-comprehension-owned', externalId: 'fresh-comprehension-owned', provider: 'grok',
+        environment: { kind: 'macos', distro: '' }, clientKind: 'grok-cli', parentId: null, depth: 0,
+        status: 'completed', completionObserved: true, startedAt: created.createdAt,
+        updatedAt: new Date().toISOString(), messages: [], runtimePresence: [],
+        comprehensionContractObserved: false,
+        comprehensionContractInjected: false,
+        comprehension: { schemaVersion: 1, status: 'unsupported' },
+        comprehensionCandidate: {
+          schemaVersion: 1,
+          status,
+          packet: status === 'ready' ? { id: 'validated-ready-packet' } : null,
+        },
+      }], {}, { processes: [] }, Date.now(), ownedProvenance);
+      assert.equal(reparsed[0].comprehensionContractInjected, true);
+      assert.equal(reparsed[0].comprehension.status, status,
+        `앱 재시작 뒤 ${status} packet 상태를 그대로 복원해야 합니다.`);
+      assert.equal(reparsed[0].comprehensionCandidate, undefined);
+      assert.deepStrictEqual(reparsed[0].runtimePresence, [],
+        '종료 PTY의 provenance-only 레코드는 실행/쓰기 연결처럼 보이면 안 됩니다.');
+    }
+
+    const exerciseRemovalProvenance = async operation => {
+      const removalStoreFile = path.join(temp, `fresh-comprehension-${operation}.json`);
+      const removalFixture = managerFixture(root, { storeFile: removalStoreFile });
+      const removalPrompt = injectComprehensionContract(`${operation} 뒤에도 이해 패킷 소유권을 보존합니다`);
+      const removalCreated = removalFixture.manager.create({
+        type: 'agent', provider: 'grok', cwd: root,
+        args: ['--no-auto-update'],
+        initialCommand: removalPrompt, initialCommandInArgs: false,
+        creationId: `create:fresh-comprehension-${operation}`,
+        deliveryId: `start:fresh-comprehension-${operation}`,
+        sessionBackend: 'direct', transient: false,
+      });
+      removalFixture.manager.bindAgentSession(removalCreated.id, {
+        sessionId: `grok:fresh-comprehension-${operation}`,
+        externalId: `fresh-comprehension-${operation}`,
+        provider: 'grok', environment: 'macos', distro: '',
+        promptFingerprint: removalCreated.initialPromptFingerprint,
+        linkScore: 19_000,
+      });
+      const result = await Promise.resolve(removalFixture.manager[operation](removalCreated.id));
+      assert.equal(result.ok, true);
+      assert.equal(removalFixture.manager.sessions.has(removalCreated.id), false,
+        `${operation} 완료 뒤 writable session은 제거되어야 합니다.`);
+      const projectedRecord = removalFixture.manager.list().find(item => item.id === removalCreated.id);
+      assert.equal(projectedRecord.comprehensionProvenanceOnly, true);
+      assert.equal(projectedRecord.transient, true);
+      assert.equal(projectedRecord.status, 'exited');
+      assert.equal(projectedRecord.pid, null);
+      assert.deepStrictEqual(projectBridgePresence([{
+        ...projectedRecord,
+        status: 'running',
+      }]), [], 'provenance-only 레코드를 synthetic running session으로 바꾸면 fail closed해야 합니다.');
+      assert.deepStrictEqual(projectBridgePresence([{
+        ...projectedRecord,
+        pid: 99_999,
+      }]), [], 'provenance-only 레코드에 writable PID가 생기면 fail closed해야 합니다.');
+      assert.deepStrictEqual(projectBridgePresence([{
+        ...projectedRecord,
+        agentLinkedPromptFingerprint: 'f'.repeat(64),
+      }]), [], 'provenance-only 레코드의 binding 지문이 launch 지문과 다르면 fail closed해야 합니다.');
+
+      const stored = JSON.parse(fs.readFileSync(removalStoreFile, 'utf8'));
+      assert.deepStrictEqual(stored.sessions, [], `${operation}가 synthetic session을 저장하면 안 됩니다.`);
+      assert.equal(stored.comprehensionProvenance.length, 1);
+      assert.equal(stored.comprehensionProvenance[0].boundSessionId, `grok:fresh-comprehension-${operation}`);
+      assert.equal(stored.comprehensionProvenance[0].launchPromptFingerprint,
+        stored.comprehensionProvenance[0].bindingPromptFingerprint);
+
+      const afterRestart = managerFixture(root, { storeFile: removalStoreFile }).manager;
+      assert.equal(afterRestart.sessions.size, 0,
+        `${operation} provenance가 재시작 때 writable session으로 복구되면 안 됩니다.`);
+      const restoredProjection = projectBridgePresence(afterRestart.list());
+      assert.equal(restoredProjection.length, 1);
+      assert.equal(restoredProjection[0].linkedSessionId, `grok:fresh-comprehension-${operation}`);
+      assert.equal(restoredProjection[0].comprehensionProvenanceOnly, true);
+      assert.equal(restoredProjection[0].pid, null);
+    };
+    await exerciseRemovalProvenance('close');
+    await exerciseRemovalProvenance('retire');
+
+    const reclaimStoreFile = path.join(temp, 'fresh-comprehension-reclaim.json');
+    const reclaimFixture = managerFixture(root, { storeFile: reclaimStoreFile });
+    const reclaimPrompt = injectComprehensionContract('자동 회수 뒤에도 이해 패킷 소유권을 보존합니다');
+    const reclaimCreated = reclaimFixture.manager.create({
+      type: 'agent', provider: 'grok', cwd: root,
+      args: ['--no-auto-update'],
+      initialCommand: reclaimPrompt, initialCommandInArgs: false,
+      creationId: 'create:fresh-comprehension-reclaim',
+      deliveryId: 'start:fresh-comprehension-reclaim',
+      sessionBackend: 'direct', transient: false,
+    });
+    reclaimFixture.manager.bindAgentSession(reclaimCreated.id, {
+      sessionId: 'grok:fresh-comprehension-reclaim',
+      externalId: 'fresh-comprehension-reclaim',
+      provider: 'grok', environment: 'macos', distro: '',
+      promptFingerprint: reclaimCreated.initialPromptFingerprint,
+      linkScore: 19_000,
+    });
+    const reclaimState = reclaimFixture.manager.sessions.get(reclaimCreated.id);
+    reclaimState.process = null;
+    reclaimState.status = 'exited';
+    reclaimState.pid = null;
+    reclaimState.updatedAt = new Date().toISOString();
+    reclaimFixture.manager.persistNow();
+    assert.deepStrictEqual(reclaimFixture.manager.reclaimFinishedSessions(100), [reclaimCreated.id]);
+    assert.equal(reclaimFixture.manager.sessions.has(reclaimCreated.id), false);
+    const reclaimedProjection = projectBridgePresence(reclaimFixture.manager.list());
+    assert.equal(reclaimedProjection.length, 1);
+    assert.equal(reclaimedProjection[0].linkedSessionId, 'grok:fresh-comprehension-reclaim');
+    assert.equal(reclaimedProjection[0].comprehensionProvenanceOnly, true);
+    const reclaimRestart = managerFixture(root, { storeFile: reclaimStoreFile }).manager;
+    assert.equal(reclaimRestart.sessions.size, 0);
+    assert.equal(projectBridgePresence(reclaimRestart.list())[0].linkedSessionId,
+      'grok:fresh-comprehension-reclaim');
+
+    const reclaimRollbackFile = path.join(temp, 'fresh-comprehension-reclaim-rollback.json');
+    const reclaimRollbackFixture = managerFixture(root, { storeFile: reclaimRollbackFile });
+    const reclaimRollbackCreated = reclaimRollbackFixture.manager.create({
+      type: 'agent', provider: 'grok', cwd: root,
+      args: ['--no-auto-update'],
+      initialCommand: reclaimPrompt, initialCommandInArgs: false,
+      creationId: 'create:fresh-comprehension-reclaim-rollback',
+      deliveryId: 'start:fresh-comprehension-reclaim-rollback',
+      sessionBackend: 'direct', transient: false,
+    });
+    reclaimRollbackFixture.manager.bindAgentSession(reclaimRollbackCreated.id, {
+      sessionId: 'grok:fresh-comprehension-reclaim-rollback',
+      externalId: 'fresh-comprehension-reclaim-rollback',
+      provider: 'grok', environment: 'macos', distro: '',
+      promptFingerprint: reclaimRollbackCreated.initialPromptFingerprint,
+      linkScore: 19_000,
+    });
+    const rollbackState = reclaimRollbackFixture.manager.sessions.get(reclaimRollbackCreated.id);
+    rollbackState.process = null;
+    rollbackState.status = 'exited';
+    rollbackState.pid = null;
+    rollbackState.updatedAt = new Date().toISOString();
+    reclaimRollbackFixture.manager.persistNow();
+    const reclaimFailingFileSystem = Object.create(fs);
+    reclaimFailingFileSystem.writeFileSync = () => { throw new Error('simulated reclaim ledger failure'); };
+    reclaimFailingFileSystem.unlinkSync = () => {};
+    reclaimRollbackFixture.manager.fileSystem = reclaimFailingFileSystem;
+    assert.throws(
+      () => reclaimRollbackFixture.manager.reclaimFinishedSessions(100),
+      error => error.code === 'TERMINAL_RECLAIM_PERSIST_FAILED',
+    );
+    assert.equal(reclaimRollbackFixture.manager.sessions.has(reclaimRollbackCreated.id), true,
+      '자동 회수 저장 실패 시 원래 terminal session을 복원해야 합니다.');
+    assert.equal(reclaimRollbackFixture.manager.comprehensionProvenanceLedger.size, 0,
+      '자동 회수 저장 실패 시 미영속 provenance도 롤백해야 합니다.');
+
+    const prepareDeduplication = (name, storeFile) => {
+      const fixture = managerFixture(root, { storeFile });
+      const prompt = injectComprehensionContract(`${name} 중복 정리 뒤에도 이해 패킷 소유권을 보존합니다`);
+      const owned = fixture.manager.create({
+        type: 'agent', provider: 'codex', cwd: root,
+        args: [], initialCommand: prompt, initialCommandInArgs: false,
+        creationId: `create:${name}-owned`, deliveryId: `start:${name}-owned`,
+        sessionBackend: 'direct', transient: false,
+      });
+      fixture.manager.bindAgentSession(owned.id, {
+        sessionId: `codex:${name}-history`, externalId: `${name}-history`,
+        provider: 'codex', environment: 'macos', distro: '',
+        promptFingerprint: owned.initialPromptFingerprint, linkScore: 19_000,
+      });
+      const ownedState = fixture.manager.sessions.get(owned.id);
+      ownedState.process = null;
+      ownedState.status = 'exited';
+      ownedState.pid = null;
+      ownedState.updatedAt = new Date(Date.now() - 1_000).toISOString();
+      fixture.manager.persistNow();
+
+      const resumed = fixture.manager.create({
+        type: 'agent', provider: 'codex', cwd: root,
+        args: ['resume', `${name}-history`], recoveryArgs: ['resume', `${name}-history`],
+        bridgeId: `codex:${name}-history`, agentConnectionSignature: `acs1:${'d'.repeat(64)}`,
+        initialCommand: '계속 진행해 주세요', initialCommandInArgs: false,
+        deliveryId: `resume:${name}-history`, sessionBackend: 'direct', transient: false,
+      });
+      const resumedState = fixture.manager.sessions.get(resumed.id);
+      resumedState.process = null;
+      resumedState.status = 'exited';
+      resumedState.pid = null;
+      resumedState.updatedAt = new Date().toISOString();
+      fixture.manager.persistNow();
+      return { fixture, owned, resumed };
+    };
+
+    const deduplicateStoreFile = path.join(temp, 'fresh-comprehension-deduplicate.json');
+    const deduplicated = prepareDeduplication('comprehension-deduplicate', deduplicateStoreFile);
+    assert.deepStrictEqual(
+      deduplicated.fixture.manager.deduplicateAgentBridgeSessions(),
+      [deduplicated.owned.id],
+    );
+    assert.equal(deduplicated.fixture.manager.sessions.has(deduplicated.owned.id), false);
+    assert.equal(deduplicated.fixture.manager.sessions.has(deduplicated.resumed.id), true);
+    const deduplicatedProjection = projectBridgePresence(deduplicated.fixture.manager.list());
+    assert.equal(deduplicatedProjection.length, 1);
+    assert.equal(deduplicatedProjection[0].linkedSessionId, 'codex:comprehension-deduplicate-history');
+    assert.equal(deduplicatedProjection[0].comprehensionProvenanceOnly, true);
+    const deduplicatedRestart = managerFixture(root, { storeFile: deduplicateStoreFile }).manager;
+    assert.equal(projectBridgePresence(deduplicatedRestart.list())[0].linkedSessionId,
+      'codex:comprehension-deduplicate-history');
+
+    const deduplicateRollbackFile = path.join(temp, 'fresh-comprehension-deduplicate-rollback.json');
+    const deduplicateRollback = prepareDeduplication(
+      'comprehension-deduplicate-rollback',
+      deduplicateRollbackFile,
+    );
+    const rollbackSessions = [...deduplicateRollback.fixture.manager.sessions.keys()].sort();
+    const rollbackReplays = new Map([...deduplicateRollback.fixture.manager.sessions]
+      .map(([id, session]) => [id, session.replay]));
+    const deduplicateFailingFileSystem = Object.create(fs);
+    deduplicateFailingFileSystem.writeFileSync = () => { throw new Error('simulated deduplicate ledger failure'); };
+    deduplicateFailingFileSystem.unlinkSync = () => {};
+    deduplicateRollback.fixture.manager.fileSystem = deduplicateFailingFileSystem;
+    assert.throws(
+      () => deduplicateRollback.fixture.manager.deduplicateAgentBridgeSessions(),
+      error => error.code === 'AGENT_CONNECTION_DEDUPLICATE_PERSIST_FAILED',
+    );
+    assert.deepStrictEqual(
+      [...deduplicateRollback.fixture.manager.sessions.keys()].sort(),
+      rollbackSessions,
+      '중복 정리 저장 실패 시 삭제한 terminal session 전체를 복원해야 합니다.',
+    );
+    assert.equal(deduplicateRollback.fixture.manager.comprehensionProvenanceLedger.size, 0,
+      '중복 정리 저장 실패 시 미영속 provenance도 롤백해야 합니다.');
+    for (const [id, replay] of rollbackReplays) {
+      assert.equal(deduplicateRollback.fixture.manager.sessions.get(id).replay, replay,
+        '중복 정리 저장 실패 시 survivor 안내를 replay에 남기면 안 됩니다.');
+    }
+
+    const externalStoreFile = path.join(temp, 'external-resume-comprehension-spoof.json');
+    const externalFixture = managerFixture(root, { storeFile: externalStoreFile });
+    const external = externalFixture.manager.create({
+      ...boundOptions(root, {
+        sessionBackend: 'direct',
+        args: ['resume', 'external-comprehension-spoof'],
+        recoveryArgs: ['resume', 'external-comprehension-spoof'],
+        bridgeId: 'codex:external-comprehension-spoof',
+        agentConnectionSignature: `acs1:${'c'.repeat(64)}`,
+      }),
+      initialCommand: injectedPrompt,
+      initialCommandInArgs: false,
+      deliveryId: 'resume:external-comprehension-spoof',
+    });
+    assert.equal(external.comprehensionContractInjected, false,
+      '외부 resume는 계약 텍스트를 전달해도 fresh Whitebox 소유권을 얻으면 안 됩니다.');
+    const externalStored = JSON.parse(fs.readFileSync(externalStoreFile, 'utf8'));
+    externalStored.sessions[0].comprehensionContractInjected = true;
+    externalStored.sessions[0].status = 'exited';
+    externalStored.sessions[0].pid = null;
+    fs.writeFileSync(externalStoreFile, JSON.stringify(externalStored), 'utf8');
+    const restoredExternal = managerFixture(root, { storeFile: externalStoreFile }).manager;
+    assert.equal(restoredExternal.get(external.id).comprehensionContractInjected, false,
+      'resume 레코드의 단독 owned 표식은 재시작 때 fail-closed로 제거해야 합니다.');
+    assert.deepStrictEqual(projectBridgePresence(restoredExternal.list()), [],
+      'binding 없는 종료 resume를 provenance로 다시 투영하면 안 됩니다.');
+
+    const externalCloseFile = path.join(temp, 'external-resume-comprehension-close.json');
+    const externalCloseFixture = managerFixture(root, { storeFile: externalCloseFile });
+    const externalClose = externalCloseFixture.manager.create({
+      ...boundOptions(root, {
+        sessionBackend: 'direct',
+        args: ['resume', 'external-comprehension-close'],
+        recoveryArgs: ['resume', 'external-comprehension-close'],
+        bridgeId: 'codex:external-comprehension-close',
+        agentConnectionSignature: `acs1:${'d'.repeat(64)}`,
+      }),
+      initialCommand: injectedPrompt,
+      initialCommandInArgs: false,
+      deliveryId: 'resume:external-comprehension-close',
+    });
+    await Promise.resolve(externalCloseFixture.manager.close(externalClose.id));
+    const externalClosedStore = JSON.parse(fs.readFileSync(externalCloseFile, 'utf8'));
+    assert.deepStrictEqual(externalClosedStore.comprehensionProvenance || [], [],
+      '외부 resume와 계약 텍스트/플래그 조합은 close provenance를 만들면 안 됩니다.');
+    assert.deepStrictEqual(projectBridgePresence(
+      managerFixture(root, { storeFile: externalCloseFile }).manager.list(),
+    ), []);
+
+    const boundedStoreFile = path.join(temp, 'bounded-comprehension-provenance.json');
+    const boundedAt = new Date().toISOString();
+    fs.writeFileSync(boundedStoreFile, JSON.stringify({
+      version: 2,
+      sessions: [],
+      comprehensionProvenance: Array.from({ length: 300 }, (_, index) => ({
+        terminalId: `terminal:bounded-${index}`,
+        boundSessionId: `codex:bounded-${index}`,
+        provider: 'codex', environment: 'macos', distro: '',
+        launchPromptFingerprint: 'e'.repeat(64),
+        bindingPromptFingerprint: 'e'.repeat(64),
+        createdAt: boundedAt, boundAt: boundedAt, retiredAt: boundedAt,
+      })),
+    }), 'utf8');
+    const boundedManager = managerFixture(root, { storeFile: boundedStoreFile }).manager;
+    assert.equal(boundedManager.comprehensionProvenanceLedger.size, 256,
+      '영속 provenance 원장은 고정 상한을 넘어 복원하면 안 됩니다.');
   });
 
   test('signed resume와 Codex fork PTY는 서로 다른 direct 신원·복구 규칙을 유지한다', async () => {

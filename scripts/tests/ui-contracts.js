@@ -52,6 +52,8 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app-session-render.js',
   'renderer/app-drawer-data.js',
   'renderer/app-drawer-content.js',
+  'renderer/app-pty-focus.js',
+  'renderer/comprehension-packet.js',
   'renderer/app-drawer.js',
   'renderer/app-run-modal.js',
   'renderer/app-quality.js',
@@ -83,7 +85,6 @@ const REQUIRED_UI_IDS = [
   'mobileToolsMenu',
   'advancedToolsNav',
   'operationsOverview',
-  'attentionInbox',
   'navRuntimeCount',
   'providerOverview',
   'automationOverview',
@@ -182,7 +183,6 @@ const BEGINNER_GUIDE_LABELS = [
   '작업 자세히 보기',
   '>처리 중<',
   '>지난 작업<',
-  '>확인 대기<',
   '>추가 기능<',
   '>반복 일정<',
   '>다른 컴퓨터의 작업<',
@@ -281,9 +281,6 @@ const MANAGEMENT_SEMANTIC_CONTRACTS = [
   'function managementBucket(session, now = Date.now())',
   'needsManagementReview',
   'needsManagementInbox',
-  'data-attention-category',
-  'management-filter-group optional',
-  'management-filter-group response',
   'signals.length',
   'loggedRatio',
   'attention.kind === "approval"',
@@ -292,13 +289,7 @@ const MANAGEMENT_SEMANTIC_CONTRACTS = [
   'function renderHomeAttention',
   'data-home-attention',
   'control.attention_title',
-  'attention-decision-flow',
   'latestAgentReply',
-  'management.flow_agent_reply',
-  'management.flow_my_check',
-  'management.flow_my_reply',
-  'data-attention-draft',
-  'attention-evidence-details',
   'sessionOrder',
   'function stableSessionSort',
   'function moveSessionOrder',
@@ -345,6 +336,8 @@ const APP_MODULES = [
   'app-session-render.js',
   'app-drawer-data.js',
   'app-drawer-content.js',
+  'app-pty-focus.js',
+  'comprehension-packet.js',
   'app-drawer.js',
   'app-run-modal.js',
   'app-quality.js',
@@ -368,6 +361,7 @@ const APP_PUBLIC_API_CONTRACTS = [
   'createManagement',
   'createDrawer',
   'createRunModal',
+  'createComprehensionPacketMode',
   'createQualityEnhancements',
   'createEventBindings',
   'window.WhiteboxApp = app',
@@ -610,6 +604,8 @@ const STYLE_FILES = [
   'styles-collaboration.css',
   'styles-tmux.css',
   'styles-terminal.css',
+  'styles-pty-focus.css',
+  'styles-comprehension-packet.css',
   'styles-run-composer.css',
   'styles-product.css',
   'styles-management.css',
@@ -1035,7 +1031,10 @@ const RELEASE_WORKFLOW_CONTRACTS = [
 
 function assertIncludesAll(source, contracts, messageForContract) {
   for (const contract of contracts) {
-    assert.ok(source.includes(contract), messageForContract && messageForContract(contract));
+    assert.ok(
+      source.includes(contract),
+      messageForContract ? messageForContract(contract) : `필수 계약이 없습니다: ${contract}`,
+    );
   }
 }
 
@@ -1277,13 +1276,49 @@ function registerUiContractTests(context) {
     }
     assert.equal(html.includes('data-view="subagents"'), false);
     assert.equal(html.includes('id="navSubagentCount"'), false);
+    assert.equal(html.includes('id="attentionInbox"'), false, '삭제된 확인 대기 전용 페이지가 다시 추가되었습니다.');
+    assert.equal(html.includes('data-view="waiting"'), false, '삭제된 확인 대기 전용 화면의 내비게이션이 다시 추가되었습니다.');
+    const viewMetaKeysSource = appSource.slice(
+      appSource.indexOf('const VIEW_META_KEYS ='),
+      appSource.indexOf('const VIEW_META ='),
+    );
+    assert.doesNotMatch(viewMetaKeysSource, /\bwaiting\s*:/, '삭제된 확인 대기 화면의 메타데이터가 남아 있습니다.');
+    assert.ok(
+      appSource.includes('if (!Object.prototype.hasOwnProperty.call(VIEW_META_KEYS, view)) view = "all";'),
+      '저장된 waiting 등 더 이상 존재하지 않는 화면 값은 처리 중 화면으로 정규화해야 합니다.',
+    );
+    const navigationDialogEventsSource = fs.readFileSync(path.join(root, 'renderer', 'app-events-dialogs.js'), 'utf8');
+    assert.match(
+      navigationDialogEventsSource,
+      /const viewShortcuts = \["all", "active", null, "runtime", null, "tmux", "settings"\];/,
+      '삭제된 확인 대기 화면을 여는 Meta/Ctrl+3 단축키가 남아 있습니다.',
+    );
+    const bootstrapSource = fs.readFileSync(path.join(root, 'renderer', 'app-bootstrap.js'), 'utf8');
+    assert.doesNotMatch(bootstrapSource, /selectView\(\s*["']waiting["']\s*\)/, '확인 알림이 삭제된 전용 페이지로 이동하면 안 됩니다.');
     const projectContextTag = html.match(/<section id="projectContextNav"[^>]*>/)?.[0] || '';
     assert.ok(
       projectContextTag.includes(' hidden"')
         && projectContextTag.includes('aria-hidden="true"')
         && projectContextTag.includes(' inert'),
-      '이번 배포에서 프로젝트 탐색 영역 전체는 여백을 남기지 않고 화면과 보조 기기에서 모두 숨겨야 합니다.',
+      '프로젝트 탐색 영역은 데스크톱 초기 화면에서 빈 공간을 남기지 않도록 숨겨져 있어야 합니다.',
     );
+    const projectNavigationSource = appSource.slice(
+      appSource.indexOf('function syncProjectContextNavigation()'),
+      appSource.indexOf('function syncViewChrome()'),
+    );
+    assert.match(
+      projectNavigationSource,
+      /matchMedia\("\(max-width: 720px\)"\)\.matches[\s\S]*const visible = mobileLayout;[\s\S]*classList\.toggle\("hidden", !visible\)[\s\S]*setAttribute\("aria-hidden", visible \? "false" : "true"\)[\s\S]*toggleAttribute\("inert", !visible\)/,
+      '프로젝트 탐색 영역은 데스크톱에서 숨고 모바일에서만 활성화되어야 합니다.',
+    );
+    const projectContextStart = html.indexOf('<section id="projectContextNav"');
+    const projectContextBlock = html.slice(projectContextStart, html.indexOf('</section>', projectContextStart));
+    assert.match(
+      projectContextBlock,
+      /<button(?=[^>]*\bid="mobileMoreBtn")(?=[^>]*\baria-controls="mobileToolsMenu")[^>]*>/,
+      '데스크톱 프로젝트 탐색을 숨겨도 모바일 More 버튼은 유지해야 합니다.',
+    );
+    assert.ok(html.includes('id="mobileToolsMenu"'), '모바일 More 버튼이 여는 메뉴가 없습니다.');
     const sidebarBlock = html.slice(html.indexOf('<aside class="sidebar"'), html.indexOf('<main id="mainContent"'));
     const liveBlock = html.slice(html.indexOf('id="liveSection"'), html.indexOf('id="globalStats"'));
     assert.equal(sidebarBlock.includes('id="workspaceList"'), false, '데스크톱 사이드바에 프로젝트 목록이 다시 들어가면 안 됩니다.');
@@ -1365,6 +1400,11 @@ function registerUiContractTests(context) {
       drawerTerminalSource,
       /const forkCreationGesture = forkIfOriginOwned && createIfMissing[\s\S]*options\.forkCreationGesture === true[\s\S]*forkCreationGesture,/,
       '드로어 mount는 createIfMissing와 별도인 one-shot fork gesture만 core에 전달해야 합니다.',
+    );
+    assert.match(
+      drawerTerminalSource,
+      /generation !== state\.generation[\s\S]*ownsEmbeddedHost\(active\)[\s\S]*unmountEmbedded/,
+      '닫힌 drawer의 늦은 mount가 hidden viewport에 붙인 shared PTY host를 회수해야 합니다.',
     );
     assert.match(
       drawerTerminalSource,
@@ -2552,7 +2592,7 @@ function registerUiContractTests(context) {
     assert.ok(source.includes('graph.progress_basis_note'), '기록된 단계 비율을 전체 계획 진척률로 오해하지 않도록 근거 안내가 필요합니다.');
   });
 
-  test('메인 담당 AI만 바로 아래 PTY를 토글하고 실행·도움 노드는 기존 상세를 연다', () => {
+  test('메인 담당 AI는 PTY 집중 모드로 열고 실행·도움 노드는 읽기 전용 상세를 연다', () => {
     const graph = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
     const events = fs.readFileSync(path.join(root, 'renderer', 'app-events-sessions.js'), 'utf8');
     const dashboard = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
@@ -2561,11 +2601,15 @@ function registerUiContractTests(context) {
     const drawerSource = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
     const orchestration = fs.readFileSync(path.join(root, 'renderer', 'app-graph-orchestration.js'), 'utf8');
     const inlineTerminal = fs.readFileSync(path.join(root, 'renderer', 'inline-agent-terminal.js'), 'utf8');
+    const ptyFocus = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
+    const core = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
+    const dialogEvents = fs.readFileSync(path.join(root, 'renderer', 'app-events-dialogs.js'), 'utf8');
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
     const sharedSource = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'renderer', 'styles-workflow-map.css'), 'utf8');
     const controlRoomStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-control-room.css'), 'utf8');
+    const ptyFocusStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-pty-focus.css'), 'utf8');
 
     const graphNodeSource = graph.slice(graph.indexOf('function graphNode('), graph.indexOf('function compactGraphNode('));
     const compactGraphSource = graph.slice(graph.indexOf('function compactGraphNode('), graph.indexOf('function providerFlowLane('));
@@ -2575,25 +2619,41 @@ function registerUiContractTests(context) {
     const historySource = dashboard.slice(dashboard.indexOf('if (historyList) {'), dashboard.indexOf('const projectSelect ='));
     const graphFilterSource = dashboard.slice(dashboard.indexOf('function graphFilteredSessions()'), dashboard.indexOf('function renderProviderVisibilitySettings()'));
     const historyEvents = filterEvents.slice(filterEvents.indexOf('$("#projectHistoryRail")'), filterEvents.indexOf('const controlProjectSelect'));
+    const ptyChildSource = ptyFocus.slice(ptyFocus.indexOf('function childNodeHtml('), ptyFocus.indexOf('function executionNodeHtml('));
+    const ptyExecutionSource = ptyFocus.slice(ptyFocus.indexOf('function executionNodeHtml('), ptyFocus.indexOf('function laneHtml('));
+    const ptyBackgroundSource = ptyFocus.slice(ptyFocus.indexOf('function setBackgroundInactive('), ptyFocus.indexOf('function captureReturnState('));
+    const currentDialogSource = core.slice(core.indexOf('function currentDialog()'), core.indexOf('function dialogFocusable('));
+    const escapeKeySource = dialogEvents.slice(
+      dialogEvents.indexOf('if (event.key !== "Escape") return;'),
+      dialogEvents.indexOf('window.addEventListener("resize"'),
+    );
 
-    assert.match(graphNodeSource, /const inlinePtyAttributes = session\.parentId[\s\S]*data-inline-pty-trigger=/,
-      '선택 흐름의 PTY 트리거가 메인 담당 AI로 제한되지 않았습니다.');
-    assert.match(controlRoomSource, /const controlRoomPtyAttributes = root\.parentId[\s\S]*data-inline-pty-trigger=/,
-      '처리 중 화면의 PTY 트리거가 메인 담당 AI로 제한되지 않았습니다.');
+    assert.match(graphNodeSource, /const writablePtySurface = [^;]*canUseWritablePtySurface(?:\?\.)?\(session\)[\s\S]*data-inline-pty-trigger=/,
+      '선택 흐름의 PTY 트리거가 쓰기 가능한 메인 담당 AI로 제한되지 않았습니다.');
+    assert.match(controlRoomSource, /canUseWritablePtySurface(?:\?\.)?\(root\)[\s\S]*canOpenResponsibleFocus(?:\?\.)?\(root\)[\s\S]*data-pty-focus-trigger=/,
+      '처리 중 화면의 담당 노드 집중 트리거가 공용 root/PTY 판정을 사용하지 않습니다.');
+    assert.ok(controlRoomSource.includes('data-focus-surface="${writablePtySurface ? "pty" : "transcript"}"'),
+      '담당 노드 집중 화면이 실제 PTY와 읽기 전용 내용을 구분하지 않습니다.');
+    assert.doesNotMatch(controlRoomSource, /data-inline-pty-trigger=/,
+      '관제 화면의 담당 노드가 구형 인라인 PTY 동작도 동시에 노출하고 있습니다.');
     assert.match(controlRoomSource, /class="control-room-main"\$\{controlRoomPtyAttributes\}/,
       '처리 중 화면의 메인 담당 AI에 PTY 토글 속성을 연결하지 않았습니다.');
     assert.ok(graphNodeSource.includes('const completedMainPty = presentationStatus === "completed"')
       && graphNodeSource.includes('&& canForkCodexDesktopSession(session);')
-      && graphNodeSource.includes('&& !completedMainPty;'),
+      && /canUseWritablePtySurface(?:\?\.)?\(session\)/.test(graphNodeSource),
     '완료된 Codex Desktop 담당 AI가 대화 기록형 상세창 대신 새 fork PTY를 우선하지 않습니다.');
     assert.doesNotMatch(helperNodeSource, /data-inline-pty-trigger=/,
       '실행 중 도움 AI 노드가 PTY를 열고 있습니다.');
+    assert.doesNotMatch(helperNodeSource, /data-pty-focus-trigger=/,
+      '도움 AI가 담당 노드 전용 PTY 집중 모드를 열고 있습니다.');
     assert.ok(helperNodeSource.includes('data-open-subagent-chat='),
       '실행 중 도움 AI 노드의 기존 읽기 전용 상세 경로가 없습니다.');
     assert.doesNotMatch(compactGraphSource, /data-inline-pty-trigger=/,
       '작업 흐름 탐색 노드가 PTY 토글로 바뀌었습니다.');
     assert.doesNotMatch(executionNodeSource, /data-inline-pty-trigger=/,
       '실행 명령 노드가 PTY 토글로 바뀌었습니다.');
+    assert.doesNotMatch(executionNodeSource, /data-pty-focus-trigger=/,
+      '실행 명령 노드가 담당 노드 전용 PTY 집중 모드를 열고 있습니다.');
     assert.ok(executionNodeSource.includes('${esc(command.text)}</em>'),
       '실행 중인 컴퓨터 작업 노드에 실제 명령어가 보이지 않습니다.');
     const inlinePanelIndex = graph.indexOf('${!focus.parentId && state.inlineTerminalSessionId === focus.id ? inlineTerminalPanel(focus) : ""}');
@@ -2602,22 +2662,123 @@ function registerUiContractTests(context) {
     assert.ok(graph.includes('tab("summary"'), '작업 상세 화면에 요약 탭이 없습니다.');
     assert.ok(graph.includes('tab("tokens"'), '작업 상세 화면에 토큰 사용량 탭이 없습니다.');
     assert.ok(events.includes('window.WhiteboxInlineTerminal?.toggle?.(inlineTerminal.dataset.inlinePtyTrigger') && events.includes('focus: !inlineTerminal.closest(".control-room-session")'), 'AI 클릭이 현재 화면의 인라인 PTY 토글로 연결되지 않았습니다.');
+    assert.ok(events.includes('const ptyFocus = event.target.closest("[data-pty-focus-trigger]")')
+      && events.includes('openPtyFocus(ptyFocus.dataset.ptyFocusTrigger, { trigger: ptyFocus, focus: true })'),
+    '관제 화면의 담당 노드 클릭이 전체 화면 PTY 집중 모드로 연결되지 않았습니다.');
+    assert.match(ptyFocus, /function canOpenPtyFocus\(session\)[\s\S]{0,400}canOpenResponsibleFocus(?:\?\.)?\(session\)/,
+      '담당 노드 집중 모드 진입점이 공용 root 판정을 사용하지 않습니다.');
+    assert.ok(ptyFocus.includes('const hasWritablePty = session => window.WhiteboxRendererUtils.canUseWritablePtySurface')
+      && ptyFocus.includes('activeFocusMode = writablePty ? "pty" : "transcript"')
+      && ptyFocus.includes('surface.dataset.ptyFocusMode = activeFocusMode')
+      && ptyFocus.includes('if (!writablePty) state.ptyFocusSessionId = id;'),
+    '실제 PTY가 없는 담당 노드를 읽기 전용 집중 화면으로 여는 분기 계약이 없습니다.');
+    assert.ok(ptyFocus.includes('if ($("#detailDrawer")?.classList.contains("open")) closeDrawer(false);'),
+      '담당 노드 집중 모드 진입 전에 기존 오른쪽 상세 탭을 정리하지 않습니다.');
+    assert.ok(ptyFocus.includes('if (options.focus !== false && !writablePty)')
+      && !ptyFocus.includes('if (options.focus !== false) {\n      requestAnimationFrame(() => $("#ptyFocusBackBtn")'),
+    'PTY 집중 모드가 xterm의 지연 caret focus를 Back 버튼 focus로 취소합니다.');
+    assert.match(inlineTerminal, /isFocusEligibleSession[\s\S]{0,400}canUseWritablePtySurface(?:\?\.)?\(session\)/,
+      '실제 PTY controller가 공용 writable surface 판정과 다른 자격 규칙을 사용합니다.');
+    assert.ok(inlineTerminal.includes('if (isReadOnlyResponsibleFocus(instance)) return { ok: false, reason: "read-only-focus" };'),
+      'passive PTY 동기화가 읽기 전용 담당 노드 집중 화면을 보존하지 않습니다.');
+    assert.ok(ptyFocus.includes('controller.enterFocus(id, { focus: options.focus !== false })')
+      && ptyFocus.includes('controller.sync({ force: true })')
+      && ptyFocus.includes('window.WhiteboxInlineTerminal?.closeFocus?.'),
+    'PTY 집중 모드가 기존 xterm host를 전면 surface로 이동하고 관제 복귀 시 분리하는 계약이 없습니다.');
+    assert.match(
+      ptyChildSource,
+      /data-pty-focus-child="\$\{esc\(child\.id\)\}"[\s\S]*aria-controls="detailDrawer"/,
+      'PTY 집중 화면의 하위 노드가 기존 오른쪽 상세창을 가리키지 않습니다.',
+    );
+    assert.match(
+      ptyExecutionSource,
+      /data-pty-focus-execution-owner="\$\{esc\(owner\.id\)\}"[\s\S]*data-pty-focus-execution="\$\{esc\(activity\.id\)\}"[\s\S]*aria-controls="detailDrawer"/,
+      'PTY 집중 화면의 실행 노드가 기존 오른쪽 상세창을 가리키지 않습니다.',
+    );
+    assert.match(
+      ptyFocus,
+      /openSubagentConversation\(child\.dataset\.ptyFocusChild,\s*\{\s*presentation:\s*"modal"\s*\}\)/,
+      'PTY 집중 화면의 하위 노드가 기존 오른쪽 하위 작업 drawer를 열지 않습니다.',
+    );
+    assert.match(
+      ptyFocus,
+      /openExecutionActivity\(\s*execution\.dataset\.ptyFocusExecutionOwner,\s*execution\.dataset\.ptyFocusExecution,?\s*\)/,
+      'PTY 집중 화면의 실행 노드가 기존 실행 상세 drawer를 열지 않습니다.',
+    );
+    assert.doesNotMatch(ptyFocus, /ptyFocusChildModal|openPtyFocusDetail|closePtyFocusDetail/, 'PTY 전용 하위 노드 모달 구현이 다시 추가되었습니다.');
+    assert.doesNotMatch(core, /ptyFocusChildModal/, '공용 dialog 계층에 삭제된 PTY 하위 노드 모달이 남아 있습니다.');
+    assert.equal(ptyBackgroundSource.includes('detailDrawer'), false, 'PTY 집중 배경 비활성화가 overlay drawer까지 inert 처리하면 안 됩니다.');
+    assert.equal(ptyBackgroundSource.includes('drawerBackdrop'), false, 'PTY 집중 배경 비활성화가 drawer backdrop까지 inert 처리하면 안 됩니다.');
+    const drawerDialogIndex = currentDialogSource.indexOf('$("#detailDrawer")');
+    const ptyDialogIndex = currentDialogSource.indexOf('$("#ptyFocusSurface")');
+    assert.ok(drawerDialogIndex >= 0 && ptyDialogIndex > drawerDialogIndex,
+      'drawer가 PTY 집중 화면보다 먼저 focus trap 대상으로 선택되어야 합니다.');
+    const escapeDrawerIndex = escapeKeySource.indexOf('closeDrawer()');
+    const escapeFocusIndex = escapeKeySource.indexOf('closePtyFocus()');
+    assert.ok(escapeDrawerIndex >= 0 && escapeFocusIndex > escapeDrawerIndex,
+      '첫 Escape는 drawer만 닫고 다음 Escape가 PTY 집중 화면을 닫아야 합니다.');
+    assert.ok(html.includes('id="ptyFocusSurface"')
+      && html.includes('id="ptyFocusTerminalViewport"')
+      && html.includes('id="ptyFocusTranscriptContent"')
+      && html.includes('id="detailDrawer"')
+      && html.includes('<script src="app-pty-focus.js"></script>'),
+    'PTY 집중 surface·실제 PTY viewport·기존 상세 drawer 또는 런타임 로드가 빠졌습니다.');
+    assert.doesNotMatch(html, /\bid="ptyFocusChildModal"/, '삭제된 PTY 하위 노드 전용 모달 markup이 다시 추가되었습니다.');
+    assert.doesNotMatch(ptyFocusStyles, /\.pty-focus-child-modal\b/, '삭제된 PTY 하위 노드 전용 모달 스타일이 다시 추가되었습니다.');
+    const focusZ = Number(ptyFocusStyles.match(/\.pty-focus-surface\s*\{[^}]*z-index:\s*(\d+)/s)?.[1]);
+    const backdropZ = Number(ptyFocusStyles.match(/body\.pty-focus-open\s*>\s*#drawerBackdrop\s*\{[^}]*z-index:\s*(\d+)/s)?.[1]);
+    const drawerZ = Number(ptyFocusStyles.match(/body\.pty-focus-open\s*>\s*#detailDrawer\s*\{[^}]*z-index:\s*(\d+)/s)?.[1]);
+    assert.ok(Number.isFinite(focusZ) && focusZ < backdropZ && backdropZ < drawerZ,
+      'PTY 집중 화면 위에 backdrop과 오른쪽 drawer가 순서대로 표시되어야 합니다.');
+    assert.ok(ptyFocusStyles.includes('#ptyFocusTerminalViewport > .terminal-screen'),
+      '전체 화면 PTY의 실제 terminal host 스타일 계약이 없습니다.');
     assert.ok(historySource.includes('data-inline-pty-trigger=') && historySource.includes('data-open-session='),
       '지난 기록이 PTY 가능 여부에 따라 인라인 터미널 또는 읽기 전용 상세로 연결되지 않았습니다.');
-    assert.ok(historySource.includes('const completedMainPty = String(session.status || "") === "completed"')
-      && historySource.includes('&& canForkCodexDesktopSession(session);')
-      && historySource.includes('session.presentation?.conversationSurface === "transcript"')
-      && historySource.includes('session.controlCapabilities?.pty === false')
-      && historySource.includes('&& !completedMainPty'),
+    assert.ok(historySource.includes('hasWritablePtySurface(session)')
+      && historySource.includes('data-inline-pty-trigger=')
+      && historySource.includes('data-open-session='),
     '완료된 Codex Desktop 최상위 기록만 새 fork PTY를 우선하고 그 외 읽기 전용 기록은 상세창을 유지해야 합니다.');
     const sharedSandbox = { window: {}, document: {} };
     vm.runInNewContext(sharedSource, sharedSandbox, { filename: 'shared.js' });
     const canFork = sharedSandbox.window.WhiteboxRendererUtils.canForkCodexDesktopSession;
+    const isWritableDirect = sharedSandbox.window.WhiteboxRendererUtils.isWritableDirectSession;
+    const canUseWritablePtySurface = sharedSandbox.window.WhiteboxRendererUtils.canUseWritablePtySurface;
+    const canOpenResponsibleFocus = sharedSandbox.window.WhiteboxRendererUtils.canOpenResponsibleFocus;
     const forkable = {
       id: 'codex:desktop-history', externalId: 'desktop-history', provider: 'codex', clientKind: 'codex-desktop',
-      parentId: null, sourcePluginId: '', runId: '',
+      parentId: null, sourcePluginId: '', runId: '', status: 'completed',
+    };
+    const writableRoot = {
+      id: 'claude:direct-live', externalId: 'direct-live', provider: 'claude', status: 'running', parentId: null,
+      controlCapabilities: { pty: true }, presentation: { conversationSurface: 'pty' },
+    };
+    const liveDesktop = {
+      ...forkable, id: 'codex:desktop-live', externalId: 'desktop-live', status: 'running',
+      controlCapabilities: { pty: true }, presentation: { conversationSurface: 'pty' },
     };
     assert.equal(canFork(forkable), true);
+    assert.equal(isWritableDirect({ id: 'direct', provider: 'codex' }), true);
+    assert.equal(canUseWritablePtySurface(writableRoot), true,
+      '일반 writable 담당 root가 PTY surface에서 차단되었습니다.');
+    assert.equal(canUseWritablePtySurface(liveDesktop), false,
+      '실행 중 Codex Desktop 기록은 담당 root처럼 보여도 writable PTY surface가 아닙니다.');
+    assert.equal(canUseWritablePtySurface(forkable), true,
+      'canonical 완료 Codex Desktop 기록은 명시적 fork PTY surface를 열 수 있어야 합니다.');
+    assert.equal(canOpenResponsibleFocus(writableRoot), true);
+    assert.equal(canOpenResponsibleFocus(liveDesktop), true,
+      '실행 중 Codex Desktop 담당 root도 읽기 전용 집중 화면은 열 수 있어야 합니다.');
+    assert.equal(canOpenResponsibleFocus({ ...liveDesktop, parentId: writableRoot.id }), false,
+      '하위 AI가 담당 노드 집중 화면을 직접 열었습니다.');
+    sharedSandbox.window.WhiteboxAppFactories = {};
+    sharedSandbox.window.WhiteboxI18n = { t: key => key };
+    vm.runInNewContext(ptyFocus, sharedSandbox, { filename: 'app-pty-focus.js' });
+    const focusEligibility = sharedSandbox.window.WhiteboxAppFactories.createPtyFocusMode({
+      state: { snapshot: { sessions: [] } },
+    });
+    for (const [session, expected] of [[writableRoot, true], [liveDesktop, true], [forkable, true], [{ ...liveDesktop, parentId: writableRoot.id }, false]]) {
+      assert.equal(focusEligibility.canOpenPtyFocus(session), expected,
+        `담당 노드 집중 모드 guard가 공용 root 판정과 달라졌습니다: ${JSON.stringify(session)}`);
+    }
     for (const invalid of [
       { ...forkable, id: 'codex:other' },
       { ...forkable, externalId: 'bad id', id: 'codex:bad id' },
@@ -2628,12 +2789,25 @@ function registerUiContractTests(context) {
       { ...forkable, sourcePlugin: { id: 'builtin.omo' } },
       { ...forkable, sourcePlugin: 'builtin.omo' },
       { ...forkable, sourcePlugin: {} },
+      { ...forkable, provenance: { source: { pluginId: 'builtin.omo' } } },
+      { ...forkable, source: 'opencode' },
+      { ...forkable, status: 'running' },
       { ...forkable, readOnly: true },
       { ...forkable, controlAuthority: 'read-only-import' },
       { ...forkable, importMode: 'local-history' },
     ]) assert.equal(canFork(invalid), false, `fork 불가 기록을 PTY로 표시했습니다: ${JSON.stringify(invalid)}`);
-    assert.match(drawerSource, /const forkableCompletedDesktop = String\(session\.status \|\| ""\) === "completed"[\s\S]*canForkCodexDesktopSession[\s\S]*const conversationSurface = forkableCompletedDesktop\s*\? "pty"/,
-      '지난 작업 카드나 왼쪽 트리에서 연 canonical Codex Desktop 기록도 중앙 drawer에서 새 fork PTY로 승격해야 합니다.');
+    for (const invalid of [
+      { readOnly: true }, { sourcePlugin: {} },
+      { provenance: { source: { pluginId: 'builtin.omo' } } },
+      { source: 'opencode' }, { clientKind: 'aside-browser' },
+      { controlAuthority: 'read-only-import' }, { importMode: 'local-history' },
+    ]) assert.equal(isWritableDirect({ id: 'projection', ...invalid }), false);
+    assert.ok(orchestration.includes('if (state.ptyFocusSessionId) return false;'),
+      'focus PTY mount가 pending인 동안 graph 정리가 shared embedded generation을 취소할 수 있습니다.');
+    assert.match(drawerSource, /const conversationSurface = window\.WhiteboxRendererUtils\.canUseWritablePtySurface\?\.\(session\) === true[\s\S]*\? "pty"[\s\S]*: "transcript"/,
+      'drawer가 공용 writable PTY 판정과 다른 surface를 표시합니다.');
+    assert.ok(drawerSource.includes('if (!state.ptyFocusSessionId) window.WhiteboxInlineTerminal?.close?.({ render: false });'),
+      '집중 화면 위에 서브에이전트 drawer를 열 때 기존 inline PTY 복원 상태를 지웁니다.');
     assert.ok(graphNodeSource.includes('const conversationLabel = completedMainPty')
       && graphNodeSource.includes('t("drawer.terminal_fork_action")')
       && graphNodeSource.includes('aria-label="${esc(conversationLabel)}"'),
@@ -2660,7 +2834,7 @@ function registerUiContractTests(context) {
     assert.ok(orchestration.includes('window.WhiteboxInlineTerminal?.sync?.()'), '작업 흐름 갱신 후 PTY 재마운트 계약이 없습니다.');
     assert.match(
       orchestration,
-      /if \(!replacement\)\s*\{[\s\S]*state\.inlineTerminalSessionId = null;[\s\S]*unmountEmbedded/,
+      /if \(!replacement\)\s*\{[\s\S]*state\.inlineTerminalSessionId = null;[\s\S]*unmountInlineEmbeddedUnlessFocused/,
       '작업 topology가 바뀌어 인라인 PTY 보존에 실패하면 오래된 writable 화면을 닫아야 합니다.',
     );
     assert.ok(orchestration.includes('preserveRuntimeConnection && name === "data-connection"'),
@@ -2740,6 +2914,69 @@ function registerUiContractTests(context) {
       /if \(activeList\.id === "projectSidebarList" && state\.view !== "all"\) selectView[\s\S]*else renderSessions\("filter"\);\s*preconnectSelectedWorkspace\(\);/,
       '프로젝트 결과 화면을 먼저 렌더한 뒤 PTY 사전 연결을 백그라운드로 시작해야 합니다.',
     );
+  });
+
+  test('사이드바 작업 클릭은 작업 목록 카드에 PTY를 붙이고 작업 진행 화면으로 들어가지 않는다', () => {
+    const filters = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
+    const sidebarPtyBranch = filters.slice(
+      filters.indexOf('const inlinePty = activeList.id === "projectSidebarList"'),
+      filters.indexOf('const openSession = activeList.id === "projectSidebarList"'),
+    );
+    assert.ok(sidebarPtyBranch.includes('window.WhiteboxInlineTerminal?.toggle?.(inlinePty.dataset.inlinePtyTrigger, { focus: false })'),
+      '사이드바 작업 클릭이 포커스 없이 인라인 PTY 토글로 연결되지 않았습니다.');
+    const toggleIndex = sidebarPtyBranch.indexOf('WhiteboxInlineTerminal?.toggle?.');
+    const clearFocusIndex = sidebarPtyBranch.indexOf('state.graphFocusId = null;');
+    assert.ok(clearFocusIndex >= 0 && clearFocusIndex < toggleIndex,
+      '사이드바 작업 클릭은 작업 진행(포커스) 화면 대신 작업 목록에 머물러야 합니다.');
+    assert.ok(sidebarPtyBranch.includes('const revealInlineTerminal = () => {')
+      && sidebarPtyBranch.includes('panel.scrollIntoView({ behavior: "auto", block: "nearest" });')
+      && sidebarPtyBranch.includes('requestAnimationFrame(() => requestAnimationFrame(revealInlineTerminal));')
+      && sidebarPtyBranch.includes('setTimeout(revealInlineTerminal, 180);'),
+      '사이드바 클릭으로 연 PTY 패널이 화면 밖에 가려지지 않도록 스크롤해야 합니다(rAF+타이머 백업).');
+    assert.ok(sidebarPtyBranch.includes('.closest(".control-room-project-group")')
+      && sidebarPtyBranch.includes('group.open = true;'),
+      'PTY를 붙인 카드가 접힌 프로젝트 그룹 안에 있으면 disclosure를 펼쳐야 합니다.');
+    const scrollIndex = sidebarPtyBranch.indexOf('const revealInlineTerminal = () => {');
+    assert.ok(scrollIndex > toggleIndex && toggleIndex >= 0,
+      'PTY 토글 후에 패널 노출(스크롤·펼침)이 이어져야 합니다.');
+    assert.ok(sidebarPtyBranch.indexOf('selectView("all"') < toggleIndex
+      && sidebarPtyBranch.indexOf('closeDrawer(false)') < toggleIndex,
+      'PTY 토글 전에 전체 뷰 전환과 드로어 닫기가 선행되어야 합니다.');
+    const orchestration = fs.readFileSync(path.join(root, 'renderer', 'app-graph-orchestration.js'), 'utf8');
+    assert.ok(orchestration.includes('connectedGraphSessions(sessions, state.graphFocusId || state.inlineTerminalSessionId)'),
+      '포커스 없이 연 PTY 세션이 작업 목록 모델에서 빠지면 카드가 사라져 PTY를 붙일 수 없습니다.');
+    const theme = fs.readFileSync(path.join(root, 'renderer', 'styles-theme.css'), 'utf8');
+    assert.ok(theme.includes('.control-room-session.has-attention:not(.has-inline-terminal) > .control-room-flow')
+      && theme.includes('.control-room-session.has-attention.has-inline-terminal > .control-room-flow'),
+      '확인 대기 카드도 인라인 PTY가 열리면 flow를 표시해 터미널을 붙일 수 있어야 합니다.');
+  });
+
+  test('프로젝트 행 클릭은 선택과 아코디언을 수행하고 데스크톱 상단 영역은 비운다', () => {
+    const filters = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
+    const handlerStart = filters.indexOf('const handleWorkspaceClick = async (event) => {');
+    const handler = filters.slice(handlerStart, filters.indexOf('workspaceLists.forEach', handlerStart));
+    const accordionIndex = handler.indexOf('let projectAccordionToggled = false;');
+    const selectionIndex = handler.indexOf('const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;');
+    assert.ok(accordionIndex >= 0 && selectionIndex > accordionIndex,
+      '프로젝트 행 클릭이 아코디언 토글 후에도 선택(오른쪽 AI 목록 표시)으로 이어져야 합니다.');
+    assert.ok(handler.includes('if (state.sidebarCollapsedProjects.has(projectKey)) state.sidebarCollapsedProjects.delete(projectKey);')
+      && handler.includes('else state.sidebarCollapsedProjects.add(projectKey);'),
+      '프로젝트 행 클릭이 접기와 펼치기를 양방향으로 토글해야 합니다.');
+    assert.ok(handler.includes('if (projectKey && !projectAccordionToggled) state.sidebarCollapsedProjects?.delete(projectKey);'),
+      '프로젝트 행에서 방금 접은 상태를 선택 로직이 강제로 다시 펼치면 안 됩니다.');
+    const appSource = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
+    const navigationSource = appSource.slice(
+      appSource.indexOf('function syncProjectContextNavigation()'),
+      appSource.indexOf('function syncViewChrome()'),
+    );
+    assert.ok(navigationSource.includes('const visible = mobileLayout;'),
+      '데스크톱에서 projectContextNav 전체를 숨겨 빈 추가 기능 영역을 제거해야 합니다.');
+    const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
+    const projectContextStart = html.indexOf('<section id="projectContextNav"');
+    const projectContextBlock = html.slice(projectContextStart, html.indexOf('</section>', projectContextStart));
+    assert.ok(projectContextBlock.includes('id="mobileMoreBtn"')
+      && projectContextBlock.includes('aria-controls="mobileToolsMenu"'),
+    '데스크톱 상단 영역을 숨겨도 모바일 More 진입점은 유지해야 합니다.');
   });
 
   test('터미널은 한글 글리프를 압축하지 않고 휠 이동을 짧게 보간한다', () => {
@@ -2878,6 +3115,13 @@ function registerUiContractTests(context) {
     const sandbox = {
       window: {
         WhiteboxAppFactories: {},
+        WhiteboxRendererUtils: {
+          canForkCodexDesktopSession: () => false,
+          isWritableDirectSession: session => Boolean(session && !session.parentId && !session.sourcePluginId),
+          canUseWritablePtySurface: session => Boolean(
+            session && !session.parentId && !session.sourcePluginId && session.controlCapabilities?.pty,
+          ),
+        },
         WhiteboxI18n: { t: (key, params = {}) => `${key}:${params.count ?? ''}` },
       },
       document: { body: { dataset: {} } },
@@ -2984,6 +3228,13 @@ function registerUiContractTests(context) {
     const sandbox = {
       window: {
         WhiteboxAppFactories: {},
+        WhiteboxRendererUtils: {
+          canForkCodexDesktopSession: () => false,
+          isWritableDirectSession: session => Boolean(session && !session.parentId && !session.sourcePluginId),
+          canUseWritablePtySurface: session => Boolean(
+            session && !session.parentId && !session.sourcePluginId && session.controlCapabilities?.pty,
+          ),
+        },
         WhiteboxI18n: {
           t(key, params = {}) {
             if (key === 'settings.plugins.group_direct') return 'Whitebox 프로젝트';
@@ -3012,16 +3263,20 @@ function registerUiContractTests(context) {
       { id: 'builtin.aside:aside-root', externalId: 'aside-root', sourcePluginId: 'builtin.aside', provider: 'codex', status: 'idle', cwd, originCwd: cwd, childIds: [] },
       { id: 'builtin.aside:aside-projectless', externalId: 'aside-projectless', sourcePluginId: 'builtin.aside', provider: 'codex', status: 'idle', cwd: '', originCwd: '', projectless: true, childIds: [] },
     ];
+    sessions.filter(session => !session.sourcePluginId).forEach(session => {
+      session.controlCapabilities = { pty: true };
+    });
     const state = {
       snapshot: { sessions, tmux: { distros: [] } },
       workspaces: [], workspace: 'all', workspaceSource: 'all', projectOrder: [], dismissedProjects: new Set(),
       sidebarCollapsedProjects: new Set(), sidebarCollapsedSources: new Set(),
       providerMap: new Map(), providers: [], availability: {}, sessionOrder: [], view: 'all', search: '', sort: 'recent',
       providerFilters: new Set(),
-      sourcePluginSettings: { version: 2, enabledPluginIds: ['builtin.opencode', 'builtin.aside'], asideHistoryFolders: [] },
+      sourcePluginSettings: { version: 2, enabledPluginIds: ['builtin.opencode', 'builtin.aside', 'builtin.empty'], asideHistoryFolders: [] },
       sourcePlugins: [
         { id: 'builtin.opencode', source: { id: 'opencode', label: 'OpenCode' } },
         { id: 'builtin.aside', source: { id: 'aside', label: 'Aside Browser' } },
+        { id: 'builtin.empty', source: { id: 'empty', label: 'Empty Plugin' } },
       ],
     };
     const visibleSessions = () => sessions.filter(session => (
@@ -3108,6 +3363,28 @@ function registerUiContractTests(context) {
       '프로젝트 아래에 중복 전체 선택 행을 표시하면 안 됩니다.');
     assert.equal(sidebar.innerHTML.includes('studio.sidebar.all_sources'), false,
       '번역 키가 그대로 보이는 경우에도 중복 전체 선택 행으로 간주해야 합니다.');
+    assert.equal(sidebar.innerHTML.includes('Empty Plugin'), false,
+      '활성화되어 있어도 현재 프로젝트 작업이 0건인 플러그인은 왼쪽 프로젝트 트리에 보이면 안 됩니다.');
+
+    const emptyWorkspace = 'D:\\empty\\project';
+    state.workspaces.push({ name: 'empty-project', path: emptyWorkspace });
+    dashboard.renderWorkspaces();
+    const emptyProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', 'd:/empty/project');
+    const emptyProjectSelector = tagWith(emptyProject, `data-workspace="${emptyWorkspace}" data-project-source="all"`);
+    assert.ok(emptyProject.includes('<span class="project-sidebar-copy"><strong>empty-project</strong></span>'),
+      '작업이 0건인 저장 프로젝트는 프로젝트 이름만 표시해야 합니다.');
+    assert.equal(emptyProject.includes('<small>'), false,
+      '작업이 0건인 저장 프로젝트에 대기 상태나 0건 요약을 표시하면 안 됩니다.');
+    assert.ok(emptyProjectSelector.includes('aria-label="empty-project"'),
+      '작업이 0건인 저장 프로젝트의 접근성 이름에도 0건 요약을 남기면 안 됩니다.');
+    assert.equal((emptyProject.match(/data-sidebar-source-key=/g) || []).length, 0,
+      '작업이 0건인 저장 프로젝트에 빈 Whitebox 프로그램 행을 만들면 안 됩니다.');
+    assert.equal(emptyProject.includes('data-sidebar-project-toggle='), false,
+      '표시할 프로그램·플러그인이 없는 프로젝트에 빈 펼침 화살표를 보이면 안 됩니다.');
+    assert.equal(emptyProjectSelector.includes('aria-owns='), false,
+      '자식이 없는 프로젝트가 비어 있는 접근성 그룹을 소유하면 안 됩니다.');
+    state.workspaces.pop();
+    dashboard.renderWorkspaces();
 
     const directProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'direct'));
     const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
@@ -3440,7 +3717,6 @@ function registerUiContractTests(context) {
       assert.ok(selection.includes(contract), `${contract} 프로젝트 선택 안내 요소가 없습니다.`);
     }
     assert.equal(selection.includes('project-selection-flow'), false, '프로젝트 선택 전에는 진행 작업 안내를 표시하지 않아야 합니다.');
-    assert.ok(themeStyles.includes('body[data-current-view="all"]:not([data-project-selected="true"]) #projectContextNav'), '프로젝트 선택 전에는 처리 중 작업 탭을 숨겨야 합니다.');
     assert.match(historyEmptyRule, /grid-column:\s*1\s*\/\s*-1\s*;/, '지난 세션 빈 상태가 기록 그리드의 첫 열에만 갇혀 있습니다.');
     assert.match(historyEmptyRule, /align-content:\s*center\s*;/, '지난 세션 빈 상태의 문구 묶음이 세로 중앙에 정렬되지 않습니다.');
     assert.match(historyEmptyRule, /border:\s*1px\s+dashed/, '지난 세션 빈 상태의 경계가 주변 기록 카드와 구분되지 않습니다.');
@@ -3503,11 +3779,10 @@ function registerUiContractTests(context) {
     assert.ok(dashboard.includes('ui.open_the_installer_and_follow_its_instructions_to_finish_updating'), '수동 업데이트에는 설치 파일 안내가 표시되어야 합니다.');
     assert.ok(
       themeStyles.includes('body[data-current-view="settings"] .topbar')
-        && themeStyles.includes('body[data-current-view="settings"] #projectContextNav')
         && themeStyles.includes('body[data-current-view="settings"] .sidebar-projects')
         && themeStyles.includes('body[data-current-view="settings"] .project-sidebar-list')
         && themeStyles.includes('width: min(100%, 1040px);'),
-      '설정 화면은 읽기 폭을 제한하면서 프로젝트와 작업 탐색 탭을 유지해야 합니다.',
+      '설정 화면은 읽기 폭을 제한하면서 사이드바 프로젝트 탐색을 유지해야 합니다.',
     );
     const languageIndex = settings.indexOf('language-settings-card');
     const themeIndex = settings.indexOf('theme-settings-card');

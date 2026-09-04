@@ -344,7 +344,6 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
     return [
       ["all", "⌂", t("app.nav.home"), t("quality.command.view"), () => selectView("all", { focusMain: true })],
       ["active", "●", t("app.nav.active"), t("quality.command.view"), () => selectView("active", { focusMain: true })],
-      ["waiting", "!", t("app.nav.needs_review"), t("quality.command.view"), () => selectView("waiting", { focusMain: true })],
       ["runtime", "↻", t("app.nav.runtime"), t("quality.command.view"), () => selectView("runtime", { focusMain: true })],
       ["tmux", "▦", t("app.nav.tmux"), t("quality.command.view"), () => selectView("tmux", { focusMain: true })],
       ["settings", "⚙", t("app.nav.settings"), t("quality.command.view"), () => selectView("settings", { focusMain: true })],

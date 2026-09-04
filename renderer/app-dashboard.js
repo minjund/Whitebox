@@ -33,7 +33,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return Boolean(session && !["running", "starting"].includes(session.status));
   }
 
-  const canForkCodexDesktopSession = session => window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+  const hasWritablePtySurface = session => window.WhiteboxRendererUtils?.canUseWritablePtySurface?.(session) === true;
 
   function latestSessionSort(sessions = []) {
     return [...sessions].sort((left, right) =>
@@ -439,7 +439,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const sidebarGroups = sourceIds.map((sourceId) => {
       const scopedSessions = rootSessions.filter((session) => sessionProjectSource(session) === sourceId);
       const scopedProjects = observedProjects(scopedSessions)
-        .filter((project) => sourceId === "direct" || Number(project.count || 0) > 0)
+        .filter((project) => Number(project.count || 0) > 0)
         .map((project) => ({ ...project, sourceId }));
       const projectlessCount = scopedSessions.filter(isProjectlessSession).length;
       return { sourceId, label: sourcePluginLabel(sourceId), projects: scopedProjects, projectlessCount };
@@ -551,7 +551,19 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         priority: attention.length ? "attention" : resultReady.length ? "result-ready" : live.length ? "live" : "idle",
       };
     };
-    const sidebarProjectNodes = new Map();
+    // Keep saved projects selectable even before their first task, but do not
+    // manufacture an empty Whitebox/program row for them.
+    const sidebarProjectNodes = new Map(projects.map((item) => [sidebarProjectKey(item.path), {
+      key: sidebarProjectKey(item.path),
+      path: item.path,
+      name: item.name,
+      saved: Boolean(item.saved),
+      count: 0,
+      sources: [],
+      live: [],
+      attention: [],
+      resultReady: [],
+    }]));
     const appendSidebarSource = (item, sourceId, projectless = false) => {
       const key = sidebarProjectKey(item.path);
       const current = sidebarProjectNodes.get(key) || {
@@ -566,6 +578,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         resultReady: [],
       };
       const scopedState = sourceState(item, sourceId, projectless);
+      if (!scopedState.sessions.length) {
+        sidebarProjectNodes.set(key, current);
+        return;
+      }
       const source = {
         ...item,
         ...scopedState,
@@ -642,11 +658,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       // Clicking a task jumps to its project workflow and opens the PTY, the
       // same action as the agent node's PTY button; transcript-only records
       // (plugin imports, Claude desktop conversations) keep the drawer.
-      const completedMainPty = String(session.status || "") === "completed"
-        && window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(session) === true;
-      const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
-        || session.controlCapabilities?.pty === false) && !completedMainPty;
-      const ptyCapable = !session.parentId && !session.sourcePluginId && !transcriptSurface;
+      const ptyCapable = hasWritablePtySurface(session);
       const interaction = ptyCapable
         ? `data-inline-pty-trigger="${esc(session.id)}"`
         : `data-open-session="${esc(session.id)}"`;
@@ -661,13 +673,17 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? state.workspace === PROJECTLESS_WORKSPACE
         : normalizedProjectPath(state.workspace) === item.key);
       const allSourcesSelected = projectSelected && String(state.workspaceSource || "all") === "all";
-      const projectExpanded = !state.sidebarCollapsedProjects.has(item.key);
+      const hasSources = item.sources.length > 0;
+      const projectExpanded = hasSources && !state.sidebarCollapsedProjects.has(item.key);
       const sourceListId = `projectSidebarSources${projectIndex}`;
       const canReorder = item.key !== PROJECTLESS_WORKSPACE && canReorderSidebarProjects;
       const canRemove = item.saved && item.key !== PROJECTLESS_WORKSPACE;
       const projectKeyboardShortcuts = [canReorder ? "Alt+ArrowUp Alt+ArrowDown" : "", canRemove ? "Delete" : ""]
         .filter(Boolean).join(" ");
-      const filterLabel = t("project.filter_named", { name: item.name, count: item.count });
+      const hasTasks = Number(item.count || 0) > 0;
+      const filterLabel = hasTasks
+        ? t("project.filter_named", { name: item.name, count: item.count })
+        : item.name;
       const accessibleLabel = item.resultReady.length
         ? `${filterLabel}. ${t("studio.sidebar.result_ready_label", { count: item.resultReady.length })}`
         : filterLabel;
@@ -734,16 +750,16 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             ${canReorder ? 'aria-grabbed="false" aria-describedby="projectReorderHelp"' : ""}
             ${projectKeyboardShortcuts ? `aria-keyshortcuts="${projectKeyboardShortcuts}"` : ""}
             aria-label="${esc(accessibleLabel)}" aria-selected="${allSourcesSelected ? "true" : "false"}"
-            aria-expanded="${projectExpanded ? "true" : "false"}" aria-owns="${sourceListId}"
+            ${hasSources ? `aria-expanded="${projectExpanded ? "true" : "false"}" aria-owns="${sourceListId}"` : ""}
             role="treeitem" aria-level="1"
             tabindex="${item.key === sidebarTabStopProjectKey && !sidebarTabStopSourceKey ? "0" : "-1"}">
             ${canReorder ? `<span class="project-sidebar-drag-handle" draggable="${canReorder ? "true" : "false"}" aria-hidden="true" title="${esc(t("project.reorder_hint"))}"></span>` : ""}
             <span class="project-sidebar-icon" aria-hidden="true">${esc(projectInitial(item.name))}</span>
-            <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><small>${esc(t("studio.sidebar.project_tree_summary", {
+            <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong>${hasTasks ? `<small>${esc(t("studio.sidebar.project_tree_summary", {
               count: Number(item.count || 0),
               sources: item.sources.length,
               status: projectStatus,
-            }))}</small></span>
+            }))}</small>` : ""}</span>
             <span class="project-sidebar-project-state">
               ${item.attention.length
                 ? `<span class="project-sidebar-attention" aria-label="${esc(t("studio.sidebar.needs_review"))}"><i aria-hidden="true"></i><b>${item.attention.length}</b></span>`
@@ -755,12 +771,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             </span>
           </button>
           <span class="project-sidebar-row-actions">
-            <button type="button" class="project-sidebar-project-toggle" data-sidebar-project-toggle="${esc(item.key)}"
+            ${hasSources ? `<button type="button" class="project-sidebar-project-toggle" data-sidebar-project-toggle="${esc(item.key)}"
               tabindex="-1"
               aria-expanded="${projectExpanded ? "true" : "false"}" aria-controls="${sourceListId}"
               aria-label="${esc(t(projectExpanded ? "studio.sidebar.collapse_project" : "studio.sidebar.expand_project", { project: accessibleLabel }))}">
               <span class="project-sidebar-disclosure" aria-hidden="true">›</span>
-            </button>
+            </button>` : ""}
             ${canRemove
               ? `<button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}"
                 tabindex="-1"
@@ -769,9 +785,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
               : ""}
           </span>
         </div>
-        <div id="${sourceListId}" class="project-sidebar-source-list" role="group"${projectExpanded ? "" : " hidden"}>
+        ${hasSources ? `<div id="${sourceListId}" class="project-sidebar-source-list" role="group"${projectExpanded ? "" : " hidden"}>
           ${sourceItems}
-        </div>
+        </div>` : ""}
       </section>`;
     };
     const sidebarHtml = sortedSidebarProjects.map(sidebarProjectItem).join("")
@@ -863,13 +879,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         ? latestHistorySessions.map((session) => {
           const provider = state.providerMap.get(session.provider);
           const providerLabel = provider?.label || String(session.provider || "AI").toUpperCase();
-          const completedMainPty = String(session.status || "") === "completed"
-            && canForkCodexDesktopSession(session);
-          const transcriptSurface = (session.presentation?.conversationSurface === "transcript"
-            || session.controlCapabilities?.pty === false) && !completedMainPty;
-          const historyInteraction = transcriptSurface
-            ? `data-open-session="${esc(session.id)}"`
-            : `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`;
+          const historyInteraction = hasWritablePtySurface(session)
+            ? `data-inline-pty-trigger="${esc(session.id)}" aria-expanded="${state.inlineTerminalSessionId === session.id ? "true" : "false"}" aria-controls="agentInlineTerminal"`
+            : `data-open-session="${esc(session.id)}"`;
           const updatedAt = new Date(session.updatedAt || 0);
           const updatedLabel = Number.isNaN(updatedAt.getTime())
             ? ""
@@ -1052,14 +1064,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       liveCountGuide.textContent = `전체 ${activeRootCount}건: 처리 중 ${processingCount}건 + 확인 대기 ${reviewNeededCount}건`;
     }
     $("#navActiveCount").textContent = memoryRootCount;
-    const reviewSessionsForNav = state.view === "waiting"
-      ? filteredSessions()
-      : sessions.filter((session) => context.needsManagementInbox?.(session));
+    const reviewSessionsForNav = sessions.filter((session) => context.needsManagementInbox?.(session));
     const reviewCount = reviewSessionsForNav.length;
     const reviewCompletedCount = reviewSessionsForNav
       .filter((session) => context.matchesManagementFilter?.(session, "optional")).length;
     const actionableReviewCount = Math.max(0, reviewCount - reviewCompletedCount);
-    $("#navWaitingCount").textContent = actionableReviewCount;
     const projectContextMeta = $("#projectContextMeta");
     if (projectContextMeta) {
       projectContextMeta.textContent = state.workspace === "all"
@@ -1074,8 +1083,6 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           waiting: reviewNeededCount,
         });
     }
-    const navWaitingUnit = $("#navWaitingUnit");
-    if (navWaitingUnit) navWaitingUnit.textContent = window.WhiteboxI18n.t("quality.unit.tasks");
     const scheduledCount = (state.snapshot?.automations || [])
       .filter((item) => isProviderVisible(item.provider || "codex")).length;
     const loopCount = sessions.filter(isRuntimeLoopSession).length;
@@ -1088,19 +1095,18 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const navCounts = {
       all: activeRootCount,
       active: memoryRootCount,
-      waiting: reviewCount,
       runtime: scheduledCount + loopCount,
       terminal: undefined,
       tmux: undefined,
     };
     document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
       const key = {
-        all: "app.nav.home", active: "app.nav.active", waiting: "app.nav.needs_review", runtime: "app.nav.runtime",
+        all: "app.nav.home", active: "app.nav.active", runtime: "app.nav.runtime",
         terminal: "app.nav.session_terminal", tmux: "app.nav.tmux", settings: "app.nav.settings",
       }[button.dataset.view];
       const label = t(key);
       const count = navCounts[button.dataset.view];
-      const unitKey = { all: "tasks", active: "records", waiting: "items", runtime: "runs", terminal: "sessions", tmux: "groups" }[button.dataset.view];
+      const unitKey = { all: "tasks", active: "records", runtime: "runs", terminal: "sessions", tmux: "groups" }[button.dataset.view];
       const unit = unitKey ? t(`quality.unit.${unitKey}`) : "";
       const accessibleLabel = Number.isFinite(count) ? t("quality.nav_count_detailed", { label, count, unit }) : label;
       button.setAttribute("aria-label", accessibleLabel);
@@ -1379,9 +1385,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
 
   function filteredSessions() {
     const allSessions = state.view === "active" ? visibleSessions() : displaySessions();
-    let sessions = state.view === "waiting" ? allSessions : allSessions.filter((session) => !session.parentId);
+    let sessions = allSessions.filter((session) => !session.parentId);
     if (state.view === "active") sessions = sessions.filter(isPastRecord);
-    if (state.view === "waiting") sessions = sessions.filter((session) => context.needsManagementInbox?.(session));
     if (state.providerFilters.size) sessions = sessions.filter((session) => state.providerFilters.has(session.provider));
     sessions = sessions.filter(matchesWorkspaceFilter);
     const query = state.search.replace(/\s+/g, " ").trim().toLowerCase();
