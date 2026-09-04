@@ -2387,6 +2387,7 @@ function registerTerminalLifecycleTests(context) {
 
     const legacyManagedStore = path.join(temp, 'managed-legacy-stopped-reconcile.json');
     const legacyNow = '2026-08-05T00:00:00.000Z';
+    const legacyClock = () => Date.parse(legacyNow) + 120_000;
     const legacyManagedRecord = (id, bridgeId, managedTmuxSession, status = 'stopped', offset = 0) => ({
       id,
       options: {
@@ -2412,6 +2413,7 @@ function registerTerminalLifecycleTests(context) {
     const legacyManager = new TerminalManager({
       platform: 'darwin',
       storeFile: legacyManagedStore,
+      now: legacyClock,
       managedTmuxRuntime: {
         existsStrict: options => legacyLiveSessions.has(options.managedTmuxSession),
         stopStrict: options => { legacyStops.push(options.managedTmuxSession); return { ok: true }; },
@@ -2455,6 +2457,7 @@ function registerTerminalLifecycleTests(context) {
     const livePreferredManager = new TerminalManager({
       platform: 'darwin',
       storeFile: livePreferredStore,
+      now: legacyClock,
       managedTmuxRuntime: {
         existsStrict: options => options.managedTmuxSession === 'older-live',
         stopStrict: options => { livePreferredStops.push(options.managedTmuxSession); return { ok: true }; },
@@ -2475,6 +2478,7 @@ function registerTerminalLifecycleTests(context) {
     const bothLiveManager = new TerminalManager({
       platform: 'darwin',
       storeFile: bothLiveStore,
+      now: legacyClock,
       managedTmuxRuntime: {
         existsStrict: () => true,
         stopStrict: options => { bothLiveStops.push(options.managedTmuxSession); return { ok: true }; },
@@ -2499,6 +2503,7 @@ function registerTerminalLifecycleTests(context) {
     const unknownDedupeManager = new TerminalManager({
       platform: 'darwin',
       storeFile: unknownDedupeStore,
+      now: legacyClock,
       managedTmuxRuntime: {
         existsStrict: options => {
           if (options.managedTmuxSession === 'unknown-one') throw infrastructureError;
