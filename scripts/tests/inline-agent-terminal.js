@@ -113,6 +113,7 @@ function createInlineHarness(root, options = {}) {
   };
   const focusSurfaceAttributes = new Map([['aria-hidden', 'false']]);
   const focusSurface = {
+    dataset: {},
     classList: classList(),
     hidden: false,
     isConnected: true,
@@ -444,6 +445,29 @@ function registerInlineAgentTerminalTests(context) {
     assert.equal(harness.embeddedState().terminalId, target.terminalId);
     assert.equal(harness.focusCalls.length, 1,
       '사용자가 연 집중 모드 PTY에 입력 포커스를 전달하지 않았습니다.');
+
+    const liveDesktop = {
+      ...mainSession,
+      id: 'codex:live-desktop-read-only',
+      externalId: 'live-desktop-read-only',
+      clientKind: 'codex-desktop',
+      status: 'running',
+    };
+    const readOnlyFocus = createInlineHarness(root, {
+      session: liveDesktop,
+      initialOpen: false,
+      initialFocus: true,
+      mountForAgent: async () => ({ ok: true, target }),
+    });
+    readOnlyFocus.focusSurface.dataset.ptyFocusSession = liveDesktop.id;
+    readOnlyFocus.focusSurface.dataset.ptyFocusMode = 'transcript';
+    readOnlyFocus.setFocusShellSessionId('');
+    const readOnlyResult = await readOnlyFocus.sync({ force: true });
+    assert.equal(readOnlyResult.reason, 'read-only-focus');
+    assert.equal(readOnlyFocus.app.state.ptyFocusSessionId, liveDesktop.id,
+      'passive PTY sync가 읽기 전용 담당 노드 집중 화면을 닫았습니다.');
+    assert.equal(readOnlyFocus.mountCalls.length, 0);
+    assert.equal(readOnlyFocus.unmountCalls.length, 0);
   });
 
   test('inline에서 PTY 집중 모드로 갔다 돌아와도 같은 terminal host를 재사용한다', async () => {

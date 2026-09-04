@@ -82,6 +82,23 @@ function appOwnedBridgeTerminalIdentity(session) {
   return Object.freeze({ terminalId: identity.terminalId, creationId: identity.creationId, provider });
 }
 
+function canOpenResponsibleFocus(session) {
+  if (!session || session.parentId) return false;
+  const sourcePlugin = session.sourcePlugin;
+  const sourcePluginPresent = typeof sourcePlugin === 'string'
+    ? Boolean(sourcePlugin.trim())
+    : Boolean(sourcePlugin && typeof sourcePlugin === 'object');
+  const sourceMarkers = [session.source, session.clientKind, session.provenance?.source?.id]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  return !sourcePluginPresent
+    && !String(session.sourcePluginId || '').trim()
+    && !String(session.provenance?.source?.pluginId || '').trim()
+    && !String(session.controlAuthority || '').trim()
+    && !String(session.importMode || '').trim()
+    && !sourceMarkers.some(value => /(?:^|[.:/_-])(?:opencode|omo|aside)(?:$|[.:/_-])/i.test(value));
+}
+
 window.WhiteboxRendererUtils = Object.freeze({
   // Intl.DateTimeFormat construction is far more expensive than format();
   // reuse one instance per locale+options combination across render passes.
@@ -111,6 +128,7 @@ window.WhiteboxRendererUtils = Object.freeze({
   },
   isWritableDirectSession,
   appOwnedBridgeTerminalIdentity,
+  canOpenResponsibleFocus,
   canForkCodexDesktopSession(session) {
     const sourcePlugin = session?.sourcePlugin;
     const sourcePluginId = String(session?.sourcePluginId

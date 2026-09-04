@@ -101,8 +101,10 @@ assert.match(ptyStyles, /body\.pty-focus-open > #drawerBackdrop \{ z-index: 70; 
   "Only a drawer opened over PTY focus should use the elevated stacking layer.");
 assert.match(agentActions, /async function resetAgentSession\(sessionId\)[\s\S]*resetForAgent[\s\S]*closeDrawer\?\.\(false\)[\s\S]*openPtyFocusForTerminal\?\.\(terminalId,[\s\S]*creationId:/u,
   "Session reset must close the drawer and open the newly created exact terminal.");
-assert.doesNotMatch(focus, /ptyFocusChildModal|loadSessionDetail|subagentConversationHtml/u,
+assert.doesNotMatch(focus, /ptyFocusChildModal|subagentConversationHtml/u,
   "PTY focus must delegate to the shared drawer instead of recreating a child modal.");
+assert.match(focus, /function openResponsibleFocus\(sessionId, options = \{\}\)[\s\S]*refreshTranscriptDetail\(root\)/u,
+  "A responsible node without a writable PTY must load its transcript in the focus surface.");
 assert.match(styles, /\.pty-focus-surface/u, "PTY focus layout styles are required.");
 assert.doesNotMatch(styles, /\.pty-focus-child-modal/u,
   "Removed child conversation popup styles must not return.");

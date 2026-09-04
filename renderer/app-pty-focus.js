@@ -10,6 +10,8 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     controlRoomStatus, sessionStatusLabel, timeAgo,
     rememberDialogTrigger = () => {}, restoreDialogTrigger = () => false,
     discardDialogTrigger = () => false,
+    loadSessionDetail = async () => null,
+    messageContentHtml = message => `<div class="chat-content plain">${esc(message?.text || "")}</div>`,
     toast = () => {}, announce = () => {}, reportRecoverableError = () => {},
   } = context;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
@@ -20,9 +22,17 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
   let focusSyncPromise = Promise.resolve({ ok: false, reason: "not-open" });
   let focusOpenGeneration = 0;
   let eventsBound = false;
+  let activeFocusMode = "";
   let lastFlowHtml = "";
+  let lastTranscriptHtml = "";
+  const requestedTranscriptVersions = new Map();
 
-  const snapshotSessions = () => state.snapshot?.sessions || [];
+  const snapshotSessions = () => {
+    const sessions = new Map();
+    for (const session of state.rawSnapshot?.sessions || []) sessions.set(String(session.id || ""), session);
+    for (const session of state.snapshot?.sessions || []) sessions.set(String(session.id || ""), session);
+    return [...sessions.values()];
+  };
   const snapshotSession = id => snapshotSessions()
     .find(session => String(session.id || "") === String(id || "")) || null;
   const focusSurface = () => $("#ptyFocusSurface");
@@ -85,6 +95,10 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       && session.presentation?.conversationSurface !== "transcript";
   }
 
+  function canOpenResponsibleFocus(session) {
+    return window.WhiteboxRendererUtils.canOpenResponsibleFocus?.(session) === true;
+  }
+
   function isPtyFocusActive() {
     const surface = focusSurface();
     return Boolean(state.ptyFocusSessionId && surface && !surface.classList.contains("hidden"));
@@ -113,14 +127,14 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     : unit.activity.updatedAt || unit.activity.startedAt || "";
   const sortUnits = units => units.sort((left, right) => Date.parse(unitTime(right) || 0) - Date.parse(unitTime(left) || 0));
 
-  function rootNodeHtml(root) {
+  function rootNodeHtml(root, writablePty) {
     const provider = providerInfo(root.provider);
     const goal = controlRoomAgentGoal(root, 54);
     const current = controlRoomSummary(latestWorkCopy(root) || root.statusDetail || root.title, 64);
     return `<div class="pty-focus-node pty-focus-root-node" style="${providerStyle(root.provider)}">
       <span class="pty-focus-node-mark">${esc(provider.mark)}</span>
-      <span class="pty-focus-node-copy"><small>${esc(t("pty_focus.responsible_node"))}</small><b title="${esc(goal.full)}">${esc(goal.text)}</b><em title="${esc(current.full)}">${esc(current.text)}</em></span>
-      <span class="pty-focus-node-state">PTY</span>
+      <span class="pty-focus-node-copy"><small>${esc(t(writablePty ? "pty_focus.responsible_node" : "pty_focus.responsible_node_readonly"))}</small><b title="${esc(goal.full)}">${esc(goal.text)}</b><em title="${esc(current.full)}">${esc(current.text)}</em></span>
+      <span class="pty-focus-node-state">${writablePty ? "PTY" : esc(t("pty_focus.readonly_short"))}</span>
     </div>`;
   }
 
@@ -163,7 +177,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     </section>`;
   }
 
-  function flowHtml(root) {
+  function flowHtml(root, writablePty) {
     const model = connectedGraphSessions(snapshotSessions(), root.id);
     const childSessions = descendants(root, model);
     const actors = [root, ...childSessions];
@@ -177,11 +191,94 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       ...childUnits.filter(unit => !isOngoingSubagent(unit.child)),
       ...executionUnits.filter(unit => unit.activity.status !== "running"),
     ]);
-    return `<section class="pty-focus-flow-lane"><header><b>${esc(t("pty_focus.responsible"))}</b><span>1</span></header><div class="pty-focus-flow-list">${rootNodeHtml(root)}</div></section>
+    return `<section class="pty-focus-flow-lane"><header><b>${esc(t("pty_focus.responsible"))}</b><span>1</span></header><div class="pty-focus-flow-list">${rootNodeHtml(root, writablePty)}</div></section>
       <span class="pty-focus-flow-arrow" aria-hidden="true">→</span>
       ${laneHtml(t("pty_focus.in_progress"), active, "pty_focus.no_running")}
       <span class="pty-focus-flow-arrow" aria-hidden="true">→</span>
       ${laneHtml(t("pty_focus.completed"), completed, "pty_focus.no_completed")}`;
+  }
+
+  function transcriptHtml(session) {
+    const allMessages = (session?.messages || [])
+      .filter(message => message && (message.role === "user" || message.role === "assistant"));
+    const messages = allMessages.slice(-120);
+    const note = `<p class="pty-focus-transcript-note">${esc(t("pty_focus.readonly_help"))}</p>`;
+    const omitted = allMessages.length > messages.length
+      ? `<p class="pty-focus-transcript-omitted">${esc(t("drawer.messages_omitted", { count: allMessages.length - messages.length }))}</p>`
+      : "";
+    if (!messages.length) return `${note}${omitted}<div class="pty-focus-transcript-empty">${esc(t("pty_focus.no_transcript"))}</div>`;
+    const provider = providerInfo(session.provider);
+    const rows = messages.map(message => {
+      const assistant = message.role === "assistant";
+      const label = assistant ? provider.label : t("drawer.user");
+      const avatar = assistant ? provider.mark : t("drawer.me_mark");
+      const timestamp = message.timestamp ? timeAgo(message.timestamp) : "";
+      return `<article class="pty-focus-transcript-message ${assistant ? "assistant" : "user"}" data-message-id="${esc(message.id || "")}">
+        <span class="pty-focus-transcript-avatar" aria-hidden="true">${esc(avatar)}</span>
+        <div class="pty-focus-transcript-bubble"><header><b>${esc(label)}</b>${timestamp ? `<time title="${esc(message.timestamp)}">${esc(timestamp)}</time>` : ""}</header>${messageContentHtml(message, session.id)}</div>
+      </article>`;
+    }).join("");
+    return `${note}${omitted}<div class="pty-focus-transcript-list">${rows}</div>`;
+  }
+
+  function mergedTranscriptMessages(detail, live) {
+    const merged = [];
+    const indexes = new Map();
+    const keyFor = (message, index, source) => {
+      const id = String(message?.id || "").trim();
+      if (id) return `id:${id}`;
+      const timestamp = String(message?.timestamp || "").trim();
+      const role = String(message?.role || "").trim();
+      const text = String(message?.text || "");
+      return timestamp || text ? `content:${role}\u0000${timestamp}\u0000${text}` : `${source}:${index}`;
+    };
+    const add = (message, index, source) => {
+      if (!message) return;
+      const key = keyFor(message, index, source);
+      if (indexes.has(key)) {
+        const existing = indexes.get(key);
+        const previous = merged[existing];
+        const previousText = String(previous?.text || "");
+        const liveText = String(message?.text || "");
+        merged[existing] = {
+          ...previous,
+          ...message,
+          text: previousText.length > liveText.length ? previousText : liveText,
+        };
+        return;
+      }
+      indexes.set(key, merged.length);
+      merged.push(message);
+    };
+    (detail || []).forEach((message, index) => add(message, index, "detail"));
+    (live || []).forEach((message, index) => add(message, index, "live"));
+    return merged;
+  }
+
+  function refreshTranscriptDetail(root) {
+    if (!root?.id || activeFocusMode !== "transcript") return Promise.resolve(null);
+    const id = String(root.id);
+    const snapshotVersion = String(root.updatedAt || "").trim();
+    const detail = state.details?.get?.(id);
+    if (detail && snapshotVersion && String(detail.updatedAt || "").trim() === snapshotVersion) {
+      requestedTranscriptVersions.delete(id);
+      return Promise.resolve(detail);
+    }
+    const requestVersion = snapshotVersion || "__unversioned__";
+    if (requestedTranscriptVersions.get(id) === requestVersion) return Promise.resolve(detail || null);
+    requestedTranscriptVersions.set(id, requestVersion);
+    return Promise.resolve(loadSessionDetail(id, true, snapshotVersion))
+      .then(result => {
+        if (!result && requestedTranscriptVersions.get(id) === requestVersion) {
+          requestedTranscriptVersions.delete(id);
+        }
+        return result;
+      })
+      .catch(error => {
+        if (requestedTranscriptVersions.get(id) === requestVersion) requestedTranscriptVersions.delete(id);
+        reportRecoverableError("responsible-focus-detail", error);
+        return null;
+      });
   }
 
   function setBackgroundInactive(inactive) {
@@ -253,6 +350,9 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
 
   function focusedRoot() {
     const current = snapshotSession(state.ptyFocusSessionId);
+    if (activeFocusMode === "transcript") {
+      return canOpenResponsibleFocus(current) ? current : null;
+    }
     if (canOpenPtyFocus(current)) return current;
     if (!focusIdentity) return null;
     const replacement = sessionForTerminal(focusIdentity.terminalId, focusIdentity.creationId);
@@ -272,23 +372,56 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     const goal = controlRoomAgentGoal(root, 90);
     const current = controlRoomSummary(latestWorkCopy(root) || root.statusDetail || root.title, 120);
     const presentedStatus = controlRoomStatus(root);
+    const writablePty = activeFocusMode !== "transcript";
     surface.setAttribute("style", providerStyle(root.provider));
     surface.dataset.ptyFocusSession = root.id;
+    surface.dataset.ptyFocusMode = writablePty ? "pty" : "transcript";
     $("#ptyFocusProviderMark").textContent = provider.mark;
     $("#ptyFocusTerminalMark").textContent = provider.mark;
-    $("#ptyFocusTitle").textContent = `${provider.label} · ${goal.text}`;
+    $("#ptyFocusEyebrow").textContent = t(writablePty ? "pty_focus.eyebrow" : "pty_focus.readonly_eyebrow");
+    $("#ptyFocusTitle").textContent = writablePty
+      ? `${provider.label} · ${goal.text}`
+      : `${provider.label} · ${t("pty_focus.readonly_title")}`;
     $("#ptyFocusSummary").textContent = current.text;
-    $("#ptyFocusTerminalTitle").textContent = `${provider.label} · PTY`;
+    $("#ptyFocusTerminalTitle").textContent = writablePty
+      ? `${provider.label} · PTY`
+      : `${provider.label} · ${t("pty_focus.readonly_title")}`;
+    $("#ptyFocusTerminalHelp").textContent = t(writablePty ? "pty_focus.terminal_help" : "pty_focus.readonly_help");
     const rootStatus = $("#ptyFocusRootStatus");
     rootStatus.className = `pty-focus-root-status ${["running", "starting"].includes(presentedStatus) ? "is-live" : presentedStatus === "waiting" ? "is-waiting" : "is-complete"}`;
     rootStatus.querySelector("b").textContent = sessionStatusLabel(root, presentedStatus);
     rootStatus.querySelector("small").textContent = timeAgo(root.updatedAt);
     const shell = focusShell();
-    shell.dataset.inlineAgentTerminal = root.id;
+    shell.dataset.focusContent = writablePty ? "pty" : "transcript";
+    shell.dataset.inlineAgentTerminal = writablePty ? root.id : "";
     shell.setAttribute("style", providerStyle(root.provider));
-    shell.setAttribute("aria-label", t("pty_focus.terminal_for", { provider: provider.label }));
+    shell.setAttribute("aria-label", writablePty
+      ? t("pty_focus.terminal_for", { provider: provider.label })
+      : t("pty_focus.transcript_viewport"));
+    const terminalViewport = $("#ptyFocusTerminalViewport");
+    const transcript = $("#ptyFocusTranscriptContent");
+    terminalViewport?.classList.toggle("hidden", !writablePty);
+    transcript?.classList.toggle("hidden", writablePty);
+    if (!writablePty && transcript) {
+      const detail = state.details?.get?.(root.id);
+      const transcriptSession = detail
+        ? {
+            ...detail,
+            ...root,
+            messages: mergedTranscriptMessages(detail.messages, root.messages),
+          }
+        : root;
+      const nextTranscriptHtml = transcriptHtml(transcriptSession);
+      if (nextTranscriptHtml !== lastTranscriptHtml || !transcript.hasChildNodes()) {
+        const pinnedToEnd = window.WhiteboxRendererUtils.isScrolledToEnd?.(transcript, 12) !== false;
+        const previousTop = transcript.scrollTop;
+        transcript.innerHTML = nextTranscriptHtml;
+        lastTranscriptHtml = nextTranscriptHtml;
+        transcript.scrollTop = pinnedToEnd ? transcript.scrollHeight : previousTop;
+      }
+    }
     const flow = $("#ptyFocusFlow");
-    const html = flowHtml(root);
+    const html = flowHtml(root, writablePty);
     if (html !== lastFlowHtml || !flow.hasChildNodes()) {
       flow.innerHTML = html;
       lastFlowHtml = html;
@@ -322,7 +455,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     pendingFocus = null;
     const root = ownerRootSession(sessionId);
     if (!canOpenPtyFocus(root)) {
-      toast(t("pty_focus.root_only"));
+      toast(t(canOpenResponsibleFocus(root) ? "pty_focus.terminal_unavailable" : "pty_focus.root_only"));
       return false;
     }
     if (options.attentionActivation !== true
@@ -331,7 +464,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
     }
     const id = String(root.id || "");
-    if (state.ptyFocusSessionId === id && isPtyFocusActive()) {
+    if (state.ptyFocusSessionId === id && isPtyFocusActive() && activeFocusMode === "pty") {
       if (options.attentionActivation !== true) focusOpenGeneration += 1;
       if (options.targetId) {
         if (String(state.ptyFocusTargetId || "") !== String(options.targetId || "")) focusOpenGeneration += 1;
@@ -350,12 +483,16 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       toast(t("pty_focus.terminal_unavailable"));
       return false;
     }
+    if ($("#detailDrawer")?.classList.contains("open")) context.closeDrawer?.(false);
     returnState = captureReturnState(options.trigger);
     lastFlowHtml = "";
+    lastTranscriptHtml = "";
     rememberDialogTrigger("ptyFocusSurface", { refresh: true });
+    activeFocusMode = "pty";
     if (controller.enterFocus(id, { focus: options.focus !== false }) === false) {
       discardDialogTrigger("ptyFocusSurface");
       returnState = null;
+      activeFocusMode = "";
       toast(t("pty_focus.terminal_unavailable"));
       return false;
     }
@@ -363,6 +500,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     focusOpenGeneration += 1;
     state.ptyFocusTargetId = String(options.targetId || focusIdentity?.terminalId || "").trim();
     const surface = focusSurface();
+    surface.dataset.ptyFocusMode = "pty";
     surface.classList.remove("hidden");
     surface.removeAttribute("inert");
     surface.setAttribute("aria-hidden", "false");
@@ -375,6 +513,61 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       requireTargetId: options.requireTargetId,
     });
     announce(t("pty_focus.opened", { title: root.title || providerInfo(root.provider).label }));
+    return true;
+  }
+
+  function openResponsibleFocus(sessionId, options = {}) {
+    pendingFocus = null;
+    const root = ownerRootSession(sessionId);
+    if (!canOpenResponsibleFocus(root)) {
+      toast(t("pty_focus.root_only"));
+      return false;
+    }
+    if (options.attentionActivation !== true
+      && options.manualSelectionSignaled !== true
+      && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("whitebox:terminal-manual-selection"));
+    }
+    const id = String(root.id || "");
+    if (state.ptyFocusSessionId === id && isPtyFocusActive() && activeFocusMode === "transcript") {
+      if (options.attentionActivation !== true) focusOpenGeneration += 1;
+      if (options.focus !== false) $("#ptyFocusBackBtn")?.focus({ preventScroll: true });
+      return true;
+    }
+    if (state.ptyFocusSessionId) {
+      closePtyFocus({ restore: false, clearPending: false, suppressManualSelection: true });
+    }
+    if ($("#detailDrawer")?.classList.contains("open")) context.closeDrawer?.(false);
+    returnState = captureReturnState(options.trigger);
+    lastFlowHtml = "";
+    lastTranscriptHtml = "";
+    rememberDialogTrigger("ptyFocusSurface", { refresh: true });
+    activeFocusMode = "transcript";
+    focusIdentity = null;
+    focusOpenGeneration += 1;
+    focusSyncPromise = Promise.resolve({ ok: false, reason: "read-only-focus" });
+    state.ptyFocusSessionId = id;
+    state.ptyFocusTargetId = "";
+    const surface = focusSurface();
+    surface.dataset.ptyFocusMode = "transcript";
+    surface.classList.remove("hidden");
+    surface.removeAttribute("inert");
+    surface.setAttribute("aria-hidden", "false");
+    if (options.trigger instanceof HTMLElement) options.trigger.setAttribute("aria-expanded", "true");
+    document.body.classList.add("pty-focus-open");
+    setBackgroundInactive(true);
+    renderPtyFocus();
+    if (options.focus !== false) {
+      requestAnimationFrame(() => {
+        if (state.ptyFocusSessionId === id && activeFocusMode === "transcript") {
+          $("#ptyFocusBackBtn")?.focus({ preventScroll: true });
+        }
+      });
+    }
+    refreshTranscriptDetail(root).then(() => {
+      if (state.ptyFocusSessionId === id && activeFocusMode === "transcript") renderPtyFocus();
+    });
+    announce(t("pty_focus.opened_readonly", { title: root.title || providerInfo(root.provider).label }));
     return true;
   }
 
@@ -497,7 +690,10 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
   function syncPendingPtyFocus() {
     if (isPtyFocusActive()) {
       const root = focusedRoot();
-      if (root) renderPtyFocus();
+      if (root) {
+        renderPtyFocus();
+        if (activeFocusMode === "transcript") refreshTranscriptDetail(root);
+      }
     }
     return tryPendingPtyFocus();
   }
@@ -510,7 +706,9 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     focusOpenGeneration += 1;
     const activeSessionId = String(state.ptyFocusSessionId || "");
     const saved = returnState;
-    window.WhiteboxInlineTerminal?.closeFocus?.({ unmount: options.unmount !== false });
+    if (activeFocusMode === "pty") {
+      window.WhiteboxInlineTerminal?.closeFocus?.({ unmount: options.unmount !== false });
+    }
     state.ptyFocusSessionId = null;
     state.ptyFocusTargetId = "";
     const surface = focusSurface();
@@ -518,8 +716,15 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     surface.setAttribute("inert", "");
     surface.setAttribute("aria-hidden", "true");
     delete surface.dataset.ptyFocusSession;
+    delete surface.dataset.ptyFocusMode;
+    activeFocusMode = "";
     lastFlowHtml = "";
+    lastTranscriptHtml = "";
+    requestedTranscriptVersions.delete(activeSessionId);
     focusShell().dataset.inlineAgentTerminal = "";
+    focusShell().dataset.focusContent = "";
+    $("#ptyFocusTerminalViewport")?.classList.remove("hidden");
+    $("#ptyFocusTranscriptContent")?.classList.add("hidden");
     if (saved?.trigger?.isConnected) saved.trigger.setAttribute("aria-expanded", "false");
     if (activeSessionId) document.querySelectorAll(`[data-pty-focus-trigger="${CSS.escape(activeSessionId)}"]`).forEach(trigger => trigger.setAttribute("aria-expanded", "false"));
     setBackgroundInactive(false);
@@ -563,14 +768,17 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
 
   return {
     canOpenPtyFocus,
+    canOpenResponsibleFocus,
     isPtyFocusActive,
     ownerRootSession,
+    openResponsibleFocus,
     openPtyFocus,
     openPtyFocusVerified,
     openPtyFocusForTerminal,
     syncPendingPtyFocus,
     closePtyFocus,
     renderPtyFocus,
+    renderPtyFocusDetail: renderPtyFocus,
     bindPtyFocusEvents,
   };
 };
