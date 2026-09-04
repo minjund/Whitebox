@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.7.16 - 2026-09-04
+
+- Keep responsible-flow child and execution cards at a readable width while
+  their lanes are scrolled horizontally, including long status labels.
+- Stack flow lanes on narrow windows so only each lane scrolls sideways and
+  the surrounding focus view no longer develops a second horizontal scrollbar.
+
 ## 1.7.15 - 2026-09-03
 
 - Restore the right-side read-only detail drawer for child nodes and execution

@@ -169,6 +169,120 @@ async function run() {
       && initial.connectionTone === 'connected' && initial.terminalCreates === 0,
       `기존 PTY의 focus-only xterm mount가 올바르지 않습니다: ${JSON.stringify(initial)}`);
 
+    const flowLayout = await rendererValue(win, `(() => {
+      const lists = [...document.querySelectorAll('#ptyFocusFlow .pty-focus-flow-list')];
+      return lists.map((list, index) => {
+        const nodes = [...list.querySelectorAll('.pty-focus-node')];
+        const before = nodes.map(node => Math.round(node.getBoundingClientRect().width * 100) / 100);
+        const maxScroll = Math.max(0, list.scrollWidth - list.clientWidth);
+        list.scrollLeft = maxScroll;
+        const endScroll = list.scrollLeft;
+        const listAtEnd = list.getBoundingClientRect();
+        const lastAtEnd = nodes.at(-1)?.getBoundingClientRect();
+        list.scrollLeft = 0;
+        const startScroll = list.scrollLeft;
+        const listAtStart = list.getBoundingClientRect();
+        const firstAtStart = nodes[0]?.getBoundingClientRect();
+        const after = nodes.map(node => Math.round(node.getBoundingClientRect().width * 100) / 100);
+        return {
+          index,
+          nodeCount: nodes.length,
+          clientWidth: list.clientWidth,
+          scrollWidth: list.scrollWidth,
+          maxScroll,
+          endScroll,
+          startScroll,
+          before,
+          after,
+          minWidths: nodes.map(node => getComputedStyle(node).minWidth),
+          flexShrink: nodes.map(node => getComputedStyle(node).flexShrink),
+          copyWidths: nodes.map(node => Math.round((node.querySelector('.pty-focus-node-copy')?.getBoundingClientRect().width || 0) * 100) / 100),
+          stateInside: nodes.every(node => {
+            const state = node.querySelector('.pty-focus-node-state');
+            if (!state) return true;
+            const nodeRect = node.getBoundingClientRect();
+            const stateRect = state.getBoundingClientRect();
+            return stateRect.left >= nodeRect.left - 1 && stateRect.right <= nodeRect.right + 1;
+          }),
+          textClippedSafely: nodes.every(node => [...node.querySelectorAll('.pty-focus-node-copy small, .pty-focus-node-copy b, .pty-focus-node-copy em, .pty-focus-node-state')]
+            .every(part => {
+              const style = getComputedStyle(part);
+              return style.whiteSpace === 'nowrap' && style.overflow === 'hidden' && style.textOverflow === 'ellipsis';
+            })),
+          firstVisibleAtStart: !firstAtStart || (firstAtStart.left >= listAtStart.left - 1 && firstAtStart.right <= listAtStart.right + 1),
+          lastVisibleAtEnd: !lastAtEnd || (lastAtEnd.left >= listAtEnd.left - 1 && lastAtEnd.right <= listAtEnd.right + 1),
+        };
+      });
+    })()`);
+    const crowdedFlowLists = flowLayout.filter(list => list.nodeCount >= 3);
+    assert(crowdedFlowLists.length >= 2
+      && crowdedFlowLists.every(list => list.before.every(width => width >= 188)
+        && list.after.every((width, index) => Math.abs(width - list.before[index]) <= 1)
+        && list.maxScroll > 0 && Math.abs(list.endScroll - list.maxScroll) <= 1 && list.startScroll === 0
+        && list.firstVisibleAtStart && list.lastVisibleAtEnd
+        && list.flexShrink.every(value => value === '0')
+        && list.copyWidths.every(width => width >= 48)
+        && list.stateInside && list.textClippedSafely),
+    `가로 이동 중 PTY 흐름 카드의 폭 또는 처음/끝 표시가 깨졌습니다: ${JSON.stringify(flowLayout)}`);
+
+    win.setSize(720, 700);
+    await rendererValue(win, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    const narrowFlowLayout = await rendererValue(win, `(() => {
+      const region = document.querySelector('.pty-focus-flow-region');
+      const flow = document.querySelector('.pty-focus-flow');
+      const lists = [...document.querySelectorAll('#ptyFocusFlow .pty-focus-flow-list')];
+      return {
+        viewportWidth: innerWidth,
+        bodyOverflowsX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        regionOverflowsX: Boolean(region && region.scrollWidth > region.clientWidth + 1),
+        flowOverflowsX: Boolean(flow && flow.scrollWidth > flow.clientWidth + 1),
+        arrowsHidden: [...document.querySelectorAll('.pty-focus-flow-arrow')]
+          .every(arrow => getComputedStyle(arrow).display === 'none'),
+        lists: lists.map(list => {
+          const nodes = [...list.querySelectorAll('.pty-focus-node')];
+          const before = nodes.map(node => Math.round(node.getBoundingClientRect().width * 100) / 100);
+          const maxScroll = Math.max(0, list.scrollWidth - list.clientWidth);
+          list.scrollLeft = maxScroll;
+          const endScroll = list.scrollLeft;
+          const listAtEnd = list.getBoundingClientRect();
+          const lastAtEnd = nodes.at(-1)?.getBoundingClientRect();
+          list.scrollLeft = 0;
+          const listAtStart = list.getBoundingClientRect();
+          const firstAtStart = nodes[0]?.getBoundingClientRect();
+          return {
+            nodeCount: nodes.length,
+            maxScroll,
+            endScroll,
+            before,
+            after: nodes.map(node => Math.round(node.getBoundingClientRect().width * 100) / 100),
+            copyWidths: nodes.map(node => Math.round((node.querySelector('.pty-focus-node-copy')?.getBoundingClientRect().width || 0) * 100) / 100),
+            stateInside: nodes.every(node => {
+              const state = node.querySelector('.pty-focus-node-state');
+              if (!state) return true;
+              const nodeRect = node.getBoundingClientRect();
+              const stateRect = state.getBoundingClientRect();
+              return stateRect.left >= nodeRect.left - 1 && stateRect.right <= nodeRect.right + 1;
+            }),
+            firstVisibleAtStart: !firstAtStart || (firstAtStart.left >= listAtStart.left - 1 && firstAtStart.right <= listAtStart.right + 1),
+            lastVisibleAtEnd: !lastAtEnd || (lastAtEnd.left >= listAtEnd.left - 1 && lastAtEnd.right <= listAtEnd.right + 1),
+          };
+        }),
+      };
+    })()`);
+    const narrowCrowdedLists = narrowFlowLayout.lists.filter(list => list.nodeCount >= 3);
+    assert(narrowFlowLayout.viewportWidth <= 720 && !narrowFlowLayout.bodyOverflowsX
+      && !narrowFlowLayout.regionOverflowsX && !narrowFlowLayout.flowOverflowsX
+      && narrowFlowLayout.arrowsHidden && narrowCrowdedLists.length >= 2
+      && narrowCrowdedLists.every(list => list.maxScroll > 0
+        && Math.abs(list.endScroll - list.maxScroll) <= 1
+        && list.before.every(width => width >= 188)
+        && list.after.every((width, index) => Math.abs(width - list.before[index]) <= 1)
+        && list.copyWidths.every(width => width >= 48)
+        && list.stateInside && list.firstVisibleAtStart && list.lastVisibleAtEnd),
+    `좁은 화면에서 PTY 흐름의 바깥/안쪽 가로 이동 경계가 올바르지 않습니다: ${JSON.stringify(narrowFlowLayout)}`);
+    win.setSize(1440, 940);
+    await rendererValue(win, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+
     await rendererValue(win, `(() => {
       const child = document.querySelector('[data-pty-focus-child="fixture-child"]');
       child?.focus({ preventScroll: true });
