@@ -139,10 +139,11 @@ body.pty-focus-open #toast { z-index: 90; }
 .pty-focus-flow-lane > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .pty-focus-flow-lane > header b { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
 .pty-focus-flow-lane > header span { color: var(--dim); font: 700 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.pty-focus-flow-list { display: flex; gap: 7px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.pty-focus-flow-list { display: flex; gap: 7px; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
 .pty-focus-flow-arrow { align-self: center; color: var(--provider, var(--green)); font: 800 20px/1 ui-monospace, SFMono-Regular, Consolas, monospace; opacity: .72; }
 
 .pty-focus-node {
+  flex: 0 0 clamp(210px, 18vw, 260px);
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
@@ -172,7 +173,7 @@ button.pty-focus-node:focus-visible {
 .pty-focus-node-copy small { color: var(--dim); font-size: 12px; }
 .pty-focus-node-copy b { margin-top: 2px; color: var(--text); font-size: 12px; }
 .pty-focus-node-copy em { margin-top: 2px; color: var(--muted); font-size: 12px; font-style: normal; }
-.pty-focus-node-state { align-self: start; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.pty-focus-node-state { align-self: start; min-width: 0; max-width: 72px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .pty-focus-node.is-running .pty-focus-node-state { color: var(--green); }
 .pty-focus-node.is-waiting .pty-focus-node-state { color: var(--amber); }
 .pty-focus-flow-empty { display: grid; place-items: center; min-width: 170px; min-height: 54px; color: var(--dim); font-size: 12px; }
@@ -280,15 +281,16 @@ button.pty-focus-node:focus-visible {
   .pty-focus-back b { display: none; }
   .pty-focus-back { width: 38px; padding: 0; justify-content: center; }
   .pty-focus-root-status { display: none; }
-  .pty-focus-flow-region { overflow-x: auto; }
+  .pty-focus-flow-region { overflow-x: hidden; overflow-y: auto; }
   .pty-focus-flow-region > header small { display: none; }
-  .pty-focus-flow { grid-template-columns: minmax(170px, .8fr) auto minmax(210px, 1.2fr) auto minmax(210px, 1.2fr); min-width: 690px; }
-  .pty-focus-node { min-width: 175px; }
+  .pty-focus-flow { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .pty-focus-flow-arrow { display: none; }
+  .pty-focus-node { flex-basis: clamp(190px, 44vw, 230px); min-width: 175px; }
   .pty-focus-terminal .agent-inline-terminal-state { order: initial; width: auto; margin-left: auto; }
 }
 
 @media (max-height: 720px) {
-  .pty-focus-flow-region { max-height: 126px; overflow: auto; }
+  .pty-focus-flow-region { max-height: 126px; overflow-x: hidden; overflow-y: auto; }
   .pty-focus-node { min-height: 48px; }
 }
 
