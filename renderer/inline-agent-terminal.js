@@ -51,8 +51,7 @@
   function isFocusEligibleSession(session) {
     if (!isMainSession(session) || session.sourcePluginId) return false;
     if (window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session)) return true;
-    if (String(session.status || "").toLowerCase() === "completed"
-      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
+    if (window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
       && String(session.clientKind || "").toLowerCase() === "codex-desktop") {
       try {

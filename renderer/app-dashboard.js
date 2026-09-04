@@ -38,7 +38,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     && session?.controlCapabilities?.pty === true
     && session?.presentation?.conversationSurface !== "transcript";
   const hasWritablePtySurface = session => !session?.parentId && (
-    (String(session.status || "").toLowerCase() === "completed" && canForkCodexDesktopSession(session))
+    canForkCodexDesktopSession(session)
     || isDirectWritablePty(session)
     || Boolean(window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session))
   );

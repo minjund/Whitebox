@@ -802,7 +802,7 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(workbenchOpened, false, '백그라운드 전송은 터미널 화면을 강제로 열지 않아야 합니다.');
   });
 
-  test('Codex Desktop 기록은 원본 resume이 아닌 별도 fork PTY를 만들고 질문을 spawn 뒤 한 번만 보낸다', async () => {
+  test('실행 중 Codex Desktop 기록은 원본 resume이 아닌 별도 fork PTY를 만들고 같은 PTY를 재사용한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const createCalls = [];
     const commandCalls = [];
@@ -870,7 +870,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-source',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
-      status: 'completed',
+      status: 'running',
     };
     const prompt = '새 세션에서만 이어서 질문 & | $(안전)';
 
@@ -879,8 +879,11 @@ function registerTerminalAgentActionTests(context) {
       focus: false,
       deliveryId: 'delivery:desktop-fork:1',
     });
+    const reused = await actions.forkForAgent(session, '', false, { focus: false });
 
     assert.equal(support.supported, true);
+    assert.equal(actions.forkSupport({ ...session, status: 'completed' }).supported, true,
+      '완료된 Codex Desktop 기록의 기존 fork 경로도 유지해야 합니다.');
     assert.equal(support.sourceSessionId, session.id);
     assert.equal(support.sourceSignature, actions.agentConnectionSignature(session));
     assert.deepStrictEqual(Array.from(support.args), ['fork', session.externalId]);
@@ -905,6 +908,13 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(result.forked, true);
     assert.equal(result.background, true);
     assert.equal(result.promptSent, true);
+    assert.equal(reused.id, result.id);
+    assert.equal(reused.creationId, result.creationId);
+    assert.equal(reused.reused, true);
+    assert.equal(createCalls.length, 1,
+      '실행 중 원본을 다시 열 때 별도 fork PTY를 중복 생성하면 안 됩니다.');
+    assert.equal(commandCalls.length, 1,
+      '기존 fork PTY를 다시 열 때 첫 질문을 다시 보내면 안 됩니다.');
     assert.equal(bindings.length, 0, '원본 Desktop 대화에 fork PTY를 strong resume binding하면 안 됩니다.');
     assert.deepStrictEqual(Array.from(actions.agentTargets(session)), [],
       '원본 transcript composer가 fork PTY를 writable target으로 보면 안 됩니다.');
@@ -1119,7 +1129,7 @@ function registerTerminalAgentActionTests(context) {
       '명시적으로 거절된 pending create를 재시도하면 안 됩니다.');
   });
 
-  test('Codex Desktop fork 생성 응답 유실과 동시 요청은 같은 creationId로 실제 PTY를 한 번만 만든다', async () => {
+  test('실행 중 Codex Desktop fork 생성 응답 유실과 동시 요청은 같은 creationId로 실제 PTY를 한 번만 만든다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const createCalls = [];
     const createdById = new Map();
@@ -1178,7 +1188,7 @@ function registerTerminalAgentActionTests(context) {
       externalId: '019f-desktop-deduped',
       cwd: 'D:\\workspace',
       environment: { kind: 'windows', distro: '' },
-      status: 'completed',
+      status: 'running',
     };
 
     const [first, second] = await Promise.all([
@@ -1486,7 +1496,6 @@ function registerTerminalAgentActionTests(context) {
       { ...session, sourcePlugin: {} },
       { ...session, provenance: { source: { pluginId: 'builtin.omo' } } },
       { ...session, source: 'opencode' },
-      { ...session, status: 'running' },
       { ...session, readOnly: true },
       { ...session, controlAuthority: 'read-only-import' },
       { ...session, importMode: 'local-history' },

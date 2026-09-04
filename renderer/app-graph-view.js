@@ -124,9 +124,8 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
           role: session.agentRole ? ` / ${agentRoleLabel(session.agentRole)}` : "",
         })
       : t("graph.assigned_ai");
-    const completedMainPty = presentationStatus === "completed"
-      && canForkCodexDesktopSession(session);
-    const writablePtySurface = !session.parentId && (completedMainPty || isAssociatedForkPty(session)
+    const forkableMainPty = canForkCodexDesktopSession(session);
+    const writablePtySurface = !session.parentId && (forkableMainPty || isAssociatedForkPty(session)
       || isDirectWritablePty(session) || isAppOwnedBridgePty(session));
     const transcriptSurface = !writablePtySurface;
     const responsibleFocus = canOpenResponsibleFocus(session);
@@ -134,7 +133,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ? ` data-pty-focus-trigger="${esc(session.id)}" data-focus-surface="${transcriptSurface ? "transcript" : "pty"}" aria-expanded="${state.ptyFocusSessionId === session.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
       : "";
     const interactionAttributes = responsibleFocus ? focusAttributes : ` data-open-session="${esc(session.id)}"`;
-    const nodeActionLabel = completedMainPty
+    const nodeActionLabel = forkableMainPty
       ? t("drawer.terminal_fork_action")
       : writablePtySurface
         ? t("graph.view_main_ai_conversation_for_task", { task: goalPreview.text })
@@ -730,16 +729,15 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const current = controlRoomSummary(delivery ? t(deliverySummaryKey(delivery.phase)) : latestWorkCopy(root) || root.statusDetail || root.title, 74);
     const title = controlRoomAgentGoal(root, 64);
     const unitCount = activeUnits.length;
-    const completedMainPty = presentationStatus === "completed"
-      && canForkCodexDesktopSession(root);
-    const transcriptSurface = !completedMainPty && !isAssociatedForkPty(root)
+    const forkableMainPty = canForkCodexDesktopSession(root);
+    const transcriptSurface = !forkableMainPty && !isAssociatedForkPty(root)
       && !isDirectWritablePty(root) && !isAppOwnedBridgePty(root);
     const responsibleFocus = canOpenResponsibleFocus(root);
     const controlRoomPtyAttributes = responsibleFocus
       ? ` data-pty-focus-trigger="${esc(root.id)}" data-focus-surface="${transcriptSurface ? "transcript" : "pty"}" aria-expanded="${state.ptyFocusSessionId === root.id ? "true" : "false"}" aria-controls="ptyFocusSurface"`
       : "";
     const main = `<button type="button" class="control-room-main"${controlRoomPtyAttributes}
-      ${completedMainPty ? `aria-label="${esc(t("drawer.terminal_fork_action"))}" title="${esc(t("agent.codex_desktop_fork_help"))}"` : ""}
+      ${forkableMainPty ? `aria-label="${esc(t("drawer.terminal_fork_action"))}" title="${esc(t("agent.codex_desktop_fork_help"))}"` : ""}
       ${!responsibleFocus ? `data-open-session="${esc(root.id)}" data-transcript-source="true"` : ""}
       data-control-summary="${esc(title.text)}"
       data-motion-key="control-main:${esc(root.id)}" data-motion-value="${esc(root.updatedAt || "")}:${esc(root.status || "")}"
@@ -748,7 +746,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
       ${sessionBadgesHtml(root, { compact: true })}
       <strong title="${esc(title.full)}">${esc(title.text)}</strong>
       <span class="control-main-now"><small>${esc(t("graph.current_work"))}</small><b title="${esc(current.full)}">${esc(current.text)}</b></span>
-      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${completedMainPty ? esc(t("drawer.terminal_fork_action")) : transcriptSurface ? esc(t("pty_focus.readonly_short")) : `PTY ${state.ptyFocusSessionId === root.id ? "↑" : "↓"}`}</b></span>
+      <span class="control-main-meta"><small>${esc(t("control.unit_counts", { helpers: activeChildren.length, executions: activeExecutions.length }))}</small><b>${forkableMainPty ? esc(t("drawer.terminal_fork_action")) : transcriptSurface ? esc(t("pty_focus.readonly_short")) : `PTY ${state.ptyFocusSessionId === root.id ? "↑" : "↓"}`}</b></span>
     </button>`;
     const shownActiveUnits = activeUnits.slice(0, 6);
     const hiddenActiveUnits = Math.max(0, activeUnits.length - shownActiveUnits.length);

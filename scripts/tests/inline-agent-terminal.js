@@ -247,7 +247,6 @@ function createInlineHarness(root, options = {}) {
         return Boolean(candidate
           && candidate.provider === 'codex'
           && candidate.clientKind === 'codex-desktop'
-          && candidate.status === 'completed'
           && !candidate.parentId
           && !candidate.sourcePluginId
           && candidate.sourcePlugin == null
@@ -985,7 +984,7 @@ function registerInlineAgentTerminalTests(context) {
         clientKind: 'codex-desktop',
         cwd: 'D:\\fixture',
         parentId: null,
-        status: 'completed',
+        status: 'running',
       },
       resumeSupport: () => ({ supported: false, originOwned: true }),
       forkSupport: () => ({ supported: true, action: 'fork' }),
@@ -1050,7 +1049,7 @@ function registerInlineAgentTerminalTests(context) {
         clientKind: 'codex-desktop',
         cwd: 'D:\\fixture',
         parentId: null,
-        status: 'completed',
+        status: 'running',
       },
       forkSupport: () => ({ supported: true, action: 'fork' }),
       mountForAgent: () => new Promise(resolve => { releaseExplicitMount = resolve; }),

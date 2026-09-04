@@ -817,11 +817,20 @@ async function exercisePtyFocus(win, round) {
   await assertFocusedRoot(win, '확인 필요 알림');
   await closeFocusedRoot(win);
 
+  const liveOriginExternalId = `fixture-origin-external-${round}`;
+  const liveOriginId = `codex:${liveOriginExternalId}`;
+  const liveOriginChildId = `${liveOriginId}:child`;
+  const liveControlRootSelector = `[data-control-session="${liveOriginId}"] [data-graph-focus="${liveOriginId}"]`;
+  const liveFocusTriggerSelector = `.agent-node-main[data-pty-focus-trigger="${liveOriginId}"][data-focus-surface="pty"]`;
+  const liveChildSelector = `[data-pty-focus-child="${liveOriginChildId}"]`;
   await rendererValue(win, "(() => {"
     + "const source=window.interactionTest.getSnapshot().sessions.find(item=>item.id==='fixture-origin');"
-    + "window.interactionTest.updateSession('fixture-origin',{childIds:['fixture-origin-child']});"
-    + "window.interactionTest.addSession({...source,id:'fixture-origin-child',externalId:'fixture-origin-child-external',"
-      + "title:'읽기 전용 집중 화면의 오른쪽 상세창 확인',parentId:'fixture-origin',childIds:[],"
+    + "const rootId=" + JSON.stringify(liveOriginId) + ";"
+    + "const externalId=" + JSON.stringify(liveOriginExternalId) + ";"
+    + "const childId=" + JSON.stringify(liveOriginChildId) + ";"
+    + "window.interactionTest.addSession({...source,id:rootId,externalId,childIds:[childId],status:'running',completedAt:null});"
+    + "window.interactionTest.addSession({...source,id:childId,externalId:externalId+'-child',"
+      + "title:'별도 GPT PTY의 오른쪽 상세창 확인',parentId:rootId,childIds:[],"
       + "runtimePresence:[],executions:[],status:'running',statusDetail:'오른쪽 상세창 경로를 확인하는 중',"
       + "messages:[{id:'origin-child-user',role:'user',text:'하위 AI 상세창을 열어줘',timestamp:new Date().toISOString()},"
       + "{id:'origin-child-assistant',role:'assistant',text:'하위 AI 고유 작업 기록입니다.',timestamp:new Date().toISOString()}]});"
@@ -831,83 +840,147 @@ async function exercisePtyFocus(win, round) {
     + "window.interactionTest.emitSnapshot();window.WhiteboxApp.renderWorkspaces?.();"
     + "window.WhiteboxApp.renderSessions?.('read-only-focus-fixture');return true;})()");
   await waitFor(win,
-    "Boolean(document.querySelector('[data-control-session=\"fixture-origin\"]'"
-      + "+' [data-graph-focus=\"fixture-origin\"]'))",
+    "Boolean(document.querySelector(" + JSON.stringify(liveControlRootSelector) + "))",
     'Codex Desktop 담당 작업의 전체 흐름 진입점이 없습니다.');
   await rendererValue(win,
-    "document.querySelector('[data-control-session=\"fixture-origin\"]'"
-      + "+' [data-graph-focus=\"fixture-origin\"]')?.click()");
+    "document.querySelector(" + JSON.stringify(liveControlRootSelector) + ")?.click()");
   await waitFor(win,
-    "window.WhiteboxApp.state.graphFocusId==='fixture-origin'"
-      + "&&Boolean(document.querySelector('.agent-node-main[data-pty-focus-trigger=\"fixture-origin\"]'"
-      + "+'[data-focus-surface=\"transcript\"]'))",
-    '선택한 작업의 Codex Desktop 담당 노드에 읽기 전용 집중 진입점이 없습니다.');
+    "window.WhiteboxApp.state.graphFocusId===" + JSON.stringify(liveOriginId)
+      + "&&Boolean(document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + "))",
+    '선택한 작업의 실행 중 Codex Desktop 담당 노드에 별도 GPT PTY 진입점이 없습니다.');
   await rendererValue(win, "window.interactionTest.clearCalls()");
   await rendererValue(win,
-    "document.querySelector('.agent-node-main[data-pty-focus-trigger=\"fixture-origin\"]'"
-      + "+'[data-focus-surface=\"transcript\"]')?.click()");
+    "document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + ")?.click()");
   await waitFor(win,
     "(()=>{const app=window.WhiteboxApp;const surface=document.querySelector('#ptyFocusSurface');"
-      + "const transcript=document.querySelector('#ptyFocusTranscriptContent');"
-      + "return app.state.ptyFocusSessionId==='fixture-origin'&&app.state.ptyFocusTargetId===''"
-      + "&&surface?.dataset.ptyFocusMode==='transcript'&&!surface.classList.contains('hidden')"
-      + "&&!transcript?.classList.contains('hidden')"
-      + "&&document.querySelector('#ptyFocusTerminalViewport')?.classList.contains('hidden')"
-      + "&&(transcript?.textContent||'').includes('버튼과 입력 동작을 확인하고 있습니다.')"
-      + "&&Boolean(document.querySelector('[data-pty-focus-child=\"fixture-origin-child\"]'))"
-      + "&&!app.state.detailLoadingIds.has('fixture-origin');})()",
-    'live Codex Desktop 담당 노드가 읽기 전용 집중 화면으로 열리지 않았습니다.');
-  const readOnlyMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();return{"
-    + "terminalCalls:calls.filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length,"
-    + "terminalCallNames:calls.filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name))"
-      + ".map(call=>call.name),"
-    + "rootOnlyToast:(document.querySelector('#toast')?.textContent||'').includes(window.WhiteboxI18n.t('pty_focus.root_only'))"
+      + "const embedded=window.WhiteboxTerminal.embeddedState();const target=app.state.ptyFocusTargetId;"
+      + "const screen=[...document.querySelectorAll('#ptyFocusTerminalViewport > .terminal-screen')]"
+        + ".find(node=>node.dataset.terminalScreen===target);"
+      + "return app.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId) + "&&Boolean(target)"
+      + "&&surface?.dataset.ptyFocusMode==='pty'&&!surface.classList.contains('hidden')"
+      + "&&!document.querySelector('#ptyFocusTerminalViewport')?.classList.contains('hidden')"
+      + "&&document.querySelector('#ptyFocusTranscriptContent')?.classList.contains('hidden')"
+      + "&&embedded.connected&&embedded.agentSessionId===" + JSON.stringify(liveOriginId) + "&&embedded.terminalId===target"
+      + "&&Boolean(screen?.querySelector('.xterm'))"
+      + "&&Boolean(document.querySelector(" + JSON.stringify(liveChildSelector) + "))"
+      + "&&window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===1;})()",
+    'live Codex Desktop 담당 노드가 별도 GPT PTY 집중 화면으로 열리지 않았습니다.');
+  const liveForkMetrics = await rendererValue(win, "(()=>{"
+    + "const app=window.WhiteboxApp;const calls=window.interactionTest.getCalls();"
+    + "const creates=calls.filter(call=>call.name==='terminalCreate');"
+    + "const payload=creates[0]?.args?.[0]||{};"
+    + "const embedded=window.WhiteboxTerminal.embeddedState();"
+    + "const source=app.snapshotSession(" + JSON.stringify(liveOriginId) + ");"
+    + "const forkTarget=window.WhiteboxTerminal.forkTargetForAgent(source);"
+    + "return{createCount:creates.length,payload,focusTargetId:app.state.ptyFocusTargetId||'',"
+      + "focusSessionId:app.state.ptyFocusSessionId||'',focusMode:document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode||'',"
+      + "embedded,forkTargetId:forkTarget?.terminalId||forkTarget?.id||'',"
+      + "regularTargetCount:window.WhiteboxTerminal.agentTargets(source).length,"
+      + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+      + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+      + "rootOnlyToast:(document.querySelector('#toast')?.textContent||'').includes(window.WhiteboxI18n.t('pty_focus.root_only'))"
     + "};})()");
-  assert(readOnlyMetrics.terminalCalls === 0 && readOnlyMetrics.rootOnlyToast === false,
-    '읽기 전용 집중 화면이 PTY를 만들거나 잘못된 담당-node 경고를 표시했습니다: ' + JSON.stringify(readOnlyMetrics));
+  const liveForkPayload = liveForkMetrics.payload || {};
+  assert(liveForkMetrics.createCount === 1
+    && liveForkPayload.type === 'agent'
+    && liveForkPayload.provider === 'codex'
+    && JSON.stringify(liveForkPayload.args) === JSON.stringify(['fork', liveOriginExternalId])
+    && liveForkPayload.cwd === 'D:\\moved-worktree'
+    && liveForkPayload.sessionBackend === 'direct'
+    && liveForkPayload.transient === false
+    && liveForkPayload.agentForkSourceSessionId === liveOriginId
+    && typeof liveForkPayload.agentForkSourceSignature === 'string'
+    && liveForkPayload.agentForkSourceSignature.startsWith('acs1:')
+    && typeof liveForkPayload.creationId === 'string'
+    && liveForkPayload.creationId.startsWith('create:')
+    && !Object.hasOwn(liveForkPayload, 'bridgeId')
+    && !Object.hasOwn(liveForkPayload, 'agentConnectionSignature')
+    && !Object.hasOwn(liveForkPayload, 'recoveryArgs')
+    && !Object.hasOwn(liveForkPayload, 'initialCommand')
+    && !Object.hasOwn(liveForkPayload, 'initialCommandInArgs')
+    && liveForkMetrics.focusSessionId === liveOriginId
+    && liveForkMetrics.focusMode === 'pty'
+    && liveForkMetrics.focusTargetId
+    && liveForkMetrics.embedded?.connected
+    && liveForkMetrics.embedded?.agentSessionId === liveOriginId
+    && liveForkMetrics.embedded?.terminalId === liveForkMetrics.focusTargetId
+    && liveForkMetrics.forkTargetId === liveForkMetrics.focusTargetId
+    && liveForkMetrics.regularTargetCount === 0
+    && liveForkMetrics.writeCount === 0
+    && liveForkMetrics.commandCount === 0
+    && liveForkMetrics.rootOnlyToast === false,
+  '실행 중 Codex Desktop 클릭이 원본 attach/write 없이 정확한 별도 fork PTY를 만들지 못했습니다: '
+    + JSON.stringify(liveForkMetrics));
 
-  await rendererValue(win, "(()=>{window.interactionTest.clearCalls();"
-    + "window.interactionTest.appendSessionMessages('fixture-origin',[{id:'origin-live-assistant',role:'assistant',"
-      + "text:'집중 화면에서 새 응답을 바로 갱신했습니다.',timestamp:new Date().toISOString()}]);"
-    + "window.interactionTest.emitSnapshot();})()");
+  const liveForkTargetId = liveForkMetrics.focusTargetId;
+  await closeFocusedRoot(win);
+  await rendererValue(win, "window.interactionTest.clearCalls();"
+    + "document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + ")?.click()");
   await waitFor(win,
-    "(document.querySelector('#ptyFocusTranscriptContent')?.textContent||'')"
-      + ".includes('집중 화면에서 새 응답을 바로 갱신했습니다.')"
-      + "&&window.interactionTest.getCalls().some(call=>call.name==='sessionDetail'"
-        + "&&call.args[0]==='fixture-origin')"
-      + "&&!window.WhiteboxApp.state.detailLoadingIds.has('fixture-origin')",
-    '열린 읽기 전용 집중 화면이 새 대화와 전체 기록을 갱신하지 못했습니다.');
-  assert(await rendererValue(win,
-    "window.interactionTest.getCalls().filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length===0"),
-  '읽기 전용 집중 화면의 대화 갱신이 PTY 작업을 시작했습니다.');
+    "(()=>{const app=window.WhiteboxApp;const embedded=window.WhiteboxTerminal.embeddedState();"
+      + "return app.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&app.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&embedded.connected&&embedded.agentSessionId===" + JSON.stringify(liveOriginId)
+      + "&&embedded.terminalId===" + JSON.stringify(liveForkTargetId) + ";})()",
+    '실행 중 Codex Desktop 담당 노드를 다시 눌렀을 때 기존 별도 GPT PTY를 재사용하지 못했습니다.');
+  const reuseMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();"
+    + "const source=window.WhiteboxApp.snapshotSession(" + JSON.stringify(liveOriginId) + ");"
+    + "const embedded=window.WhiteboxTerminal.embeddedState();return{"
+      + "createCount:calls.filter(call=>call.name==='terminalCreate').length,"
+      + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+      + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+      + "embeddedTerminalId:embedded.terminalId||'',"
+      + "forkTargetId:window.WhiteboxTerminal.forkTargetForAgent(source)?.terminalId||''"
+    + "};})()");
+  assert(reuseMetrics.createCount === 0
+    && reuseMetrics.writeCount === 0
+    && reuseMetrics.commandCount === 0
+    && reuseMetrics.embeddedTerminalId === liveForkTargetId
+    && reuseMetrics.forkTargetId === liveForkTargetId,
+  '실행 중 Codex Desktop 담당 노드 재클릭이 기존 fork 대신 새 PTY를 만들거나 원본에 썼습니다: '
+    + JSON.stringify(reuseMetrics));
 
   await rendererValue(win, "window.interactionTest.clearCalls();"
-    + "document.querySelector('[data-pty-focus-child=\"fixture-origin-child\"]')?.click()");
+    + "document.querySelector(" + JSON.stringify(liveChildSelector) + ")?.click()");
   await waitFor(win,
-    "window.WhiteboxApp.state.ptyFocusSessionId==='fixture-origin'"
-      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='transcript'"
-      + "&&window.WhiteboxApp.state.selectedId==='fixture-origin-child'"
+    "window.WhiteboxApp.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&window.WhiteboxApp.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&window.WhiteboxApp.state.selectedId===" + JSON.stringify(liveOriginChildId)
       + "&&window.WhiteboxApp.state.drawerMode==='subagent'"
       + "&&!document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')"
       + "&&!document.querySelector('#ptyFocusSurface')?.inert"
       + "&&document.querySelector('#detailDrawer')?.classList.contains('open')"
       + "&&document.querySelector('#detailDrawer')?.getAttribute('aria-hidden')==='false'"
       + "&&!document.querySelector('#detailDrawer')?.inert"
+      + "&&window.WhiteboxTerminal.embeddedState().terminalId===" + JSON.stringify(liveForkTargetId)
       + "&&(document.querySelector('#detailDrawer')?.textContent||'').includes('하위 AI 고유 작업 기록입니다.')",
-    '읽기 전용 집중 화면의 하위 AI가 오른쪽 상세창으로 열리지 않았습니다.');
-  assert(await rendererValue(win,
-    "window.interactionTest.getCalls().filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length===0"),
-  '읽기 전용 하위 AI 상세창이 PTY 작업을 시작했습니다.');
+    '별도 GPT PTY 집중 화면의 하위 AI가 오른쪽 상세창으로 열리지 않았습니다.');
+  const childDrawerMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();return{"
+    + "createCount:calls.filter(call=>call.name==='terminalCreate').length,"
+    + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+    + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+    + "embeddedTerminalId:window.WhiteboxTerminal.embeddedState().terminalId||''};})()");
+  assert(childDrawerMetrics.createCount === 0
+    && childDrawerMetrics.writeCount === 0
+    && childDrawerMetrics.commandCount === 0
+    && childDrawerMetrics.embeddedTerminalId === liveForkTargetId,
+  '하위 AI 오른쪽 상세창이 별도 GPT PTY를 바꾸거나 원본 대화에 썼습니다: '
+    + JSON.stringify(childDrawerMetrics));
   await rendererValue(win, "document.querySelector('#closeDrawerBtn')?.click()");
   await waitFor(win,
     "!document.querySelector('#detailDrawer')?.classList.contains('open')"
-      + "&&window.WhiteboxApp.state.ptyFocusSessionId==='fixture-origin'"
-      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='transcript'",
-    '하위 AI 상세창을 닫은 뒤 담당 노드 읽기 전용 집중 화면이 유지되지 않았습니다.');
+      + "&&window.WhiteboxApp.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&window.WhiteboxApp.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&window.WhiteboxTerminal.embeddedState().terminalId===" + JSON.stringify(liveForkTargetId),
+    '하위 AI 상세창을 닫은 뒤 담당 노드의 별도 GPT PTY가 유지되지 않았습니다.');
   await closeFocusedRoot(win);
-  await rendererValue(win, "window.interactionTest.removeSession('fixture-origin-child');"
-    + "window.interactionTest.updateSession('fixture-origin',{childIds:[]});window.interactionTest.emitSnapshot()");
-  return { marker, metrics, readOnlyMetrics };
+  await rendererValue(win, "window.interactionTest.removeSession(" + JSON.stringify(liveOriginChildId) + ");"
+    + "window.interactionTest.removeSession(" + JSON.stringify(liveOriginId) + ");"
+    + "window.interactionTest.emitSnapshot()");
+  return { marker, metrics, liveForkMetrics, reuseMetrics, childDrawerMetrics };
 }
 
 async function run() {

@@ -137,7 +137,6 @@ window.WhiteboxRendererUtils = Object.freeze({
     const importMode = String(session?.importMode || '').trim();
     if (String(session?.provider || '').toLowerCase() !== 'codex'
       || String(session?.clientKind || '').toLowerCase() !== 'codex-desktop'
-      || String(session?.status || '').toLowerCase() !== 'completed'
       || session?.parentId
       || sourcePluginId
       || session?.readOnly === true
