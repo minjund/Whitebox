@@ -9,6 +9,11 @@ const { StringDecoder } = require('string_decoder');
 const { PROVIDERS, normalizeProvider, modelContextWindow, blankUsage, finalizeUsage } = require('./providerRegistry');
 const { reportRecoverableError, runBestEffort } = require('./diagnostics');
 const { pruneManagedRuns, restrictPathPermissions } = require('./dataRetention');
+const {
+  finalizeComprehension,
+  injectComprehensionContract,
+  MAX_RESPONSE_BYTES,
+} = require('./comprehensionPacket');
 
 const DEFAULT_TERMINATION_GRACE_MS = 1_000;
 const DEFAULT_PERSIST_DELAY_MS = 50;
@@ -100,6 +105,7 @@ function makeSession(id, provider, opts) {
     updatedAt: now,
     endedAt: null,
     completionObserved: false,
+    comprehensionContractInjected: opts.comprehensionContractInjected === true,
     usage: blankUsage(),
     turnUsage: blankUsage(),
     context: { used: 0, window: context.tokens, percent: 0, source: context.source },
@@ -107,6 +113,143 @@ function makeSession(id, provider, opts) {
     lifecycle: [{ id: `${id}:queued`, type: 'queued', label: '실행 준비', detail: provider, status: 'done', timestamp: now }],
     childIds: [],
   };
+}
+
+function assistantResponseText(value) {
+  if (typeof value === 'string') return value.replace(/\u0000/g, '');
+  return eventText(value).replace(/\u0000/g, '');
+}
+
+function defineAssistantState(state, key, value) {
+  Object.defineProperty(state, key, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value,
+  });
+}
+
+function boundedAssistantResponse(value) {
+  const text = String(value || '');
+  if (Buffer.byteLength(text, 'utf8') <= MAX_RESPONSE_BYTES) return { text, overflow: false };
+  const bytes = Buffer.from(text, 'utf8');
+  let bounded = bytes.subarray(0, MAX_RESPONSE_BYTES + 1).toString('utf8');
+  while (Buffer.byteLength(bounded, 'utf8') <= MAX_RESPONSE_BYTES) bounded += 'x';
+  return { text: bounded, overflow: true };
+}
+
+function beginAssistantResponse(state, streamKey = '') {
+  defineAssistantState(state, '__lastAssistantResponse', '');
+  defineAssistantState(state, '__assistantResponseChunks', []);
+  defineAssistantState(state, '__assistantResponseBytes', 0);
+  defineAssistantState(state, '__assistantResponseStreamKey', String(streamKey || ''));
+  defineAssistantState(state, '__assistantResponseOverflow', false);
+}
+
+function rememberAssistantResponse(state, value, streamKey = '') {
+  const text = assistantResponseText(value);
+  if (!text) return '';
+  const bounded = boundedAssistantResponse(text);
+  defineAssistantState(state, '__lastAssistantResponse', bounded.text);
+  defineAssistantState(state, '__assistantResponseChunks', null);
+  defineAssistantState(state, '__assistantResponseBytes', Buffer.byteLength(bounded.text, 'utf8'));
+  defineAssistantState(state, '__assistantResponseStreamKey', String(streamKey || ''));
+  defineAssistantState(state, '__assistantResponseOverflow', bounded.overflow);
+  return bounded.text;
+}
+
+function appendAssistantResponse(state, value, streamKey = '') {
+  const chunk = typeof value === 'string'
+    ? value.replace(/\u0000/g, '')
+    : assistantResponseText(value);
+  if (!chunk) return lastAssistantResponse(state);
+  const key = String(streamKey || '');
+  const sameStream = state.__assistantResponseStreamKey === key;
+  if (!sameStream) beginAssistantResponse(state, key);
+  if (state.__assistantResponseOverflow === true) return '';
+  if (!Array.isArray(state.__assistantResponseChunks)) {
+    const previous = typeof state.__lastAssistantResponse === 'string' ? state.__lastAssistantResponse : '';
+    defineAssistantState(state, '__assistantResponseChunks', previous ? [previous] : []);
+    defineAssistantState(state, '__assistantResponseBytes', Buffer.byteLength(previous, 'utf8'));
+  }
+  const chunkBytes = Buffer.from(chunk, 'utf8');
+  const currentBytes = Number(state.__assistantResponseBytes || 0);
+  if (currentBytes + chunkBytes.length <= MAX_RESPONSE_BYTES) {
+    state.__assistantResponseChunks.push(chunk);
+    state.__assistantResponseBytes = currentBytes + chunkBytes.length;
+    return chunk;
+  }
+
+  const remaining = Math.max(1, MAX_RESPONSE_BYTES + 1 - currentBytes);
+  let overflowFragment = chunkBytes.subarray(0, remaining).toString('utf8');
+  let overflowBytes = Buffer.byteLength(overflowFragment, 'utf8');
+  while (currentBytes + overflowBytes <= MAX_RESPONSE_BYTES) {
+    overflowFragment += 'x';
+    overflowBytes += 1;
+  }
+  state.__assistantResponseChunks.push(overflowFragment);
+  state.__assistantResponseBytes = currentBytes + overflowBytes;
+  state.__assistantResponseOverflow = true;
+  return overflowFragment;
+}
+
+function lastAssistantResponse(state) {
+  if (state && Array.isArray(state.__assistantResponseChunks)) {
+    const joined = state.__assistantResponseChunks.join('');
+    defineAssistantState(state, '__lastAssistantResponse', joined);
+    defineAssistantState(state, '__assistantResponseChunks', null);
+    return joined;
+  }
+  if (state && typeof state.__lastAssistantResponse === 'string') return state.__lastAssistantResponse;
+  const messages = Array.isArray(state && state.messages) ? state.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index] && messages[index].role === 'assistant') return String(messages[index].text || '');
+  }
+  return '';
+}
+
+function setVisibleAssistantResult(state, value) {
+  const full = assistantResponseText(value);
+  const visible = Buffer.byteLength(full, 'utf8') <= MAX_RESPONSE_BYTES
+    ? full
+    : clip(full, 8000);
+  state.result = visible;
+  const messages = Array.isArray(state.messages) ? state.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== 'assistant') continue;
+    message.text = visible;
+    message.status = 'done';
+    return;
+  }
+  if (visible) {
+    state.messages.push({
+      id: 'final-result',
+      role: 'assistant',
+      type: 'message',
+      title: '',
+      text: visible,
+      status: 'done',
+      timestamp: new Date().toISOString(),
+    });
+    state.messages = state.messages.slice(-220);
+  }
+}
+
+function finalizeManagedComprehension(state, value) {
+  const rawResponse = assistantResponseText(value == null ? lastAssistantResponse(state) : value);
+  const finalized = finalizeComprehension(state, rawResponse, {
+    contractInjected: state && state.comprehensionContractInjected === true,
+  });
+  if (finalized.comprehension) state.comprehension = finalized.comprehension;
+  setVisibleAssistantResult(state, finalized.body);
+  return finalized;
+}
+
+function clearManagedComprehension(state) {
+  if (!state || typeof state !== 'object') return;
+  delete state.comprehension;
+  beginAssistantResponse(state);
 }
 
 function addMessage(state, role, text, extra = {}) {
@@ -188,17 +331,21 @@ function handleClaude(state, event) {
     state.externalId = event.session_id || state.externalId;
     state.model = event.model || state.model;
     state.status = 'running';
+    state.completionObserved = false;
     state.activityState = 'thinking';
     state.statusDetail = 'AI 반복 작업 중';
+    clearManagedComprehension(state);
     addLifecycle(state, 'session-start', '작업 시작', { id: 'session-start', status: 'done' });
   }
   if (event.type === 'stream_event') {
     const inner = event.event || {};
     if (inner.type === 'message_start' && inner.message?.id) {
       setClaudeStreamMessageId(state, inner.message.id);
+      beginAssistantResponse(state, `claude:${inner.message.id}`);
     }
     if (inner.type === 'content_block_delta' && inner.delta && inner.delta.type === 'text_delta') {
       if (inner.delta.text) state.completionObserved = true;
+      appendAssistantResponse(state, inner.delta.text, `claude:${state.__claudeStreamMessageId || 'live-answer'}`);
       addMessage(state, 'assistant', inner.delta.text, {
         id: state.__claudeStreamMessageId || 'live-answer',
         append: true,
@@ -215,6 +362,7 @@ function handleClaude(state, event) {
     const text = blocks.filter(block => block.type === 'text').map(block => block.text).filter(Boolean).join('\n');
     if (text) {
       state.completionObserved = true;
+      rememberAssistantResponse(state, text, `claude:${messageId}`);
       addMessage(state, 'assistant', text, { id: messageId, status: 'done' });
     }
     for (const block of blocks) {
@@ -234,12 +382,8 @@ function handleClaude(state, event) {
     state.statusDetail = event.is_error ? (event.result || '실행 실패') : '작업 완료';
     state.endedAt = new Date().toISOString();
     state.usage = usageFrom(event.usage || event);
-    if (event.result) {
-      const resultText = clip(event.result, 8000);
-      const existing = state.messages.find(message => message.role === 'assistant' && clip(message.text, 8000) === resultText);
-      if (existing) existing.status = 'done';
-      else addMessage(state, 'assistant', resultText, { id: 'final-result', status: 'done' });
-    }
+    if (event.is_error) clearManagedComprehension(state);
+    else finalizeManagedComprehension(state, event.result || lastAssistantResponse(state));
     addLifecycle(state, state.status === 'failed' ? 'error' : 'session-end', state.status === 'failed' ? '실행 실패' : '작업 완료', { id: 'session-end', status: state.status === 'failed' ? 'failed' : 'done' });
   }
 }
@@ -254,6 +398,7 @@ function handleCodex(state, event) {
   } else if (event.type === 'turn.started') {
     state.status = 'running';
     state.completionObserved = false;
+    clearManagedComprehension(state);
     state.activityState = 'thinking';
     state.statusDetail = '턴 실행 중';
     addLifecycle(state, 'turn-start', '턴 시작', { id: `turn:${state.lifecycle.length}`, status: 'running' });
@@ -261,8 +406,26 @@ function handleCodex(state, event) {
     const item = event.item || {};
     const done = event.type === 'item.completed';
     if (item.type === 'agent_message') {
-      if (item.text) state.completionObserved = true;
-      addMessage(state, 'assistant', item.text, { id: item.id, status: done ? 'done' : 'streaming' });
+      const deltaValue = typeof item.delta === 'string'
+        ? item.delta
+        : (typeof event.delta === 'string' ? event.delta : item.text_delta);
+      const messageText = item.text != null ? item.text : deltaValue;
+      const isDelta = item.delta === true || event.delta === true
+        || typeof item.delta === 'string' || typeof event.delta === 'string'
+        || typeof item.text_delta === 'string';
+      const messageId = item.id || 'live-answer';
+      const streamKey = `codex:${messageId}`;
+      if (event.type === 'item.started') beginAssistantResponse(state, streamKey);
+      if (messageText) {
+        state.completionObserved = true;
+        if (isDelta) appendAssistantResponse(state, messageText, streamKey);
+        else rememberAssistantResponse(state, messageText, streamKey);
+      }
+      addMessage(state, 'assistant', messageText, {
+        id: messageId,
+        append: isDelta,
+        status: done ? 'done' : 'streaming',
+      });
     }
     else if (item.type === 'reasoning') {
       state.activityState = 'thinking';
@@ -282,6 +445,7 @@ function handleCodex(state, event) {
     state.endedAt = new Date().toISOString();
     state.usage = usageFrom(event.usage);
     state.turnUsage = state.usage;
+    finalizeManagedComprehension(state, lastAssistantResponse(state));
     addLifecycle(state, 'turn-complete', '턴 완료', { id: 'turn-complete', status: 'done' });
   } else if (event.type === 'turn.failed' || event.type === 'error') {
     state.status = 'failed';
@@ -289,6 +453,7 @@ function handleCodex(state, event) {
     state.activityState = 'error';
     state.statusDetail = clip(event.message || event.error || 'Codex 실행 실패', 240);
     state.endedAt = new Date().toISOString();
+    clearManagedComprehension(state);
     addLifecycle(state, 'error', '실행 실패', { id: 'run-error', detail: state.statusDetail, status: 'failed' });
   }
 }
@@ -299,13 +464,34 @@ function handleGemini(state, event) {
     state.externalId = event.session_id || event.sessionId || state.externalId;
     state.model = event.model || state.model;
     state.status = 'running';
+    state.completionObserved = false;
     state.activityState = 'thinking';
     state.statusDetail = '작업 시작';
+    clearManagedComprehension(state);
     addLifecycle(state, 'session-start', '작업 시작', { id: 'session-start' });
-  } else if (type === 'message') {
-    const role = /assistant|model/.test(String(event.role || event.author || '').toLowerCase()) ? 'assistant' : 'user';
-    addMessage(state, role, event.content || event.text || event.message, { id: event.id, status: event.delta ? 'streaming' : 'done' });
-    if (role === 'assistant' && (event.content || event.text || event.message)) state.completionObserved = true;
+  } else if (type === 'message' || type === 'message_delta') {
+    const roleName = String(event.role || event.author || '').toLowerCase();
+    const role = /assistant|model/.test(roleName) || type === 'message_delta' ? 'assistant' : 'user';
+    const deltaValue = typeof event.delta === 'string'
+      ? event.delta
+      : (event.delta && typeof event.delta === 'object' ? event.delta.text || event.delta.content : '');
+    const messageText = event.content != null
+      ? event.content
+      : (event.text != null ? event.text : (event.message != null ? event.message : deltaValue));
+    const isDelta = type === 'message_delta' || event.delta === true
+      || typeof event.delta === 'string' || (event.delta && typeof event.delta === 'object');
+    const streamMessageId = event.message_id || event.messageId || 'gemini-live-answer';
+    const messageId = isDelta ? streamMessageId : (event.id || streamMessageId);
+    addMessage(state, role, messageText, {
+      id: messageId,
+      append: role === 'assistant' && isDelta,
+      status: isDelta ? 'streaming' : 'done',
+    });
+    if (role === 'assistant' && messageText) {
+      state.completionObserved = true;
+      if (isDelta) appendAssistantResponse(state, messageText, `gemini:${streamMessageId}`);
+      else rememberAssistantResponse(state, messageText, `gemini:${messageId}`);
+    }
     if (role === 'user') state.activityState = 'thinking';
     state.statusDetail = role === 'assistant' ? '응답 스트리밍 중' : '요청 처리 중';
   } else if (type === 'tool_use') {
@@ -325,6 +511,12 @@ function handleGemini(state, event) {
     state.activityState = event.error ? 'error' : (state.completionObserved ? 'attention' : 'idle');
     state.statusDetail = event.error ? clip(event.error, 220) : '작업 완료';
     state.endedAt = new Date().toISOString();
+    if (event.error) clearManagedComprehension(state);
+    else {
+      const finalResponse = event.result || event.output || lastAssistantResponse(state);
+      if (event.result || event.output) rememberAssistantResponse(state, finalResponse);
+      finalizeManagedComprehension(state, finalResponse);
+    }
     addLifecycle(state, 'session-end', state.status === 'failed' ? '실행 실패' : '작업 완료', { id: 'session-end', status: state.status === 'failed' ? 'failed' : 'done' });
   } else if (type === 'error') {
     state.activityState = 'error';
@@ -339,14 +531,34 @@ function handleGrok(state, event) {
   if (event.model) state.model = event.model;
   if (/init|session_start|started/.test(type)) {
     state.status = 'running';
+    state.completionObserved = false;
     state.activityState = 'thinking';
     state.statusDetail = '작업 진행 중';
+    clearManagedComprehension(state);
     addLifecycle(state, 'session-start', '작업 시작', { id: 'session-start' });
   }
   if (/message|agent_message|assistant/.test(type)) {
     const role = /user/.test(String(event.role || '')) ? 'user' : 'assistant';
-    addMessage(state, role, event.text || event.content || event.message || event.delta, { id: event.id, status: event.delta ? 'streaming' : 'done' });
-    if (role === 'assistant' && (event.text || event.content || event.message || event.delta)) state.completionObserved = true;
+    const deltaValue = typeof event.delta === 'string'
+      ? event.delta
+      : (event.delta && typeof event.delta === 'object' ? event.delta.text || event.delta.content : '');
+    const messageText = event.text != null
+      ? event.text
+      : (event.content != null ? event.content : (event.message != null ? event.message : deltaValue));
+    const isDelta = /delta/.test(type) || event.delta === true
+      || typeof event.delta === 'string' || (event.delta && typeof event.delta === 'object');
+    const streamMessageId = event.message_id || event.messageId || 'grok-live-answer';
+    const messageId = isDelta ? streamMessageId : (event.id || streamMessageId);
+    addMessage(state, role, messageText, {
+      id: messageId,
+      append: role === 'assistant' && isDelta,
+      status: isDelta ? 'streaming' : 'done',
+    });
+    if (role === 'assistant' && messageText) {
+      state.completionObserved = true;
+      if (isDelta) appendAssistantResponse(state, messageText, `grok:${streamMessageId}`);
+      else rememberAssistantResponse(state, messageText, `grok:${messageId}`);
+    }
     if (role === 'user') state.activityState = 'thinking';
   }
   if (/tool.*(?:start|use|call)/.test(type)) {
@@ -362,13 +574,19 @@ function handleGrok(state, event) {
   }
   const usage = usageFrom(event.usage || event.stats || {});
   if (usage.total) state.turnUsage = usage;
-  if (/result|session_end|completed|done/.test(type)) {
+  if (!/tool/.test(type) && /result|session_end|completed|done/.test(type)) {
     state.usage = usage.total ? usage : state.turnUsage;
     state.status = event.error ? 'failed' : 'completed';
     state.completionObserved = !event.error && Boolean(state.completionObserved || event.result || event.output);
     state.activityState = event.error ? 'error' : (state.completionObserved ? 'attention' : 'idle');
     state.statusDetail = event.error ? clip(event.error, 220) : '작업 완료';
     state.endedAt = new Date().toISOString();
+    if (event.error) clearManagedComprehension(state);
+    else {
+      const finalResponse = event.result || event.output || lastAssistantResponse(state);
+      if (event.result || event.output) rememberAssistantResponse(state, finalResponse);
+      finalizeManagedComprehension(state, finalResponse);
+    }
     addLifecycle(state, 'session-end', state.status === 'failed' ? '실행 실패' : '작업 완료', { id: 'session-end', status: state.status === 'failed' ? 'failed' : 'done' });
   }
 }
@@ -475,15 +693,33 @@ class AgentRunner extends EventEmitter {
     const executable = findExecutable(PROVIDERS[provider].command);
     if (!executable) return { ok: false, error: `${PROVIDERS[provider].label} AI 프로그램이 설치되어 있지 않습니다.` };
 
+    let providerPrompt = prompt;
+    const comprehensionContractInjected = !raw.parentId;
+    if (comprehensionContractInjected) {
+      try {
+        providerPrompt = injectComprehensionContract(prompt);
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    }
     const id = runId();
     const dir = path.join(this.runsDir, id);
     ensureDir(dir);
-    const opts = { ...raw, provider, prompt, cwd };
+    const opts = { ...raw, provider, prompt, cwd, comprehensionContractInjected };
     const state = makeSession(id, provider, opts);
-    const meta = { id, provider, prompt, cwd, model: raw.model || '', allowWrites: !!raw.allowWrites, createdAt: state.startedAt };
+    const meta = {
+      id,
+      provider,
+      prompt,
+      cwd,
+      model: raw.model || '',
+      allowWrites: !!raw.allowWrites,
+      ...(raw.parentId ? { parentId: raw.parentId } : {}),
+      createdAt: state.startedAt,
+    };
     atomicJson(path.join(dir, 'meta.json'), meta);
     atomicJson(path.join(dir, 'session.json'), state);
-    const spec = commandSpec(provider, opts, executable);
+    const spec = commandSpec(provider, { ...opts, prompt: providerPrompt }, executable);
 
     let child;
     try {
@@ -526,14 +762,32 @@ class AgentRunner extends EventEmitter {
       if (run.disposing || run.finalized) return;
       this.flush(run, 'stdout');
       this.flush(run, 'stderr');
+      const abnormalExit = run.processErrored === true
+        || (code !== null && code !== undefined && Number(code) !== 0)
+        || Boolean(signal);
       if (run.stopping) {
         state.status = 'cancelled';
+        state.completionObserved = false;
         state.activityState = 'idle';
         state.statusDetail = '사용자가 중지함';
+      } else if (abnormalExit) {
+        // Provider streams may optimistically emit turn.completed/result
+        // before their process reports a fatal teardown error. The OS exit is
+        // the final authority for an unmanaged stop: never retain a completed
+        // packet from a non-zero or signalled process.
+        state.status = 'failed';
+        state.completionObserved = false;
+        state.activityState = 'error';
+        state.statusDetail = 'AI 프로그램 실행 실패';
       } else if (state.status === 'running' || state.status === 'starting' || state.status === 'paused') {
         state.status = code === 0 ? 'completed' : 'failed';
         state.activityState = code === 0 ? (state.completionObserved ? 'attention' : 'idle') : 'error';
         state.statusDetail = code === 0 ? '작업 완료' : 'AI 프로그램 실행 실패';
+      }
+      if (state.status === 'completed') {
+        if (!state.comprehension) finalizeManagedComprehension(state, lastAssistantResponse(state));
+      } else {
+        clearManagedComprehension(state);
       }
       state.endedAt = new Date().toISOString();
       addLifecycle(state, 'process-end', state.status === 'completed' ? '프로그램 실행 완료' : (state.status === 'cancelled' ? '프로그램 실행 중지' : '프로그램 실행 실패'), { id: 'process-end', detail: state.statusDetail, status: state.status === 'completed' ? 'done' : 'failed' });
@@ -593,8 +847,9 @@ class AgentRunner extends EventEmitter {
     run.stdoutDecoder = null;
     run.stderrDecoder = null;
     run.state.status = 'failed';
-    run.state.activityState = 'error';
     run.state.completionObserved = false;
+    run.state.activityState = 'error';
+    clearManagedComprehension(run.state);
     run.state.statusDetail = 'AI 프로그램 출력 한 줄이 안전한 크기를 초과했습니다.';
     run.state.endedAt = new Date().toISOString();
     run.state.updatedAt = run.state.endedAt;
@@ -623,7 +878,7 @@ class AgentRunner extends EventEmitter {
   }
 
   handleLine(run, stream, line) {
-    if (!run || run.finalized) return;
+    if (!run || run.finalized || run.processErrored) return;
     let event = null;
     try { event = JSON.parse(line); } catch (_plainOutputLine) { event = null; } // Plain stderr/stdout lines are valid runner output.
     const eventLine = `${JSON.stringify({ timestamp: new Date().toISOString(), stream, event, text: event ? undefined : clip(line, 4000) })}\n`;
@@ -647,9 +902,12 @@ class AgentRunner extends EventEmitter {
 
   handleChildError(run, error) {
     if (!run || run.finalized) return;
+    run.processErrored = true;
     run.state.status = 'failed';
+    run.state.completionObserved = false;
     run.state.activityState = 'error';
     run.state.statusDetail = error.message;
+    clearManagedComprehension(run.state);
     addLifecycle(run.state, 'error', '실행 중인 프로그램 오류', {
       id: 'process-error', detail: error.message, status: 'failed',
     });
@@ -731,6 +989,7 @@ class AgentRunner extends EventEmitter {
       cwd: meta.cwd,
       model: meta.model,
       allowWrites: Boolean(meta.allowWrites),
+      ...(meta.parentId ? { parentId: meta.parentId } : {}),
     });
     return result && result.ok ? { ...result, retriedFrom: runIdValue } : result;
   }
@@ -891,11 +1150,13 @@ class AgentRunner extends EventEmitter {
       runBestEffort('runner-dispose-flush-stderr', () => this.flush(run, 'stderr'));
       run.finalized = true;
       run.state.status = 'cancelled';
+      run.state.completionObserved = false;
       run.state.activityState = 'idle';
       run.state.statusDetail = systemShutdown
         ? 'Windows 시스템 종료로 실행을 중지함'
         : (errors.length ? '프로그램 종료 중 실행 상태를 확인하지 못함' : '프로그램 종료로 실행을 중지함');
       run.state.endedAt = new Date().toISOString();
+      clearManagedComprehension(run.state);
       run.state.updatedAt = run.state.endedAt;
       addLifecycle(run.state, 'process-end', systemShutdown ? '시스템 종료로 실행 중지' : '프로그램 종료로 실행 중지', {
         id: 'process-end', detail: run.state.statusDetail, status: 'failed',

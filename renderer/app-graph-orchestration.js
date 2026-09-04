@@ -146,7 +146,9 @@ window.WhiteboxAppFactories.createGraphOrchestration = function createGraphOrche
     const preserveFocusedComposer = document.activeElement?.matches?.("[data-agent-command-draft]")
       && liveSessionGrid.contains(document.activeElement);
     rememberDisclosureStates(liveSessionGrid);
-    const model = connectedGraphSessions(sessions);
+    // The inline PTY can open on a task-list card without focusing the graph;
+    // keep that session in the model so its overview card can host the panel.
+    const model = connectedGraphSessions(sessions, state.graphFocusId || state.inlineTerminalSessionId);
     const tmuxEntries = filteredLiveTmuxEntries(model, liveTmuxEntries(state.snapshot && state.snapshot.tmux));
     const focus =
       state.graphFocusId && model.byId.get(state.graphFocusId) && model.included.has(state.graphFocusId) ? model.byId.get(state.graphFocusId) : null;

@@ -4,6 +4,13 @@ const path = require('path');
 const { finalizedActivityState, observeActivity } = require('./activityState');
 const { createExecutionTracker } = require('./executionActivity');
 const { structuredInputRequest, structuredInputRequestText } = require('./responseIntent');
+const {
+  MAX_CONTRACT_PROMPT_FINGERPRINTS,
+  stageComprehensionCandidate,
+  normalizedComprehensionContractPromptFingerprints,
+  observeComprehensionContractPrompt,
+  stripComprehensionContract,
+} = require('../comprehensionPacket');
 
 const TOOL_START_PATTERN = /tool_use|tool-call|tool_start/;
 const TOOL_END_PATTERN = /tool_result|tool-result|tool_end/;
@@ -59,6 +66,29 @@ function createGenericParser(dependencies) {
     isUserInputTool,
   } = dependencies;
 
+  function rawMessageText(value, depth = 0) {
+    if (depth > 6 || value == null) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(item => rawMessageText(item, depth + 1)).filter(Boolean).join('\n');
+    if (typeof value !== 'object') return String(value);
+    for (const key of ['text', 'output_text', 'content', 'message', 'response', 'prompt', 'delta']) {
+      if (value[key] == null) continue;
+      const text = rawMessageText(value[key], depth + 1);
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function replaceFinalAssistantMessage(session, messageBody) {
+    const text = compactText(messageBody, session.fullHistory ? Number.MAX_SAFE_INTEGER : 6000);
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      if (session.messages[index]?.role !== 'assistant') continue;
+      if (text) session.messages[index].text = text;
+      else session.messages.splice(index, 1);
+      return;
+    }
+  }
+
   function normalizeUsage(raw = {}) {
     const usage = raw.usageMetadata || raw.usage_metadata || raw.usage
       || raw.stats || raw.tokens || raw;
@@ -83,9 +113,10 @@ function createGenericParser(dependencies) {
     seen.add(value);
     const role = value.role || value.author || value.sender;
     const deltaText = typeof value.delta === 'string' ? value.delta : '';
-    const text = compactText(value.text || value.content || value.message
+    const rawText = rawMessageText(value.text || value.content || value.message
       || value.response || value.prompt || deltaText);
-    if (role && text) out.push({ value, order: out.length });
+    const text = compactText(rawText);
+    if (role && text) out.push({ value, rawText, order: out.length });
     for (const key of ['messages', 'history', 'turns', 'events', 'conversation']) {
       if (value[key]) flattenRows(value[key], out, depth + 1, seen);
     }
@@ -169,7 +200,10 @@ function createGenericParser(dependencies) {
       running: false,
       completed: false,
       completedAt: null,
+      lastFinalResponseRaw: '',
       failed: false,
+      comprehensionContractObserved: false,
+      comprehensionContractPromptFingerprints: [],
       pendingUserInputCalls: new Set(),
       pendingUserInputAt: new Map(),
       pendingUserInputText: new Map(),
@@ -189,6 +223,7 @@ function createGenericParser(dependencies) {
         state.completed = false;
         state.completedAt = null;
         state.running = true;
+        state.lastFinalResponseRaw = '';
       }
       observeActivity(state, activity, event && event.timestamp);
       return resumed;
@@ -199,6 +234,9 @@ function createGenericParser(dependencies) {
       const startsUserTurn = !TOOL_START_PATTERN.test(type) && !isToolCompletionEvent(type)
         && (role === 'user' || /^(?:user_message|prompt|request|turn_start|session_start)$/.test(type));
       if (startsUserTurn) {
+        const rawUser = rawMessageText(event.text || event.content || event.message
+          || event.prompt || event.request || event.input);
+        observeComprehensionContractPrompt(state, rawUser);
         resumeAfterCompletion(event, 'thinking');
         state.pendingUserInputCalls.clear();
         state.pendingUserInputAt.clear();
@@ -263,6 +301,9 @@ function createGenericParser(dependencies) {
           state.running = false;
           state.completed = true;
           state.completedAt = timestamp(event.timestamp, session.updatedAt);
+          const finalResponse = rawMessageText(event.result || event.output || event.response
+            || event.message || event.content || event.text);
+          if (finalResponse) state.lastFinalResponseRaw = finalResponse;
           state.pendingUserInputCalls.clear();
           state.pendingUserInputAt.clear();
           state.pendingUserInputText.clear();
@@ -289,8 +330,13 @@ function createGenericParser(dependencies) {
       ? 'assistant'
       : (rawRole === 'user' ? 'user' : 'system');
     const deltaText = typeof item.delta === 'string' ? item.delta : '';
-    const text = compactText(item.text || item.content || item.message
+    const sourceText = row.rawText || rawMessageText(item.text || item.content || item.message
       || item.response || item.prompt || deltaText);
+    const contractObservation = {};
+    const contractObserved = role === 'user'
+      && observeComprehensionContractPrompt(contractObservation, sourceText);
+    const visibleSourceText = role === 'user' ? stripComprehensionContract(sourceText) : sourceText;
+    const text = compactText(visibleSourceText);
     const id = item.id || item.uuid || '';
     const recordedAt = timestamp(item.timestamp || item.created_at, session.updatedAt);
     const isDelta = item.is_delta === true || item.delta === true
@@ -300,6 +346,8 @@ function createGenericParser(dependencies) {
       item,
       role,
       text,
+      rawText: sourceText,
+      contractObserved,
       id,
       recordedAt,
       isDelta,
@@ -312,18 +360,33 @@ function createGenericParser(dependencies) {
     const messages = new Map();
     const usages = [];
     let firstUser = '';
+    const comprehensionObservation = {
+      comprehensionContractObserved: false,
+      comprehensionContractPromptFingerprints: [],
+    };
+    observeComprehensionContractPrompt(
+      comprehensionObservation,
+      rawMessageText(root.prompt || root.request || root.input),
+    );
     for (const row of flattenRows(root)) {
       const message = normalizedMessage(row, session);
       if (!message) continue;
+      if (message.contractObserved) {
+        observeComprehensionContractPrompt(comprehensionObservation, message.rawText);
+      }
       const previous = messages.get(message.key);
       const mergedText = previous && message.isDelta
         ? `${previous.text}${message.text}`
         : message.text;
+      const mergedRawText = previous && message.isDelta
+        ? `${previous.rawText}${message.rawText}`
+        : message.rawText;
       if (!previous || message.isDelta || message.text.length >= previous.text.length) {
         messages.set(message.key, {
           id: message.id,
           role: message.role,
           text: mergedText,
+          rawText: mergedRawText,
           timestamp: message.recordedAt,
           order: previous ? previous.order : message.order,
         });
@@ -343,8 +406,11 @@ function createGenericParser(dependencies) {
     return {
       firstUser,
       usages,
+      comprehensionContractObserved: comprehensionObservation.comprehensionContractObserved,
+      comprehensionContractPromptFingerprints: comprehensionObservation.comprehensionContractPromptFingerprints,
       lastConversationRole: lastConversation && lastConversation.role || '',
       lastAssistantText: lastConversation && lastConversation.role === 'assistant' ? lastConversation.text : '',
+      lastAssistantRawText: lastConversation && lastConversation.role === 'assistant' ? lastConversation.rawText : '',
       lastConversationAt: lastConversation && lastConversation.timestamp || null,
     };
   }
@@ -399,6 +465,38 @@ function createGenericParser(dependencies) {
       session.completedAt = eventState.completedAt || session.updatedAt;
       session.completionObserved = true;
       session.result = messageState.lastAssistantText || session.result;
+    }
+    session.comprehensionContractObserved = eventState.comprehensionContractObserved
+      || messageState.comprehensionContractObserved;
+    session.comprehensionContractPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
+      [...new Set([
+        ...(eventState.comprehensionContractPromptFingerprints || []),
+        ...(messageState.comprehensionContractPromptFingerprints || []),
+      ])].slice(0, MAX_CONTRACT_PROMPT_FINGERPRINTS),
+    );
+    session.comprehensionContractInjected = false;
+    const rawFinalResponse = eventState.lastFinalResponseRaw || messageState.lastAssistantRawText;
+    const finalizedComprehension = stageComprehensionCandidate(session, rawFinalResponse, {
+      stageCandidate: true,
+    });
+    if (finalizedComprehension.comprehension) {
+      session.comprehension = finalizedComprehension.comprehension;
+    }
+    if (finalizedComprehension.candidate) {
+      session.comprehensionCandidate = finalizedComprehension.candidate;
+    }
+    if (finalizedComprehension.candidateEligibility?.eligible) {
+      const visibleFinalResponse = finalizedComprehension.body;
+      session.result = compactText(visibleFinalResponse, 6000);
+      messageState.lastAssistantText = session.result;
+      replaceFinalAssistantMessage(session, visibleFinalResponse);
+      if (!pendingUserInput) {
+        const visibleIntent = assistantResponseIntent(visibleFinalResponse);
+        session.responseIntent = {
+          ...visibleIntent,
+          source: visibleIntent.category === 'none' ? 'none' : 'assistant-message',
+        };
+      }
     }
     session.statusObserved = eventState.running || session.status === 'waiting' || session.status === 'failed';
     session.executions = eventState.executionTracker.finalize();

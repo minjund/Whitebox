@@ -7,13 +7,67 @@ const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { StringDecoder } = require('string_decoder');
 const { findExecutable } = require('../agentRunner');
+const {
+  comprehensionPromptFingerprint,
+  injectComprehensionContract,
+} = require('../comprehensionPacket');
+const { restrictPathPermissions } = require('../dataRetention');
 const { ASIDE_MANIFEST, OMO_MANIFEST, OPENCODE_MANIFEST } = require('./bundled');
 const { cleanText, normalizedCapabilities } = require('./contracts');
+const { applySourceComprehension } = require('./monitorHost');
 const { isSourcePluginEnabled } = require('./settingsStore');
 
 const DELETE_TOKEN_TTL_MS = 30_000;
 const MAX_PROMPT_LENGTH = 120_000;
 const MAX_CHILD_OUTPUT = 2 * 1024 * 1024;
+const COMPREHENSION_OWNERSHIP_VERSION = 1;
+const MAX_COMPREHENSION_OWNERSHIPS = 500;
+const MAX_COMPREHENSION_OWNERSHIP_BYTES = 512 * 1024;
+
+function validOwnershipExternalId(value) {
+  const id = String(value == null ? '' : value).trim();
+  return id && id.length <= 500 && !/[\u0000-\u001f\u007f]/u.test(id) ? id : '';
+}
+
+function comprehensionOwnershipKey(pluginId, externalId) {
+  return `${String(pluginId || '')}\u0000${String(externalId || '')}`;
+}
+
+function normalizedComprehensionOwnership(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const pluginId = String(value.pluginId || '').trim();
+  const externalId = validOwnershipExternalId(value.externalId);
+  const promptFingerprint = String(value.promptFingerprint || '').trim().toLowerCase();
+  const request = cleanText(value.requestId, 160);
+  const boundAt = String(value.boundAt || '').trim();
+  if (!/^builtin\.[a-z0-9-]{1,64}$/u.test(pluginId)
+    || !externalId
+    || !/^[a-f0-9]{64}$/u.test(promptFingerprint)
+    || !request
+    || !Number.isFinite(Date.parse(boundAt))) return null;
+  return { pluginId, externalId, promptFingerprint, requestId: request, boundAt };
+}
+
+function sourceResultExternalId(value, depth = 0, seen = new Set()) {
+  if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return '';
+  seen.add(value);
+  for (const key of ['externalId', 'taskId', 'task_id', 'sessionId', 'session_id', 'conversationId', 'conversation_id']) {
+    const id = validOwnershipExternalId(value[key]);
+    if (id) return id;
+  }
+  for (const key of ['task', 'session', 'conversation', 'data', 'result']) {
+    const id = sourceResultExternalId(value[key], depth + 1, seen);
+    if (id) return id;
+  }
+  return '';
+}
+
+function defaultComprehensionOwnershipFile(settingsStore) {
+  const settingsFile = String(settingsStore?.file || '').trim();
+  if (!settingsFile) return '';
+  const parsed = path.parse(settingsFile);
+  return path.join(parsed.dir, `${parsed.name}.comprehension-ownership.json`);
+}
 
 function requestId(value) {
   const id = cleanText(value, 160);
@@ -74,6 +128,9 @@ class SourcePluginControlHost extends EventEmitter {
     this.deleteTokens = new Map();
     this.requests = new Map();
     this.children = new Map();
+    this.comprehensionOwnershipFile = String(options.comprehensionOwnershipFile
+      || defaultComprehensionOwnershipFile(this.settingsStore)).trim();
+    this.comprehensionOwnerships = new Map();
     this.externalSnapshots = {};
     this.aside = null;
     this.disposed = false;
@@ -82,6 +139,98 @@ class SourcePluginControlHost extends EventEmitter {
     this.statuses.set(ASIDE_MANIFEST.id, emptySourceStatus(ASIDE_MANIFEST, this.platform === 'darwin'
       ? 'Aside CLI를 확인하는 중입니다.'
       : 'Aside Browser는 현재 macOS 15 이상에서만 사용할 수 있습니다.', this.platform));
+    this.loadComprehensionOwnerships();
+  }
+
+  loadComprehensionOwnerships() {
+    if (!this.comprehensionOwnershipFile) return;
+    try {
+      const stat = fs.statSync(this.comprehensionOwnershipFile);
+      if (!stat.isFile() || stat.size > MAX_COMPREHENSION_OWNERSHIP_BYTES) return;
+      const parsed = JSON.parse(fs.readFileSync(this.comprehensionOwnershipFile, 'utf8'));
+      if (parsed?.version !== COMPREHENSION_OWNERSHIP_VERSION || !Array.isArray(parsed.records)) return;
+      for (const value of parsed.records.slice(-MAX_COMPREHENSION_OWNERSHIPS)) {
+        const record = normalizedComprehensionOwnership(value);
+        if (record) this.comprehensionOwnerships.set(
+          comprehensionOwnershipKey(record.pluginId, record.externalId),
+          record,
+        );
+      }
+    } catch (_missingOrInvalidOwnershipStore) {
+      this.comprehensionOwnerships.clear();
+    }
+  }
+
+  comprehensionOwnershipSnapshot(pluginId = '') {
+    const owner = String(pluginId || '');
+    return [...this.comprehensionOwnerships.values()]
+      .filter(record => !owner || record.pluginId === owner)
+      .sort((left, right) => String(left.boundAt).localeCompare(String(right.boundAt)))
+      .slice(-MAX_COMPREHENSION_OWNERSHIPS)
+      .map(record => ({ ...record }));
+  }
+
+  persistComprehensionOwnerships() {
+    if (!this.comprehensionOwnershipFile) return true;
+    const payload = {
+      version: COMPREHENSION_OWNERSHIP_VERSION,
+      records: this.comprehensionOwnershipSnapshot(),
+    };
+    fs.mkdirSync(path.dirname(this.comprehensionOwnershipFile), { recursive: true });
+    const temporary = `${this.comprehensionOwnershipFile}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
+    try {
+      fs.renameSync(temporary, this.comprehensionOwnershipFile);
+    } catch (_renameUnavailable) {
+      try {
+        fs.copyFileSync(temporary, this.comprehensionOwnershipFile);
+      } finally {
+        try { fs.unlinkSync(temporary); } catch {}
+      }
+    }
+    restrictPathPermissions(this.comprehensionOwnershipFile);
+    return true;
+  }
+
+  rememberComprehensionOwnership(pluginId, externalId, launch) {
+    const record = normalizedComprehensionOwnership({
+      pluginId,
+      externalId,
+      promptFingerprint: launch?.promptFingerprint,
+      requestId: launch?.requestId,
+      boundAt: new Date(this.now()).toISOString(),
+    });
+    if (!record) return false;
+    const previousOwnerships = new Map(this.comprehensionOwnerships);
+    this.comprehensionOwnerships.delete(comprehensionOwnershipKey(record.pluginId, record.externalId));
+    this.comprehensionOwnerships.set(comprehensionOwnershipKey(record.pluginId, record.externalId), record);
+    while (this.comprehensionOwnerships.size > MAX_COMPREHENSION_OWNERSHIPS) {
+      this.comprehensionOwnerships.delete(this.comprehensionOwnerships.keys().next().value);
+    }
+    try {
+      this.persistComprehensionOwnerships();
+    } catch (error) {
+      this.comprehensionOwnerships = previousOwnerships;
+      this.emit('cleanup-error', error);
+      return false;
+    }
+    return true;
+  }
+
+  forgetComprehensionOwnership(pluginId, externalId, launch) {
+    const key = comprehensionOwnershipKey(pluginId, externalId);
+    const current = this.comprehensionOwnerships.get(key);
+    if (!current || current.requestId !== String(launch?.requestId || '')) return false;
+    const previousOwnerships = new Map(this.comprehensionOwnerships);
+    this.comprehensionOwnerships.delete(key);
+    try {
+      this.persistComprehensionOwnerships();
+    } catch (error) {
+      this.comprehensionOwnerships = previousOwnerships;
+      this.emit('cleanup-error', error);
+      return false;
+    }
+    return true;
   }
 
   settings() {
@@ -137,7 +286,16 @@ class SourcePluginControlHost extends EventEmitter {
   }
 
   monitorState() {
-    return { statuses: this.listSources(), snapshots: { ...this.externalSnapshots } };
+    const statuses = this.listSources();
+    const snapshots = {};
+    for (const status of statuses) {
+      if (status.enabled === false) continue;
+      snapshots[status.id] = {
+        ...(this.externalSnapshots[status.id] || {}),
+        comprehensionOwnerships: this.comprehensionOwnershipSnapshot(status.id),
+      };
+    }
+    return { statuses, snapshots };
   }
 
   async initialize() {
@@ -351,15 +509,42 @@ class SourcePluginControlHost extends EventEmitter {
     const action = Promise.resolve().then(async () => {
       const status = this.statuses.get(String(pluginId || ''));
       if (!status || !status.available || !status.capabilities?.start) throw new Error(status?.reason || '선택한 출처에서 새 작업을 시작할 수 없습니다.');
-      const input = { ...raw, prompt: safePrompt(raw.prompt), cwd: safeCwd(raw.cwd), requestId: id };
+      const userPrompt = safePrompt(raw.prompt);
+      const freshTask = options.allowExistingSession !== true;
+      const prompt = freshTask ? injectComprehensionContract(userPrompt) : userPrompt;
+      const input = {
+        ...raw,
+        prompt,
+        userPrompt,
+        title: cleanText(raw.title || userPrompt, 500).slice(0, 500),
+        cwd: safeCwd(raw.cwd),
+        requestId: id,
+      };
+      const comprehensionLaunch = freshTask ? {
+        requestId: id,
+        promptFingerprint: comprehensionPromptFingerprint(prompt),
+      } : null;
+      let result;
       if ([OPENCODE_MANIFEST.id, OMO_MANIFEST.id].includes(pluginId)) {
-        return this.startCliProcess({ pluginId, executable: status.executable, input, args: this.openCodeArgs(input) });
+        result = this.startCliProcess({
+          pluginId, executable: status.executable, input, args: this.openCodeArgs(input), comprehensionLaunch,
+        });
+      } else if (pluginId === ASIDE_MANIFEST.id) {
+        result = this.aside && typeof this.aside.start === 'function'
+          ? await this.aside.start(input)
+          : this.startCliProcess({
+            pluginId, executable: status.executable, input, args: [input.prompt], comprehensionLaunch,
+          });
+      } else {
+        throw new Error('알 수 없는 source plugin입니다.');
       }
-      if (pluginId === ASIDE_MANIFEST.id) {
-        if (this.aside && typeof this.aside.start === 'function') return this.aside.start(input);
-        return this.startCliProcess({ pluginId, executable: status.executable, input, args: [input.prompt] });
+      if (comprehensionLaunch) {
+        const externalId = sourceResultExternalId(result);
+        if (externalId && this.rememberComprehensionOwnership(pluginId, externalId, comprehensionLaunch)) {
+          this.emit('changed', this.monitorState());
+        }
       }
-      throw new Error('알 수 없는 source plugin입니다.');
+      return result;
     }).then(result => ({ ok: true, accepted: true, requestId: id, ...result }), error => ({ ok: false, accepted: false, requestId: id, error: cleanText(error && error.message || error, 1000) }));
     return this.rememberRequest(id, action);
   }
@@ -377,7 +562,7 @@ class SourcePluginControlHost extends EventEmitter {
     return this.openCodeArgs(input);
   }
 
-  startCliProcess({ pluginId, executable, input, args }) {
+  startCliProcess({ pluginId, executable, input, args, comprehensionLaunch = null }) {
     const child = this.spawn(executable, args, {
       cwd: input.cwd,
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
@@ -387,6 +572,7 @@ class SourcePluginControlHost extends EventEmitter {
     const record = {
       id: input.requestId, pluginId, child, externalId: input.externalId || '', outputBytes: 0,
       stdoutDecoder: new StringDecoder('utf8'), stderrDecoder: new StringDecoder('utf8'), stdoutBuffer: '', stopping: false,
+      comprehensionLaunch, comprehensionExternalId: '', comprehensionOwnershipConflict: false,
     };
     this.children.set(record.id, record);
     const consumeStdout = (chunk) => {
@@ -403,8 +589,24 @@ class SourcePluginControlHost extends EventEmitter {
             const nextExternalId = cleanText(externalId, 500);
             if (nextExternalId && nextExternalId !== record.externalId) {
               record.externalId = nextExternalId;
-              this.emit('changed', this.monitorState());
             }
+            const parentExternalId = validOwnershipExternalId(event.parentID || event.parentId
+              || event.parent_id || event.session?.parentID || event.session?.parentId || event.session?.parent_id);
+            if (record.comprehensionLaunch && nextExternalId && !parentExternalId
+              && !record.comprehensionOwnershipConflict) {
+              if (!record.comprehensionExternalId) {
+                record.comprehensionExternalId = nextExternalId;
+                this.rememberComprehensionOwnership(record.pluginId, nextExternalId, record.comprehensionLaunch);
+              } else if (record.comprehensionExternalId !== nextExternalId) {
+                this.forgetComprehensionOwnership(
+                  record.pluginId,
+                  record.comprehensionExternalId,
+                  record.comprehensionLaunch,
+                );
+                record.comprehensionOwnershipConflict = true;
+              }
+            }
+            if (nextExternalId) this.emit('changed', this.monitorState());
           }
         } catch {}
       }
@@ -526,7 +728,14 @@ class SourcePluginControlHost extends EventEmitter {
   async detail(session) {
     if (session?.sourcePluginId) this.assertPluginEnabled(session.sourcePluginId);
     if (session?.sourcePluginId !== ASIDE_MANIFEST.id || !this.aside || typeof this.aside.detail !== 'function') return null;
-    return this.aside.detail(session.externalId);
+    const detail = await this.aside.detail(session.externalId);
+    if (!detail) return null;
+    const expectedExternalId = validOwnershipExternalId(session.externalId);
+    const returnedExternalId = sourceResultExternalId(detail);
+    const ownership = expectedExternalId && returnedExternalId === expectedExternalId
+      ? this.comprehensionOwnerships.get(comprehensionOwnershipKey(ASIDE_MANIFEST.id, expectedExternalId)) || null
+      : null;
+    return applySourceComprehension(detail, ownership);
   }
 
   async dispose() {
@@ -542,6 +751,7 @@ class SourcePluginControlHost extends EventEmitter {
 module.exports = {
   DELETE_TOKEN_TTL_MS,
   MAX_CHILD_OUTPUT,
+  MAX_COMPREHENSION_OWNERSHIPS,
   MAX_PROMPT_LENGTH,
   SourcePluginControlHost,
   emptySourceStatus,

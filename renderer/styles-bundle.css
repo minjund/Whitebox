@@ -13,6 +13,7 @@
 @import url("styles-tmux.css") layer(features);
 @import url("styles-terminal.css") layer(features);
 @import url("styles-pty-focus.css") layer(features);
+@import url("styles-comprehension-packet.css") layer(features);
 @import url("styles-detail-drawer.css") layer(features);
 @import url("styles-drawer-terminal.css") layer(features);
 @import url("styles-run-composer.css") layer(features);

@@ -46,6 +46,18 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
       requestAnimationFrame(() => requestAnimationFrame(restoreViewport));
     });
   };
+  // Output released after an authority refresh must use the same viewport-aware
+  // writer as live PTY events so reading position and xterm repaint semantics
+  // remain unchanged.
+  state.writeTerminalOutput = writeTerminalOutput;
+
+  const refreshComprehensionOutput = () => {
+    for (const entry of state.terminals.values()) {
+      if (!entry || entry.outputHydrating) continue;
+      const released = entry.comprehensionOutputFilter?.refresh?.() || '';
+      writeTerminalOutput(entry, released);
+    }
+  };
 
   window.addEventListener('resize', () => {
     const entry = currentSession() ? state.terminals.get(state.selectedId) : state.remoteTerminal;
@@ -65,5 +77,14 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
   window.whitebox.onTerminalConnection?.(payload => {
     const tone = payload?.state === 'failed' ? 'error' : payload?.state === 'connected' ? 'success' : 'info';
     notice(payload?.message || t('terminal.error.input_failed'), tone);
+  });
+  window.addEventListener('whitebox:comprehension-authority-refresh', refreshComprehensionOutput);
+  window.addEventListener('whitebox:terminal-command-delivery', event => {
+    const target = event?.detail?.target || {};
+    const terminalId = String(target.terminalId || event?.detail?.terminalId || '');
+    const entry = terminalId ? state.terminals.get(terminalId) : null;
+    if (entry?.comprehensionOutputFilter?.hasPending?.()) {
+      writeTerminalOutput(entry, entry.comprehensionOutputFilter.releasePending());
+    }
   });
 };

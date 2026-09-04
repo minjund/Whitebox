@@ -45,6 +45,57 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(Object.hasOwn(claude, 'recoveryArgs'), false, '새 대화에는 아직 복구할 대화 ID가 없으므로 복구 인자를 만들지 않아야 합니다.');
   });
 
+  test('Whitebox 소유 새 PTY 작업은 최초 요청에 이해 패킷 계약을 정확히 한 번 주입한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const creates = [];
+    const commands = [];
+    const injected = [];
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        WhiteboxComprehension: {
+          injectPrompt: prompt => {
+            injected.push(prompt);
+            return `<contract>same-generation-only</contract>\n\n${prompt}`;
+          },
+        },
+        whitebox: {
+          terminalCreate: async options => {
+            creates.push(options);
+            return { id: 'terminal:contract', status: 'running', deliveryState: '' };
+          },
+          terminalCommand: async (id, prompt, options) => {
+            commands.push([id, prompt, options]);
+            return { ok: true, deliveryState: 'accepted' };
+          },
+        },
+      },
+    };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state: { snapshot: null, sessions: [] },
+      init: async () => {},
+      refreshSessions: async () => {},
+      moveWorkbench: () => {},
+      selectSession: async () => {},
+      preferredWorkspace: () => 'D:\\workspace',
+      providerLabel: provider => provider,
+    });
+
+    await actions.startAgent({ provider: 'codex', prompt: '원래 사용자 요청', cwd: 'D:\\workspace' });
+
+    assert.deepStrictEqual(injected, ['원래 사용자 요청']);
+    assert.equal(creates.length, 1, '계약 주입은 추가 AI 실행이나 PTY 생성을 만들면 안 됩니다.');
+    assert.equal(creates[0].initialCommand, '<contract>same-generation-only</contract>\n\n원래 사용자 요청');
+    assert.equal(creates[0].initialCommandInArgs, false);
+    assert(!creates[0].args.some(argument => String(argument).includes('<contract>')),
+      '여러 줄 계약을 AI 실행 인자로 전달하면 안 됩니다.');
+    assert.equal(commands.length, 1, '계약이 포함된 최초 요청은 같은 PTY에 정확히 한 번 전달해야 합니다.');
+    assert.equal(commands[0][0], 'terminal:contract');
+    assert.equal(commands[0][1], creates[0].initialCommand);
+    assert.equal(creates[0].title, 'codex · 원래 사용자 요청', '내부 계약은 사용자에게 보이는 제목에 섞이면 안 됩니다.');
+  });
+
   test('새 AI 작업은 PTY를 생성하고 초기 요청을 그 터미널에 한 번만 전달한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const creates = [];

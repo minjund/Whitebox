@@ -15,6 +15,8 @@ const { scanCodexAutomationHomes } = require('./automationMonitor');
 const { reportRecoverableError } = require('./diagnostics');
 const { enrichSession, enrichSessions } = require('./sessionIntelligence');
 const { SourcePluginMonitorHost } = require('./sourcePlugins/monitorHost');
+const { comprehensionState, validateComprehensionPacket } = require('./comprehensionPacket');
+const { createSnapshotPublicationCoordinator } = require('./monitorPublicationCoordinator');
 
 const tmuxMonitor = new TmuxMonitor();
 tmuxMonitor.scan();
@@ -42,11 +44,9 @@ let lastPublishedSessions = [];
 let currentBridges = Array.isArray(workerData.bridges) ? workerData.bridges : [];
 const discoveryWatchers = [];
 let scheduledScanTimer = null;
-let latestCoreSnapshot = null;
-let sourceScanRunning = false;
 let stopping = false;
 
-monitor.setPinnedSessions(currentBridges);
+monitor.setBridgePresence(currentBridges);
 
 function scheduleScan(delayMs = 120) {
   if (scheduledScanTimer) clearTimeout(scheduledScanTimer);
@@ -156,6 +156,42 @@ function completionPresentationFingerprint(session) {
     normalizedFingerprintText(session && session.outcome && session.outcome.summary, 800),
     normalizedFingerprintText(latestAssistantText, 420),
   ];
+}
+
+function cardComprehension(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const status = String(value.status || '');
+  if (status === 'ready') {
+    const validation = validateComprehensionPacket(value.packet);
+    if (!validation.ok) return comprehensionState('invalid');
+    return comprehensionState('ready', JSON.parse(JSON.stringify(validation.packet)));
+  }
+  if (status === 'missing' || status === 'invalid' || status === 'unsupported') {
+    return comprehensionState(status);
+  }
+  return null;
+}
+
+function cardSessionComprehension(session) {
+  if (!session || session.parentId || Number(session.depth || 0) !== 0
+    || String(session.status || '').toLowerCase() !== 'completed'
+    || session.completionObserved !== true) return null;
+  if (session.comprehensionContractInjected !== true) return comprehensionState('unsupported');
+  const projected = cardComprehension(session.comprehension);
+  if (projected) return projected;
+  return comprehensionState(session.comprehensionContractInjected === true ? 'missing' : 'unsupported');
+}
+
+function comprehensionPresentationFingerprint(session) {
+  const projected = cardSessionComprehension(session);
+  if (!projected) return session && session.comprehensionContractInjected === true ? 'contract:1' : '';
+  const serialized = JSON.stringify(projected);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${session && session.comprehensionContractInjected === true ? 'contract:1' : 'contract:0'}:${projected.status}:${projected.schemaVersion}:${(hash >>> 0).toString(16)}`;
 }
 
 function cardCollaboration(value) {
@@ -281,6 +317,8 @@ function cardSession(session) {
     endedAt: session.endedAt,
     completedAt: session.completedAt,
     completionObserved: Boolean(session.completionObserved),
+    comprehensionContractInjected: session.comprehensionContractInjected === true,
+    comprehension: cardSessionComprehension(session),
     result: clip(session.result, 1200),
     delegation: session.delegation ? {
       taskName: clip(session.delegation.taskName, 180),
@@ -368,6 +406,7 @@ function fingerprint(
     session.status,
     session.activityState,
     completionPresentationFingerprint(session),
+    comprehensionPresentationFingerprint(session),
     session.usage && session.usage.total,
     session.context && session.context.used,
     session.originCwd,
@@ -487,32 +526,56 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
   });
 }
 
-monitor.on('snapshot', snapshot => {
-  latestCoreSnapshot = snapshot;
-  if (sourceScanRunning) return;
-  sourceScanRunning = true;
-  const drain = async () => {
-    while (latestCoreSnapshot) {
-      let coreSnapshot = latestCoreSnapshot;
-      latestCoreSnapshot = null;
-      const sourceSnapshot = await sourcePluginHost.scan();
-      // Use the newest provider snapshot that arrived while plugin I/O was in
-      // flight. This coalesces bursts without cancelling every slow scan.
-      if (latestCoreSnapshot) {
-        coreSnapshot = latestCoreSnapshot;
-        latestCoreSnapshot = null;
-      }
-      await publishSnapshot(coreSnapshot, sourceSnapshot);
-    }
-  };
-  drain().catch(error => {
-    reportRecoverableError('source-plugin-scan', error);
-    parentPort.postMessage({ type: 'recoverable-error', scope: 'source-plugin-scan', message: String(error && error.message || error) });
-  }).finally(() => {
-    sourceScanRunning = false;
-    if (latestCoreSnapshot) scheduleScan(0);
-  });
+const publicationCoordinator = createSnapshotPublicationCoordinator({
+  initialSourceSnapshot: {
+    sessions: [],
+    statuses: Array.isArray(workerData.sourcePluginStatuses) ? workerData.sourcePluginStatuses : [],
+  },
+  scanSource: () => sourcePluginHost.scan(),
+  publish: publishSnapshot,
+  onError(scope, error) {
+    const diagnosticScope = scope === 'scan' ? 'source-plugin-scan' : 'monitor-snapshot-publish';
+    reportRecoverableError(diagnosticScope, error);
+    parentPort.postMessage({ type: 'recoverable-error', scope: diagnosticScope, message: String(error && error.message || error) });
+  },
 });
+
+monitor.on('snapshot', snapshot => publicationCoordinator.observeCore(snapshot));
+
+function publicDetailSession(stored, runtime) {
+  const base = stored && runtime
+    ? {
+      ...stored,
+      status: runtime.status,
+      activityState: runtime.activityState,
+      statusDetail: runtime.statusDetail,
+      statusObserved: runtime.statusObserved,
+      completionObserved: runtime.completionObserved === true,
+      runtimePresence: runtime.runtimePresence || [],
+      controlCapabilities: runtime.controlCapabilities,
+      controlUnavailableReasons: runtime.controlUnavailableReasons || {},
+      sourceControlCapabilities: runtime.sourceControlCapabilities,
+    }
+    : (stored || runtime);
+  if (!base) return null;
+
+  const authority = runtime || base;
+  const session = enrichSession({
+    ...base,
+    comprehensionContractInjected: authority.comprehensionContractInjected === true,
+    comprehension: cardSessionComprehension(authority),
+  }, lastPublishedSessions, Date.now());
+  // These fields are internal evidence used to decide whether the packet may
+  // be promoted. Returning them through detail would expose an untrusted packet
+  // candidate and make detail disagree with the fail-closed card projection.
+  delete session.comprehensionCandidate;
+  delete session.comprehensionOrigin;
+  delete session.comprehensionContractObserved;
+  delete session.comprehensionContractPromptFingerprints;
+  delete session.comprehensionProvenanceOnly;
+  return session;
+}
+
 parentPort.on('message', message => {
   if (!message) return;
   if (message.type === 'availability') monitor.setAvailability(message.availability || {});
@@ -521,7 +584,7 @@ parentPort.on('message', message => {
   }
   if (message.type === 'bridge-presence') {
     currentBridges = Array.isArray(message.bridges) ? message.bridges : [];
-    monitor.setPinnedSessions(currentBridges);
+    monitor.setBridgePresence(currentBridges);
     scheduleScan(0);
   }
   if (message.type === 'source-plugin-state') {
@@ -536,10 +599,7 @@ parentPort.on('message', message => {
     Promise.resolve(sourcePluginHost.owns(message.sessionId)
       ? sourcePluginHost.detail(message.sessionId)
       : monitor.detailSession(message.sessionId)).then(stored => {
-      const merged = stored && runtime
-        ? { ...stored, status: runtime.status, activityState: runtime.activityState, statusDetail: runtime.statusDetail, statusObserved: runtime.statusObserved, runtimePresence: runtime.runtimePresence || [], controlCapabilities: runtime.controlCapabilities, controlUnavailableReasons: runtime.controlUnavailableReasons || {}, sourceControlCapabilities: runtime.sourceControlCapabilities }
-        : (stored || runtime);
-      const session = enrichSession(merged, lastPublishedSessions, Date.now());
+      const session = publicDetailSession(stored, runtime);
       parentPort.postMessage({ type: 'detail-result', requestId: message.requestId, session });
     }).catch(error => {
       reportRecoverableError('source-plugin-detail', error);
@@ -548,6 +608,7 @@ parentPort.on('message', message => {
   }
   if (message.type === 'stop') {
     stopping = true;
+    publicationCoordinator.stop();
     if (scheduledScanTimer) clearTimeout(scheduledScanTimer);
     scheduledScanTimer = null;
     monitor.stop();

@@ -11,6 +11,7 @@ const { spawnSync } = require('child_process');
 const { parseArguments } = require('../../bin/whitebox');
 const { parseGeneric, buildSummary, snapshotWithoutSessions } = require('../../src/agentMonitor');
 const { AgentRunner, commandSpec, handleClaude } = require('../../src/agentRunner');
+const { injectComprehensionContract } = require('../../src/comprehensionPacket');
 const { BridgeServer, decodeBase64 } = require('../../src/bridgeServer');
 const { ProcessMonitor, processRows, powershellProcessRows, posixProcessRows, providerFromPosixProcess, selectAgentProcesses, processSessionExternalId, promptFingerprint, bridgeLinkScore, applyRuntimePresence, forkBridgeBindingGuardSessionIds, inferredBridgeBindings } = require('../../src/processMonitor');
 const { TerminalManager, normalizeLaunchOptions, launchSpec, resolveWindowsCommand, resolvePosixShell, killPtyTree } = require('../../src/terminalManager');
@@ -446,6 +447,92 @@ function registerNativeProcessTests(context) {
       startedAt: '2026-07-14T09:59:29Z',
     }, bridge, now) > 10_000, '초 단위 기록/시계 오차는 허용해야 합니다.');
     assert.ok(bridgeLinkScore({ ...base, clientKind: 'codex-cli', startedAt: '2026-07-14T09:59:35Z' }, bridge, now) > 10_000);
+    const comprehensionBridge = {
+      ...bridge,
+      terminalId: 'terminal:comprehension',
+      initialPromptFingerprint: promptFingerprint(injectComprehensionContract(prompt)),
+      comprehensionContractInjected: true,
+    };
+    assert.ok(bridgeLinkScore({
+      ...base,
+      comprehensionContractObserved: true,
+      comprehensionContractInjected: false,
+      clientKind: 'codex-cli',
+      startedAt: '2026-07-14T09:59:35Z',
+    }, comprehensionBridge, now) > 10_000,
+    '내부 계약을 UI 메시지에서 제거해도 fresh PTY의 주입된 prompt fingerprint와 연결돼야 합니다.');
+    assert.equal(bridgeLinkScore({
+      ...base,
+      comprehensionContractObserved: false,
+      comprehensionContractInjected: false,
+      clientKind: 'codex-cli',
+      startedAt: '2026-07-14T09:59:35Z',
+    }, comprehensionBridge, now), -Infinity,
+    '계약 provenance 없는 외부 기록을 주입된 Whitebox PTY로 추정 연결하면 안 됩니다.');
+    const externalResumeSpoof = applyRuntimePresence([{
+      ...base,
+      id: 'codex:external-resume-spoof',
+      clientKind: 'codex-cli',
+      startedAt: '2026-07-14T09:59:35Z',
+      comprehensionContractObserved: true,
+      comprehensionContractInjected: false,
+      comprehension: { schemaVersion: 1, status: 'unsupported' },
+      comprehensionCandidate: { schemaVersion: 1, status: 'missing' },
+    }], {}, { processes: [] }, now, [{
+      ...comprehensionBridge,
+      id: 'codex:external-resume-spoof',
+      bridgeId: 'codex:external-resume-spoof',
+      linkedSessionId: 'codex:external-resume-spoof',
+      comprehensionContractInjected: false,
+      comprehensionOwnershipVerified: false,
+    }]);
+    assert.equal(externalResumeSpoof[0].comprehension.status, 'unsupported',
+      '외부 resume가 계약처럼 보이는 prompt/candidate를 제공해도 소유 packet으로 승격하면 안 됩니다.');
+    assert.equal(externalResumeSpoof[0].comprehensionCandidate.status, 'missing');
+    const explicitlyBound = applyRuntimePresence([{
+      ...base,
+      id: 'codex:bound-long-task',
+      clientKind: 'codex-cli',
+      startedAt: '2026-07-14T09:59:35Z',
+      messages: [],
+      comprehensionContractObserved: false,
+      comprehensionContractInjected: false,
+      comprehension: { schemaVersion: 1, status: 'unsupported' },
+      comprehensionCandidate: { schemaVersion: 1, status: 'missing' },
+    }], {}, { processes: [] }, now, [{
+      ...comprehensionBridge,
+      id: 'codex:bound-long-task',
+      bridgeId: 'codex:bound-long-task',
+      linkedSessionId: 'codex:bound-long-task',
+      comprehensionOwnershipVerified: true,
+      comprehensionBoundSessionId: 'codex:bound-long-task',
+      comprehensionPromptFingerprint: comprehensionBridge.initialPromptFingerprint,
+    }]);
+    assert.equal(explicitlyBound[0].comprehensionContractInjected, true,
+      '영속 인증 binding은 최초 prompt가 긴 기록에서 잘린 뒤에도 소유권을 복원해야 합니다.');
+    assert.equal(explicitlyBound[0].comprehension.status, 'missing');
+    assert.equal(explicitlyBound[0].comprehensionCandidate, undefined);
+    const afterExit = applyRuntimePresence([{
+      ...explicitlyBound[0],
+      runtimePresence: [],
+      comprehensionContractInjected: false,
+      comprehension: { schemaVersion: 1, status: 'unsupported' },
+      comprehensionCandidate: { schemaVersion: 1, status: 'invalid' },
+    }], {}, { processes: [] }, now + 60_000, [{
+      ...comprehensionBridge,
+      id: 'codex:bound-long-task',
+      bridgeId: 'codex:bound-long-task',
+      linkedSessionId: 'codex:bound-long-task',
+      comprehensionOwnershipVerified: true,
+      comprehensionBoundSessionId: 'codex:bound-long-task',
+      comprehensionPromptFingerprint: comprehensionBridge.initialPromptFingerprint,
+      comprehensionProvenanceOnly: true,
+      pid: null,
+    }]);
+    assert.equal(afterExit[0].comprehension.status, 'invalid');
+    assert.equal(afterExit[0].comprehensionCandidate, undefined);
+    assert.deepStrictEqual(afterExit[0].runtimePresence, [],
+      '종료 provenance는 packet만 복원하고 live/writable runtime presence를 만들면 안 됩니다.');
     const observed = applyRuntimePresence([{ ...base, id: 'codex:matched', clientKind: 'codex-cli', startedAt: '2026-07-14T09:59:35Z' }], {}, { processes: [] }, now, [{ ...bridge, id: 'terminal:new', terminalId: 'terminal:new' }]);
     assert.deepStrictEqual(inferredBridgeBindings(observed).map(item => [item.terminalId, item.sessionId]), [['terminal:new', 'codex:matched']]);
     assert.equal(inferredBridgeBindings(observed)[0].promptFingerprint, bridge.initialPromptFingerprint);

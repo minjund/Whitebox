@@ -242,6 +242,10 @@
     const session = selectedSession();
     const terminal = window.WhiteboxTerminal;
     if (!instance?.state || !session) return { ok: false, reason: "not-ready" };
+    // Agent snapshots can authorize a packet after the final PTY bytes have
+    // already arrived. Notify the terminal layer on every focus reconciliation
+    // so a pending envelope is resolved without waiting for more output.
+    window.dispatchEvent?.(new CustomEvent("whitebox:comprehension-authority-refresh"));
     if (isReadOnlyResponsibleFocus(instance)) return { ok: false, reason: "read-only-focus" };
     if (!terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
     if (!isMainSession(session)) return { ok: false, reason: "not-main-session" };

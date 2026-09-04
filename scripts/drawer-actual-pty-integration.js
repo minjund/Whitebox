@@ -20,6 +20,11 @@ const { TerminalManager, isInternalTerminalProjectionSessionId } = require('../s
 const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost');
 const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
 const { applyRuntimePresence } = require('../src/processMonitor');
+const {
+  comprehensionPromptFingerprint,
+  hasComprehensionContract,
+  stripComprehensionContract,
+} = require('../src/comprehensionPacket');
 
 app.disableHardwareAcceleration();
 // Keep cleanup in control after the hidden integration window is destroyed;
@@ -124,7 +129,7 @@ function fixtureLaunchArgumentsMarker(args) {
 
 function mainBridgePresenceProjector() {
   const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  const start = source.indexOf('function bridgePresenceSessionEligible(session)');
+  const start = source.indexOf('function terminalComprehensionOwnershipVerified(session)');
   const end = source.indexOf('function bridgePresence()', start);
   if (start < 0 || end <= start) {
     throw new Error('main.js bridge presence projector를 찾지 못했습니다.');
@@ -609,6 +614,7 @@ async function run() {
       focusHidden: document.querySelector('#ptyFocusSurface')?.classList.contains('hidden') === true,
     }))()`);
     const directCreateCalls = directRunOutcome.calls.filter(call => call.name === 'terminalCreate');
+    const directCommandCalls = directRunOutcome.calls.filter(call => call.name === 'terminalCommand');
     const directCreateOptions = directCreateCalls[0]?.args?.[0] || null;
     const directCreationResult = directRunOutcome.capture?.result || null;
     const directTerminalId = String(directCreationResult?.terminalId || '');
@@ -626,10 +632,20 @@ async function run() {
       && directCreateOptions.cwd === root
       && directCreateOptions.sessionBackend === 'direct'
       && directCreateOptions.transient === false
-      && directCreateOptions.initialCommand === directPrompt
+      && hasComprehensionContract(directCreateOptions.initialCommand)
+      && stripComprehensionContract(directCreateOptions.initialCommand) === directPrompt
+      && directCreateOptions.initialCommandInArgs === false
+      && !(directCreateOptions.args || []).some(argument => (
+        String(argument).includes(directPrompt) || hasComprehensionContract(argument)
+      ))
       && directCreateOptions.creationId === directCreationId
       && directRunOutcome.capture.options?.creationId === directCreationId,
     `새 작업 modal이 동일 creationId의 fresh direct PTY를 정확히 한 번 생성하지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
+    assert(directCommandCalls.length === 1
+      && directCommandCalls[0]?.args?.[0] === directTerminalId
+      && directCommandCalls[0]?.args?.[1] === directCreateOptions.initialCommand
+      && directCommandCalls[0]?.args?.[2]?.deliveryId === directCreateOptions.deliveryId,
+    `이해 패킷 계약을 포함한 최초 요청이 동일 deliveryId로 PTY에 정확히 한 번 전달되지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
     assert(directRunOutcome.focusHidden
       && directRunOutcome.focusSessionId !== `bridge:${directTerminalId}`
       && directRunOutcome.focusTargetId !== directTerminalId,
@@ -649,6 +665,9 @@ async function run() {
       && directSession.conversationBound === false
       && directSession.bridgeId === ''
       && directSession.creationId === directCreationId
+      && directSession.comprehensionContractInjected === true
+      && directSession.initialPromptFingerprintVersion === 'raw-v1'
+      && directSession.initialPromptFingerprint === comprehensionPromptFingerprint(directCreateOptions.initialCommand)
       && Number(directSession.pid) > 0
       && manager.list().length === directSessionCountBeforeCreate + 1,
     `새 작업 modal의 실제 fresh direct node-pty가 고유하게 실행되지 않았습니다: ${JSON.stringify(directSession)}`);
@@ -658,6 +677,8 @@ async function run() {
       && directBridgePresence[0].id === directTerminalId
       && directBridgePresence[0].terminalId === directTerminalId
       && directBridgePresence[0].linkedSessionId === ''
+      && directBridgePresence[0].comprehensionContractInjected === true
+      && directBridgePresence[0].comprehensionOwnershipVerified === false
       && directBridgePresence[0].creationId === directCreationId,
     `main bridge presence가 실제 fresh PTY의 terminalId + creationId를 보존하지 않았습니다: ${JSON.stringify(directBridgePresence)}`);
     const monitoredDirectSessions = applyRuntimePresence(

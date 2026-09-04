@@ -49,6 +49,7 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app-management.js',
   'renderer/app-session-render.js',
   'renderer/app-pty-focus.js',
+  'renderer/comprehension-packet.js',
   'renderer/app-drawer-data.js',
   'renderer/app-drawer-content.js',
   'renderer/app-drawer.js',
@@ -344,6 +345,7 @@ const APP_MODULES = [
   'app-drawer-data.js',
   'app-drawer-content.js',
   'app-pty-focus.js',
+  'comprehension-packet.js',
   'app-drawer.js',
   'app-run-modal.js',
   'app-quality.js',
@@ -368,6 +370,7 @@ const APP_PUBLIC_API_CONTRACTS = [
   'createManagement',
   'createDrawerData',
   'createDrawerContent',
+  'createComprehensionPacketMode',
   'createDrawer',
   'createRunModal',
   'createQualityEnhancements',
@@ -560,6 +563,7 @@ const STYLE_FILES = [
   'styles-responsive-product.css',
   'styles-control-room.css',
   'styles-pty-focus.css',
+  'styles-comprehension-packet.css',
 ];
 
 const I18N_RUNTIME_CONTRACTS = [
@@ -2280,7 +2284,8 @@ function registerUiContractTests(context) {
       'createCore', 'createProviderVisibility', 'createDashboard',
       'createGraphModel', 'createGraphView', 'createGraphLayout', 'createGraphOrchestration',
       'createAgentActions', 'createManagement', 'createSessionRenderer',
-      'createDrawerData', 'createDrawerContent', 'createPtyFocusMode', 'createDrawer',
+      'createDrawerData', 'createDrawerContent', 'createPtyFocusMode',
+      'createComprehensionPacketMode', 'createDrawer',
       'createRunModal', 'createQualityEnhancements',
       'createNavigationEventBindings', 'createSessionEventBindings', 'createFilterEventBindings',
       'createDialogEventBindings', 'createEventBindings',

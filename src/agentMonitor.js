@@ -600,6 +600,8 @@ class AgentMonitor extends EventEmitter {
     this.managedCache = new Map();
     this.pinnedFileCache = new Map();
     this.pinnedSessions = [];
+    this.bridgeDiscoveryScopes = [];
+    this.bridgeDiscoveryRefreshScopes = [];
     this.historyHomes = [];
     this.startupRecoveryKeys = new Set();
     this.startupRecoveredFiles = new Map();
@@ -631,6 +633,65 @@ class AgentMonitor extends EventEmitter {
       normalized.push({ provider, externalId, environment, distro });
     }
     this.pinnedSessions = normalized;
+  }
+
+  invalidateDiscoveryCaches() {
+    this.listCache.clear();
+    for (const [key, cached] of this.pinnedFileCache) {
+      if (!cached || !cached.file) this.pinnedFileCache.delete(key);
+    }
+  }
+
+  setBridgePresence(bindings = []) {
+    this.setPinnedSessions(bindings);
+    const scopes = [];
+    const seen = new Set();
+    for (const binding of bindings || []) {
+      if (!binding || binding.kind !== 'bridge'
+        || binding.comprehensionContractInjected !== true
+        || binding.comprehensionOwnershipVerified === true
+        || binding.comprehensionProvenanceOnly === true) continue;
+      const provider = String(binding.provider || '').trim().toLowerCase();
+      const terminalId = String(binding.terminalId || '').trim();
+      if (!['claude', 'codex', 'gemini', 'grok'].includes(provider) || !terminalId) continue;
+      const environment = String(binding.environment || '').trim().toLowerCase();
+      const distro = String(binding.distro || '').trim().toLowerCase();
+      const key = `${provider}:${environment}:${distro}:${terminalId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      scopes.push({ provider, environment, distro, key });
+    }
+    scopes.sort((left, right) => left.key.localeCompare(right.key));
+    const previousKey = this.bridgeDiscoveryScopes.map(scope => scope.key).join('\n');
+    const nextKey = scopes.map(scope => scope.key).join('\n');
+    if (previousKey !== nextKey) {
+      const refreshByKey = new Map([
+        ...this.bridgeDiscoveryRefreshScopes,
+        ...this.bridgeDiscoveryScopes,
+        ...scopes,
+      ].map(scope => [scope.key, scope]));
+      this.bridgeDiscoveryRefreshScopes = [...refreshByKey.values()];
+    }
+    this.bridgeDiscoveryScopes = scopes;
+    if (previousKey !== nextKey) this.invalidateDiscoveryCaches();
+  }
+
+  bridgeDiscoveryScopeMatches(scopes, provider, history) {
+    const environment = String(history && history.kind || '').trim().toLowerCase();
+    const distro = String(history && history.distro || '').trim().toLowerCase();
+    return scopes.some(scope => (
+      scope.provider === provider
+      && (!scope.environment || scope.environment === environment)
+      && (!scope.distro || scope.distro === distro)
+    ));
+  }
+
+  bridgeDiscoveryActive(provider, history) {
+    return this.bridgeDiscoveryScopeMatches(this.bridgeDiscoveryScopes, provider, history);
+  }
+
+  bridgeDiscoveryRefreshPending(provider, history) {
+    return this.bridgeDiscoveryScopeMatches(this.bridgeDiscoveryRefreshScopes, provider, history);
   }
 
   pinnedFiles(provider, history, root, predicate) {
@@ -815,12 +876,21 @@ class AgentMonitor extends EventEmitter {
           gemini: path.join(history.home, '.gemini', 'tmp'),
           grok: path.join(history.home, '.grok', 'sessions'),
         };
-        const cacheMs = history.kind === 'wsl' ? 5_000 : LIST_CACHE_MS;
         const addSessions = (provider, predicate, max, parser) => {
           const key = `${history.kind}:${history.distro || homeIndex}:${provider}`;
+          // A fresh app-owned interactive PTY does not have a provider session
+          // id to pin until its new transcript is discovered. Keep discovery
+          // live for only that provider/environment so a watcher miss cannot
+          // turn the normal 60-second list cache into completion latency.
+          const forceBridgeDiscovery = this.bridgeDiscoveryActive(provider, history)
+            || this.bridgeDiscoveryRefreshPending(provider, history);
+          const cacheMs = forceBridgeDiscovery
+            ? 0
+            : (history.kind === 'wsl' ? 5_000 : LIST_CACHE_MS);
           const recoverStartupInput = provider === 'codex' && !this.startupRecoveryKeys.has(key);
           const discoveryMax = max + (recoverStartupInput ? STARTUP_INPUT_RECOVERY_MAX_FILES : 0);
-          const discoveredInfos = history.files && Array.isArray(history.files[provider])
+          const discoveredInfos = !forceBridgeDiscovery
+            && history.files && Array.isArray(history.files[provider])
             ? this.hintedFiles(history.files[provider], discoveryMax)
             : this.files(key, roots[provider], predicate, discoveryMax, 6, cacheMs);
           const infos = discoveredInfos.slice(0, max);
@@ -923,6 +993,7 @@ class AgentMonitor extends EventEmitter {
         sessions: merged,
         summary: buildSummary(merged, this.availability),
       };
+      this.bridgeDiscoveryRefreshScopes = [];
       this.emit('snapshot', this.lastSnapshot);
       return this.lastSnapshot;
     } finally {

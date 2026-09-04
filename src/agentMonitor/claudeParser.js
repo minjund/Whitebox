@@ -4,6 +4,12 @@ const path = require('path');
 const { finalizedActivityState, observeActivity } = require('./activityState');
 const { createExecutionTracker, reconcileExecutionActivities } = require('./executionActivity');
 const { structuredInputRequest, structuredInputRequestText } = require('./responseIntent');
+const {
+  stageComprehensionCandidate,
+  normalizedComprehensionContractPromptFingerprints,
+  observeComprehensionContractPrompt,
+  stripComprehensionContract,
+} = require('../comprehensionPacket');
 
 function createClaudeParser(dependencies) {
   const {
@@ -24,6 +30,39 @@ function createClaudeParser(dependencies) {
     assistantResponseIntent,
     isUserInputTool,
   } = dependencies;
+
+  function rawText(value) {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.map(rawText).filter(Boolean).join('\n').trim();
+    if (typeof value !== 'object') return String(value);
+    for (const key of ['text', 'content', 'message', 'output_text']) {
+      if (typeof value[key] === 'string') return value[key];
+    }
+    return '';
+  }
+
+  function observeComprehensionContract(state, value) {
+    observeComprehensionContractPrompt(state, rawText(value));
+  }
+
+  function replaceFinalAssistantMessages(session, messageIds, messageBody) {
+    const ids = new Set(messageIds || []);
+    const candidates = ids.size
+      ? session.messages.filter(message => ids.has(message.id))
+      : [];
+    const target = candidates[0]
+      || [...session.messages].reverse().find(message => message.role === 'assistant')
+      || null;
+    const text = compactText(messageBody, session.fullHistory ? Number.MAX_SAFE_INTEGER : 6000);
+    if (!target) return;
+    if (!text) {
+      session.messages = session.messages.filter(message => message !== target && !ids.has(message.id));
+      return;
+    }
+    target.text = text;
+    session.messages = session.messages.filter(message => message === target || !ids.has(message.id));
+  }
 
   function taskNotification(value) {
     const text = String(value || '');
@@ -74,7 +113,7 @@ function createClaudeParser(dependencies) {
   }
 
   function visibleUserText(value) {
-    const raw = compactText(value, 12000);
+    const raw = compactText(stripComprehensionContract(rawText(value)), 12000);
     if (!raw) return '';
     const objective = raw.match(/<objective>\s*([\s\S]*?)\s*<\/objective>/i);
     if (objective) return compactText(objective[1], 6000);
@@ -439,6 +478,7 @@ function createClaudeParser(dependencies) {
         .filter(Boolean)
         .join('\n');
       if (!internalUserRow) {
+        observeComprehensionContract(state, rawUser);
         const detectedUtility = utilityKind(rawUser);
         if (detectedUtility) session.utilityKind = detectedUtility;
         const visibleUser = visibleUserText(rawUser);
@@ -455,13 +495,20 @@ function createClaudeParser(dependencies) {
       }
     }
     if (role === 'assistant') {
-      const assistantText = compactText(content
+      const assistantRawText = content
         .filter(item => item && item.type === 'text')
         .map(item => item.text)
         .filter(Boolean)
-        .join('\n'), 6000);
+        .join('\n');
+      const assistantText = compactText(assistantRawText, 6000);
       if (assistantText) {
         state.lastAssistantText = assistantText;
+        state.lastAssistantRawText = assistantRawText;
+        state.lastAssistantMessageIds = content
+          .map((item, index) => item?.type === 'text'
+            ? `${row.uuid || row.requestId || session.externalId}:${index}`
+            : '')
+          .filter(Boolean);
         state.lastConversationRole = 'assistant';
         observeActivity(state, 'working', row.timestamp);
       }
@@ -491,6 +538,8 @@ function createClaudeParser(dependencies) {
     state.lastTurnFinished = false;
     state.subagentCompletedAt = null;
     state.lastAssistantText = '';
+    state.lastAssistantRawText = '';
+    state.lastAssistantMessageIds = [];
     state.lastConversationRole = '';
     session.completedAt = null;
     session.completionObserved = false;
@@ -512,6 +561,10 @@ function createClaudeParser(dependencies) {
       lastRole: '',
       lastConversationRole: '',
       lastAssistantText: '',
+      lastAssistantRawText: '',
+      lastAssistantMessageIds: [],
+      comprehensionContractObserved: false,
+      comprehensionContractPromptFingerprints: [],
       pendingUserInputCalls: new Set(),
       pendingUserInputAt: new Map(),
       pendingUserInputText: new Map(),
@@ -535,6 +588,7 @@ function createClaudeParser(dependencies) {
       if (row.type === 'queue-operation' && row.operation === 'enqueue' && row.content) {
         const notification = recordTaskNotification(state, row.content, row.timestamp);
         recordClaudeTaskCompletion(session, state, notification, row.timestamp);
+        observeComprehensionContract(state, row.content);
         const detectedUtility = utilityKind(row.content);
         if (detectedUtility) session.utilityKind = detectedUtility;
         const visibleUser = visibleUserText(row.content);
@@ -556,6 +610,7 @@ function createClaudeParser(dependencies) {
         }
       }
       if (row.type === 'last-prompt' && !state.latestUser && row.lastPrompt) {
+        observeComprehensionContract(state, row.lastPrompt);
         const visibleUser = visibleUserText(row.lastPrompt);
         if (visibleUser) {
           state.latestUser = visibleUser;
@@ -653,6 +708,33 @@ function createClaudeParser(dependencies) {
     } else {
       session.status = 'idle';
       session.statusDetail = state.lastRole === 'user' ? '마지막 응답 기록이 종료됨' : '다음 요청 대기';
+    }
+    session.comprehensionContractObserved = state.comprehensionContractObserved;
+    session.comprehensionContractPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
+      state.comprehensionContractPromptFingerprints,
+    );
+    session.comprehensionContractInjected = false;
+    const finalizedComprehension = stageComprehensionCandidate(session, state.lastAssistantRawText, {
+      stageCandidate: true,
+    });
+    if (finalizedComprehension.comprehension) {
+      session.comprehension = finalizedComprehension.comprehension;
+    }
+    if (finalizedComprehension.candidate) {
+      session.comprehensionCandidate = finalizedComprehension.candidate;
+    }
+    if (finalizedComprehension.candidateEligibility?.eligible) {
+      const visibleFinalResponse = finalizedComprehension.body;
+      session.result = compactText(visibleFinalResponse, 6000);
+      state.lastAssistantText = session.result;
+      replaceFinalAssistantMessages(session, state.lastAssistantMessageIds, visibleFinalResponse);
+      if (!pendingUserInput) {
+        const visibleIntent = assistantResponseIntent(visibleFinalResponse);
+        session.responseIntent = {
+          ...visibleIntent,
+          source: visibleIntent.category === 'none' ? 'none' : 'assistant-message',
+        };
+      }
     }
     session.executions = reconcileExecutionActivities(state.executionTracker.finalize(), {
       staleAfterMs: STALE_TURN_THRESHOLD_MS,

@@ -570,7 +570,12 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
 
   function freshAgentLaunchOptions(options = {}) {
     const provider = String(options.provider || '').trim().toLowerCase();
-    const prompt = String(options.prompt || '').trim();
+    const userPrompt = String(options.prompt || '').trim();
+    const injectComprehensionPrompt = window.WhiteboxComprehension?.injectPrompt;
+    const comprehensionPromptInjected = typeof injectComprehensionPrompt === 'function';
+    const prompt = comprehensionPromptInjected
+      ? injectComprehensionPrompt(userPrompt)
+      : userPrompt;
     const model = String(options.model || '').trim();
     const allowWrites = Boolean(options.allowWrites);
     const requestedPermissionMode = String(options.permissionMode || '').trim();
@@ -578,7 +583,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!['claude', 'codex', 'gemini', 'grok'].includes(provider)) {
       throw rejectedError(t('terminal.resume.unsupported_provider', { provider: providerLabel(provider) }));
     }
-    if (!prompt) throw rejectedError(t('terminal.agent.command_required'));
+    if (!userPrompt) throw rejectedError(t('terminal.agent.command_required'));
 
     if (provider === 'claude') {
       if (model) args.push('--model', model);
@@ -600,11 +605,13 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       if (allowWrites) args.push('--always-approve');
     }
 
-    let initialCommandInArgs = true;
-    if (provider === 'gemini') args.push('--prompt-interactive', prompt);
-    else if (provider === 'grok') initialCommandInArgs = false;
-    else args.push(prompt);
-    return { provider, prompt, args, initialCommandInArgs };
+    // The packet contract is multiline, so an owned task is delivered once
+    // through the PTY ledger after the interactive provider starts. Keeping it
+    // out of argv also preserves the original prompt as the visible title.
+    let initialCommandInArgs = !comprehensionPromptInjected && provider !== 'grok';
+    if (initialCommandInArgs && provider === 'gemini') args.push('--prompt-interactive', prompt);
+    else if (initialCommandInArgs) args.push(prompt);
+    return { provider, prompt, userPrompt, args, initialCommandInArgs };
   }
 
   async function startAgent(options = {}) {
@@ -614,7 +621,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const launch = freshAgentLaunchOptions(options);
     const creationId = String(options.creationId || '').trim() || nextCreationId();
     const deliveryId = `start:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
-    const titlePrompt = launch.prompt.replace(/\s+/g, ' ').slice(0, 72);
+    const titlePrompt = launch.userPrompt.replace(/\s+/g, ' ').slice(0, 72);
     const createOptions = {
       type: 'agent',
       provider: launch.provider,
