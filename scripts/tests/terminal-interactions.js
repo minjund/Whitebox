@@ -208,6 +208,7 @@ function createWorkbench(root, options = {}) {
   };
   fixtureDocument.activeElement = fixtureDocument.body;
   const sandbox = {
+    navigator: { clipboard: options.clipboard || {} },
     document: fixtureDocument,
     requestAnimationFrame: options.requestAnimationFrame || (callback => callback()),
     cancelAnimationFrame: options.cancelAnimationFrame || (() => {}),
@@ -253,6 +254,9 @@ function createWorkbench(root, options = {}) {
         onData(callback) { this.dataHandler = callback; }
         onResize() {}
         attachCustomKeyEventHandler(callback) { this.keyEventHandler = callback; }
+        hasSelection() { return Boolean(this.selection); }
+        getSelection() { return this.selection || ''; }
+        paste(text) { this.pastes = [...(this.pastes || []), text]; this.dataHandler?.(text); }
         focus() { this.helperTextarea?.focus(); }
         write(data, callback) {
           this.writes.push(String(data));
@@ -839,6 +843,48 @@ function registerTerminalInteractionTests(context) {
     assert.equal(rawWrites.length, 1);
     assert.equal(rawWrites[0][1], '\u001b[Z');
 
+  });
+
+  test('PTY clipboard shortcuts copy the full selection and paste once without stealing Ctrl+C', async () => {
+    const copied = [];
+    let reads = 0;
+    let resolveRead;
+    const session = { id: 'terminal:clipboard', type: 'agent', status: 'running' };
+    const { state, workbench, terminalInstances, notices } = createWorkbench(root, {
+      session,
+      clipboard: {
+        writeText: async text => copied.push(text),
+        readText: () => { reads += 1; return new Promise(resolve => { resolveRead = resolve; }); },
+      },
+    });
+    await workbench.ensureSessionTerminal(session);
+    const terminal = terminalInstances[0];
+    const key = (name, overrides = {}) => {
+      const event = { type: 'keydown', key: name, ctrlKey: true,
+        preventDefault() { this.prevented = true; }, stopPropagation() {}, ...overrides };
+      return [terminal.keyEventHandler(event), event];
+    };
+    assert.equal(key('c')[0], true);
+    terminal.selection = '한글😀\n'.repeat(3000);
+    assert.equal(key('c')[0], false);
+    key('c', { type: 'keyup' });
+    await Promise.resolve();
+    assert.deepEqual(copied, [terminal.selection]);
+    assert.equal(key('V', { shiftKey: true })[0], false);
+    key('V', { shiftKey: true, repeat: true });
+    key('V', { shiftKey: true, type: 'keyup' });
+    await Promise.resolve();
+    resolveRead('여러 줄\n붙여넣기😀');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1);
+    assert.deepEqual(Array.from(terminal.pastes), ['여러 줄\n붙여넣기😀']);
+    key('Insert', { ctrlKey: false, shiftKey: true });
+    await Promise.resolve();
+    state.selectedId = 'another-task';
+    resolveRead('must not reach another task');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(terminal.pastes.length, 1);
+    assert.equal(notices.length, 0);
   });
 
   test('창이 hidden으로 바뀌면 대기 중인 raw 입력을 animation frame 없이 즉시 전달한다', async () => {

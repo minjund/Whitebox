@@ -218,11 +218,22 @@ function createCodexParser(dependencies) {
     return true;
   }
 
+  function turnEventTimestamp(value, row) {
+    const normalized = timestamp(value || row.timestamp, row.timestamp);
+    // CLI turn boundaries use Unix seconds; row timestamps retain milliseconds.
+    // Recover that precision only within the same second, preserving stale guards.
+    if (Number.isInteger(value) && value > 0 && value <= 10_000_000_000
+      && Math.floor(Date.parse(row.timestamp) / 1000) === value) {
+      return timestamp(row.timestamp, normalized);
+    }
+    return normalized;
+  }
+
   function staleTaskCompletion(state, payload, row) {
     const completionTurnId = compactText(payload.turn_id, 180);
     if (state.activeTurn && state.activeTurnId && completionTurnId
       && completionTurnId !== state.activeTurnId) return true;
-    const completedAt = Date.parse(timestamp(payload.completed_at || row.timestamp, null) || '');
+    const completedAt = Date.parse(turnEventTimestamp(payload.completed_at, row) || '');
     return Boolean(state.activeTurn && state.activityAt && Number.isFinite(completedAt)
       && completedAt < state.activityAt);
   }
@@ -274,29 +285,31 @@ function createCodexParser(dependencies) {
 
   function processEventMessage(session, state, row, payload, timing) {
     if (payload.type === 'task_started') {
+      const startedAt = turnEventTimestamp(payload.started_at, row);
       beginObservedTurn(session, state, payload.turn_id);
       state.latestDelegationNarration = '';
-      observeActivity(state, 'thinking', payload.started_at || row.timestamp);
+      observeActivity(state, 'thinking', startedAt);
       addLifecycle(session, {
         id: payload.turn_id,
         type: 'turn-start',
         label: '턴 시작',
         status: 'running',
-        timestamp: payload.started_at || row.timestamp,
+        timestamp: startedAt,
       });
     } else if (payload.type === 'task_complete') {
       if (staleTaskCompletion(state, payload, row)) return;
+      const completedAt = turnEventTimestamp(payload.completed_at, row);
       state.activeTurn = false;
       state.lastTurnCompleted = true;
-      settleRunningLifecycle(session, payload.completed_at || row.timestamp);
-      session.completedAt = timestamp(payload.completed_at || row.timestamp, session.updatedAt);
+      settleRunningLifecycle(session, completedAt);
+      session.completedAt = timestamp(completedAt, session.updatedAt);
       state.turnHadMeaningfulOutput = state.turnHadMeaningfulOutput || Boolean(compactText(payload.last_agent_message));
       session.completionObserved = state.turnHadMeaningfulOutput;
       state.pendingUserInputCalls.clear();
       state.pendingUserInputAt.clear();
       state.pendingUserInputText.clear();
       state.pendingUserInputRequests.clear();
-      observeActivity(state, session.completionObserved ? 'attention' : 'idle', payload.completed_at || row.timestamp);
+      observeActivity(state, session.completionObserved ? 'attention' : 'idle', completedAt);
       if (payload.last_agent_message) {
         state.lastFinalAnswerRaw = rawContentText(payload.last_agent_message);
         state.lastFinalAnswer = compactText(state.lastFinalAnswerRaw, 6000);
@@ -310,7 +323,7 @@ function createCodexParser(dependencies) {
         label: 'AI 답변 완료',
         detail: payload.duration_ms ? `${payload.duration_ms}밀리초` : '',
         status: 'done',
-        timestamp: payload.completed_at || row.timestamp,
+        timestamp: completedAt,
       });
     } else if (payload.type === 'sub_agent_activity') {
       recordSubagentActivity(session, state, payload, row, timing);

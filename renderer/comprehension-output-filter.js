@@ -160,6 +160,9 @@
 
   function createFilter(options = {}) {
     const enabled = options.enabled !== false;
+    // Display privacy is independent of packet validation. Only the launch
+    // owner may opt in; observers retain the lossless diagnostic stream.
+    const hideOwnedEnvelopes = options.hideOwnedEnvelopes === true;
     const maxPrintable = Math.max(1024, Number(options.maxCandidatePrintable) || DEFAULT_MAX_CANDIDATE_PRINTABLE);
     const maxRaw = Math.max(maxPrintable, Number(options.maxCandidateRaw) || DEFAULT_MAX_CANDIDATE_RAW);
     const maxAnsiRaw = Math.max(1024, Number(options.maxAnsiRaw) || DEFAULT_MAX_ANSI_RAW);
@@ -180,12 +183,21 @@
     let held = null;
     let contractHidden = false;
 
+    function ownsHiddenOutput() {
+      try { return hideOwnedEnvelopes && isOwnedTerminal() === true; }
+      catch (_error) { return false; }
+    }
+
     function serializedUnits(units = scanUnits) {
       return units.map(unit => `${unit.beforeRaw}${unit.raw}`).join("");
     }
 
     function scanPlain() {
       return scanUnits.map(unit => unit.text).join("");
+    }
+
+    function markerText(value) {
+      return ownsHiddenOutput() ? value.replace(/\s/gu, '').toLowerCase() : value;
     }
 
     function authority() {
@@ -233,7 +245,7 @@
       const maximum = Math.min(scanUnits.length, Math.max(...RESERVED_ENVELOPES.map(item => item.open.length - 1)));
       for (let count = 1; count <= maximum; count += 1) {
         const suffix = scanUnits.slice(-count).map(unit => unit.text).join("");
-        if (RESERVED_ENVELOPES.some(item => item.open.startsWith(suffix))) retainCount = count;
+        if (markerText(suffix) && RESERVED_ENVELOPES.some(item => markerText(item.open).startsWith(markerText(suffix)))) retainCount = count;
       }
       const emitCount = scanUnits.length - retainCount;
       if (emitCount > 0) output.push(serializedUnits(scanUnits.slice(0, emitCount)));
@@ -323,6 +335,15 @@
     }
 
     function processCandidateToken(token, output) {
+      if (candidate.hidden) {
+        // Keep only a closing-marker suffix, even for malformed or oversized
+        // payloads. Never replay private bytes on flush or an input boundary.
+        if (token.text && !/\s/u.test(token.text)) {
+          candidate.plain = (candidate.plain + token.text.toLowerCase()).slice(-candidate.definition.close.length);
+          if (candidate.plain === candidate.definition.close) candidate = null;
+        }
+        return;
+      }
       candidate.raw += token.raw;
       candidate.rawLength += token.raw.length;
       if (token.text) {
@@ -346,7 +367,7 @@
       scanUnits.push({ beforeRaw: scanInterstitialRaw, raw: token.raw, text: token.text });
       scanInterstitialRaw = "";
       const plain = scanPlain();
-      const exact = RESERVED_ENVELOPES.find(item => item.open === plain);
+      const exact = RESERVED_ENVELOPES.find(item => markerText(item.open) === markerText(plain));
       if (exact) {
         const raw = serializedUnits();
         candidate = {
@@ -356,11 +377,13 @@
           rawLength: raw.length,
           printableLength: plain.length,
           sourceAuthority: exact.kind === "packet" ? authority() : null,
+          hidden: ownsHiddenOutput(),
         };
         scanUnits = [];
         return;
       }
-      if (RESERVED_ENVELOPES.some(item => item.open.startsWith(plain))) return;
+      if (scanUnits.length < 1024 && markerText(plain)
+        && RESERVED_ENVELOPES.some(item => markerText(item.open).startsWith(markerText(plain)))) return;
       retainOpeningSuffix(output);
     }
 
@@ -377,9 +400,11 @@
     function releaseAll(output) {
       processRaw("", true, output);
       if (held) releaseHeld(output);
-      if (candidate) output.push(candidate.raw);
+      if (candidate && !candidate.hidden) output.push(candidate.raw);
       candidate = null;
-      if (scanUnits.length) output.push(serializedUnits());
+      const privatePrefix = ownsHiddenOutput()
+        && markerText(scanPlain()).startsWith('<whitebox-comprehension-');
+      if (scanUnits.length && !privatePrefix) output.push(serializedUnits());
       if (scanInterstitialRaw) output.push(scanInterstitialRaw);
       scanUnits = [];
       scanInterstitialRaw = "";
@@ -399,7 +424,7 @@
       if (!enabled) return "";
       const output = [];
       reevaluateHeld(output);
-      if (candidate?.definition.kind === "packet" && authority().state === "release") {
+      if (candidate?.definition.kind === "packet" && !candidate.hidden && authority().state === "release") {
         output.push(candidate.raw);
         candidate = null;
       }
