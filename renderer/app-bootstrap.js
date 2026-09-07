@@ -26,6 +26,7 @@
     "createDrawerData",
     "createDrawerContent",
     "createPtyFocusMode",
+    "createComprehensionPacketMode",
     "createDrawer",
     "createRunModal",
     "createQualityEnhancements",

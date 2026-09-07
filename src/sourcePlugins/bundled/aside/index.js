@@ -178,17 +178,25 @@ function normalizeOfficialTask(raw, discovery, options = {}) {
   const updatedAt = isoTime(raw.updatedAt || raw.updated_at || raw.time_updated,
     messages.map(message => message.timestamp).filter(Boolean).sort().pop() || startedAt);
   const statusValue = String(raw.status || raw.state || '').toLowerCase();
+  const completionTimestamp = raw.completedAt || raw.completed_at || raw.time_completed
+    || raw.finishedAt || raw.finished_at || raw.time_finished;
+  const explicitCompletion = raw.completed === true
+    || ['completed', 'complete', 'succeeded', 'success', 'done'].includes(statusValue)
+    || Boolean(completionTimestamp);
   const status = raw.archived || raw.time_archived ? 'archived'
     : raw.error || raw.failed || ['error', 'failed'].includes(statusValue) ? 'failed'
+      : raw.cancelled || raw.canceled || ['cancelled', 'canceled', 'aborted', 'stopped'].includes(statusValue) ? 'cancelled'
       : ['running', 'active', 'working', 'in_progress', 'in-progress'].includes(statusValue) ? 'running'
         : ['waiting', 'blocked', 'needs_input', 'needs-input'].includes(statusValue) ? 'waiting'
-          : ['archived', 'completed', 'idle'].includes(statusValue) ? statusValue : 'completed';
+          : ['archived', 'idle'].includes(statusValue) ? statusValue : 'completed';
   const modelProvider = String(raw.provider || raw.providerId || raw.provider_id || '');
   const model = String(raw.model || raw.modelId || raw.model_id || '');
   const title = compactText(raw.title || raw.name || raw.task || raw.prompt, 500)
     || compactText(messages.find(message => message.role === 'user')?.text, 500)
     || `Aside task ${externalId}`;
   const latestAssistant = [...messages].reverse().find(message => message.role === 'assistant');
+  const completionObserved = status === 'completed' && explicitCompletion;
+  const completedAt = completionObserved ? isoTime(completionTimestamp, updatedAt) : null;
   const capabilities = discovery && discovery.capabilities || {};
   const lifecycle = officialLifecycle(raw);
   const tabs = Array.isArray(raw.tabs || raw.browserTabs || raw.browser_tabs)
@@ -200,6 +208,8 @@ function normalizeOfficialTask(raw, discovery, options = {}) {
       timestamp: isoTime(tab && (tab.timestamp || tab.updatedAt || tab.updated_at), updatedAt),
       url: redactBrowserUrl(tab && tab.url || ''),
     })).filter(tab => tab.label) : [];
+  const artifacts = officialArtifacts(raw);
+  const result = latestAssistant ? latestAssistant.text : '';
   return {
     id: `aside:${externalId}`,
     externalId: String(externalId),
@@ -217,15 +227,27 @@ function normalizeOfficialTask(raw, discovery, options = {}) {
     cwd: String(raw.cwd || raw.directory || raw.workspace || ''),
     startedAt,
     updatedAt,
+    endedAt: ['completed', 'failed', 'cancelled', 'archived'].includes(status) ? updatedAt : null,
+    completedAt,
+    completionObserved,
     status,
     messages: options.fullHistory === false
       ? messages.slice(-6).map(message => ({ ...message, text: compactText(message.text, 2000) }))
       : messages,
     messageCount: Number(raw.messageCount || raw.message_count || messages.length),
     lifecycle: [...lifecycle, ...tabs],
-    artifacts: officialArtifacts(raw),
+    artifacts,
     resources: { browserTabs: tabs },
+    result,
     outcomes: latestAssistant ? [{ id: 'latest-response', title: 'Latest response', text: latestAssistant.text }] : [],
+    outcome: {
+      status,
+      summary: result,
+      verified: completionObserved,
+      verification: completionObserved ? 'Aside official completion state' : 'unverified',
+      completedAt,
+      artifacts,
+    },
     readOnly: false,
     importMode: 'official-mcp',
     controlAuthority: 'official-session-id',
@@ -568,6 +590,10 @@ class AsideAdapter {
     }
     if (!status.platformSupported) return null;
     return detailAsideHistorySession(this.taskFolders, sessionId, { ...this.options, ...options, cache: this.folderCache });
+  }
+
+  async start(input = {}) {
+    return this.control('start', input);
   }
 
   async control(action, input = {}) {

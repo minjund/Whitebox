@@ -1206,7 +1206,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     const root = resultReviewSnapshot(sessionOrId);
     const owner = resultReviewPtyOwner(root);
     // A review action is only useful when it can reveal the exact PTY that
-    // owns the result. A completed Codex Desktop task may also create one exact
+    // owns the result. A canonical Codex Desktop task may also create one exact
     // PTY through its explicit safe-fork path. Imported/read-only records and
     // ambiguous or otherwise retired sessions never expose a dead button.
     const canCreateExactPty = options.allowPtyCreation === true

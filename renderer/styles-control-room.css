@@ -46,6 +46,8 @@
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
+  pointer-events: none;
+  cursor: default;
   text-align: left;
 }
 

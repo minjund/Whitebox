@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sketch 011 · 오답 재확인 흐름</title>
+  <link id="theme-link" rel="stylesheet" href="../themes/default.css">
+  <style>
+    * { box-sizing: border-box; }
+    :root { color-scheme: dark; --provider:#70d7ff; --amber:#f2c46d; --danger:#ff8b78; --terminal:#050a0e; --panel:#09131a; --panel-2:#0e1a22; --line:color-mix(in srgb,var(--color-border) 78%,transparent); }
+    html[data-theme="light"] { color-scheme:light; --terminal:#18201e; --panel:#f8faf7; --panel-2:#eef2ee; }
+    body { margin:0; min-width:320px; min-height:100vh; overflow:hidden; background:#030609; color:var(--color-text); font-family:var(--font-sans); }
+    button, select, input { font:inherit; }
+    button { transition:all .15s ease; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--color-primary); outline-offset:2px; }
+    .variant-nav { position:fixed; z-index:10000; inset:0 0 auto; display:flex; justify-content:center; gap:8px; min-height:52px; padding:8px 164px 8px 16px; border-bottom:1px solid rgba(255,255,255,.12); background:rgba(4,8,12,.9); backdrop-filter:blur(18px); }
+    .variant-tab { min-height:34px; padding:0 13px; border:1px solid rgba(255,255,255,.13); border-radius:9px; background:rgba(255,255,255,.04); color:#aeb9c0; cursor:pointer; }
+    .variant-tab:hover { border-color:rgba(169,255,219,.48); color:#fff; }
+    .variant-tab.active { border-color:var(--color-primary); background:rgba(169,255,219,.13); color:#effff8; }
+    .stage { display:grid; place-items:stretch center; height:100vh; padding-top:52px; overflow:auto; background:#030609; }
+    .frame { position:relative; width:100%; height:calc(100vh - 52px); overflow:hidden; background:var(--color-bg); transition:width .2s ease; }
+    .pty { position:absolute; inset:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); gap:10px; padding:12px; background:radial-gradient(circle at 12% 0%,color-mix(in srgb,var(--provider) 11%,transparent),transparent 34%),var(--color-bg); }
+    .pty > * { border:1px solid var(--line); border-radius:12px; background:color-mix(in srgb,var(--panel) 95%,transparent); }
+    .pty-head { display:flex; align-items:center; gap:10px; min-height:56px; padding:8px 11px; }
+    .mark { display:grid; place-items:center; width:35px; height:35px; border:1px solid color-mix(in srgb,var(--provider) 44%,var(--line)); border-radius:10px; background:color-mix(in srgb,var(--provider) 11%,var(--panel-2)); color:var(--provider); font:800 11px var(--font-mono); }
+    .pty-head span { min-width:0; }
+    .pty-head b, .pty-head small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pty-head b { font-size:13px; }.pty-head small { margin-top:2px; color:var(--color-text-muted); font-size:10px; }
+    .done { margin-left:auto; color:var(--color-success); font-size:10px; }
+    .flow { display:flex; align-items:center; gap:8px; padding:9px; overflow:hidden; }
+    .flow-node { flex:1; min-width:150px; padding:8px 9px; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); }
+    .flow-node small,.flow-node b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .flow-node small { color:var(--color-text-muted); font-size:9px; }.flow-node b { margin-top:3px; font-size:10px; }
+    .arrow { color:var(--provider); }
+    .terminal { min-height:0; overflow:hidden; padding:14px 16px; background:var(--terminal); color:#afbec5; font:11px/1.75 var(--font-mono); }
+    .terminal p { margin:0 0 6px; }.terminal .prompt{color:#72e6b8}.terminal .path{color:#77cfff}.terminal .ok{color:#91efc8}.terminal .dim{color:#5d6d74}
+    .overlay { position:absolute; z-index:20; inset:0; display:grid; place-items:center; padding:clamp(12px,3vw,38px); background:rgba(1,5,8,.7); backdrop-filter:blur(5px); transition:opacity .18s ease; }
+    .overlay.hidden { opacity:0; pointer-events:none; }
+    .dialog { display:grid; grid-template-rows:auto minmax(0,1fr) auto; width:min(1040px,100%); max-height:min(810px,calc(100vh - 100px)); overflow:hidden; border:1px solid color-mix(in srgb,var(--color-primary) 34%,var(--color-border)); border-radius:18px; background:color-mix(in srgb,var(--panel) 98%,transparent); box-shadow:0 34px 110px rgba(0,0,0,.58); }
+    .dialog-head { display:flex; align-items:center; gap:11px; min-height:61px; padding:10px 14px 10px 18px; border-bottom:1px solid var(--line); }
+    .dialog-head span { flex:1 1 auto; min-width:0; }.dialog-head small{display:block;color:var(--color-primary);font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.dialog-head h1{margin:3px 0 0;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .difficulty { flex:0 0 auto; margin-left:auto; padding:7px 10px; border:1px solid color-mix(in srgb,var(--color-primary) 35%,var(--line)); border-radius:999px; color:var(--color-primary); font:800 11px var(--font-mono); white-space:nowrap; }
+    .icon-button,.quiet,.primary,.issue,.badge button { border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--color-text); cursor:pointer; }
+    .icon-button { flex:0 0 auto;width:34px;height:34px;font-size:18px}.icon-button:hover,.quiet:hover,.issue:hover{border-color:var(--provider)}
+    .body { min-height:0; overflow:auto; scrollbar-width:thin; }
+    .briefing { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(240px,.7fr); gap:14px; padding:17px 19px; border-bottom:1px solid var(--line); background:linear-gradient(135deg,color-mix(in srgb,var(--color-primary) 5%,transparent),transparent 55%); }
+    .eyebrow { margin:0 0 6px; color:var(--color-primary); font-size:9px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    .briefing h2 { margin:0; font-size:15px; }.briefing p:not(.eyebrow){margin:7px 0 0;color:var(--color-text-muted);font-size:11px;line-height:1.58}
+    .brief-points { display:grid; gap:6px; align-content:start; }
+    .brief-points span { padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb,var(--panel-2) 90%,transparent); color:var(--color-text-muted); font-size:9px; line-height:1.4; }
+    .brief-points b { color:var(--color-text); }
+    .quiz { padding:18px 19px 22px; }
+    .quiz-head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin-bottom:11px; }.quiz-head h2{margin:0;font-size:15px}.quiz-head small{color:var(--color-text-muted);font:700 10px var(--font-mono)}
+    .questions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .question, .review-card { min-width:0; margin:0; padding:12px; border:1px solid var(--line); border-radius:11px; background:color-mix(in srgb,var(--panel-2) 90%,transparent); }
+    .question.is-unanswered { border-color:var(--amber); }.question.is-wrong,.review-card{border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}.review-card.is-resolved{border-color:color-mix(in srgb,var(--color-success) 43%,var(--line))}
+    .q-meta { display:flex; align-items:center; gap:6px; margin-bottom:7px; }.q-meta strong{display:grid;place-items:center;width:21px;height:21px;border-radius:6px;background:color-mix(in srgb,var(--provider) 12%,transparent);color:var(--provider);font:800 9px var(--font-mono)}.q-meta span{color:var(--color-text-muted);font-size:9px}.issue{margin-left:auto;padding:3px 6px;color:var(--color-text-muted);font-size:8px}
+    legend,.question-title { width:100%; padding:0; color:var(--color-text); font-size:11px; font-weight:750; line-height:1.48; }
+    .choices { display:grid; gap:5px; margin-top:9px; }.choice{display:grid;grid-template-columns:15px minmax(0,1fr);gap:6px;align-items:start;padding:6px 7px;border:1px solid transparent;border-radius:7px;color:var(--color-text-muted);font-size:9px;line-height:1.4;cursor:pointer}.choice:hover{border-color:var(--line);color:var(--color-text)}.choice:has(input:checked){border-color:color-mix(in srgb,var(--provider) 38%,var(--line));background:color-mix(in srgb,var(--provider) 8%,transparent);color:var(--color-text)}.choice input{margin:1px 0 0;accent-color:var(--color-primary)}
+    .explain { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }.explain h3{margin:0 0 5px;color:var(--danger);font-size:10px}.explain p{margin:0 0 7px;color:var(--color-text-muted);font-size:9px;line-height:1.55}.evidence{display:inline-flex;margin-bottom:8px;padding:4px 7px;border-radius:999px;background:color-mix(in srgb,var(--color-primary) 9%,transparent);color:var(--color-primary);font:700 8px var(--font-mono)}
+    .variant-box { padding:9px; border:1px dashed color-mix(in srgb,var(--color-primary) 35%,var(--line)); border-radius:8px; }.variant-box b{display:block;font-size:9px;line-height:1.5}.variant-actions{display:flex;justify-content:flex-end;margin-top:7px}.result{margin-top:7px;padding:7px;border-radius:7px;background:color-mix(in srgb,var(--danger) 8%,transparent);color:var(--color-text-muted);font-size:9px;line-height:1.5}.result.hidden{display:none}
+    .review-root { display:grid; gap:10px; }.review-root.mode-a .review-card{display:grid;grid-template-columns:minmax(190px,.72fr) minmax(320px,1.28fr);align-items:start;gap:14px}.review-root.mode-a .review-prompt{min-width:0}.review-root.mode-a .explain{margin:0;padding:0;border:0;border-left:1px solid var(--line);padding-left:14px}
+    .review-desk { display:grid;grid-template-columns:190px minmax(0,1fr);gap:12px}.review-summary{position:sticky;top:0;align-self:start;padding:13px;border:1px solid color-mix(in srgb,var(--amber) 35%,var(--line));border-radius:11px;background:color-mix(in srgb,var(--amber) 6%,var(--panel-2))}.review-summary b{display:block;font-size:12px}.review-summary p{margin:6px 0 0;color:var(--color-text-muted);font-size:9px;line-height:1.5}.review-queue{display:grid;gap:9px}
+    .morph-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.morph-grid .review-card{position:relative;overflow:hidden;background:linear-gradient(145deg,color-mix(in srgb,var(--danger) 6%,var(--panel-2)),var(--panel-2))}.morph-grid .review-card::after{content:"재확인";position:absolute;right:-24px;top:12px;width:86px;padding:3px 0;background:var(--danger);color:#24100d;text-align:center;font:800 8px var(--font-mono);transform:rotate(35deg)}
+    .empty-result { padding:24px; border:1px solid color-mix(in srgb,var(--color-success) 40%,var(--line));border-radius:11px;text-align:center}.empty-result b{font-size:14px}.empty-result p{color:var(--color-text-muted);font-size:10px}
+    .actions { display:flex;align-items:center;gap:8px;min-height:58px;padding:9px 14px;border-top:1px solid var(--line);background:var(--panel); }.score{color:var(--color-text-muted);font-size:10px}.score b{color:var(--color-text);font:800 12px var(--font-mono)}.spacer{flex:1}.quiet,.primary{min-height:35px;padding:0 11px;font-size:10px;font-weight:750}.primary{border-color:color-mix(in srgb,var(--color-primary) 60%,var(--line));background:var(--color-primary);color:#07130f}.primary:hover{background:var(--color-primary-hover);transform:translateY(-1px)}.primary:disabled{opacity:.45;cursor:default;transform:none}
+    .badge { position:absolute;z-index:12;right:24px;bottom:24px;display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;border:1px solid color-mix(in srgb,var(--amber) 42%,var(--line));border-radius:11px;background:var(--panel);box-shadow:0 14px 46px rgba(0,0,0,.42);font-size:9px}.badge.hidden{display:none}.badge.resolved{border-color:color-mix(in srgb,var(--color-success) 42%,var(--line))}.badge i{width:7px;height:7px;border-radius:50%;background:var(--amber)}.badge.resolved i{background:var(--color-success)}.badge button{padding:5px 7px;font-size:9px}
+    .toast { position:fixed;z-index:11000;left:50%;bottom:21px;max-width:calc(100vw - 24px);padding:9px 12px;border:1px solid rgba(169,255,219,.26);border-radius:8px;background:#10201b;color:#ecfff7;box-shadow:0 15px 46px rgba(0,0,0,.45);font-size:10px;opacity:0;pointer-events:none;transform:translate(-50%,9px);transition:all .18s ease}.toast.show{opacity:1;transform:translate(-50%,0)}
+    .tools { position:fixed;z-index:10001;right:10px;top:8px;display:flex;gap:5px;padding:5px;border-radius:9px;background:rgba(0,0,0,.72);color:#fff;font:11px system-ui;opacity:.48;transition:opacity .2s}.tools:hover{opacity:1}.tools button,.tools select{min-height:28px;border:1px solid rgba(255,255,255,.2);border-radius:6px;background:#15191d;color:#fff;cursor:pointer}.tools button{padding:0 7px}.tools button.active{border-color:#a9ffdb;color:#a9ffdb}
+    body.annotations .briefing { outline:1px dashed var(--amber);outline-offset:-5px}body.annotations .quiz::before{content:"최초에는 세 문항 전체 · 제출 뒤 오답만";display:block;margin-bottom:9px;padding:5px 7px;border-radius:6px;background:var(--amber);color:#241b0a;font:700 8px var(--font-mono)}
+    @media(max-width:760px){.variant-nav{justify-content:flex-start;padding-right:8px;overflow-x:auto}.variant-tab{flex:0 0 auto;font-size:10px}.tools{top:auto;right:5px;bottom:64px;opacity:.22;transform:scale(.84);transform-origin:bottom right}.frame{min-height:calc(100vh - 52px)}.pty{gap:7px;padding:7px}.flow{overflow:auto}.dialog{width:100%;height:100%;max-height:none;border-radius:11px}.overlay{padding:5px}.dialog-head{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;min-height:54px;padding:8px 7px 8px 12px}.dialog-head h1{font-size:15px}.difficulty{margin-left:0;padding:6px 8px;font-size:0}.difficulty::after{content:"3";font:800 10px var(--font-mono)}.briefing{grid-template-columns:1fr;padding:13px}.quiz{padding:13px}.questions,.morph-grid{grid-template-columns:1fr}.review-root.mode-a .review-card,.review-desk{grid-template-columns:1fr}.review-root.mode-a .explain{border-left:0;border-top:1px solid var(--line);padding:10px 0 0}.review-summary{position:static}.quiet{display:none}.actions{position:sticky;bottom:0}.done{display:none}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+  </style>
+</head>
+<body data-flow="c">
+  <nav class="variant-nav" aria-label="오답 흐름 변형">
+    <button class="variant-tab" type="button" data-flow-choice="a">A · 카드 아래 확장</button>
+    <button class="variant-tab" type="button" data-flow-choice="b">B · 오답 검토 데스크</button>
+    <button class="variant-tab active" type="button" data-flow-choice="c">C · 카드 제자리 변환 ★ 선택됨</button>
+  </nav>
+
+  <main class="stage"><div id="frame" class="frame"><section class="pty" aria-label="PTY 집중 모드">
+    <header class="pty-head"><span class="mark">C</span><span><b>Codex · 이해 패킷 UX 설계</b><small>완료된 메인 노드 · 실제 PTY 집중 모드</small></span><em class="done">● 완료 · 패킷 1.8초</em></header>
+    <div class="flow"><article class="flow-node"><small>메인 노드</small><b>이해의 병목 해소</b></article><span class="arrow">→</span><article class="flow-node"><small>하위 조사</small><b>계약 · UI · 실행 경로</b></article><span class="arrow">→</span><article class="flow-node"><small>검증</small><b>근거 3개 · 문항 3개</b></article></div>
+    <div class="terminal"><p><span class="prompt">PS D:\winCudeProject\oneForAll\Lodestar&gt;</span> npm test</p><p class="ok">✓ completed main-node packet contract</p><p><span class="path">renderer/app-pty-focus.js</span> · popup insertion verified</p><p><span class="path">renderer/terminal-agent.js</span> · same-turn generation contract</p><p class="dim">Understanding packet ready · difficulty 3 · 1.8s</p></div>
+
+    <div id="badge" class="badge hidden"><i></i><span id="badgeText">이해 부채 · 미확인</span><button id="reopen" type="button">패킷 열기</button></div>
+    <div id="overlay" class="overlay"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="title">
+      <header class="dialog-head"><span><small>이해 패킷 · 오픈북</small><h1 id="title">오답을 어떻게 다시 이해하게 할까요?</h1></span><em class="difficulty">난이도 3</em><button id="close" class="icon-button" type="button" aria-label="닫기">×</button></header>
+      <div class="body">
+        <section class="briefing"><div><p class="eyebrow">전체 작업 설명과 근거</p><h2>완료를 읽고 다음 지시를 만들 수 있게 한다</h2><p>패킷은 같은 메인 AI가 최종 답변과 함께 만들며, 모든 완료 메인 작업에 귀속됩니다. 문제는 설명을 외우는 대신 변경의 원인·영향·제약을 적용하게 합니다.</p></div><div class="brief-points"><span><b>변경</b> · PTY 집중 진입에서 최초 1회 표시</span><span><b>이유</b> · 변형 문제까지 미리 생성해 추가 호출 제거</span><span><b>근거</b> · app-pty-focus.js · terminal-agent.js · parser events</span></div></section>
+        <form id="quiz" class="quiz" novalidate><div class="quiz-head"><div><p class="eyebrow" id="modeEyebrow">이해 확인</p><h2 id="modeTitle">세 문항을 한 번에 제출하세요</h2></div><small id="count">3문항</small></div><div id="content" class="questions"></div></form>
+      </div>
+      <footer class="actions"><span id="score" class="score" aria-live="polite">아직 제출하지 않음</span><span class="spacer"></span><button id="reset" class="quiet" type="button">상태 초기화</button><button id="submit" class="primary" type="submit" form="quiz">답안 제출</button></footer>
+    </section></div>
+  </section></div></main>
+
+  <div class="tools"><select id="theme" aria-label="테마"><option value="default.css">Dark</option><option value="quiet-light.css">Light</option></select><button type="button" data-width="375">375</button><button type="button" data-width="768">768</button><button class="active" type="button" data-width="full">Full</button><button id="annotations" type="button" aria-pressed="false">주석</button></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const qs=[
+      {id:"q1",kind:"작동 조건",prompt:"패킷을 처음 자동 표시하는 시점은?",answer:"b",choices:[["a","서브에이전트 시작"],["b","완료 메인 노드의 첫 PTY 집중 진입"],["c","앱 실행 직후"],["d","다음 작업 시작 직전"]],explain:"실행 중 노드나 서브에이전트에는 패킷을 띄우지 않습니다.",evidence:"app-pty-focus.js · main root gate",variant:{prompt:"완료된 서브에이전트 기록은 어디에 쓰일까요?",answer:"c",choices:[["a","별도 점수"],["b","팝업 자동 실행"],["c","메인 패킷의 근거"],["d","다음 작업 차단"]]}},
+      {id:"q2",kind:"설계 이유",prompt:"변형 문제를 미리 생성하는 이유는?",answer:"a",choices:[["a","오답 순간의 AI 호출과 지연 제거"],["b","문제를 더 길게 보이게 함"],["c","점수를 자동으로 높임"],["d","PTY 로그를 대체함"]],explain:"패킷 준비는 완료 후 3초 안이어야 하므로 재확인용 문제도 같은 생성에 포함합니다.",evidence:"same-turn packet contract · 3s target",variant:{prompt:"메인 AI가 이미 종료된 뒤 첫 오답이 나왔다면?",answer:"b",choices:[["a","작업 재실행"],["b","숨겨 둔 변형 문제 표시"],["c","새 AI 평가"],["d","자동 정답"]]}},
+      {id:"q3",kind:"예외 처리",prompt:"‘문제 오류’로 표시한 문항의 처리는?",answer:"d",choices:[["a","오답 유지"],["b","부채만 유지"],["c","정답 처리"],["d","점수 분모와 부채에서 제외"]],explain:"잘못 만든 문제는 사용자의 이해 부족이 아니므로 평가 대상에서 제거합니다.",evidence:"결정 Q51 · invalid-question exclusion",variant:{prompt:"3문항 중 하나를 문제 오류로 제외하면 분모는?",answer:"a",choices:[["a","2"],["b","3"],["c","4"],["d","표시 안 함"]]}}
+    ];
+    const state={excluded:new Set(),outcomes:new Map(),resolved:new Set(),submitted:false,open:true};
+    const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)]; let timer;
+    const active=()=>qs.filter(q=>!state.excluded.has(q.id));
+    const score=()=>active().filter(q=>["correct","variant-correct"].includes(state.outcomes.get(q.id))).length;
+    const complete=()=>state.submitted&&active().every(q=>state.resolved.has(q.id));
+    function ping(text){const n=$("#toast");n.textContent=text;n.classList.add("show");clearTimeout(timer);timer=setTimeout(()=>n.classList.remove("show"),2100)}
+    function choiceHtml(item,name){return `<div class="choices">${item.choices.map(([v,l])=>`<label class="choice"><input type="radio" name="${name}" value="${v}"><span>${l}</span></label>`).join("")}</div>`}
+    function bindIssues(){$$('[data-issue]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.issue;state.excluded.add(id);state.resolved.add(id);state.outcomes.delete(id);state.submitted?renderReview():renderInitial();update();ping('문항을 점수와 이해 부채에서 제외했습니다.')}))}
+    function renderInitial(){
+      $("#modeEyebrow").textContent="이해 확인";$("#modeTitle").textContent="세 문항을 한 번에 제출하세요";$("#count").textContent=`${active().length}문항`;$("#content").className="questions";
+      $("#content").innerHTML=active().map((q,i)=>`<fieldset class="question" data-q="${q.id}"><div class="q-meta"><strong>${i+1}</strong><span>${q.kind}</span><button class="issue" type="button" data-issue="${q.id}">문제 오류</button></div><legend>${q.prompt}</legend>${choiceHtml(q,q.id)}</fieldset>`).join("")||`<div class="empty-result"><b>평가할 문항이 없습니다.</b><p>모든 문항이 문제 오류로 제외되었습니다.</p></div>`;
+      $("#submit").hidden=false;$("#submit").disabled=active().length===0;bindIssues();
+    }
+    function reviewCard(q,i){return `<article class="review-card" data-review="${q.id}"><div class="review-prompt"><div class="q-meta"><strong>${i+1}</strong><span>오답 · ${q.kind}</span><button class="issue" type="button" data-issue="${q.id}">문제 오류</button></div><div class="question-title">${q.prompt}</div></div><div class="explain"><h3>정답을 판단하는 핵심</h3><p>${q.explain}</p><span class="evidence">근거 · ${q.evidence}</span><div class="variant-box" data-variant-form="${q.id}"><b>변형 문제 · ${q.variant.prompt}</b>${choiceHtml(q.variant,`v-${q.id}`)}<div class="variant-actions"><button class="primary" type="button" data-variant-submit>재확인</button></div></div><div class="result hidden" data-result="${q.id}"></div></div></article>`}
+    function renderReview(){
+      const wrong=active().filter(q=>state.outcomes.get(q.id)==="wrong");const mode=document.body.dataset.flow;
+      $("#modeEyebrow").textContent="오답 재확인";$("#modeTitle").textContent=mode==="a"?"틀린 카드 아래에서 바로 이해하기":mode==="b"?"오답만 모은 검토 데스크":"같은 카드가 변형 문제로 전환됨";$("#count").textContent=wrong.length?`오답 ${wrong.length}`:"확인 완료";$("#submit").hidden=true;
+      if(!wrong.length){$("#content").className="review-root";$("#content").innerHTML=`<div class="empty-result"><b>첫 제출에서 모두 맞혔습니다.</b><p>이 노드의 이해 부채가 해소되었습니다.</p></div>`}
+      else if(mode==="a"){$("#content").className="review-root mode-a";$("#content").innerHTML=wrong.map(reviewCard).join("")}
+      else if(mode==="b"){$("#content").className="review-desk";$("#content").innerHTML=`<aside class="review-summary"><b>${wrong.length}개를 다시 확인</b><p>맞힌 문제는 치웠습니다. 왼쪽 요약을 기준점으로 두고 오른쪽 오답만 순서대로 해소합니다.</p></aside><div class="review-queue">${wrong.map(reviewCard).join("")}</div>`}
+      else{$("#content").className="morph-grid";$("#content").innerHTML=wrong.map(reviewCard).join("")}
+      bindIssues();$$('[data-variant-submit]').forEach(button=>button.addEventListener('click',variantSubmit));update();
+    }
+    function submitQuiz(e){e.preventDefault();const missing=[];active().forEach(q=>{const val=$(`input[name="${q.id}"]:checked`)?.value,card=$(`[data-q="${q.id}"]`);card?.classList.remove('is-unanswered');if(!val){missing.push(q.id);card?.classList.add('is-unanswered')}else if(val===q.answer){state.outcomes.set(q.id,'correct');state.resolved.add(q.id)}else state.outcomes.set(q.id,'wrong')});if(missing.length){ping(`${missing.length}개 문항에 답해주세요.`);return}state.submitted=true;renderReview();ping(state.resolved.size===active().length?'모두 맞혔습니다.':'맞힌 문제를 치우고 오답만 남겼습니다.')}
+    function variantSubmit(e){e.preventDefault();const form=e.currentTarget.closest('[data-variant-form]'),id=form.dataset.variantForm,q=qs.find(x=>x.id===id),val=$(`input[name="v-${id}"]:checked`,form)?.value;if(!val){ping('변형 문제의 답을 선택해주세요.');return}form.querySelectorAll('input,button').forEach(x=>x.disabled=true);const out=$(`[data-result="${id}"]`);out.classList.remove('hidden');if(val===q.variant.answer){state.resolved.add(id);state.outcomes.set(id,'variant-correct');out.textContent='정답입니다. 같은 원리를 다른 상황에도 적용했습니다.';form.closest('.review-card').classList.add('is-resolved')}else{state.outcomes.set(id,'final-wrong');out.innerHTML=`정답은 ${q.variant.answer.toUpperCase()}입니다. ${q.explain}<br><button class="quiet" type="button" data-understood>해설을 읽었고 이해했음</button>`;$('[data-understood]',out).addEventListener('click',()=>{state.resolved.add(id);out.textContent='이해 부채를 해소했습니다. 오답 점수는 유지됩니다.';update();ping('이해했음으로 표시했습니다.')},{once:true})}update()}
+    function update(){const den=active().length,remaining=active().filter(q=>!state.resolved.has(q.id)).length,s=score();$("#score").innerHTML=!state.submitted?'아직 제출하지 않음':remaining?`<b>${s}/${den}</b> · 재확인 ${remaining}개 남음`:`<b>최종 ${s}/${den}</b> · ${s===den?'이해 확인 완료':'해설 확인 완료'}`;$("#badge").classList.toggle('resolved',complete());$("#badgeText").textContent=complete()?`이해 확인 · ${s}/${den}`:'이해 부채 · 미확인'}
+    function openPacket(open){state.open=open;$("#overlay").classList.toggle('hidden',!open);$("#badge").classList.toggle('hidden',open);if(open)requestAnimationFrame(()=>$("#close").focus());else ping(complete()?'패킷을 닫았습니다.':'이해 부채가 이 노드에 남았습니다.')}
+    function reset(){state.excluded.clear();state.outcomes.clear();state.resolved.clear();state.submitted=false;renderInitial();update();openPacket(true);ping('비교 상태를 초기화했습니다.')}
+    $("#quiz").addEventListener('submit',submitQuiz);$("#close").addEventListener('click',()=>openPacket(false));$("#reopen").addEventListener('click',()=>openPacket(true));$("#reset").addEventListener('click',reset);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.open)openPacket(false)});
+    $$('button[data-flow-choice]').forEach(b=>b.addEventListener('click',()=>{document.body.dataset.flow=b.dataset.flowChoice;$$('button[data-flow-choice]').forEach(x=>x.classList.toggle('active',x===b));reset();ping({a:'카드 아래 확장',b:'오답 검토 데스크',c:'카드 제자리 변환'}[b.dataset.flowChoice])}));
+    $("#theme").addEventListener('change',e=>{$("#theme-link").href=`../themes/${e.target.value}`;document.documentElement.dataset.theme=e.target.value.startsWith('quiet')?'light':'dark'});$$('[data-width]').forEach(b=>b.addEventListener('click',()=>{$("#frame").style.width=b.dataset.width==='full'?'100%':`${b.dataset.width}px`;$$('[data-width]').forEach(x=>x.classList.toggle('active',x===b))}));$("#annotations").addEventListener('click',e=>{document.body.classList.toggle('annotations');const on=document.body.classList.contains('annotations');e.currentTarget.classList.toggle('active',on);e.currentTarget.setAttribute('aria-pressed',String(on))});
+    renderInitial();update();
+  </script>
+</body>
+</html>

@@ -338,7 +338,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
     const runId = String(agentSession.runId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(sessionId)
-      || String(agentSession.status || '').toLowerCase() !== 'completed'
       || sourceSessionId !== canonicalSourceSessionId
       || /^(?:terminal|bridge):/i.test(sessionId)
       || /^process-\d+$/i.test(sessionId)
@@ -367,11 +366,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   }
 
   function forkAssociationSupport(agentSession) {
-    // Completion is required to create a new Codex fork, but an already
-    // running fork PTY must remain reachable if the source task becomes live
-    // again. Re-run every canonical/source/environment check while ignoring
-    // only that mutable presentation status; this path never creates a PTY.
-    return forkSupport(agentSession ? { ...agentSession, status: 'completed' } : agentSession);
+    // A fork association is tied to the canonical source identity, not to its
+    // mutable running/completed presentation status.
+    return forkSupport(agentSession);
   }
 
   function resultError(result, fallback) {
@@ -570,7 +567,12 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
 
   function freshAgentLaunchOptions(options = {}) {
     const provider = String(options.provider || '').trim().toLowerCase();
-    const prompt = String(options.prompt || '').trim();
+    const userPrompt = String(options.prompt || '').trim();
+    const injectComprehensionPrompt = window.WhiteboxComprehension?.injectPrompt;
+    const comprehensionPromptInjected = typeof injectComprehensionPrompt === 'function';
+    const prompt = comprehensionPromptInjected
+      ? injectComprehensionPrompt(userPrompt)
+      : userPrompt;
     const model = String(options.model || '').trim();
     const allowWrites = Boolean(options.allowWrites);
     const requestedPermissionMode = String(options.permissionMode || '').trim();
@@ -578,7 +580,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!['claude', 'codex', 'gemini', 'grok'].includes(provider)) {
       throw rejectedError(t('terminal.resume.unsupported_provider', { provider: providerLabel(provider) }));
     }
-    if (!prompt) throw rejectedError(t('terminal.agent.command_required'));
+    if (!userPrompt) throw rejectedError(t('terminal.agent.command_required'));
 
     if (provider === 'claude') {
       if (model) args.push('--model', model);
@@ -600,11 +602,13 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       if (allowWrites) args.push('--always-approve');
     }
 
-    let initialCommandInArgs = true;
-    if (provider === 'gemini') args.push('--prompt-interactive', prompt);
-    else if (provider === 'grok') initialCommandInArgs = false;
-    else args.push(prompt);
-    return { provider, prompt, args, initialCommandInArgs };
+    // The packet contract is multiline, so an owned task is delivered once
+    // through the PTY ledger after the interactive provider starts. Keeping it
+    // out of argv also preserves the original prompt as the visible title.
+    let initialCommandInArgs = !comprehensionPromptInjected && provider !== 'grok';
+    if (initialCommandInArgs && provider === 'gemini') args.push('--prompt-interactive', prompt);
+    else if (initialCommandInArgs) args.push(prompt);
+    return { provider, prompt, userPrompt, args, initialCommandInArgs };
   }
 
   async function startAgent(options = {}) {
@@ -614,7 +618,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const launch = freshAgentLaunchOptions(options);
     const creationId = String(options.creationId || '').trim() || nextCreationId();
     const deliveryId = `start:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
-    const titlePrompt = launch.prompt.replace(/\s+/g, ' ').slice(0, 72);
+    const titlePrompt = launch.userPrompt.replace(/\s+/g, ' ').slice(0, 72);
     const createOptions = {
       type: 'agent',
       provider: launch.provider,

@@ -331,6 +331,10 @@ app.whenReady().then(async () => {
         selected: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
         projects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
         sources: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
+        projectsWithSources: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+          .filter(item => item.hasAttribute('aria-expanded')).length,
+        emptySources: [...document.querySelectorAll('#projectSidebarList .project-sidebar-source')]
+          .filter(item => !item.querySelector('.project-sidebar-session')).length,
         expandedProjects: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
           .filter(item => item.getAttribute('aria-expanded') === 'true').length,
         expandedSources: [...document.querySelectorAll('#projectSidebarList [data-source-workspace]')]
@@ -340,8 +344,8 @@ app.whenReady().then(async () => {
         mainProjects: [...document.querySelectorAll('.control-room-project-group')].map(item => item.dataset.controlProject),
       }))()`);
       if (projectState.selected !== 1 || projectState.projects !== projectPaths.length
-        || projectState.sources < projectState.projects
-        || projectState.expandedProjects !== projectState.projects
+        || projectState.emptySources !== 0
+        || projectState.expandedProjects > projectState.projectsWithSources
         || projectState.expandedSources !== projectState.sources
         || projectState.nestedSessionAreas !== projectState.sources
         || projectState.nestedSessions < projectState.projects

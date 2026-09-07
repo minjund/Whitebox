@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sketch 010 · 이해 패킷 배치</title>
+  <link id="theme-link" rel="stylesheet" href="../themes/default.css">
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: dark;
+      --bg-terminal: #050a0e;
+      --panel-strong: #09131a;
+      --panel-soft: #0e1a22;
+      --line-soft: color-mix(in srgb, var(--color-border) 76%, transparent);
+      --provider: #70d7ff;
+      --amber: #f2c46d;
+      --danger: #ff8b78;
+    }
+    html[data-theme="light"] { color-scheme: light; --bg-terminal: #18201e; --panel-strong: #f8faf7; --panel-soft: #eef2ee; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      overflow: hidden;
+      background: #030609;
+      color: var(--color-text);
+      font-family: var(--font-sans);
+    }
+    button, select, input { font: inherit; }
+    button { transition: all .15s ease; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .variant-nav {
+      position: fixed;
+      z-index: 10000;
+      inset: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 52px;
+      padding: 8px 164px 8px 16px;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      background: rgba(4,8,12,.9);
+      backdrop-filter: blur(18px);
+    }
+    .variant-tab {
+      min-height: 34px;
+      padding: 0 13px;
+      border: 1px solid rgba(255,255,255,.13);
+      border-radius: 9px;
+      background: rgba(255,255,255,.04);
+      color: #aeb9c0;
+      cursor: pointer;
+    }
+    .variant-tab:hover { border-color: rgba(169,255,219,.48); color: #fff; }
+    .variant-tab.active { border-color: var(--color-primary); background: rgba(169,255,219,.13); color: #effff8; }
+    .preview-stage {
+      display: grid;
+      place-items: stretch center;
+      height: 100vh;
+      padding-top: 52px;
+      overflow: auto;
+      background: #030609;
+    }
+    .preview-frame {
+      position: relative;
+      width: 100%;
+      min-width: 0;
+      height: calc(100vh - 52px);
+      overflow: hidden;
+      background: var(--color-bg);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 28px 90px rgba(0,0,0,.38);
+      transition: width .22s ease;
+    }
+    .pty-surface {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0,1fr);
+      gap: 11px;
+      padding: 13px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--provider) 11%, transparent), transparent 34%),
+        var(--color-bg);
+    }
+    .focus-header, .flow-strip, .terminal-shell {
+      border: 1px solid var(--line-soft);
+      border-radius: 13px;
+      background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
+    }
+    .focus-header {
+      display: grid;
+      grid-template-columns: auto auto minmax(0,1fr) auto;
+      align-items: center;
+      gap: 11px;
+      min-height: 58px;
+      padding: 8px 11px;
+    }
+    .back-button, .icon-button, .quiet-button, .primary-button, .issue-button, .badge-button {
+      border: 1px solid var(--line-soft);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--panel-soft) 92%, transparent);
+      color: var(--color-text);
+      cursor: pointer;
+    }
+    .back-button { min-height: 38px; padding: 0 12px; }
+    .back-button:hover, .quiet-button:hover, .icon-button:hover, .issue-button:hover { border-color: var(--provider); }
+    .provider-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid color-mix(in srgb, var(--provider) 46%, var(--line-soft));
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--provider) 12%, var(--panel-soft));
+      color: var(--provider);
+      font: 800 11px/1 var(--font-mono);
+    }
+    .focus-copy { min-width: 0; }
+    .focus-copy small { color: var(--provider); font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+    .focus-copy b, .focus-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .focus-copy b { margin-top: 2px; font-size: 15px; }
+    .focus-copy span { margin-top: 2px; color: var(--color-text-muted); font-size: 11px; }
+    .node-status { display: grid; grid-template-columns: 7px auto; gap: 3px 7px; align-items: center; font-size: 11px; }
+    .node-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-success); }
+    .node-status small { grid-column: 1/-1; color: var(--color-text-muted); text-align: right; }
+    .flow-strip { padding: 9px 11px 11px; overflow: hidden; }
+    .flow-strip > header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+    .flow-strip > header small { color: var(--color-text-muted); }
+    .flow-line { display: grid; grid-template-columns: minmax(170px,.8fr) auto minmax(210px,1.2fr) auto minmax(210px,1.2fr); gap: 8px; align-items: center; min-width: 720px; }
+    .flow-node {
+      min-width: 0;
+      padding: 8px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
+    }
+    .flow-node small, .flow-node b, .flow-node span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .flow-node small { color: var(--color-text-muted); font-size: 9px; }
+    .flow-node b { margin-top: 2px; font-size: 11px; }
+    .flow-node span { margin-top: 2px; color: var(--color-text-muted); font-size: 9px; }
+    .flow-arrow { color: var(--provider); font: 800 19px/1 var(--font-mono); }
+    .terminal-shell { display: grid; grid-template-rows: auto minmax(0,1fr); min-height: 0; overflow: hidden; border-color: color-mix(in srgb, var(--provider) 42%, var(--line-soft)); }
+    .terminal-head { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); }
+    .terminal-head b { font-size: 12px; }
+    .terminal-head small { color: var(--color-text-muted); font-size: 10px; }
+    .terminal-live { margin-left: auto; color: var(--color-success); font-size: 10px; }
+    .terminal-output { overflow: hidden; padding: 15px 17px; background: var(--bg-terminal); color: #bdcbd2; font: 11px/1.72 var(--font-mono); }
+    .terminal-output p { margin: 0 0 7px; }
+    .terminal-output .prompt { color: #71e7b7; }
+    .terminal-output .muted { color: #65777f; }
+    .terminal-output .ok { color: #91efc8; }
+    .terminal-output .path { color: #77cfff; }
+    .packet-layer {
+      position: absolute;
+      z-index: 20;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(14px,3vw,42px);
+      background: rgba(1,5,8,.68);
+      backdrop-filter: blur(5px);
+      transition: opacity .18s ease, background .18s ease;
+    }
+    .packet-layer.hidden { opacity: 0; pointer-events: none; }
+    .packet-dialog {
+      display: grid;
+      grid-template-rows: auto minmax(0,1fr) auto;
+      width: min(1080px,100%);
+      max-height: min(780px,calc(100vh - 105px));
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      border-radius: 18px;
+      background: color-mix(in srgb, var(--panel-strong) 97%, transparent);
+      box-shadow: 0 34px 110px rgba(0,0,0,.58);
+      transform: translateY(0);
+      transition: width .2s ease, height .2s ease, transform .2s ease, border-radius .2s ease;
+    }
+    .packet-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 62px;
+      padding: 10px 14px 10px 18px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .packet-title { flex: 1 1 auto; min-width: 0; }
+    .packet-title small { display: block; color: var(--color-primary); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .packet-title h1 { margin: 3px 0 0; font-size: 17px; }
+    .difficulty { flex: 0 0 auto; margin-left: auto; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--color-primary) 34%, var(--line-soft)); border-radius: 999px; background: color-mix(in srgb, var(--color-primary) 9%, var(--panel-soft)); color: var(--color-primary); font: 800 11px/1 var(--font-mono); white-space: nowrap; }
+    .icon-button { flex: 0 0 auto; width: 34px; height: 34px; font-size: 18px; }
+    .packet-body { display: grid; grid-template-columns: minmax(280px,.82fr) minmax(360px,1.18fr); min-height: 0; overflow: hidden; }
+    .briefing, .quiz-panel { min-height: 0; overflow: auto; scrollbar-width: thin; }
+    .briefing { padding: 20px; border-right: 1px solid var(--line-soft); }
+    .quiz-panel { padding: 20px; }
+    .section-label { margin: 0 0 8px; color: var(--color-primary); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .briefing h2, .quiz-panel h2 { margin: 0; font-size: 16px; line-height: 1.35; }
+    .lead { margin: 8px 0 15px; color: var(--color-text-muted); font-size: 12px; line-height: 1.65; }
+    .change-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 0; list-style: none; }
+    .change-list li { position: relative; padding: 10px 11px 10px 29px; border: 1px solid var(--line-soft); border-radius: 10px; background: color-mix(in srgb, var(--panel-soft) 88%, transparent); font-size: 11px; line-height: 1.55; }
+    .change-list li::before { content: "✓"; position: absolute; left: 10px; top: 10px; color: var(--color-success); font-weight: 900; }
+    .evidence-list { display: grid; gap: 7px; }
+    .evidence-link { display: grid; grid-template-columns: 27px minmax(0,1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 8px; border: 1px solid var(--line-soft); border-radius: 9px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; }
+    .evidence-link:hover { border-color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 6%, transparent); }
+    .evidence-link i { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; background: color-mix(in srgb, var(--color-primary) 10%, var(--panel-soft)); color: var(--color-primary); font: normal 800 10px var(--font-mono); }
+    .evidence-link span { min-width: 0; }
+    .evidence-link b, .evidence-link small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .evidence-link b { font-size: 10px; }
+    .evidence-link small { margin-top: 2px; color: var(--color-text-muted); font-size: 9px; }
+    .evidence-link em { color: var(--color-text-muted); font-style: normal; }
+    .quiz-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .quiz-heading > span { color: var(--color-text-muted); font: 700 10px var(--font-mono); }
+    .question-list { display: grid; gap: 11px; }
+    .question-card { margin: 0; padding: 13px; border: 1px solid var(--line-soft); border-radius: 12px; background: color-mix(in srgb, var(--panel-soft) 90%, transparent); }
+    .question-card[hidden] { display: none; }
+    .question-card.is-unanswered { border-color: var(--amber); box-shadow: 0 0 0 1px color-mix(in srgb,var(--amber) 34%,transparent); }
+    .question-card.is-wrong { border-color: color-mix(in srgb,var(--danger) 45%,var(--line-soft)); }
+    .question-card.is-resolved { border-color: color-mix(in srgb,var(--color-success) 42%,var(--line-soft)); }
+    .question-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+    .question-meta strong { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: color-mix(in srgb,var(--provider) 12%,transparent); color: var(--provider); font: 800 10px var(--font-mono); }
+    .question-meta span { color: var(--color-text-muted); font-size: 9px; }
+    .issue-button { margin-left: auto; padding: 4px 7px; color: var(--color-text-muted); font-size: 9px; }
+    .question-card legend { width: 100%; padding: 0; color: var(--color-text); font-size: 12px; font-weight: 750; line-height: 1.48; }
+    .choices { display: grid; gap: 6px; margin-top: 10px; }
+    .choice { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 7px; align-items: start; padding: 7px 8px; border: 1px solid transparent; border-radius: 8px; color: var(--color-text-muted); font-size: 10px; line-height: 1.45; cursor: pointer; }
+    .choice:hover { border-color: var(--line-soft); background: rgba(255,255,255,.025); color: var(--color-text); }
+    .choice:has(input:checked) { border-color: color-mix(in srgb,var(--provider) 38%,var(--line-soft)); background: color-mix(in srgb,var(--provider) 8%,transparent); color: var(--color-text); }
+    .choice input { margin: 1px 0 0; accent-color: var(--color-primary); }
+    .remediation { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
+    .remediation h3 { margin: 0 0 5px; color: var(--danger); font-size: 11px; }
+    .remediation p { margin: 0 0 8px; color: var(--color-text-muted); font-size: 10px; line-height: 1.55; }
+    .evidence-chip { display: inline-flex; margin-bottom: 9px; padding: 4px 7px; border-radius: 999px; background: color-mix(in srgb,var(--color-primary) 9%,transparent); color: var(--color-primary); font: 700 9px var(--font-mono); }
+    .variant-form { padding: 10px; border: 1px dashed color-mix(in srgb,var(--color-primary) 34%,var(--line-soft)); border-radius: 9px; }
+    .variant-form b { display: block; margin-bottom: 7px; font-size: 10px; line-height: 1.5; }
+    .variant-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+    .variant-result { margin-top: 8px; padding: 8px; border-radius: 8px; background: color-mix(in srgb,var(--danger) 8%,transparent); color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
+    .packet-actions { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 9px 14px; border-top: 1px solid var(--line-soft); background: color-mix(in srgb,var(--panel-strong) 98%,transparent); }
+    .score { color: var(--color-text-muted); font-size: 11px; }
+    .score b { color: var(--color-text); font: 800 12px var(--font-mono); }
+    .action-spacer { flex: 1; }
+    .quiet-button, .primary-button { min-height: 36px; padding: 0 12px; font-size: 11px; font-weight: 750; }
+    .primary-button { border-color: color-mix(in srgb,var(--color-primary) 60%,var(--line-soft)); background: var(--color-primary); color: #07130f; }
+    .primary-button:hover { background: var(--color-primary-hover); transform: translateY(-1px); }
+    .primary-button:disabled { opacity: .46; cursor: default; transform: none; }
+    .packet-badge {
+      position: absolute;
+      z-index: 12;
+      right: 25px;
+      bottom: 25px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 8px 7px 11px;
+      border: 1px solid color-mix(in srgb,var(--amber) 42%,var(--line-soft));
+      border-radius: 12px;
+      background: color-mix(in srgb,var(--panel-strong) 96%,transparent);
+      box-shadow: 0 14px 46px rgba(0,0,0,.42);
+    }
+    .packet-badge.hidden { display: none; }
+    .packet-badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .packet-badge.resolved { border-color: color-mix(in srgb,var(--color-success) 40%,var(--line-soft)); }
+    .packet-badge.resolved i { background: var(--color-success); }
+    .packet-badge span { font-size: 10px; }
+    .badge-button { padding: 6px 8px; color: var(--color-text); font-size: 10px; }
+    .toast {
+      position: fixed;
+      z-index: 11000;
+      left: 50%;
+      bottom: 22px;
+      max-width: min(520px,calc(100vw - 24px));
+      padding: 10px 13px;
+      border: 1px solid rgba(169,255,219,.26);
+      border-radius: 9px;
+      background: #10201b;
+      color: #ecfff7;
+      box-shadow: 0 15px 46px rgba(0,0,0,.45);
+      font-size: 11px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%,10px);
+      transition: all .18s ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%,0); }
+    /* B: terminal-preserving right sheet */
+    body[data-placement="b"] .packet-layer { justify-content: flex-end; padding: 10px; background: linear-gradient(90deg, transparent 0 34%, rgba(1,5,8,.5) 52%, rgba(1,5,8,.78)); backdrop-filter: none; }
+    body[data-placement="b"] .packet-dialog { width: min(660px,64vw); height: calc(100% - 20px); max-height: none; border-radius: 14px; }
+    body[data-placement="b"] .packet-body { display: block; overflow: auto; }
+    body[data-placement="b"] .briefing, body[data-placement="b"] .quiz-panel { overflow: visible; }
+    body[data-placement="b"] .briefing { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+    /* C: bottom sheet */
+    body[data-placement="c"] .packet-layer { align-items: flex-end; padding: 10px; background: linear-gradient(180deg, transparent 0 18%, rgba(1,5,8,.62) 50%); backdrop-filter: none; }
+    body[data-placement="c"] .packet-dialog { width: 100%; height: min(72vh,720px); max-height: none; border-radius: 18px 18px 8px 8px; transform: translateY(0); }
+    body[data-placement="c"] .packet-body { grid-template-columns: minmax(260px,.75fr) minmax(440px,1.25fr); }
+    /* Annotations */
+    body.annotations .packet-dialog::before { content: "완료된 메인 노드에 귀속되는 1회 팝업"; position: absolute; z-index: 2; top: -25px; left: 12px; padding: 4px 7px; border-radius: 5px; background: #f2c46d; color: #201708; font: 700 9px var(--font-mono); }
+    body.annotations .packet-dialog { position: relative; outline: 1px dashed #f2c46d; outline-offset: 4px; }
+    body.annotations .briefing { box-shadow: inset 0 0 0 1px rgba(112,215,255,.28); }
+    body.annotations .quiz-panel { box-shadow: inset 0 0 0 1px rgba(169,255,219,.28); }
+    .sketch-tools {
+      position: fixed;
+      z-index: 10001;
+      right: 10px;
+      top: 8px;
+      display: flex;
+      gap: 5px;
+      padding: 5px;
+      border-radius: 9px;
+      background: rgba(0,0,0,.72);
+      color: white;
+      font: 11px system-ui;
+      opacity: .48;
+      transition: opacity .2s ease;
+    }
+    .sketch-tools:hover { opacity: 1; }
+    .sketch-tools button, .sketch-tools select { min-height: 28px; border: 1px solid rgba(255,255,255,.2); border-radius: 6px; background: #15191d; color: #fff; cursor: pointer; }
+    .sketch-tools button { padding: 0 7px; }
+    .sketch-tools button.active { border-color: #a9ffdb; color: #a9ffdb; }
+    @media (max-width: 760px) {
+      .variant-nav { justify-content: flex-start; padding-right: 8px; overflow-x: auto; }
+      .variant-tab { flex: 0 0 auto; font-size: 10px; }
+      .sketch-tools { top: auto; right: 5px; bottom: 64px; opacity: .42; transform: scale(.84); transform-origin: bottom right; }
+      .preview-frame { min-height: calc(100vh - 52px); }
+      .pty-surface { gap: 7px; padding: 7px; }
+      .focus-header { grid-template-columns: auto auto minmax(0,1fr); min-height: 50px; }
+      .back-button { width: 36px; padding: 0; font-size: 0; }
+      .back-button::after { content: "←"; font-size: 17px; }
+      .node-status { display: none; }
+      .flow-strip { max-height: 94px; overflow: auto; }
+      .packet-layer, body[data-placement="b"] .packet-layer, body[data-placement="c"] .packet-layer { align-items: stretch; justify-content: stretch; padding: 5px; background: rgba(1,5,8,.78); backdrop-filter: blur(4px); }
+      .packet-dialog, body[data-placement="b"] .packet-dialog, body[data-placement="c"] .packet-dialog { width: 100%; height: 100%; max-height: none; border-radius: 12px; }
+      .packet-head { gap: 6px; min-height: 55px; padding: 8px 9px 8px 13px; }
+      .difficulty { padding: 6px 8px; font-size: 0; }
+      .difficulty::after { content: "3"; font: 800 10px var(--font-mono); }
+      .packet-body, body[data-placement="c"] .packet-body { display: block; overflow: auto; }
+      .briefing, .quiz-panel { overflow: visible; padding: 14px; }
+      .briefing { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .packet-actions { position: sticky; bottom: 0; }
+      .quiet-button { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body data-placement="a">
+  <nav class="variant-nav" aria-label="배치 변형">
+    <button class="variant-tab active" type="button" data-variant="a">A · 중앙 이해 브리핑 ★ 선택됨</button>
+    <button class="variant-tab" type="button" data-variant="b">B · 오른쪽 근거 시트</button>
+    <button class="variant-tab" type="button" data-variant="c">C · PTY 하단 시트</button>
+  </nav>
+
+  <main class="preview-stage">
+    <div id="previewFrame" class="preview-frame">
+      <section class="pty-surface" aria-label="완료된 메인 노드 PTY 집중 모드">
+        <header class="focus-header">
+          <button class="back-button" type="button" data-toast="목업에서는 관제 모드로 이동하지 않습니다.">← 관제 모드</button>
+          <span class="provider-mark">C</span>
+          <div class="focus-copy"><small>담당 노드 터미널</small><b>Codex · 이해 패킷 기능 설계</b><span>작업 완료 · 패킷 준비 1.8초</span></div>
+          <div class="node-status"><i></i><b>완료</b><small>방금 전</small></div>
+        </header>
+
+        <section class="flow-strip">
+          <header><b>이 담당 노드의 흐름</b><small>하위 노드와 실행은 근거로만 사용됩니다.</small></header>
+          <div class="flow-line">
+            <article class="flow-node"><small>담당 메인 노드</small><b>이해 패킷 UX 결정</b><span>Codex · 완료</span></article>
+            <span class="flow-arrow">→</span>
+            <article class="flow-node"><small>하위 조사 3개</small><b>생성 계약 · UI 위치 · 실행 경로</b><span>모두 완료 · 읽기 전용</span></article>
+            <span class="flow-arrow">→</span>
+            <article class="flow-node"><small>검증 근거</small><b>PTY 집중 모드 연결점 확인</b><span>3개 파일 · 4개 공급자</span></article>
+          </div>
+        </section>
+
+        <section class="terminal-shell">
+          <header class="terminal-head"><span class="provider-mark">C</span><span><b>Codex · 실제 PTY</b><br><small>같은 터미널과 scrollback</small></span><em class="terminal-live">● PTY 연결됨</em></header>
+          <div class="terminal-output" aria-hidden="true">
+            <p><span class="prompt">PS D:\winCudeProject\oneForAll\Lodestar&gt;</span> rg -n "openPtyFocus|turn.completed" renderer src</p>
+            <p><span class="path">renderer/app-pty-focus.js:333</span> function openPtyFocus(sessionId, options = {})</p>
+            <p><span class="path">src/agentMonitor/codexParser.js:683</span> session.status = session.completionObserved ? 'completed' : 'idle'</p>
+            <p class="ok">✓ 완료된 메인 노드와 PTY 집중 화면의 연결 지점을 확인했습니다.</p>
+            <p class="muted">이해 패킷 생성 · 난이도 3 · 기본 문항 3 · 변형 문항 3 · 1.8s</p>
+            <p>사용자에게는 패킷이 완료 노드에 귀속되고, 프로젝트 전체 점수로 집계되지 않습니다.</p>
+          </div>
+        </section>
+
+        <div id="packetBadge" class="packet-badge hidden"><i></i><span id="badgeText">이해 부채 · 미확인</span><button id="reopenPacket" class="badge-button" type="button">패킷 열기</button></div>
+
+        <div id="packetLayer" class="packet-layer" role="presentation">
+          <section id="packetDialog" class="packet-dialog" role="dialog" aria-modal="true" aria-labelledby="packetTitle">
+            <header class="packet-head">
+              <div class="packet-title"><small>이해 패킷 · 완료 즉시 생성됨</small><h1 id="packetTitle">다음 작업을 맡기기 전에 확인하세요</h1></div>
+              <span class="difficulty" aria-label="난이도 3">난이도 3</span>
+              <button id="closePacket" class="icon-button" type="button" aria-label="이해 패킷 닫기">×</button>
+            </header>
+
+            <div class="packet-body">
+              <section class="briefing" aria-labelledby="briefingTitle">
+                <p class="section-label">작업 설명 · 오픈북</p>
+                <h2 id="briefingTitle">무엇이 바뀌고, 왜 이 경로를 택했는가</h2>
+                <p class="lead">완료된 메인 AI가 자신의 작업 기록을 바탕으로 만든 설명입니다. 아래 근거를 보면서 문제를 풀 수 있습니다.</p>
+                <ul class="change-list">
+                  <li>이해 패킷은 모든 완료된 메인 작업에 생성되고, 서브에이전트 기록은 메인 패킷의 근거로 합쳐집니다.</li>
+                  <li>패킷과 변형 문제는 최종 답변과 같은 생성에서 준비해 추가 AI 호출과 체감 지연을 없앱니다.</li>
+                  <li>패킷을 닫아도 다음 작업은 막지 않으며, 이해 부채는 해당 노드에만 남습니다.</li>
+                </ul>
+                <p class="section-label">실제 근거</p>
+                <div class="evidence-list">
+                  <button class="evidence-link" type="button" data-toast="renderer/app-pty-focus.js:333의 진입 훅을 여는 동작입니다."><i>JS</i><span><b>PTY 집중 진입</b><small>renderer/app-pty-focus.js:333</small></span><em>↗</em></button>
+                  <button class="evidence-link" type="button" data-toast="renderer/terminal-agent.js:548의 최초 프롬프트 합성 지점입니다."><i>JS</i><span><b>메인 AI 프롬프트 계약</b><small>renderer/terminal-agent.js:548</small></span><em>↗</em></button>
+                  <button class="evidence-link" type="button" data-toast="공급자별 완료 이벤트 파서 세 개를 묶어 표시합니다."><i>LOG</i><span><b>완료 이벤트</b><small>Claude · Codex · Gemini/Grok</small></span><em>↗</em></button>
+                </div>
+              </section>
+
+              <form id="quizForm" class="quiz-panel" novalidate>
+                <div class="quiz-heading"><div><p class="section-label">이해 확인</p><h2>설명과 근거를 보고 답하세요</h2></div><span id="questionCount">3문항</span></div>
+                <div id="questionList" class="question-list"></div>
+              </form>
+            </div>
+
+            <footer class="packet-actions">
+              <span id="score" class="score" aria-live="polite">아직 제출하지 않음</span>
+              <span class="action-spacer"></span>
+              <button id="resetDemo" class="quiet-button" type="button">상태 초기화</button>
+              <button id="submitAnswers" class="primary-button" type="submit" form="quizForm">답안 제출</button>
+            </footer>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="sketch-tools" aria-label="스케치 도구">
+    <select id="themeSwitcher" aria-label="테마"><option value="default.css">Dark</option><option value="quiet-light.css">Light</option></select>
+    <button type="button" data-width="375">375</button><button type="button" data-width="768">768</button><button class="active" type="button" data-width="full">Full</button>
+    <button id="annotationToggle" type="button" aria-pressed="false">주석</button>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const questions = [
+      {
+        id: "q1", kind: "작동 조건", prompt: "이해 패킷이 처음 자동으로 열리는 조건으로 맞는 것은?", answer: "b",
+        choices: [["a","서브에이전트가 실행을 시작할 때"],["b","완료된 메인 노드를 열고 PTY 집중 모드에 처음 들어갈 때"],["c","프로젝트를 열 때마다"],["d","다음 작업을 시작하려 할 때"]],
+        explanation: "패킷은 완료된 메인 노드에만 귀속되고, PTY 집중 모드의 첫 진입에서 한 번 자동으로 열립니다.",
+        evidence: "app-pty-focus.js · openPtyFocus 이후",
+        variant: { prompt: "완료된 서브에이전트 노드를 직접 열었다면 어떤 동작이 맞을까요?", answer: "c", choices: [["a","별도 퀴즈를 즉시 연다"],["b","메인 노드와 같은 패킷을 복제한다"],["c","패킷을 열지 않고 해당 기록을 메인 노드의 근거로만 사용한다"],["d","다음 작업을 차단한다"]] }
+      },
+      {
+        id: "q2", kind: "설계 이유", prompt: "기본 문제와 변형 문제를 최초 패킷에 함께 만드는 가장 중요한 이유는?", answer: "a",
+        choices: [["a","오답 순간의 추가 AI 호출과 지연을 없애기 위해"],["b","문항 수를 항상 두 배로 보여주기 위해"],["c","서브에이전트에게 채점을 맡기기 위해"],["d","PTY 기록을 삭제하기 위해"]],
+        explanation: "변형 문제를 미리 포함하면 사용자가 오답을 내도 동일 메인 AI를 다시 깨울 필요가 없습니다.",
+        evidence: "패킷 생성 계약 · 기본/변형 문항 동시 생성",
+        variant: { prompt: "사용자가 첫 문제를 틀렸지만 메인 AI 세션이 이미 종료됐다면 가장 빠른 재확인 방식은?", answer: "b", choices: [["a","새 평가 AI를 호출한다"],["b","패킷에 숨겨 둔 변형 문제를 즉시 표시한다"],["c","전체 작업을 다시 실행한다"],["d","문항을 자동 정답 처리한다"]] }
+      },
+      {
+        id: "q3", kind: "예외 처리", prompt: "사용자가 ‘문제 자체가 잘못됐다’고 표시한 문항은 어떻게 처리해야 하는가?", answer: "d",
+        choices: [["a","오답으로 기록한다"],["b","이해 부채만 남긴다"],["c","정답으로 간주한다"],["d","점수 분모와 이해 부채에서 모두 제외한다"]],
+        explanation: "문제 오류는 사용자의 이해 부족이 아니므로 기본·변형 문항을 함께 폐기하고 평가에서 제외합니다.",
+        evidence: "이해 패킷 결정 Q51 · 문제 오류 정책",
+        variant: { prompt: "3문항 중 하나가 문제 오류로 제외되면 최종 점수 표기의 분모는?", answer: "a", choices: [["a","2"],["b","3"],["c","4"],["d","분모를 표시하지 않는다"]] }
+      }
+    ];
+
+    const state = { excluded: new Set(), outcomes: new Map(), resolved: new Set(), submitted: false, open: true };
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+    let toastTimer;
+
+    function toast(message) {
+      const node = $("#toast");
+      node.textContent = message;
+      node.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => node.classList.remove("show"), 2100);
+    }
+
+    function activeQuestions() { return questions.filter(q => !state.excluded.has(q.id)); }
+    function correctCount() { return activeQuestions().filter(q => ["correct","variant-correct"].includes(state.outcomes.get(q.id))).length; }
+    function allResolved() { return state.submitted && activeQuestions().every(q => state.resolved.has(q.id)); }
+
+    function choicesHtml(question, name, selected = "") {
+      return `<div class="choices">${question.choices.map(([value,label]) => `<label class="choice"><input type="radio" name="${name}" value="${value}" ${selected === value ? "checked" : ""}><span>${label}</span></label>`).join("")}</div>`;
+    }
+
+    function renderInitial() {
+      const root = $("#questionList");
+      root.innerHTML = activeQuestions().map((q,index) => `
+        <fieldset class="question-card" data-question="${q.id}">
+          <div class="question-meta"><strong>${index + 1}</strong><span>${q.kind}</span><button class="issue-button" type="button" data-issue="${q.id}">문제 오류</button></div>
+          <legend>${q.prompt}</legend>
+          ${choicesHtml(q, q.id)}
+        </fieldset>`).join("") || `<div class="question-card"><b>평가할 문항이 없습니다.</b><p class="lead">모든 문항이 문제 오류로 제외되었습니다.</p></div>`;
+      $("#questionCount").textContent = `${activeQuestions().length}문항`;
+      $("#submitAnswers").disabled = activeQuestions().length === 0;
+      bindIssueButtons();
+    }
+
+    function remediationHtml(q,index) {
+      return `<article class="question-card is-wrong" data-question="${q.id}">
+        <div class="question-meta"><strong>${index + 1}</strong><span>오답 · ${q.kind}</span><button class="issue-button" type="button" data-issue="${q.id}">문제 오류</button></div>
+        <b>${q.prompt}</b>
+        <div class="remediation"><h3>왜 틀렸는지 확인</h3><p>${q.explanation}</p><span class="evidence-chip">근거 · ${q.evidence}</span>
+          <div class="variant-form" data-variant-form="${q.id}"><b>변형 문제 · ${q.variant.prompt}</b>${choicesHtml(q.variant, `variant-${q.id}`)}<div class="variant-actions"><button class="primary-button" type="button" data-variant-submit>재확인</button></div></div>
+          <div class="variant-result hidden" data-variant-result="${q.id}"></div>
+        </div>
+      </article>`;
+    }
+
+    function renderReview() {
+      const wrong = activeQuestions().filter(q => state.outcomes.get(q.id) === "wrong");
+      $("#questionList").innerHTML = wrong.length
+        ? wrong.map(remediationHtml).join("")
+        : `<article class="question-card is-resolved"><div class="question-meta"><strong>✓</strong><span>모두 확인됨</span></div><b>첫 제출에서 모든 문제를 맞혔습니다.</b></article>`;
+      $("#questionCount").textContent = wrong.length ? `오답 ${wrong.length}문항` : "확인 완료";
+      $("#submitAnswers").hidden = true;
+      bindIssueButtons();
+      $$("[data-variant-submit]").forEach(button => button.addEventListener("click", handleVariant));
+      updateScore();
+    }
+
+    function updateScore() {
+      const denominator = activeQuestions().length;
+      const remaining = activeQuestions().filter(q => !state.resolved.has(q.id)).length;
+      const score = correctCount();
+      if (!state.submitted) $("#score").textContent = "아직 제출하지 않음";
+      else if (remaining) $("#score").innerHTML = `<b>${score}/${denominator}</b> · 재확인 ${remaining}개 남음`;
+      else $("#score").innerHTML = `<b>최종 ${score}/${denominator}</b> · ${score === denominator ? "이해 확인 완료" : "해설 확인 완료"}`;
+      const resolved = allResolved();
+      $("#packetBadge").classList.toggle("resolved", resolved);
+      $("#badgeText").textContent = resolved ? `이해 확인 · ${score}/${denominator}` : "이해 부채 · 미확인";
+    }
+
+    function submitQuiz(event) {
+      event.preventDefault();
+      const unanswered = [];
+      activeQuestions().forEach(q => {
+        const value = $(`input[name="${q.id}"]:checked`)?.value;
+        const card = $(`[data-question="${q.id}"]`);
+        card?.classList.remove("is-unanswered");
+        if (!value) { unanswered.push(q.id); card?.classList.add("is-unanswered"); return; }
+        if (value === q.answer) { state.outcomes.set(q.id,"correct"); state.resolved.add(q.id); }
+        else state.outcomes.set(q.id,"wrong");
+      });
+      if (unanswered.length) { toast(`${unanswered.length}개 문항에 답해주세요.`); return; }
+      state.submitted = true;
+      renderReview();
+      toast(state.resolved.size === activeQuestions().length ? "모든 문제를 맞혔습니다." : "틀린 문제만 남겼습니다. 근거를 보고 다시 확인하세요.");
+    }
+
+    function handleVariant(event) {
+      event.preventDefault();
+      const form = event.currentTarget.closest("[data-variant-form]");
+      const id = form.dataset.variantForm;
+      const q = questions.find(item => item.id === id);
+      const value = $(`input[name="variant-${id}"]:checked`, form)?.value;
+      if (!value) { toast("변형 문제의 답을 선택해주세요."); return; }
+      const result = $(`[data-variant-result="${id}"]`);
+      result.classList.remove("hidden");
+      form.querySelectorAll("input,button").forEach(control => control.disabled = true);
+      if (value === q.variant.answer) {
+        state.resolved.add(id);
+        state.outcomes.set(id,"variant-correct");
+        result.textContent = "정답입니다. 같은 원리를 다른 상황에도 적용했습니다.";
+        form.closest(".question-card").classList.add("is-resolved");
+      } else {
+        state.outcomes.set(id,"final-wrong");
+        result.innerHTML = `정답은 ${q.variant.answer.toUpperCase()}입니다. ${q.explanation}<br><button class="quiet-button" type="button" data-understood="${id}">해설을 읽었고 이해했음</button>`;
+        $(`[data-understood="${id}"]`, result).addEventListener("click", () => {
+          state.resolved.add(id);
+          result.innerHTML = "이해 부채를 해소했습니다. 오답 기록은 그대로 유지됩니다.";
+          updateScore();
+          toast("이해했음으로 표시했습니다. 점수는 변경되지 않습니다.");
+        }, { once: true });
+      }
+      updateScore();
+    }
+
+    function bindIssueButtons() {
+      $$("[data-issue]").forEach(button => button.addEventListener("click", () => {
+        const id = button.dataset.issue;
+        state.excluded.add(id);
+        state.resolved.add(id);
+        state.outcomes.delete(id);
+        if (state.submitted) renderReview(); else renderInitial();
+        updateScore();
+        toast("문항을 문제 오류로 제외했습니다. 점수와 이해 부채에 반영되지 않습니다.");
+      }));
+    }
+
+    function setPacketOpen(open) {
+      state.open = open;
+      $("#packetLayer").classList.toggle("hidden", !open);
+      $("#packetBadge").classList.toggle("hidden", open);
+      if (open) requestAnimationFrame(() => $("#closePacket").focus());
+      else toast(allResolved() ? "패킷을 닫았습니다." : "이해 부채가 이 노드에 남았습니다.");
+    }
+
+    function resetDemo() {
+      state.excluded.clear(); state.outcomes.clear(); state.resolved.clear(); state.submitted = false;
+      $("#submitAnswers").hidden = false;
+      renderInitial(); updateScore(); setPacketOpen(true); toast("목업 상태를 초기화했습니다.");
+    }
+
+    $("#quizForm").addEventListener("submit", submitQuiz);
+    $("#closePacket").addEventListener("click", () => setPacketOpen(false));
+    $("#reopenPacket").addEventListener("click", () => setPacketOpen(true));
+    $("#resetDemo").addEventListener("click", resetDemo);
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && state.open) setPacketOpen(false); });
+    $$('[data-toast]').forEach(button => button.addEventListener('click', () => toast(button.dataset.toast)));
+    $$("[data-variant]").forEach(button => button.addEventListener("click", () => {
+      document.body.dataset.placement = button.dataset.variant;
+      $$("[data-variant]").forEach(tab => tab.classList.toggle("active", tab === button));
+      toast({a:"중앙 2열 브리핑",b:"오른쪽 근거 시트",c:"PTY 하단 시트"}[button.dataset.variant]);
+    }));
+    $("#themeSwitcher").addEventListener("change", event => {
+      $("#theme-link").href = `../themes/${event.target.value}`;
+      document.documentElement.dataset.theme = event.target.value.startsWith("quiet") ? "light" : "dark";
+    });
+    $$("[data-width]").forEach(button => button.addEventListener("click", () => {
+      const width = button.dataset.width;
+      $("#previewFrame").style.width = width === "full" ? "100%" : `${width}px`;
+      $$("[data-width]").forEach(item => item.classList.toggle("active", item === button));
+    }));
+    $("#annotationToggle").addEventListener("click", event => {
+      document.body.classList.toggle("annotations");
+      const active = document.body.classList.contains("annotations");
+      event.currentTarget.classList.toggle("active", active);
+      event.currentTarget.setAttribute("aria-pressed", String(active));
+    });
+
+    renderInitial(); updateScore();
+  </script>
+</body>
+</html>

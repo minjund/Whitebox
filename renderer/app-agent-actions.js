@@ -557,7 +557,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
     const routeContext = routedAgentCommandContext(session, requestedRoute);
     const targets = routeContext.targets;
     const saved = state.agentCommandTargets.get(agentCommandTargetKey(session, routeContext.route)) || "";
-    if (saved) return targets.find((target) => target.id === saved) || null;
+    if (saved) {
+      const selected = targets.find((target) => target.id === saved) || null;
+      if (selected) return selected;
+    }
     return targets.length === 1 ? targets[0] : null;
   }
 
@@ -701,9 +704,10 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
       return resumeAgentTerminal(sessionId, true);
     }
     const savedTarget = state.agentCommandTargets.get(agentCommandTargetKey(session, routeContext.route)) || "";
-    const target = savedTarget
+    const saved = savedTarget
       ? routeContext.targets.find((item) => item.id === savedTarget) || null
-      : routeContext.targets.length === 1 ? routeContext.targets[0] : null;
+      : null;
+    const target = saved || (routeContext.targets.length === 1 ? routeContext.targets[0] : null);
     if (!target)
       return context.toast(t(agentCommandTargets(session).length ? "agent.select_target_first" : "agent.no_writable_terminal"));
     if (!command) return context.toast(t("agent.enter_command"));

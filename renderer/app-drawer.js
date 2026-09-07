@@ -393,12 +393,11 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     // A top-level session's conversation is the PTY itself. The terminal
     // surface stays visible while it connects or reports that no PTY exists;
     // it must never fall back to a second transcript/chat transport.
-    const forkableCompletedDesktop = String(session.status || "") === "completed"
-      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
+    const forkableDesktop = window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true;
     const directWritablePty = window.WhiteboxRendererUtils.isWritableDirectSession?.(session) === true
       && session.controlCapabilities?.pty === true
       && session.presentation?.conversationSurface !== "transcript";
-    const conversationSurface = forkableCompletedDesktop
+    const conversationSurface = forkableDesktop
       ? "pty"
       : directWritablePty ? "pty" : "transcript";
     const ptyConversation = conversationTab && !session.parentId && !subagentMode && !executionMode;

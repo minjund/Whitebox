@@ -51,8 +51,7 @@
   function isFocusEligibleSession(session) {
     if (!isMainSession(session) || session.sourcePluginId) return false;
     if (window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session)) return true;
-    if (String(session.status || "").toLowerCase() === "completed"
-      && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
+    if (window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(session) === true) return true;
     if (String(session.provider || "").toLowerCase() === "codex"
       && String(session.clientKind || "").toLowerCase() === "codex-desktop") {
       try {
@@ -242,6 +241,10 @@
     const session = selectedSession();
     const terminal = window.WhiteboxTerminal;
     if (!instance?.state || !session) return { ok: false, reason: "not-ready" };
+    // Agent snapshots can authorize a packet after the final PTY bytes have
+    // already arrived. Notify the terminal layer on every focus reconciliation
+    // so a pending envelope is resolved without waiting for more output.
+    window.dispatchEvent?.(new CustomEvent("whitebox:comprehension-authority-refresh"));
     if (isReadOnlyResponsibleFocus(instance)) return { ok: false, reason: "read-only-focus" };
     if (!terminal?.mountForAgent) return { ok: false, reason: "not-ready" };
     if (!isMainSession(session)) return { ok: false, reason: "not-main-session" };

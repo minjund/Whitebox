@@ -451,9 +451,12 @@ async function exerciseKeyboardAndRunModal(win) {
   assert(submitted.creates === 1 && submitted.legacyRuns === 0
     && submitted.payload.type === 'agent' && submitted.payload.provider === 'codex'
     && submitted.payload.cwd === 'D:\\fixture'
-    && submitted.payload.initialCommand === '실제 DOM submit PTY 집중 모드 검증'
-    && submitted.payload.initialCommandInArgs === true
+    && submitted.payload.initialCommand.startsWith('<whitebox-comprehension-contract version="1">')
+    && submitted.payload.initialCommand.endsWith('\n\n실제 DOM submit PTY 집중 모드 검증')
+    && submitted.payload.initialCommandInArgs === false
+    && submitted.payload.title === 'GPT · 실제 DOM submit PTY 집중 모드 검증'
     && submitted.payload.args.includes('gpt-fixture')
+    && !submitted.payload.args.includes('실제 DOM submit PTY 집중 모드 검증')
     && submitted.payload.args.includes('workspace-write')
     && Boolean(submitted.payload.creationId),
   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));
@@ -572,7 +575,8 @@ async function exerciseDashboardGraphAndManagement(win) {
       + "&&document.querySelectorAll('#liveSessionGrid [data-control-session]').length>=1",
     '작업 현황 검색이 실제 root 목록을 좁히지 못했습니다.');
   const searchEscape = await rendererValue(win, "(()=>{const input=document.querySelector('#controlRoomSearchInput');"
-    + "const before=input?.value||'';const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});"
+    + "input?.focus();if(input)input.value='화면 개선';const before=input?.value||'';"
+    + "const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});"
     + "input?.dispatchEvent(event);return{before,after:input?.value||'',defaultPrevented:event.defaultPrevented};})()");
   assert(searchEscape.before === '화면 개선' && searchEscape.after === '' && searchEscape.defaultPrevented,
     '작업 현황 검색 Escape 이벤트가 입력값을 지우지 못했습니다: ' + JSON.stringify(searchEscape));
@@ -817,11 +821,20 @@ async function exercisePtyFocus(win, round) {
   await assertFocusedRoot(win, '확인 필요 알림');
   await closeFocusedRoot(win);
 
+  const liveOriginExternalId = `fixture-origin-external-${round}`;
+  const liveOriginId = `codex:${liveOriginExternalId}`;
+  const liveOriginChildId = `${liveOriginId}:child`;
+  const liveControlRootSelector = `[data-control-session="${liveOriginId}"] [data-graph-focus="${liveOriginId}"]`;
+  const liveFocusTriggerSelector = `.agent-node-main[data-pty-focus-trigger="${liveOriginId}"][data-focus-surface="pty"]`;
+  const liveChildSelector = `[data-pty-focus-child="${liveOriginChildId}"]`;
   await rendererValue(win, "(() => {"
     + "const source=window.interactionTest.getSnapshot().sessions.find(item=>item.id==='fixture-origin');"
-    + "window.interactionTest.updateSession('fixture-origin',{childIds:['fixture-origin-child']});"
-    + "window.interactionTest.addSession({...source,id:'fixture-origin-child',externalId:'fixture-origin-child-external',"
-      + "title:'읽기 전용 집중 화면의 오른쪽 상세창 확인',parentId:'fixture-origin',childIds:[],"
+    + "const rootId=" + JSON.stringify(liveOriginId) + ";"
+    + "const externalId=" + JSON.stringify(liveOriginExternalId) + ";"
+    + "const childId=" + JSON.stringify(liveOriginChildId) + ";"
+    + "window.interactionTest.addSession({...source,id:rootId,externalId,childIds:[childId],status:'running',completedAt:null});"
+    + "window.interactionTest.addSession({...source,id:childId,externalId:externalId+'-child',"
+      + "title:'별도 GPT PTY의 오른쪽 상세창 확인',parentId:rootId,childIds:[],"
       + "runtimePresence:[],executions:[],status:'running',statusDetail:'오른쪽 상세창 경로를 확인하는 중',"
       + "messages:[{id:'origin-child-user',role:'user',text:'하위 AI 상세창을 열어줘',timestamp:new Date().toISOString()},"
       + "{id:'origin-child-assistant',role:'assistant',text:'하위 AI 고유 작업 기록입니다.',timestamp:new Date().toISOString()}]});"
@@ -831,83 +844,308 @@ async function exercisePtyFocus(win, round) {
     + "window.interactionTest.emitSnapshot();window.WhiteboxApp.renderWorkspaces?.();"
     + "window.WhiteboxApp.renderSessions?.('read-only-focus-fixture');return true;})()");
   await waitFor(win,
-    "Boolean(document.querySelector('[data-control-session=\"fixture-origin\"]'"
-      + "+' [data-graph-focus=\"fixture-origin\"]'))",
+    "Boolean(document.querySelector(" + JSON.stringify(liveControlRootSelector) + "))",
     'Codex Desktop 담당 작업의 전체 흐름 진입점이 없습니다.');
   await rendererValue(win,
-    "document.querySelector('[data-control-session=\"fixture-origin\"]'"
-      + "+' [data-graph-focus=\"fixture-origin\"]')?.click()");
+    "document.querySelector(" + JSON.stringify(liveControlRootSelector) + ")?.click()");
   await waitFor(win,
-    "window.WhiteboxApp.state.graphFocusId==='fixture-origin'"
-      + "&&Boolean(document.querySelector('.agent-node-main[data-pty-focus-trigger=\"fixture-origin\"]'"
-      + "+'[data-focus-surface=\"transcript\"]'))",
-    '선택한 작업의 Codex Desktop 담당 노드에 읽기 전용 집중 진입점이 없습니다.');
+    "window.WhiteboxApp.state.graphFocusId===" + JSON.stringify(liveOriginId)
+      + "&&Boolean(document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + "))",
+    '선택한 작업의 실행 중 Codex Desktop 담당 노드에 별도 GPT PTY 진입점이 없습니다.');
   await rendererValue(win, "window.interactionTest.clearCalls()");
   await rendererValue(win,
-    "document.querySelector('.agent-node-main[data-pty-focus-trigger=\"fixture-origin\"]'"
-      + "+'[data-focus-surface=\"transcript\"]')?.click()");
+    "document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + ")?.click()");
   await waitFor(win,
     "(()=>{const app=window.WhiteboxApp;const surface=document.querySelector('#ptyFocusSurface');"
-      + "const transcript=document.querySelector('#ptyFocusTranscriptContent');"
-      + "return app.state.ptyFocusSessionId==='fixture-origin'&&app.state.ptyFocusTargetId===''"
-      + "&&surface?.dataset.ptyFocusMode==='transcript'&&!surface.classList.contains('hidden')"
-      + "&&!transcript?.classList.contains('hidden')"
-      + "&&document.querySelector('#ptyFocusTerminalViewport')?.classList.contains('hidden')"
-      + "&&(transcript?.textContent||'').includes('버튼과 입력 동작을 확인하고 있습니다.')"
-      + "&&Boolean(document.querySelector('[data-pty-focus-child=\"fixture-origin-child\"]'))"
-      + "&&!app.state.detailLoadingIds.has('fixture-origin');})()",
-    'live Codex Desktop 담당 노드가 읽기 전용 집중 화면으로 열리지 않았습니다.');
-  const readOnlyMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();return{"
-    + "terminalCalls:calls.filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length,"
-    + "terminalCallNames:calls.filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name))"
-      + ".map(call=>call.name),"
-    + "rootOnlyToast:(document.querySelector('#toast')?.textContent||'').includes(window.WhiteboxI18n.t('pty_focus.root_only'))"
+      + "const embedded=window.WhiteboxTerminal.embeddedState();const target=app.state.ptyFocusTargetId;"
+      + "const screen=[...document.querySelectorAll('#ptyFocusTerminalViewport > .terminal-screen')]"
+        + ".find(node=>node.dataset.terminalScreen===target);"
+      + "return app.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId) + "&&Boolean(target)"
+      + "&&surface?.dataset.ptyFocusMode==='pty'&&!surface.classList.contains('hidden')"
+      + "&&!document.querySelector('#ptyFocusTerminalViewport')?.classList.contains('hidden')"
+      + "&&document.querySelector('#ptyFocusTranscriptContent')?.classList.contains('hidden')"
+      + "&&embedded.connected&&embedded.agentSessionId===" + JSON.stringify(liveOriginId) + "&&embedded.terminalId===target"
+      + "&&Boolean(screen?.querySelector('.xterm'))"
+      + "&&Boolean(document.querySelector(" + JSON.stringify(liveChildSelector) + "))"
+      + "&&window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===1;})()",
+    'live Codex Desktop 담당 노드가 별도 GPT PTY 집중 화면으로 열리지 않았습니다.');
+  const liveForkMetrics = await rendererValue(win, "(()=>{"
+    + "const app=window.WhiteboxApp;const calls=window.interactionTest.getCalls();"
+    + "const creates=calls.filter(call=>call.name==='terminalCreate');"
+    + "const payload=creates[0]?.args?.[0]||{};"
+    + "const embedded=window.WhiteboxTerminal.embeddedState();"
+    + "const source=app.snapshotSession(" + JSON.stringify(liveOriginId) + ");"
+    + "const forkTarget=window.WhiteboxTerminal.forkTargetForAgent(source);"
+    + "return{createCount:creates.length,payload,focusTargetId:app.state.ptyFocusTargetId||'',"
+      + "focusSessionId:app.state.ptyFocusSessionId||'',focusMode:document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode||'',"
+      + "embedded,forkTargetId:forkTarget?.terminalId||forkTarget?.id||'',"
+      + "regularTargetCount:window.WhiteboxTerminal.agentTargets(source).length,"
+      + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+      + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+      + "rootOnlyToast:(document.querySelector('#toast')?.textContent||'').includes(window.WhiteboxI18n.t('pty_focus.root_only'))"
     + "};})()");
-  assert(readOnlyMetrics.terminalCalls === 0 && readOnlyMetrics.rootOnlyToast === false,
-    '읽기 전용 집중 화면이 PTY를 만들거나 잘못된 담당-node 경고를 표시했습니다: ' + JSON.stringify(readOnlyMetrics));
+  const liveForkPayload = liveForkMetrics.payload || {};
+  assert(liveForkMetrics.createCount === 1
+    && liveForkPayload.type === 'agent'
+    && liveForkPayload.provider === 'codex'
+    && JSON.stringify(liveForkPayload.args) === JSON.stringify(['fork', liveOriginExternalId])
+    && liveForkPayload.cwd === 'D:\\moved-worktree'
+    && liveForkPayload.sessionBackend === 'direct'
+    && liveForkPayload.transient === false
+    && liveForkPayload.agentForkSourceSessionId === liveOriginId
+    && typeof liveForkPayload.agentForkSourceSignature === 'string'
+    && liveForkPayload.agentForkSourceSignature.startsWith('acs1:')
+    && typeof liveForkPayload.creationId === 'string'
+    && liveForkPayload.creationId.startsWith('create:')
+    && !Object.hasOwn(liveForkPayload, 'bridgeId')
+    && !Object.hasOwn(liveForkPayload, 'agentConnectionSignature')
+    && !Object.hasOwn(liveForkPayload, 'recoveryArgs')
+    && !Object.hasOwn(liveForkPayload, 'initialCommand')
+    && !Object.hasOwn(liveForkPayload, 'initialCommandInArgs')
+    && liveForkMetrics.focusSessionId === liveOriginId
+    && liveForkMetrics.focusMode === 'pty'
+    && liveForkMetrics.focusTargetId
+    && liveForkMetrics.embedded?.connected
+    && liveForkMetrics.embedded?.agentSessionId === liveOriginId
+    && liveForkMetrics.embedded?.terminalId === liveForkMetrics.focusTargetId
+    && liveForkMetrics.forkTargetId === liveForkMetrics.focusTargetId
+    && liveForkMetrics.regularTargetCount === 0
+    && liveForkMetrics.writeCount === 0
+    && liveForkMetrics.commandCount === 0
+    && liveForkMetrics.rootOnlyToast === false,
+  '실행 중 Codex Desktop 클릭이 원본 attach/write 없이 정확한 별도 fork PTY를 만들지 못했습니다: '
+    + JSON.stringify(liveForkMetrics));
 
-  await rendererValue(win, "(()=>{window.interactionTest.clearCalls();"
-    + "window.interactionTest.appendSessionMessages('fixture-origin',[{id:'origin-live-assistant',role:'assistant',"
-      + "text:'집중 화면에서 새 응답을 바로 갱신했습니다.',timestamp:new Date().toISOString()}]);"
-    + "window.interactionTest.emitSnapshot();})()");
+  const liveForkTargetId = liveForkMetrics.focusTargetId;
+  await closeFocusedRoot(win);
+  await rendererValue(win, "window.interactionTest.clearCalls();"
+    + "document.querySelector(" + JSON.stringify(liveFocusTriggerSelector) + ")?.click()");
   await waitFor(win,
-    "(document.querySelector('#ptyFocusTranscriptContent')?.textContent||'')"
-      + ".includes('집중 화면에서 새 응답을 바로 갱신했습니다.')"
-      + "&&window.interactionTest.getCalls().some(call=>call.name==='sessionDetail'"
-        + "&&call.args[0]==='fixture-origin')"
-      + "&&!window.WhiteboxApp.state.detailLoadingIds.has('fixture-origin')",
-    '열린 읽기 전용 집중 화면이 새 대화와 전체 기록을 갱신하지 못했습니다.');
-  assert(await rendererValue(win,
-    "window.interactionTest.getCalls().filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length===0"),
-  '읽기 전용 집중 화면의 대화 갱신이 PTY 작업을 시작했습니다.');
+    "(()=>{const app=window.WhiteboxApp;const embedded=window.WhiteboxTerminal.embeddedState();"
+      + "return app.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&app.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&embedded.connected&&embedded.agentSessionId===" + JSON.stringify(liveOriginId)
+      + "&&embedded.terminalId===" + JSON.stringify(liveForkTargetId) + ";})()",
+    '실행 중 Codex Desktop 담당 노드를 다시 눌렀을 때 기존 별도 GPT PTY를 재사용하지 못했습니다.');
+  const reuseMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();"
+    + "const source=window.WhiteboxApp.snapshotSession(" + JSON.stringify(liveOriginId) + ");"
+    + "const embedded=window.WhiteboxTerminal.embeddedState();return{"
+      + "createCount:calls.filter(call=>call.name==='terminalCreate').length,"
+      + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+      + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+      + "embeddedTerminalId:embedded.terminalId||'',"
+      + "forkTargetId:window.WhiteboxTerminal.forkTargetForAgent(source)?.terminalId||''"
+    + "};})()");
+  assert(reuseMetrics.createCount === 0
+    && reuseMetrics.writeCount === 0
+    && reuseMetrics.commandCount === 0
+    && reuseMetrics.embeddedTerminalId === liveForkTargetId
+    && reuseMetrics.forkTargetId === liveForkTargetId,
+  '실행 중 Codex Desktop 담당 노드 재클릭이 기존 fork 대신 새 PTY를 만들거나 원본에 썼습니다: '
+    + JSON.stringify(reuseMetrics));
 
   await rendererValue(win, "window.interactionTest.clearCalls();"
-    + "document.querySelector('[data-pty-focus-child=\"fixture-origin-child\"]')?.click()");
+    + "document.querySelector(" + JSON.stringify(liveChildSelector) + ")?.click()");
   await waitFor(win,
-    "window.WhiteboxApp.state.ptyFocusSessionId==='fixture-origin'"
-      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='transcript'"
-      + "&&window.WhiteboxApp.state.selectedId==='fixture-origin-child'"
+    "window.WhiteboxApp.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&window.WhiteboxApp.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&window.WhiteboxApp.state.selectedId===" + JSON.stringify(liveOriginChildId)
       + "&&window.WhiteboxApp.state.drawerMode==='subagent'"
       + "&&!document.querySelector('#ptyFocusSurface')?.classList.contains('hidden')"
       + "&&!document.querySelector('#ptyFocusSurface')?.inert"
       + "&&document.querySelector('#detailDrawer')?.classList.contains('open')"
       + "&&document.querySelector('#detailDrawer')?.getAttribute('aria-hidden')==='false'"
       + "&&!document.querySelector('#detailDrawer')?.inert"
+      + "&&window.WhiteboxTerminal.embeddedState().terminalId===" + JSON.stringify(liveForkTargetId)
       + "&&(document.querySelector('#detailDrawer')?.textContent||'').includes('하위 AI 고유 작업 기록입니다.')",
-    '읽기 전용 집중 화면의 하위 AI가 오른쪽 상세창으로 열리지 않았습니다.');
-  assert(await rendererValue(win,
-    "window.interactionTest.getCalls().filter(call=>['terminalCreate','terminalGet','terminalWrite'].includes(call.name)).length===0"),
-  '읽기 전용 하위 AI 상세창이 PTY 작업을 시작했습니다.');
+    '별도 GPT PTY 집중 화면의 하위 AI가 오른쪽 상세창으로 열리지 않았습니다.');
+  const childDrawerMetrics = await rendererValue(win, "(()=>{const calls=window.interactionTest.getCalls();return{"
+    + "createCount:calls.filter(call=>call.name==='terminalCreate').length,"
+    + "writeCount:calls.filter(call=>call.name==='terminalWrite').length,"
+    + "commandCount:calls.filter(call=>call.name==='terminalCommand').length,"
+    + "embeddedTerminalId:window.WhiteboxTerminal.embeddedState().terminalId||''};})()");
+  assert(childDrawerMetrics.createCount === 0
+    && childDrawerMetrics.writeCount === 0
+    && childDrawerMetrics.commandCount === 0
+    && childDrawerMetrics.embeddedTerminalId === liveForkTargetId,
+  '하위 AI 오른쪽 상세창이 별도 GPT PTY를 바꾸거나 원본 대화에 썼습니다: '
+    + JSON.stringify(childDrawerMetrics));
   await rendererValue(win, "document.querySelector('#closeDrawerBtn')?.click()");
   await waitFor(win,
     "!document.querySelector('#detailDrawer')?.classList.contains('open')"
-      + "&&window.WhiteboxApp.state.ptyFocusSessionId==='fixture-origin'"
-      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='transcript'",
-    '하위 AI 상세창을 닫은 뒤 담당 노드 읽기 전용 집중 화면이 유지되지 않았습니다.');
+      + "&&window.WhiteboxApp.state.ptyFocusSessionId===" + JSON.stringify(liveOriginId)
+      + "&&window.WhiteboxApp.state.ptyFocusTargetId===" + JSON.stringify(liveForkTargetId)
+      + "&&document.querySelector('#ptyFocusSurface')?.dataset.ptyFocusMode==='pty'"
+      + "&&window.WhiteboxTerminal.embeddedState().terminalId===" + JSON.stringify(liveForkTargetId),
+    '하위 AI 상세창을 닫은 뒤 담당 노드의 별도 GPT PTY가 유지되지 않았습니다.');
   await closeFocusedRoot(win);
-  await rendererValue(win, "window.interactionTest.removeSession('fixture-origin-child');"
-    + "window.interactionTest.updateSession('fixture-origin',{childIds:[]});window.interactionTest.emitSnapshot()");
-  return { marker, metrics, readOnlyMetrics };
+  await rendererValue(win, "window.interactionTest.removeSession(" + JSON.stringify(liveOriginChildId) + ");"
+    + "window.interactionTest.removeSession(" + JSON.stringify(liveOriginId) + ");"
+    + "window.interactionTest.emitSnapshot()");
+  return { marker, metrics, liveForkMetrics, reuseMetrics, childDrawerMetrics };
+}
+
+async function exerciseComprehensionPacket(win, round) {
+  const generation = '2026-08-01T12:34:56.000Z';
+  await prepareProject(win);
+  await rendererValue(win, "(() => {"
+    + "window.interactionTest.updateSession('fixture-root',{status:'completed',statusDetail:'이해 패킷 검증 완료',"
+      + "completionObserved:true,completedAt:'" + generation + "',updatedAt:'" + generation + "'});"
+    + "window.interactionTest.emitSnapshot();window.WhiteboxApp.renderSessions?.('comprehension-complete');return true;"
+    + "})()");
+  await waitFor(win,
+    "Boolean(document.querySelector('[data-pty-focus-trigger=\"fixture-root\"]'))",
+    '완료된 메인 노드의 이해 패킷 진입점을 찾지 못했습니다.');
+  await rendererValue(win,
+    "document.querySelector('[data-pty-focus-trigger=\"fixture-root\"]')?.click()");
+  await assertFocusedRoot(win, '이해 패킷 완료 노드 클릭');
+
+  if (round === 1) {
+    await waitFor(win,
+      "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
+      '완료된 메인 노드의 최초 PTY 진입에서 이해 패킷이 자동 표시되지 않았습니다.');
+    const briefing = await rendererValue(win, "(() => {"
+      + "const dialog=document.querySelector('#comprehensionPacketDialog');"
+      + "return{dialog:Boolean(dialog&&dialog.getAttribute('role')==='dialog'"
+        + "&&dialog.getAttribute('aria-modal')==='true'),"
+        + "background:Boolean(document.querySelector('#ptyFocusSurface')?.classList.contains('comprehension-packet-open')),"
+        + "evidence:dialog?.querySelectorAll('.comprehension-packet-evidence').length||0,"
+        + "difficulty:dialog?.querySelector('.comprehension-packet-difficulty strong')?.textContent.trim()||'',"
+        + "reason:(dialog?.textContent||'').includes('UI 상태 전환과 PTY 보존 조건'),"
+        + "questions:dialog?.querySelectorAll('[data-comprehension-question]').length||0};})()");
+    assert(briefing.dialog && briefing.background && briefing.evidence === 3
+      && briefing.difficulty === '3' && !briefing.reason && briefing.questions === 3,
+    '중앙 오픈북 브리핑의 근거·난이도·문항 표시가 올바르지 않습니다: ' + JSON.stringify(briefing));
+
+    await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
+    await waitFor(win,
+      "document.querySelector('#comprehensionPacketOverlay')?.hidden"
+        + "&&!document.querySelector('#comprehensionPacketBadge')?.hidden",
+      '이해 패킷을 닫은 뒤 노드 배지가 나타나지 않았습니다.');
+    const beforeReopen = await rendererValue(win, "(() => {"
+      + "const embedded=window.WhiteboxTerminal.embeddedState();"
+      + "const viewport=document.querySelector('#ptyFocusTerminalViewport .xterm-viewport');"
+      + "if(viewport)viewport.scrollTop=Math.min(viewport.scrollHeight,17);"
+      + "return{terminalId:embedded.terminalId,scrollTop:viewport?.scrollTop||0};})()");
+    await rendererValue(win, "(()=>{const button=document.querySelector('#comprehensionPacketBadge button');button?.focus();button?.click();})()");
+    await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
+      '노드 배지로 이해 패킷을 다시 열지 못했습니다.');
+    await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit')?.click()");
+    const unanswered = await rendererValue(win, "(() => ({"
+      + "submitted:window.WhiteboxApp.comprehensionPacketController?.getProgress?.()?.submitted,"
+      + "missing:document.querySelectorAll('.comprehension-packet-question-card.is-unanswered').length,"
+      + "invalid:[...document.querySelectorAll('fieldset[data-comprehension-question]')].every(fieldset=>"
+        + "fieldset.querySelector('[role=\"radiogroup\"]')?.getAttribute('aria-invalid')==='true')}))()");
+    assert(unanswered.submitted === false && unanswered.missing === 3 && unanswered.invalid,
+      '미응답 문제의 일괄 제출이 차단되지 않았습니다: ' + JSON.stringify(unanswered));
+
+    for (const selector of [
+      '[data-comprehension-question-id="q-change"][data-comprehension-option-id="q-change-b"]',
+      '[data-comprehension-question-id="q-decision"][data-comprehension-option-id="q-decision-a"]',
+      '[data-comprehension-question-id="q-risk"][data-comprehension-option-id="q-risk-b"]',
+    ]) await rendererValue(win, `document.querySelector(${JSON.stringify(selector)})?.click()`);
+    await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit')?.click()");
+    await waitFor(win,
+      "document.querySelectorAll('.comprehension-packet-remediation-card').length===2"
+        + "&&!document.querySelector('[data-comprehension-question=\"q-decision\"]')"
+        + "&&document.querySelector('#comprehensionPacketScore')?.textContent.includes('1/3')",
+      '정답 카드를 치우고 오답 카드를 제자리 전환하지 못했습니다.');
+    const remediation = await rendererValue(win, "(() => ({"
+      + "explanations:document.querySelectorAll('.comprehension-packet-remediation-card .comprehension-packet-remediation').length,"
+      + "evidence:document.querySelectorAll('.comprehension-packet-evidence-chip').length,"
+      + "variants:document.querySelectorAll('[data-comprehension-variant-form]').length}))()");
+    assert(remediation.explanations === 2 && remediation.evidence >= 2 && remediation.variants === 2,
+      '오답 카드에 해설·근거·사전 생성 변형 문제가 없습니다: ' + JSON.stringify(remediation));
+
+    await rendererValue(win,
+      "document.querySelector('[data-comprehension-question-id=\"q-change\"]"
+        + "[data-comprehension-option-id=\"q-change-va\"]')?.click();"
+        + "document.querySelector('[data-comprehension-variant-submit=\"q-change\"]')?.click()");
+    await waitFor(win,
+      "document.querySelector('#comprehensionPacketScore')?.textContent.includes('2/3')",
+      '변형 문제 정답이 최종 점수에 반영되지 않았습니다.');
+    await rendererValue(win,
+      "document.querySelector('[data-comprehension-question-id=\"q-risk\"]"
+        + "[data-comprehension-option-id=\"q-risk-vb\"]')?.click();"
+        + "document.querySelector('[data-comprehension-variant-submit=\"q-risk\"]')?.click()");
+    await waitFor(win,
+      "Boolean(document.querySelector('[data-comprehension-understood=\"q-risk\"]'))",
+      '변형 문제 재오답 뒤 정답·해설·이해했음 흐름이 나타나지 않았습니다.');
+    await rendererValue(win,
+      "document.querySelector('[data-comprehension-understood=\"q-risk\"]')?.click()");
+    const understood = await rendererValue(win, "(() => ({"
+      + "score:document.querySelector('#comprehensionPacketScore')?.textContent||'',"
+      + "progress:window.WhiteboxApp.comprehensionPacketController?.getProgress?.()}))()");
+    assert(understood.score.includes('2/3') && understood.progress?.understood?.includes('q-risk'),
+      '이해했음이 이해 부채만 해소하지 않았습니다: ' + JSON.stringify(understood));
+    await rendererValue(win,
+      "document.querySelector('[data-comprehension-issue=\"q-risk\"]')?.click()");
+    await waitFor(win,
+      "document.querySelector('#comprehensionPacketScore')?.textContent.includes('2/2')",
+      '문제 오류가 원문·변형 문제를 점수 분모와 이해 부채에서 제외하지 않았습니다.');
+
+    await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
+    await waitFor(win, "document.querySelector('#comprehensionPacketOverlay')?.hidden"
+      + "&&document.activeElement===document.querySelector('#comprehensionPacketBadge button')",
+      '완료한 이해 패킷을 닫지 못했습니다.');
+    const preserved = await rendererValue(win, "(() => {"
+      + "const embedded=window.WhiteboxTerminal.embeddedState();"
+      + "const viewport=document.querySelector('#ptyFocusTerminalViewport .xterm-viewport');"
+      + "return{terminalId:embedded.terminalId,scrollTop:viewport?.scrollTop||0,"
+        + "focus:document.activeElement===document.querySelector('#comprehensionPacketBadge button')};})()");
+    assert(preserved.terminalId === beforeReopen.terminalId
+      && preserved.scrollTop === beforeReopen.scrollTop && preserved.focus,
+    '패킷 닫기 뒤 PTY identity·스크롤 또는 원래 배지 포커스를 복원하지 못했습니다: '
+      + JSON.stringify({ beforeReopen, preserved }));
+
+    win.setContentSize(375, 780);
+    await wait(100);
+    await rendererValue(win, "(()=>{const button=document.querySelector('#comprehensionPacketBadge button');button?.focus();button?.click();})()");
+    await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
+      '375px 화면에서 이해 패킷을 열지 못했습니다.');
+    const mobile = await rendererValue(win, "(() => {"
+      + "const dialog=document.querySelector('#comprehensionPacketDialog');"
+      + "const rect=dialog?.getBoundingClientRect();const body=dialog?.querySelector('.comprehension-packet-body');"
+      + "return{width:innerWidth,inside:Boolean(rect&&rect.left>=0&&rect.right<=innerWidth+1),"
+        + "overflow:Boolean(dialog&&dialog.scrollWidth>dialog.clientWidth+2),"
+        + "oneColumn:getComputedStyle(body).gridTemplateColumns.split(' ').length===1};})()");
+    assert(mobile.width === 375 && mobile.inside && !mobile.overflow && mobile.oneColumn,
+      '이해 패킷 375px 레이아웃이 화면 안에 맞지 않습니다: ' + JSON.stringify(mobile));
+    await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
+    win.setContentSize(1440, 940);
+    await wait(80);
+  } else {
+    await waitFor(win,
+      "document.querySelector('#comprehensionPacketOverlay')?.hidden"
+        + "&&!document.querySelector('#comprehensionPacketBadge')?.hidden",
+      '앱 재시작 뒤 이해 패킷의 자동 재표시를 막거나 배지를 복원하지 못했습니다.');
+    const restored = await rendererValue(win, "(() => {"
+      + "const progress=window.WhiteboxApp.comprehensionPacketController?.getProgress?.();"
+      + "return{badge:document.querySelector('#comprehensionPacketBadge')?.textContent||'',progress};})()");
+    assert(restored.badge.includes('2/2') && restored.progress?.autoPresented === true
+      && restored.progress?.outcomes?.['q-change'] === 'variant-correct'
+      && restored.progress?.excluded?.includes('q-risk'),
+    '앱 재시작 뒤 점수와 문항 상태를 복원하지 못했습니다: ' + JSON.stringify(restored));
+    await rendererValue(win, "(()=>{const button=document.querySelector('#comprehensionPacketBadge button');button?.focus();button?.click();})()");
+    await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
+      '앱 재시작 뒤 노드 배지로 패킷을 열지 못했습니다.');
+    await rendererValue(win,
+      "document.querySelector('#comprehensionPacketClose')?.focus();"
+        + "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))");
+    await waitFor(win,
+      "document.querySelector('#comprehensionPacketOverlay')?.hidden"
+        + "&&document.activeElement===document.querySelector('#comprehensionPacketBadge button')",
+      'Esc 닫기와 원래 배지 포커스 복원이 동작하지 않았습니다.');
+  }
+
+  await closeFocusedRoot(win);
+  await rendererValue(win, "(() => {"
+    + "window.interactionTest.updateSession('fixture-root',{status:'running',statusDetail:'화면 개선 결과를 확인하는 중',"
+      + "completionObserved:false,completedAt:null,updatedAt:new Date().toISOString()});"
+    + "window.interactionTest.emitSnapshot();return true;})()");
+  return { comprehension: true, restored: round > 1, score: '2/2' };
 }
 
 async function run() {
@@ -952,6 +1190,7 @@ async function run() {
       await exerciseKeyboardAndRunModal(win);
       await exerciseDashboardGraphAndManagement(win);
       reports.push(await exercisePtyFocus(win, round));
+      reports.push(await exerciseComprehensionPacket(win, round));
     }
     assert(rendererErrors.length === 0, 'renderer 오류가 발생했습니다: ' + rendererErrors.join(' | '));
     process.stdout.write(JSON.stringify({ ok: true, rounds: reports }, null, 2) + '\n');
