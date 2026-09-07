@@ -77,7 +77,13 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     };
     const Manager = req('./src/updateManager').UpdateManager;
     const check = Manager.prototype.check;
-    Manager.prototype.check = function(...args) { this.currentVersion = '0.0.0'; this.fetch = globalThis.fetch; return check.apply(this,args); };
+    Manager.prototype.check = async function(...args) {
+      // A startup check may already be using the live release channel. Let it
+      // finish before the explicit button check uses the candidate fixture.
+      if (this.checkPromise) await this.checkPromise;
+      this.currentVersion = '0.0.0'; this.fetch = globalThis.fetch;
+      return check.apply(this,args);
+    };
     return true;
   })()`);
   const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
@@ -85,9 +91,16 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`document.querySelector('#sidebarSettingsBtn').click(); document.querySelector('#checkUpdateBtn').click(); true`);
+  await renderer(`document.querySelector('#sidebarSettingsBtn').click(); true`);
+  // Native .click() is ignored while the startup check disables this button.
+  // Wait for the same enabled state a person needs, then click exactly once.
+  while (!await renderer(`!document.querySelector('#checkUpdateBtn').disabled`)) {
+    if (Date.now() >= deadline) throw new Error('Startup update check did not settle: ' + await renderer(`document.querySelector('#updateError').textContent`));
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  await renderer(`document.querySelector('#checkUpdateBtn').click(); true`);
   while (!await renderer(`!document.querySelector('#installUpdateBtn').classList.contains('hidden') && !document.querySelector('#installUpdateBtn').disabled`)) {
-    if (Date.now() >= deadline) throw new Error('Packaged update button did not become available');
+    if (Date.now() >= deadline) throw new Error('Packaged update button did not become available: ' + await renderer(`JSON.stringify({error:document.querySelector('#updateError').textContent,checkDisabled:document.querySelector('#checkUpdateBtn').disabled})`));
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   if (options.beforeClick) await options.beforeClick({ evaluate, renderer });
