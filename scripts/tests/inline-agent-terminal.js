@@ -247,7 +247,6 @@ function createInlineHarness(root, options = {}) {
         return Boolean(candidate
           && candidate.provider === 'codex'
           && candidate.clientKind === 'codex-desktop'
-          && candidate.status === 'completed'
           && candidate.id === `codex:${candidate.externalId}`
           && (!candidate.runId || candidate.runId !== candidate.externalId)
           && !candidate.parentId
@@ -472,12 +471,19 @@ function registerInlineAgentTerminalTests(context) {
     const liveDesktop = createInlineHarness(root, {
       session: liveDesktopSession,
       initialOpen: false,
+      resumeSupport: () => ({ supported: false, originOwned: true }),
+      forkSupport: () => ({ supported: true, action: 'fork' }),
       mountForAgent: async () => ({ ok: true, target }),
     });
-    assert.equal(liveDesktop.enterFocus(liveDesktopSession.id), false,
-      '실행 중인 Codex Desktop 기록이 실제 PTY 담당 노드로 오인되어 집중 모드에 진입했습니다.');
-    assert.equal(liveDesktop.app.state.ptyFocusSessionId, null);
+    assert.equal(liveDesktop.enterFocus(liveDesktopSession.id), true,
+      '실행 중인 Codex Desktop 기록의 새 fork PTY 집중 모드를 차단했습니다.');
+    assert.equal(liveDesktop.app.state.ptyFocusSessionId, liveDesktopSession.id);
     assert.equal(liveDesktop.mountCalls.length, 0);
+    const liveSync = await liveDesktop.sync();
+    assert.equal(liveSync.ok, true);
+    assert.equal(liveDesktop.mountCalls.length, 1);
+    assert.equal(liveDesktop.mountCalls[0].options.forkCreationGesture, true);
+    assert.strictEqual(liveDesktop.mountCalls[0].options.mount, liveDesktop.focusViewport);
     liveDesktop.app.state.ptyFocusSessionId = liveDesktopSession.id;
     liveDesktop.focusSurface.dataset.ptyFocusSession = liveDesktopSession.id;
     liveDesktop.focusSurface.dataset.ptyFocusMode = 'transcript';
@@ -485,7 +491,7 @@ function registerInlineAgentTerminalTests(context) {
     assert.equal(readOnlySync.reason, 'read-only-focus');
     assert.equal(liveDesktop.app.state.ptyFocusSessionId, liveDesktopSession.id,
       'passive PTY sync가 실행 중 Codex Desktop의 읽기 전용 집중 화면을 닫았습니다.');
-    assert.equal(liveDesktop.mountCalls.length, 0);
+    assert.equal(liveDesktop.mountCalls.length, 1);
 
     const completedDesktopSession = {
       ...liveDesktopSession,

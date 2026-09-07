@@ -2760,13 +2760,13 @@ function registerUiContractTests(context) {
     assert.equal(isWritableDirect({ id: 'direct', provider: 'codex' }), true);
     assert.equal(canUseWritablePtySurface(writableRoot), true,
       '일반 writable 담당 root가 PTY surface에서 차단되었습니다.');
-    assert.equal(canUseWritablePtySurface(liveDesktop), false,
-      '실행 중 Codex Desktop 기록은 담당 root처럼 보여도 writable PTY surface가 아닙니다.');
+    assert.equal(canUseWritablePtySurface(liveDesktop), true,
+      '실행 중 Codex Desktop 기록도 새 fork PTY surface를 열 수 있어야 합니다.');
     assert.equal(canUseWritablePtySurface(forkable), true,
       'canonical 완료 Codex Desktop 기록은 명시적 fork PTY surface를 열 수 있어야 합니다.');
     assert.equal(canOpenResponsibleFocus(writableRoot), true);
     assert.equal(canOpenResponsibleFocus(liveDesktop), true,
-      '실행 중 Codex Desktop 담당 root도 읽기 전용 집중 화면은 열 수 있어야 합니다.');
+      '실행 중 Codex Desktop 담당 root도 새 세션 집중 화면을 열 수 있어야 합니다.');
     assert.equal(canOpenResponsibleFocus({ ...liveDesktop, parentId: writableRoot.id }), false,
       '하위 AI가 담당 노드 집중 화면을 직접 열었습니다.');
     sharedSandbox.window.WhiteboxAppFactories = {};
@@ -2791,7 +2791,6 @@ function registerUiContractTests(context) {
       { ...forkable, sourcePlugin: {} },
       { ...forkable, provenance: { source: { pluginId: 'builtin.omo' } } },
       { ...forkable, source: 'opencode' },
-      { ...forkable, status: 'running' },
       { ...forkable, readOnly: true },
       { ...forkable, controlAuthority: 'read-only-import' },
       { ...forkable, importMode: 'local-history' },

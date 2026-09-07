@@ -322,7 +322,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
     const runId = String(agentSession.runId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(sessionId)
-      || String(agentSession.status || '').toLowerCase() !== 'completed'
       || sourceSessionId !== canonicalSourceSessionId
       || /^(?:terminal|bridge):/i.test(sessionId)
       || /^process-\d+$/i.test(sessionId)

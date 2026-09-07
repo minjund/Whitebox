@@ -66,7 +66,6 @@ function canForkCodexDesktopSession(session) {
   const importMode = String(session?.importMode || '').trim();
   if (String(session?.provider || '').toLowerCase() !== 'codex'
     || String(session?.clientKind || '').toLowerCase() !== 'codex-desktop'
-    || String(session?.status || '').toLowerCase() !== 'completed'
     || session?.parentId
     || sourcePluginId
     || session?.readOnly === true
@@ -86,10 +85,8 @@ function canForkCodexDesktopSession(session) {
 function canUseWritablePtySurface(session) {
   if (!session || session.parentId || session.sourcePluginId) return false;
   if (canForkCodexDesktopSession(session)) return true;
-  // A live Codex Desktop task is owned by the Codex app. Whitebox must not
-  // advertise an attachable PTY for it because there is no independent PTY
-  // writer to mount; completed canonical tasks can still use the safe fork
-  // path above.
+  // Canonical Desktop tasks open an independent fork through the path above.
+  // Other Desktop records have no writable terminal to mount.
   if (String(session.provider || '').toLowerCase() === 'codex'
     && String(session.clientKind || '').toLowerCase() === 'codex-desktop') return false;
   return isWritableDirectSession(session)
