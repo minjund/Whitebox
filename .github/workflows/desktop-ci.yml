@@ -88,6 +88,25 @@ jobs:
         with:
           fail-on-severity: critical
 
+  mac-arm64-update:
+    needs: mac-artifacts
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22
+      - run: npm ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: Whitebox-macOS
+          path: release
+      - run: |
+          test "$(node -p process.arch)" = arm64
+          version="$(node -p 'require("./package.json").version')"
+          ditto -x -k "release/Whitebox-$version-arm64.zip" release/mac-arm64
+          node scripts/mac-packaged-update-button.js
+
   mac-artifacts:
     runs-on: macos-15-intel
     steps:

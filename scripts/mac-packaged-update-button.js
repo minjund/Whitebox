@@ -10,7 +10,7 @@ const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-but
 
 if (process.platform !== 'darwin') throw new Error('Packaged macOS update button test requires macOS');
 const version = require('../package.json').version;
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-mac-button-'));
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-mac-button-')));
 const app = path.join(root, 'Applications', 'Whitebox.app');
 const executable = path.join(app, 'Contents', 'MacOS', 'Whitebox');
 const profile = path.join(root, 'profile');
@@ -89,6 +89,7 @@ async function stopOwned(pid) {
     assert.equal(match[2], version); relaunchedPid = Number(match[1]); return true;
   }, 'packaged macOS replacement and renderer readiness');
   assert(alive(relaunchedPid));
+  asar.uncache(path.join(app,'Contents','Resources','app.asar'));
   const metadata = JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'), 'package.json'));
   assert.equal(metadata.version, version);
   assert.equal(JSON.parse(fs.readFileSync(sentinel,'utf8')).preserved,true);
@@ -101,7 +102,7 @@ async function stopOwned(pid) {
     if(driver) driver.close();
     await stopOwned(relaunchedPid);
     if(driver) await stopOwned(driver.child.pid);
-    assert.equal(path.dirname(root),path.resolve(os.tmpdir()));
+    assert.equal(path.dirname(root),fs.realpathSync(os.tmpdir()));
     if(!process.exitCode) fs.rmSync(root,{recursive:true,force:true});
     else console.error('Diagnostics preserved: ' + root);
   } catch(error) { console.error(error);process.exitCode=1; }

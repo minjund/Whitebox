@@ -20,6 +20,35 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
   runner.disposeResult.errors.length=0;
   assert.equal(runner.resumeAfterUpdateFailure(),true);
 
+  // Execute the production main-process lifecycle with only OS boundaries
+  // replaced: a first host failure must not start a helper or poison retry.
+  const main=fs.readFileSync(require.resolve('../main.js'),'utf8');
+  for(const platform of ['win32','darwin']) {
+    let hostCalls=0,helpers=0,quits=0;
+    const events=[];
+    class Host { async shutdownForUpdate(){if(++hostCalls===1)throw Error('host shutdown failure');} async recoverAfterUpdateFailure(){} }
+    const manager={state:{status:'downloaded',downloadedPath:'fixture',asset:{},latestVersion:'1.8.4'},
+      async download(){return this.getState();},getState(){return {...this.state};},setState(patch){Object.assign(this.state,patch);}};
+    const lifecycle={fs:{mkdirSync(){},appendFileSync(_file,line){events.push(JSON.parse(line));}},
+      userFile:x=>x,crypto:require('node:crypto'),process:{platform,pid:123},updateManager:manager,
+      updateInstallPlan:async()=>({installType:'desktop',installMode:'automatic',appPath:'fixture'}),
+      shell:{},ALLOW_UNSIGNED_WINDOWS_UPDATES:true,ALLOW_UNSIGNED_MAC_UPDATES:true,
+      canInstallSilently:()=>true,verifyDownloadedInstaller:async()=>{},preflightAutomaticUpdate:async()=>{},
+      updateWorkloadImpact:async()=>({agentRuns:[],terminalSessions:[]}),confirmActiveTerminalUpdate:async()=>true,
+      runner,TerminalHostClient:Host,terminalManager:new Host(),requireAgentRunnerUpdateShutdown:x=>x,
+      launchDownloadedUpdate:async()=>{helpers++;return {mode:'automatic'};},reportRecoverableError(){},
+      updateInstallPromise:null,setImmediate:fn=>fn(),app:{quit(){quits++;}},isQuitting:false};
+    vm.createContext(lifecycle);
+    vm.runInContext(main.slice(main.indexOf('function recordUpdateInstallEvent('),main.indexOf('async function setupAttentionRuntime()')),lifecycle);
+    await assert.rejects(lifecycle.installDownloadedUpdate(),/host shutdown failure/);
+    assert.equal(helpers,0);assert.equal(quits,0);assert.match(manager.state.error,/host shutdown failure/);
+    await lifecycle.installDownloadedUpdate();
+    assert.equal(helpers,1);assert.equal(quits,1);assert.equal(manager.state.error,'');
+    const success=events.filter(e=>e.attemptId===events.at(-1).attemptId).map(e=>e.stage);
+    assert(success.indexOf('workload-stopped')<success.indexOf('helper-ready'));
+    assert(runner.resumeAfterUpdateFailure());
+  }
+
   let calls=0, resolveInstall;
   const nodes=new Map();
   const $=selector=>{
