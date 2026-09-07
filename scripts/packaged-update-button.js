@@ -46,7 +46,7 @@ async function openInspectedApp(executable, args, env) {
     pending.set(id, { resolve, reject, timer, expression });
     // Inspector awaitPromise holds only a weak reference. Keep executeJavaScript
     // promises alive in the main context until the next sequential evaluation.
-    const retainedExpression = `globalThis.__whiteboxPackagedEvaluation = (${expression})`;
+    const retainedExpression = `globalThis.__whiteboxPackagedEvaluation = (0, eval)(${JSON.stringify(expression)})`;
     socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: retainedExpression, awaitPromise: true, returnByValue: true } }));
   });
   // Electron replaces its bootstrap V8 context during startup.
