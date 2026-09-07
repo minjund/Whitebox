@@ -22,6 +22,7 @@ const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
 const { applyRuntimePresence } = require('../src/processMonitor');
 const {
   comprehensionPromptFingerprint,
+  COMPREHENSION_CONTRACT,
   hasComprehensionContract,
   stripComprehensionContract,
 } = require('../src/comprehensionPacket');
@@ -634,24 +635,24 @@ async function run() {
       && directCreateOptions.transient === false
       && hasComprehensionContract(directCreateOptions.initialCommand)
       && stripComprehensionContract(directCreateOptions.initialCommand) === directPrompt
-      && directCreateOptions.initialCommandInArgs === false
-      && !(directCreateOptions.args || []).some(argument => (
-        String(argument).includes(directPrompt) || hasComprehensionContract(argument)
-      ))
+      && directCreateOptions.initialCommandInArgs === true
+      && directCreateOptions.args?.at(-1) === directPrompt
+      && !(directCreateOptions.args || []).some(argument => hasComprehensionContract(argument))
       && directCreateOptions.creationId === directCreationId
       && directRunOutcome.capture.options?.creationId === directCreationId,
     `새 작업 modal이 동일 creationId의 fresh direct PTY를 정확히 한 번 생성하지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
-    assert(directCommandCalls.length === 1
-      && directCommandCalls[0]?.args?.[0] === directTerminalId
-      && directCommandCalls[0]?.args?.[1] === directCreateOptions.initialCommand
-      && directCommandCalls[0]?.args?.[2]?.deliveryId === directCreateOptions.deliveryId,
-    `이해 패킷 계약을 포함한 최초 요청이 동일 deliveryId로 PTY에 정확히 한 번 전달되지 않았습니다: ${JSON.stringify(directRunOutcome)}`);
+    assert(directCommandCalls.length === 0,
+    `시작 인자로 전달한 최초 요청을 PTY에 다시 붙여넣었습니다: ${JSON.stringify(directRunOutcome)}`);
     assert(directRunOutcome.focusHidden
       && directRunOutcome.focusSessionId !== `bridge:${directTerminalId}`
       && directRunOutcome.focusTargetId !== directTerminalId,
     `monitor projection 전에 새 PTY가 다른 세션으로 추측되어 열렸습니다: ${JSON.stringify(directRunOutcome)}`);
 
-    const directLaunchMarker = fixtureLaunchArgumentsMarker(directCreateOptions.args || []);
+    const directLaunchMarker = fixtureLaunchArgumentsMarker([
+      ...directCreateOptions.args.slice(0, -1),
+      '--append-system-prompt', COMPREHENSION_CONTRACT.replace(/\s+/gu, ' '),
+      '--', directPrompt,
+    ]);
     await waitUntil(async () => {
       const created = await client.get(directTerminalId, true);
       return Number(created?.pid) > 0
@@ -666,8 +667,9 @@ async function run() {
       && directSession.bridgeId === ''
       && directSession.creationId === directCreationId
       && directSession.comprehensionContractInjected === true
-      && directSession.initialPromptFingerprintVersion === 'raw-v1'
-      && directSession.initialPromptFingerprint === comprehensionPromptFingerprint(directCreateOptions.initialCommand)
+      && directSession.initialPromptFingerprintVersion === 'instructions-v1'
+      && directSession.initialPromptFingerprint === comprehensionPromptFingerprint(directPrompt)
+      && !String(directSession.replay || '').includes('UNEXPECTED_DRAWER_COMMAND:')
       && Number(directSession.pid) > 0
       && manager.list().length === directSessionCountBeforeCreate + 1,
     `새 작업 modal의 실제 fresh direct node-pty가 고유하게 실행되지 않았습니다: ${JSON.stringify(directSession)}`);
