@@ -440,6 +440,31 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     });
   }
 
+  test('owned PTY display hides damaged internal blocks independently of packet authority', () => {
+    const make = (owned = true) => rendererOutput.createFilter({
+      hideOwnedEnvelopes: true,
+      isOwnedTerminal: () => owned,
+    });
+    const alteredContract = COMPREHENSION_CONTRACT.replace('You are', '  You are');
+    const malformed = `${PACKET_OPEN}{"detail"dd}${PACKET_CLOSE}`;
+    const wrapped = malformed.replace('comprehension-packet', 'comprehension-\r\n  packet')
+      .replace(PACKET_CLOSE, '</whitebox-comprehension-\r\n packet>');
+    for (const raw of [alteredContract, malformed, wrapped, `${PACKET_OPEN}${'x'.repeat(600000)}${PACKET_CLOSE}`]) {
+      const filter = make();
+      const visible = splitEveryBoundary(`앞${raw}뒤`).map(chunk => filter.consume(chunk)).join('') + filter.flush();
+      assert.equal(visible, '앞뒤');
+      assert.equal(filter.hasPending(), false);
+    }
+    const unfinished = make();
+    assert.equal(unfinished.consume(`답변${PACKET_OPEN}{broken`), '답변');
+    assert.equal(unfinished.refresh() + unfinished.releasePending(), '');
+    assert.equal(unfinished.consume('다음 턴') + unfinished.flush(), '다음 턴');
+    const partial = make();
+    assert.equal(partial.consume('답변<whitebox-comprehension-pac') + partial.flush(), '답변');
+    const external = make(false);
+    assert.equal(external.consume(malformed) + external.flush(), malformed);
+  });
+
   test('PTY 표시 필터는 strict authority가 일치하는 계약과 패킷만 ANSI/chunk 경계에서 숨긴다', () => {
     const expectedPacket = packet(3);
     const contract = COMPREHENSION_CONTRACT

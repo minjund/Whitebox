@@ -224,6 +224,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   function createComprehensionOutputFilter(terminalId) {
     const api = window.WhiteboxComprehensionPacket;
     return window.WhiteboxComprehensionOutput?.createFilter?.({
+      hideOwnedEnvelopes: true,
       contractBlock: api?.CONTRACT_BLOCK || '',
       packetFingerprint: packet => api?.packetContentFingerprint?.(packet) || '',
       getPacketAuthority: () => comprehensionPacketAuthority(terminalId),
@@ -275,8 +276,37 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const fit = new window.FitAddon.FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
-    if (!readOnly && typeof terminal.attachCustomKeyEventHandler === 'function') {
+    if (typeof terminal.attachCustomKeyEventHandler === 'function') {
       terminal.attachCustomKeyEventHandler(event => {
+        const clipboardKey = String(event.key || '').toLowerCase();
+        const commandKey = (event.ctrlKey || event.metaKey) && !event.altKey;
+        const copy = commandKey && clipboardKey === 'c' && terminal.hasSelection?.();
+        const paste = !readOnly && ((commandKey && clipboardKey === 'v')
+          || (clipboardKey === 'insert' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey));
+        if (copy || paste) {
+          // Own the shortcut once, including keyup/keypress, so neither xterm
+          // control bytes nor Chromium's default paste can duplicate it.
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.type === 'keydown' && !event.repeat) {
+            const selection = copy ? terminal.getSelection() : '';
+            Promise.resolve().then(async () => {
+              if (copy) await navigator.clipboard.writeText(selection);
+              else {
+                const text = await navigator.clipboard.readText();
+                // Clipboard access is asynchronous: never paste into a task
+                // that was switched or closed while permission was pending.
+                if (!host.isConnected || (state.selectedId !== key && state.embeddedTerminalId !== key)) return;
+                terminal.paste(text);
+                terminal.focus();
+              }
+            }).catch(error => {
+              window.WhiteboxRendererUtils.reportRecoverableError('terminal-clipboard', error);
+              notice(t('terminal.error.input_failed'), 'error');
+            });
+          }
+          return false;
+        }
         // In screen-reader mode xterm intentionally leaves browser keyboard
         // defaults enabled. Shift+Tab still emits the terminal backtab
         // sequence, but Chromium also moves focus out of the PTY and the app's

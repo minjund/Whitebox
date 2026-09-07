@@ -767,6 +767,36 @@ function registerCodexParserTests(context) {
   });
 
   test('Codex 완료 뒤 실제 작업 신호가 이어지면 완료 상태를 해제한다', () => {
+    for (const sameSecond of [false, true]) {
+      const finalAt = sameSecond ? '2026-09-07T06:51:16.050Z' : '2026-09-07T06:51:12.743Z';
+      const rows = [
+        { timestamp: '2026-09-07T06:50:00Z', type: 'session_meta', payload: { id: `unix-turn-${sameSecond}` } },
+        { timestamp: '2026-09-07T06:50:01.100Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'unix-turn', started_at: 1788763801 } },
+        { timestamp: finalAt, type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '수정 완료했습니다.' }] } },
+        { timestamp: '2026-09-07T06:51:16.108Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'unix-turn', completed_at: 1788763876, last_agent_message: '수정 완료했습니다.' } },
+      ];
+      const done = parseCodex(jsonl(path.join(temp, 'codex', `unix-complete-${sameSecond}.jsonl`), rows));
+      assert.equal(done.status, 'completed');
+      assert.equal(done.activityState, 'attention');
+      assert.equal(done.completionObserved, true);
+      assert.equal(done.completedAt, '2026-09-07T06:51:16.108Z');
+      assert.equal(done.result, '수정 완료했습니다.');
+      assert.ok(done.lifecycle.every(item => item.status !== 'running'));
+      const resumed = parseCodex(jsonl(path.join(temp, 'codex', `unix-restart-${sameSecond}.jsonl`), [
+        ...rows,
+        { timestamp: '2026-09-07T06:51:17.100Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'next-turn', started_at: 1788763877 } },
+      ]));
+      assert.equal(resumed.status, 'running');
+      assert.equal(resumed.activityState, 'thinking');
+      assert.equal(resumed.completionObserved, false);
+      assert.equal(resumed.completedAt, null);
+      const stale = parseCodex(jsonl(path.join(temp, 'codex', `unix-stale-${sameSecond}.jsonl`), [
+        ...rows.slice(0, -1),
+        { timestamp: '2026-09-07T06:51:18Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'unix-turn', completed_at: 1788763801 } },
+      ]));
+      assert.equal(stale.status, 'running');
+      assert.equal(stale.completionObserved, false);
+    }
     const completedRows = id => [
       { timestamp: '2026-07-14T05:00:00Z', type: 'session_meta', payload: { id, cwd: 'D:\\repo' } },
       { timestamp: '2026-07-14T05:00:01Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-1' } },
