@@ -710,6 +710,7 @@ function createClaudeParser(dependencies) {
       session.statusDetail = state.lastRole === 'user' ? '마지막 응답 기록이 종료됨' : '다음 요청 대기';
     }
     session.comprehensionContractObserved = state.comprehensionContractObserved;
+    session.comprehensionUserPromptFingerprints = normalizedComprehensionContractPromptFingerprints(state.comprehensionUserPromptFingerprints);
     session.comprehensionContractPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
       state.comprehensionContractPromptFingerprints,
     );

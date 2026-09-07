@@ -602,12 +602,13 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       if (allowWrites) args.push('--always-approve');
     }
 
-    // The packet contract is multiline, so an owned task is delivered once
-    // through the PTY ledger after the interactive provider starts. Keeping it
-    // out of argv also preserves the original prompt as the visible title.
-    let initialCommandInArgs = !comprehensionPromptInjected && provider !== 'grok';
+    // Claude and Codex accept a startup prompt. The terminal host separates
+    // the internal contract into their instruction options before spawning;
+    // never race their interactive input editor with a startup paste.
+    const initialCommandInArgs = provider !== 'grok'
+      && (!comprehensionPromptInjected || ['claude', 'codex'].includes(provider));
     if (initialCommandInArgs && provider === 'gemini') args.push('--prompt-interactive', prompt);
-    else if (initialCommandInArgs) args.push(prompt);
+    else if (initialCommandInArgs) args.push(comprehensionPromptInjected ? userPrompt : prompt);
     return { provider, prompt, userPrompt, args, initialCommandInArgs };
   }
 

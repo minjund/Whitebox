@@ -44,6 +44,7 @@ jobs:
         run: npm run test:result-review
       - run: npm audit --audit-level=high
       - run: npm run test:terminal
+      - run: npm run test:terminal:startup
       - run: npm run test:terminal:tmux-pane
       - run: npm run test:bridge
       - name: Verify inline PTY interaction contract

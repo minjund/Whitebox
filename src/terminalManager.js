@@ -13,6 +13,8 @@ const { ensureMacNodePtyRuntime } = require('./nodePtyRuntime');
 const {
   comprehensionPromptFingerprint,
   hasComprehensionContract,
+  COMPREHENSION_CONTRACT,
+  stripComprehensionContract,
 } = require('./comprehensionPacket');
 const {
   retentionDays,
@@ -31,6 +33,10 @@ const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_BRIDGE_ID_CHARS = 256;
 const STORE_VERSION = 2;
 const RAW_PROMPT_FINGERPRINT_VERSION = 'raw-v1';
+const INSTRUCTION_PROMPT_FINGERPRINT_VERSION = 'instructions-v1';
+function supportedPromptFingerprintVersion(value) {
+  return [RAW_PROMPT_FINGERPRINT_VERSION, INSTRUCTION_PROMPT_FINGERPRINT_VERSION].includes(value) ? value : '';
+}
 // Full-screen AI TUIs redraw spinners and status bars continuously. Rewriting
 // every retained replay (up to 64 MiB total) six times per second stalls the
 // terminal-host event loop and delays input/host responses. Exit transitions
@@ -349,9 +355,7 @@ function normalizedComprehensionProvenanceRecord(value) {
   const distro = cleanText(value.distro, 100);
   const launchPromptFingerprint = validFingerprint(value.launchPromptFingerprint);
   const bindingPromptFingerprint = validFingerprint(value.bindingPromptFingerprint);
-  const promptFingerprintVersion = value.promptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
-    ? RAW_PROMPT_FINGERPRINT_VERSION
-    : '';
+  const promptFingerprintVersion = supportedPromptFingerprintVersion(value.promptFingerprintVersion);
   const createdAtText = cleanText(value.createdAt, 50);
   const boundAtText = cleanText(value.boundAt, 50);
   const retiredAtText = cleanText(value.retiredAt, 50);
@@ -823,6 +827,9 @@ function escapeWindowsCmdArgument(value, doubleEscapeMetaCharacters = false) {
 }
 
 function windowsBatchLaunchSpec(command, args, options, provider) {
+  if (args.some(argument => /[\u0000\r\n]/u.test(String(argument)))) {
+    throw new Error('여러 줄 AI 요청은 .exe 또는 .ps1 실행 파일이 필요합니다.');
+  }
   const commandLine = [
     escapeWindowsCmdCommand(path.normalize(command)),
     // A batch agent launcher necessarily adds another cmd.exe parse (and npm
@@ -1847,9 +1854,7 @@ function persistedSession(session) {
     deliveries: restoredDeliveries(session.deliveries),
     rawInputDeliveries: restoredRawInputDeliveries(session.rawInputDeliveries),
     initialPromptFingerprint: validFingerprint(session.initialPromptFingerprint),
-    initialPromptFingerprintVersion: session.initialPromptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
-      ? RAW_PROMPT_FINGERPRINT_VERSION
-      : '',
+    initialPromptFingerprintVersion: supportedPromptFingerprintVersion(session.initialPromptFingerprintVersion),
     comprehensionContractInjected: session.comprehensionContractInjected === true,
     creationId: normalizedCreationId(session.creationId),
     creationPayloadFingerprint: validFingerprint(session.creationPayloadFingerprint),
@@ -2060,9 +2065,7 @@ class TerminalManager extends EventEmitter {
           const persistedComprehensionContractInjected = value.comprehensionContractInjected === true
             && Boolean(initialPromptFingerprint);
           const initialPromptFingerprintVersion = persistedComprehensionContractInjected
-            && value.initialPromptFingerprintVersion === RAW_PROMPT_FINGERPRINT_VERSION
-            ? RAW_PROMPT_FINGERPRINT_VERSION
-            : '';
+            ? supportedPromptFingerprintVersion(value.initialPromptFingerprintVersion) : '';
           const rawCreationId = String(value.creationId || '').trim();
           const creationId = normalizedCreationId(rawCreationId);
           const creationPayloadFingerprint = validFingerprint(value.creationPayloadFingerprint);
@@ -3007,7 +3010,21 @@ class TerminalManager extends EventEmitter {
 
   create(rawOptions = {}) {
     const includeReplay = rawOptions.includeReplay !== false;
-    const launchOptions = normalizeLaunchOptions(rawOptions, this.platform);
+    const requestedPrompt = String(rawOptions.initialCommand || '').trim();
+    const separateStartupPrompt = rawOptions.initialCommandInArgs === true
+      && isWhiteboxOwnedComprehensionLaunch(rawOptions, requestedPrompt)
+      && ['claude', 'codex'].includes(rawOptions.provider)
+      && Array.isArray(rawOptions.args)
+      && rawOptions.args.at(-1) === stripComprehensionContract(requestedPrompt);
+    // Validate command options normally, while keeping the exact user prompt
+    // out of option normalization (which rejects newlines and clips strings).
+    const launchOptions = normalizeLaunchOptions(separateStartupPrompt
+      ? { ...rawOptions, args: rawOptions.args.slice(0, -1) } : rawOptions, this.platform);
+    if (separateStartupPrompt) {
+      const prompt = stripComprehensionContract(requestedPrompt);
+      if (prompt.includes('\u0000')) throw new Error('AI 요청에 NUL 문자를 사용할 수 없습니다.');
+      launchOptions.args.push(prompt);
+    }
     if (launchOptions.type === 'agent'
       && launchOptions.sessionBackend === 'managed-tmux'
       && typeof this.managedTmuxRuntime?.available === 'function'
@@ -3094,9 +3111,14 @@ class TerminalManager extends EventEmitter {
     }
     const fingerprint = initialCommand ? deliveryFingerprint(initialCommand) : '';
     const comprehensionContractInjected = isWhiteboxOwnedComprehensionLaunch(launchOptions, initialCommand);
+    const separateComprehensionInstructions = comprehensionContractInjected
+      && initialCommandInArgs
+      && ['claude', 'codex'].includes(launchOptions.provider)
+      && separateStartupPrompt;
+    const userPrompt = separateComprehensionInstructions ? stripComprehensionContract(initialCommand) : initialCommand;
     const initialPromptFingerprint = initialCommand
       ? (comprehensionContractInjected
-        ? comprehensionPromptFingerprint(initialCommand)
+        ? comprehensionPromptFingerprint(userPrompt)
         : promptFingerprint(initialCommand))
       : '';
     const deliveryTarget = agentBridgeKey(launchOptions)
@@ -3245,7 +3267,15 @@ class TerminalManager extends EventEmitter {
       launchOptions.managedTmuxSession = safeTmuxName(`lta-${launchOptions.provider}-${id.split(':').slice(1).join('-')}`);
     }
     const options = recoveryArgs ? { ...launchOptions, args: recoveryArgs } : launchOptions;
-    const spec = launchSpec(launchOptions, this.platform, this.agentProviders);
+    const instructionArgs = separateComprehensionInstructions
+      ? (launchOptions.provider === 'claude'
+        ? ['--append-system-prompt', COMPREHENSION_CONTRACT.replace(/\s+/gu, ' ')]
+        : ['-c', `developer_instructions=${JSON.stringify(COMPREHENSION_CONTRACT)}`])
+      : [];
+    const spawnOptions = separateComprehensionInstructions
+      ? { ...launchOptions, args: [...launchOptions.args.slice(0, -1), ...instructionArgs, '--', userPrompt] }
+      : launchOptions;
+    const spec = launchSpec(spawnOptions, this.platform, this.agentProviders);
     const now = new Date().toISOString();
     const session = {
       id,
@@ -3269,7 +3299,7 @@ class TerminalManager extends EventEmitter {
       rawInputDeliveries: [],
       initialPromptFingerprint,
       initialPromptFingerprintVersion: comprehensionContractInjected
-        ? RAW_PROMPT_FINGERPRINT_VERSION
+        ? (separateComprehensionInstructions ? INSTRUCTION_PROMPT_FINGERPRINT_VERSION : RAW_PROMPT_FINGERPRINT_VERSION)
         : '',
       comprehensionContractInjected,
       creationId,

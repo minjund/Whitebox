@@ -98,6 +98,7 @@ jobs:
         run: brew install tmux
       - run: npm test
       - run: npm run test:terminal
+      - run: npm run test:terminal:startup
       - run: npm run test:terminal:tmux-pane
       - run: npm run test:bridge
       - name: Verify renderer profile recovery and idempotence

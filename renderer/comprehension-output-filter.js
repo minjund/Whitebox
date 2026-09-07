@@ -151,7 +151,7 @@
     return value?.type === "agent"
       && value?.backend === "direct"
       && value?.comprehensionContractInjected === true
-      && value?.initialPromptFingerprintVersion === "raw-v1"
+      && ["raw-v1", "instructions-v1"].includes(value?.initialPromptFingerprintVersion)
       && /^[a-f0-9]{64}$/u.test(initialPromptFingerprint)
       && !String(value?.bridgeId || "").trim()
       && !String(value?.agentResumeSessionId || "").trim()

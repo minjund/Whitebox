@@ -153,20 +153,47 @@ function assertLongPromptBridgeBinding(session, rawPrompt, temp, label) {
     `${label} parser가 기존 persisted terminal의 display-clipped fingerprint fallback을 깨뜨렸습니다.`);
 }
 
-function codexSession(jsonl, temp, name, response, prompt) {
+function assertHiddenInstructionBinding(session, prompt, temp) {
+  assert.equal(session.comprehensionContractObserved, false);
+  assert.equal(session.comprehensionContractInjected, false);
+  assert.equal(session.comprehension.status, 'unsupported');
+  assert.deepEqual(session.comprehensionUserPromptFingerprints, [comprehensionPromptFingerprint(prompt)]);
+  const environment = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux');
+  const bridge = {
+    id: `hidden-${session.provider}`, kind: 'bridge', terminalId: `terminal:hidden-${session.provider}`,
+    provider: session.provider, environment, distro: '', cwd: temp, startedAt: session.startedAt,
+    initialPromptFingerprint: comprehensionPromptFingerprint(prompt),
+    initialPromptFingerprintVersion: 'instructions-v1', comprehensionContractInjected: true,
+  };
+  const project = overrides => applyRuntimePresence([{
+    ...session, cwd: temp, originCwd: temp, environment: { kind: environment, distro: '' },
+  }], { distros: [] }, { processes: [] }, Date.parse(session.updatedAt), [{ ...bridge, ...overrides }]);
+  const observed = project({});
+  assert.equal(observed.find(value => value.id === session.id)?.comprehension.status, 'ready');
+  assert.equal(inferredBridgeBindings(observed)[0]?.sessionId, session.id);
+  for (const overrides of [
+    { initialPromptFingerprint: 'a'.repeat(64) },
+    { comprehensionContractInjected: false },
+    { initialPromptFingerprintVersion: 'raw-v1' },
+  ]) {
+    assert.notEqual(project(overrides).find(value => value.id === session.id)?.comprehension.status, 'ready');
+  }
+}
+
+function codexSession(jsonl, temp, name, response, prompt, hiddenInstructions = false) {
   const timestamp = '2026-09-04T01:00:00.000Z';
   return parseCodex(jsonl(path.join(temp, 'comprehension-parser', `codex-${name}.jsonl`), [
     { timestamp, type: 'session_meta', payload: { id: `codex-${name}`, cwd: temp, source: 'cli', thread_source: 'user' } },
     { timestamp: '2026-09-04T01:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: `turn-${name}` } },
-    { timestamp: '2026-09-04T01:00:02.000Z', type: 'event_msg', payload: { type: 'user_message', message: injectComprehensionContract(prompt) } },
+    { timestamp: '2026-09-04T01:00:02.000Z', type: 'event_msg', payload: { type: 'user_message', message: hiddenInstructions ? prompt : injectComprehensionContract(prompt) } },
     { timestamp: '2026-09-04T01:00:03.000Z', type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: response } },
     { timestamp: '2026-09-04T01:00:04.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: `turn-${name}`, last_agent_message: response } },
   ]));
 }
 
-function claudeSession(jsonl, temp, name, response, prompt) {
+function claudeSession(jsonl, temp, name, response, prompt, hiddenInstructions = false) {
   return parseClaude(jsonl(path.join(temp, 'comprehension-parser', `claude-${name}.jsonl`), [
-    { type: 'user', uuid: `user-${name}`, timestamp: '2026-09-04T02:00:00.000Z', message: { role: 'user', content: injectComprehensionContract(prompt) } },
+    { type: 'user', uuid: `user-${name}`, timestamp: '2026-09-04T02:00:00.000Z', message: { role: 'user', content: hiddenInstructions ? prompt : injectComprehensionContract(prompt) } },
     { type: 'assistant', uuid: `assistant-${name}`, timestamp: '2026-09-04T02:00:01.000Z', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: response }] } },
     { type: 'system', subtype: 'turn_complete', timestamp: '2026-09-04T02:00:02.000Z' },
   ]));
@@ -283,6 +310,7 @@ function registerComprehensionParserProjectionTests(context) {
   const longPrompt = `8천자 입력도 정확히 연결해줘\n${'긴'.repeat(7_500)}\nLONG-PROMPT-UNIQUE-TAIL`;
 
   test('Codex parser는 완료 본문과 ready/missing/invalid candidate를 보존하고 marker를 소유권으로 믿지 않는다', () => {
+    assertHiddenInstructionBinding(codexSession(jsonl, temp, 'hidden', responseWithPacket('완료'), longPrompt, true), longPrompt, temp);
     for (const scenario of parserCases()) {
       assertObservedCandidate(codexSession(jsonl, temp, scenario.name, scenario.response, prompt), scenario.name, scenario.body, prompt);
     }
@@ -295,6 +323,7 @@ function registerComprehensionParserProjectionTests(context) {
   });
 
   test('Claude parser는 완료 본문과 ready/missing/invalid candidate를 보존하고 marker를 소유권으로 믿지 않는다', () => {
+    assertHiddenInstructionBinding(claudeSession(jsonl, temp, 'hidden', responseWithPacket('완료'), longPrompt, true), longPrompt, temp);
     for (const scenario of parserCases()) {
       assertObservedCandidate(claudeSession(jsonl, temp, scenario.name, scenario.response, prompt), scenario.name, scenario.body, prompt);
     }

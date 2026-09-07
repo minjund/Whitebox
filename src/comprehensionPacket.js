@@ -384,6 +384,15 @@ function normalizedComprehensionContractPromptFingerprints(value) {
 function observeComprehensionContractPrompt(target, value) {
   if (!target || typeof target !== 'object') return false;
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
+  // A provider can receive the contract through its private instruction
+  // channel. Retain exact user-message proof separately; this is not proof
+  // that an external conversation belongs to Whitebox.
+  const userProof = normalizedComprehensionContractPromptFingerprints(target.comprehensionUserPromptFingerprints);
+  const userFingerprint = comprehensionPromptFingerprint(prompt);
+  if (prompt.trim() && !userProof.includes(userFingerprint) && userProof.length < MAX_CONTRACT_PROMPT_FINGERPRINTS) {
+    userProof.push(userFingerprint);
+  }
+  target.comprehensionUserPromptFingerprints = userProof;
   if (!hasComprehensionContract(prompt)) return false;
   target.comprehensionContractObserved = true;
   const current = normalizedComprehensionContractPromptFingerprints(
