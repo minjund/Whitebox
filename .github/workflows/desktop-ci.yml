@@ -106,7 +106,7 @@ jobs:
           test "$(node -p process.arch)" = arm64
           version="$(node -p 'require("./package.json").version')"
           ditto -x -k "release/Whitebox-$version-arm64.zip" release/mac-arm64
-          node scripts/mac-packaged-update-button.js
+          node scripts/mac-update-cohort-check.js
 
   mac-artifacts:
     runs-on: macos-15-intel
@@ -123,7 +123,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - run: npm run test:artifacts:mac
-      - run: node scripts/mac-packaged-update-button.js
+      - run: node scripts/mac-update-cohort-check.js
       - run: npm run test:terminal-restart
         env:
           WHITEBOX_TEST_EXECUTABLE: ${{ github.workspace }}/release/mac/Whitebox.app/Contents/MacOS/Whitebox

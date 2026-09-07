@@ -697,12 +697,14 @@ function registerCliAndUpdateTests(context) {
       { version: '1.7.3', env: 'WHITEBOX_V173_INSTALLER', installMode: 'manual' },
       { version: '1.7.4', env: 'WHITEBOX_V174_INSTALLER', installMode: 'manual' },
       { version: '1.7.5', env: 'WHITEBOX_V175_INSTALLER', installMode: 'automatic' },
+      { version: '1.8.4', env: 'WHITEBOX_V184_INSTALLER', installMode: 'automatic' },
+      { version: '1.8.5', env: 'WHITEBOX_V185_INSTALLER', installMode: 'automatic' },
     ]);
     const previousFixed = manifest.previousFixed;
-    assert.equal(compareVersions(previousFixed.version, cohorts.at(-1).version), 1,
+    assert.equal(compareVersions(previousFixed.version, manifest.frozen.at(-1).version), 1,
       'previousFixed must be newer than every immutable frozen cohort.');
-    assert.equal(cohorts.some(cohort => cohort.version === previousFixed.version), false,
-      'previousFixed is a public-channel attestation, not a frozen source attempt.');
+    assert.equal(cohorts.filter(cohort => cohort.version === previousFixed.version).length, 1,
+      'The latest installed client must be exercised exactly once too.');
     const latestRelease = {
       tag_name: `v${previousFixed.version}`,
       draft: false,
@@ -972,13 +974,12 @@ function registerCliAndUpdateTests(context) {
       ['tag release', releaseWorkflow],
     ]) {
       assert(workflowSource.includes("Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json'"), `${label} workflow가 공용 cohort 매니페스트를 읽어야 합니다.`);
-      assert(workflowSource.includes('$cohorts = @($manifest.frozen)')
-        && !workflowSource.includes('$cohorts = @($manifest.frozen) + @($manifest.previousFixed)'),
-      `${label} workflow는 previousFixed를 source attempt로 실행하지 않아야 합니다.`);
+      assert(workflowSource.includes('c.cohortList(c.readCohortManifest())'),
+      `${label} workflow는 frozen·1.8.4·1.8.5·최신 설치본을 검증해야 합니다.`);
       assert(workflowSource.includes('foreach ($cohort in $cohorts)'), `${label} workflow가 모든 cohort를 순회해야 합니다.`);
       assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
       assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
-      assert(workflowSource.includes('$cohorts.Count -ne 3') && workflowSource.includes('$attempt -ne 3'), `${label} workflow는 정확히 세 번 실행되지 않으면 실패해야 합니다.`);
+      assert(workflowSource.includes('$cohorts.Count -lt 5') && workflowSource.includes('$attempt -ne $cohorts.Count'), `${label} workflow는 모든 고정 설치본이 실행되지 않으면 실패해야 합니다.`);
       assert(workflowSource.includes('LoadToAgent-Setup-1.6.3.exe'), `${label} workflow가 공식 v1.6.3 설치본을 고정해야 합니다.`);
       assert(workflowSource.includes('LoadToAgent-Setup-1.6.23.exe'), `${label} workflow가 공식 immutable bridge를 고정해야 합니다.`);
       assert(workflowSource.includes('WHITEBOX_LEGACY_CANDIDATE_E2E=true'), `${label} workflow가 후보 버전 legacy 모드를 명시해야 합니다.`);

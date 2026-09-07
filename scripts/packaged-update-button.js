@@ -90,7 +90,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     return true;
   })()`);
   const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
-  while (!await renderer(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(version)}`)) {
+  while (!await renderer(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(options.currentVersion || version)}`)) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
@@ -107,6 +107,21 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   if (options.beforeClick) await options.beforeClick({ evaluate, renderer });
+  if (options.holdIncompleteHookRequest !== false) {
+    await evaluate(`(async () => {
+      const req=process.mainModule.require.bind(process.mainModule);
+      const identity=JSON.parse(req('fs').readFileSync(req('path').join(req('electron').app.getPath('userData'),'attention-hook-runtime.json'),'utf8'));
+      const socket=req('net').createConnection(identity.port, identity.host);
+      globalThis.__whiteboxIncompleteHookSocket=socket;
+      socket.on('error',()=>{});
+      await new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('error',reject);});
+      socket.write('POST '+identity.path+' HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nContent-Length: 100\\r\\n\\r\\n{');
+      await new Promise(resolve=>setTimeout(resolve,100));
+      if(socket.destroyed) throw new Error('Incomplete-hook fixture closed before the update');
+      return true;
+    })()`);
+    console.log('PASS incomplete hook request held open before actual packaged update');
+  }
   if (options.retryAfterFailure) {
     await evaluate(`(() => {
       const Host = process.mainModule.require('./src/terminalHost').TerminalHostClient;

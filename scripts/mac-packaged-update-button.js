@@ -10,6 +10,7 @@ const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-but
 
 if (process.platform !== 'darwin') throw new Error('Packaged macOS update button test requires macOS');
 const version = require('../package.json').version;
+const sourceVersion = process.env.WHITEBOX_MAC_SOURCE_VERSION || '1.7.3';
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-mac-button-')));
 const app = path.join(root, 'Applications', 'Whitebox.app');
 const executable = path.join(app, 'Contents', 'MacOS', 'Whitebox');
@@ -34,11 +35,21 @@ async function stopOwned(pid) {
 (async () => {
   fs.mkdirSync(path.dirname(app), {recursive:true});
   // Reproduce the reported installed macOS 1.7.3 cohort from official bytes.
-  const pinned = process.arch === 'arm64'
+  const originalPinned = process.arch === 'arm64'
     ? {size:118203096,sha256:'4de9ff62f526326d718bbd9de9b5ef296cf6236573c0910b85f40f6739a131ed'}
     : {size:119993464,sha256:'0cfbfa66d4ea202a0929b5f7eda1b72c2568d245df30ee5c5d15f642dc99e768'};
-  const sourceName = `Whitebox-1.7.3-${process.arch}.dmg`;
-  const sourceUrl = `https://github.com/minjund/Whitebox/releases/download/v1.7.3/${sourceName}`;
+  const pins = {
+    '1.7.3': originalPinned,
+    '1.8.4': process.arch === 'arm64'
+      ? {size:118201325,sha256:'d783426277328002a470a6d51fc0442036cad978b775e47f953ab0775f58c681'}
+      : {size:120000089,sha256:'62aac017fecde3798c0f616392e2484a876ad3193a763edc60fe159f87954f40'},
+    '1.8.5': process.arch === 'arm64'
+      ? {size:118205664,sha256:'550fe7b1e4dc77f5449bea1ee2dceb9b8d570a8472137403064a9cab646477e6'}
+      : {size:120000598,sha256:'378accbd45e2e477e1e2ea605ac8798e478a1d918da7154a5598d7c991d08139'},
+  };
+  const pinned = pins[sourceVersion]; assert(pinned, 'Unsupported official Mac cohort');
+  const sourceName = `Whitebox-${sourceVersion}-${process.arch}.dmg`;
+  const sourceUrl = `https://github.com/minjund/Whitebox/releases/download/v${sourceVersion}/${sourceName}`;
   const sourceResponse = await fetch(sourceUrl); assert(sourceResponse.ok);
   const sourceBytes = Buffer.from(await sourceResponse.arrayBuffer());
   assert.equal(sourceBytes.length,pinned.size);
@@ -49,8 +60,8 @@ async function stopOwned(pid) {
   try {execFileSync('/usr/bin/ditto',[path.join(mount,'Whitebox.app'),app]);}
   finally {execFileSync('/usr/bin/hdiutil',['detach',mount]);}
   const sourceMetadata=JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'),'package.json'));
-  assert.equal(sourceMetadata.version,'1.7.3');
-  console.log('PASS pinned official macOS v1.7.3 app.asar: '+sourceUrl+' '+pinned.size+' '+pinned.sha256);
+  assert.equal(sourceMetadata.version,sourceVersion);
+  console.log('PASS pinned official macOS v'+sourceVersion+' app.asar: '+sourceUrl+' '+pinned.size+' '+pinned.sha256);
   // Existing broken updaters require manual replacement once. Preserve the
   // profile across that replacement, then exercise the candidate's own updater.
   const sentinel=path.join(profile,'update-recovery-sentinel.json');
@@ -59,17 +70,23 @@ async function stopOwned(pid) {
   const env = {...process.env, HOME:home, WHITEBOX_TEST_INSTANCE:'1', WHITEBOX_DEMO_CAPTURE:'1'};
   delete env.ELECTRON_RUN_AS_NODE;
   driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
-  assert.equal(await driver.evaluate(`process.mainModule.require('electron').app.getVersion()`),'1.7.3');
+  assert.equal(await driver.evaluate(`process.mainModule.require('electron').app.getVersion()`),sourceVersion);
   await waitFor(async () => driver.evaluate(`(async () => {
     const w=process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
-    return w ? await w.webContents.executeJavaScript("document.querySelector('#currentVersion')?.textContent.trim() === '1.7.3'") : false;
-  })()`),'official macOS 1.7.3 renderer');
-  await driver.evaluate(`setTimeout(()=>process.mainModule.require('electron').app.quit(),100);true`);
-  driver.close();await waitFor(()=>!alive(driver.child.pid),'official macOS 1.7.3 shutdown');
-  fs.rmSync(app,{recursive:true,force:true});
-  execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
-  driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
-  await clickPackagedUpdate(driver, installer, version, {retryAfterFailure:true});
+    return w ? await w.webContents.executeJavaScript(${JSON.stringify(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(sourceVersion)}`)}) : false;
+  })()`),'official macOS '+sourceVersion+' renderer');
+  if (sourceVersion === '1.7.3') {
+    await driver.evaluate(`setTimeout(()=>process.mainModule.require('electron').app.quit(),100);true`);
+    driver.close();await waitFor(()=>!alive(driver.child.pid),'official macOS 1.7.3 shutdown');
+    fs.rmSync(app,{recursive:true,force:true});
+    execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
+    driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
+  }
+  await clickPackagedUpdate(driver, installer, version, {
+    retryAfterFailure:true,
+    currentVersion: sourceVersion === '1.7.3' ? version : sourceVersion,
+    holdIncompleteHookRequest: sourceVersion === '1.7.3',
+  });
   driver.close();
   const attempts = path.join(profile, 'updates', 'install-attempts.jsonl');
   let events = [], launch;

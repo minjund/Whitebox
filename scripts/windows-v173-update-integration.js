@@ -1002,6 +1002,30 @@ async function main() {
   existingFile(installedExecutable, `installed v${SOURCE_VERSION} executable`);
   assert.equal(executableVersion(installedExecutable), SOURCE_VERSION);
   const v173Metadata = packagedMetadata(installedAsar);
+  if (['1.8.4', '1.8.5'].includes(SOURCE_VERSION)) {
+    const hookBytes = asar.extractFile(installedAsar, 'src/attentionHookServer.js');
+    const hookPath = path.join(testRoot, 'official-attention-hook.cjs');
+    fs.writeFileSync(hookPath, hookBytes);
+    const hook = new (require(hookPath).AttentionHookServer)({runtimeFile:path.join(testRoot,'official-hook-runtime.json')});
+    const identity = await hook.start();
+    const socket = require('net').createConnection(identity.port, identity.host);
+    socket.on('error', () => {});
+    let stopped = false;
+    let disposal;
+    try {
+      await new Promise(resolve => socket.once('connect', resolve));
+      const received = new Promise(resolve => hook.server.once('request', resolve));
+      socket.write(`POST ${identity.path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{`);
+      await received;
+      disposal = hook.dispose().then(() => { stopped = true; });
+      await new Promise(resolve => setTimeout(resolve, 750));
+      assert.equal(stopped, false, 'Immutable recent-client incomplete-request defect must reproduce from official app.asar');
+      console.log(`PASS official ${SOURCE_VERSION} packaged hook defect reproduced;sha256=${crypto.createHash('sha256').update(hookBytes).digest('hex')}`);
+    } finally {
+      socket.destroy();
+      await (disposal || hook.dispose());
+    }
+  }
   assert.equal(v173Metadata.version, SOURCE_VERSION);
   const v173AllowsUnsigned = v173Metadata.whitebox?.distributionChannel === 'internal'
     && v173Metadata.whitebox?.allowUnsignedWindowsUpdates === true;
