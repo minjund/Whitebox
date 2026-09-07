@@ -5,6 +5,11 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.1 - 2026-09-07
+
+- Open live GPT conversations in focus mode through a new terminal session
+  that inherits their history, while reusing an existing fork on repeated opens.
+
 ## 1.8.0 - 2026-09-04
 
 - Add comprehension packets to completed main-agent PTY focus views so users
