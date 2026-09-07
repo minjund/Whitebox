@@ -817,8 +817,8 @@ async function run() {
       externalId: codexForkExternalId,
       provider: 'codex',
       clientKind: 'codex-desktop',
-      status: 'completed',
-      completedAt: new Date().toISOString(),
+      status: 'running',
+      completedAt: null,
       updatedAt: new Date().toISOString(),
       cwd: root,
       environment: {
@@ -830,48 +830,85 @@ async function run() {
       messages: [],
       lifecycle: [],
     };
-    const forkLaunch = await rendererValue(win, `(async () => {
+    const codexMainRoute = await rendererValue(win, `(async () => {
       const source = ${JSON.stringify(codexForkSource)};
+      window.WhiteboxApp.closePtyFocus({ restore: false });
+      window.WhiteboxApp.state.controlRoomObservedIds.add(source.id);
+      window.interactionTest.addSession(source);
+      window.interactionTest.emitSnapshot();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const main = document.querySelector('.control-room-main[data-pty-focus-trigger="' + CSS.escape(source.id) + '"]');
+      if (!main) return { button: false, opened: false };
       window.interactionTest.clearCalls();
       const support = window.WhiteboxTerminal.forkSupport(source);
-      const result = await window.WhiteboxTerminal.forkForAgent(source, '', false, {
-        focus: false,
-        includeReplay: true,
-      });
+      const forkTargetBefore = window.WhiteboxTerminal.forkTargetForAgent(source);
+      const regularTargetsBefore = window.WhiteboxTerminal.agentTargets(source);
+      const canOpen = window.WhiteboxApp.canOpenPtyFocus(source);
+      const focusSurface = main.dataset.focusSurface || '';
+      main.click();
+      const deadline = Date.now() + 20_000;
+      let forkTarget = null;
+      while (Date.now() < deadline) {
+        forkTarget = window.WhiteboxTerminal.forkTargetForAgent(source);
+        const embedded = window.WhiteboxTerminal.embeddedState();
+        if (forkTarget
+          && window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && window.WhiteboxApp.state.ptyFocusTargetId === forkTarget.terminalId
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === forkTarget.terminalId
+          && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      const embedded = window.WhiteboxTerminal.embeddedState();
       return {
+        button: true,
+        focusSurface,
+        opened: Boolean(forkTarget)
+          && window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && window.WhiteboxApp.state.ptyFocusTargetId === forkTarget.terminalId
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === forkTarget.terminalId,
         support,
-        result: {
-          terminalId: result.terminalId,
-          forked: result.forked,
-          background: result.background,
-          creationId: result.creationId,
-          sourceSessionId: result.forkSourceSessionId,
-          sourceSignature: result.forkSourceSignature,
-        },
+        forkTargetBefore,
+        forkTarget,
+        regularTargetsBefore,
+        canOpen,
         createCalls: window.interactionTest.getCalls()
           .filter(call => call.name === 'terminalCreate'),
       };
     })()`);
-    codexForkTerminalId = String(forkLaunch?.result?.terminalId || '');
-    const forkCreateOptions = forkLaunch?.createCalls?.[0]?.args?.[0] || null;
-    assert(forkLaunch?.support?.supported === true
-      && JSON.stringify(forkLaunch.support.args) === JSON.stringify(['fork', codexForkExternalId]),
-    `Codex Desktop 대화가 renderer에서 정확한 fork launch로 판별되지 않았습니다: ${JSON.stringify(forkLaunch)}`);
+    codexForkTerminalId = String(codexMainRoute?.forkTarget?.terminalId || '');
+    const forkCreateOptions = codexMainRoute?.createCalls?.[0]?.args?.[0] || null;
+    assert(codexMainRoute?.button === true
+      && codexMainRoute.focusSurface === 'pty'
+      && codexMainRoute.opened === true
+      && codexMainRoute.support?.supported === true
+      && JSON.stringify(codexMainRoute.support.args) === JSON.stringify(['fork', codexForkExternalId])
+      && !codexMainRoute.forkTargetBefore
+      && codexMainRoute.regularTargetsBefore?.length === 0
+      && codexMainRoute.canOpen === true,
+    `실행 중 Codex Desktop 담당 노드의 첫 클릭이 실제 fork PTY로 라우팅되지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
     assert(codexForkTerminalId
-      && forkLaunch.result.forked === true
-      && forkLaunch.result.background === true
-      && forkLaunch.createCalls.length === 1,
-    `renderer→IPC Codex fork 생성이 정확히 한 번 완주하지 않았습니다: ${JSON.stringify(forkLaunch)}`);
+      && codexMainRoute.forkTarget?.forked === true
+      && codexMainRoute.forkTarget?.creationId
+      && codexMainRoute.createCalls.length === 1,
+    `담당 노드 클릭의 renderer→IPC Codex fork 생성이 정확히 한 번 완주하지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
     assert(forkCreateOptions?.type === 'agent'
       && forkCreateOptions.provider === 'codex'
       && JSON.stringify(forkCreateOptions.args) === JSON.stringify(['fork', codexForkExternalId])
       && forkCreateOptions.cwd === root
       && forkCreateOptions.sessionBackend === 'direct'
       && forkCreateOptions.agentForkSourceSessionId === codexForkSource.id
-      && forkCreateOptions.agentForkSourceSignature === forkLaunch.support.sourceSignature
+      && forkCreateOptions.agentForkSourceSignature === codexMainRoute.support.sourceSignature
+      && forkCreateOptions.creationId === codexMainRoute.forkTarget.creationId
       && !forkCreateOptions.bridgeId
+      && !forkCreateOptions.agentConnectionSignature
       && !forkCreateOptions.recoveryArgs
-      && !forkCreateOptions.initialCommand,
+      && !forkCreateOptions.reuseBridge
+      && !forkCreateOptions.initialCommand
+      && !forkCreateOptions.initialCommandInArgs,
     `Codex fork renderer launch spec에 원본 attach/resume 또는 질문이 섞였습니다: ${JSON.stringify(forkCreateOptions)}`);
 
     const codexLaunchArgs = ['fork', codexForkExternalId];
@@ -886,54 +923,10 @@ async function run() {
       && codexForkSession.provider === 'codex'
       && codexForkSession.backend === 'direct'
       && codexForkSession.agentForkSourceSessionId === codexForkSource.id
-      && codexForkSession.agentForkSourceSignature === forkLaunch.support.sourceSignature
+      && codexForkSession.agentForkSourceSignature === codexMainRoute.support.sourceSignature
       && codexForkSession.agentResumeSessionId === ''
       && codexForkSession.conversationBound === false,
     `실제 Codex fork PTY가 원본 대화 writer에 attach되지 않은 새 세션이 아닙니다: ${JSON.stringify(codexForkSession)}`);
-
-    const codexMainRoute = await rendererValue(win, `(async () => {
-      const source = { ...${JSON.stringify(codexForkSource)}, status: 'running', completedAt: null };
-      window.WhiteboxApp.closePtyFocus({ restore: false });
-      window.WhiteboxApp.state.controlRoomObservedIds.add(source.id);
-      window.interactionTest.addSession(source);
-      window.interactionTest.emitSnapshot();
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const main = document.querySelector('.control-room-main[data-pty-focus-trigger="' + CSS.escape(source.id) + '"]');
-      if (!main) return { button: false, opened: false };
-      const support = window.WhiteboxTerminal.forkSupport(source);
-      const forkTarget = window.WhiteboxTerminal.forkTargetForAgent(source);
-      const regularTargets = window.WhiteboxTerminal.agentTargets(source);
-      const canOpen = window.WhiteboxApp.canOpenPtyFocus(source);
-      main.click();
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline) {
-        const embedded = window.WhiteboxTerminal.embeddedState();
-        if (window.WhiteboxApp.state.ptyFocusSessionId === source.id
-          && embedded.connected
-          && embedded.agentSessionId === source.id
-          && embedded.terminalId === forkTarget?.terminalId) break;
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-      const embedded = window.WhiteboxTerminal.embeddedState();
-      return {
-        button: true,
-        opened: window.WhiteboxApp.state.ptyFocusSessionId === source.id
-          && embedded.connected
-          && embedded.agentSessionId === source.id
-          && embedded.terminalId === forkTarget?.terminalId,
-        support,
-        forkTarget,
-        regularTargets,
-        canOpen,
-      };
-    })()`);
-    assert(codexMainRoute?.button === true
-      && codexMainRoute.opened === true
-      && codexMainRoute.support?.supported === false
-      && codexMainRoute.forkTarget?.terminalId === codexForkTerminalId
-      && codexMainRoute.regularTargets?.length === 0
-      && codexMainRoute.canOpen === true,
-      `Codex Desktop 메인 노드가 PTY 집중모드 route를 열지 못했습니다: ${JSON.stringify(codexMainRoute)}`);
     await waitForRenderer(win, `(() => {
       const embedded = window.WhiteboxTerminal.embeddedState();
       return embedded.connected
@@ -992,6 +985,72 @@ async function run() {
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLiveMarker)})`,
       'Codex fork live marker가 renderer xterm에 표시되지 않았습니다.');
 
+    const codexReuse = await rendererValue(win, `(async () => {
+      const source = window.WhiteboxApp.state.snapshot.sessions
+        .find(item => item.id === ${JSON.stringify(codexForkSource.id)});
+      const beforeRefresh = window.WhiteboxTerminal.forkTargetForAgent(source);
+      await window.WhiteboxTerminal.refresh();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const afterRefresh = window.WhiteboxTerminal.forkTargetForAgent(source);
+      const createCountAfterRefresh = window.interactionTest.getCalls()
+        .filter(call => call.name === 'terminalCreate').length;
+      window.WhiteboxApp.closePtyFocus({ restore: false });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const main = document.querySelector('.control-room-main[data-pty-focus-trigger="'
+        + CSS.escape(source.id) + '"]');
+      main?.click();
+      const deadline = Date.now() + 20_000;
+      let afterReopen = null;
+      while (Date.now() < deadline) {
+        afterReopen = window.WhiteboxTerminal.forkTargetForAgent(source);
+        const embedded = window.WhiteboxTerminal.embeddedState();
+        if (afterReopen
+          && window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && window.WhiteboxApp.state.ptyFocusTargetId === afterReopen.terminalId
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === afterReopen.terminalId
+          && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      const embedded = window.WhiteboxTerminal.embeddedState();
+      return {
+        mainFound: Boolean(main),
+        beforeRefresh,
+        afterRefresh,
+        afterReopen,
+        createCountAfterRefresh,
+        createCountAfterReopen: window.interactionTest.getCalls()
+          .filter(call => call.name === 'terminalCreate').length,
+        reopened: Boolean(afterReopen)
+          && window.WhiteboxApp.state.ptyFocusSessionId === source.id
+          && window.WhiteboxApp.state.ptyFocusTargetId === afterReopen.terminalId
+          && embedded.connected
+          && embedded.agentSessionId === source.id
+          && embedded.terminalId === afterReopen.terminalId,
+      };
+    })()`);
+    const managerForks = manager.list().filter(item =>
+      item.agentForkSourceSessionId === codexForkSource.id);
+    const forkIpcCreates = ipcCalls.filter(call => call.operation === 'create'
+      && call.args?.[0]?.agentForkSourceSessionId === codexForkSource.id);
+    assert(codexReuse.mainFound
+      && codexReuse.beforeRefresh?.terminalId === codexForkTerminalId
+      && codexReuse.afterRefresh?.terminalId === codexForkTerminalId
+      && codexReuse.afterReopen?.terminalId === codexForkTerminalId
+      && codexReuse.beforeRefresh?.creationId === forkCreateOptions.creationId
+      && codexReuse.afterRefresh?.creationId === forkCreateOptions.creationId
+      && codexReuse.afterReopen?.creationId === forkCreateOptions.creationId
+      && codexReuse.createCountAfterRefresh === 1
+      && codexReuse.createCountAfterReopen === 1
+      && codexReuse.reopened === true
+      && managerForks.length === 1
+      && managerForks[0].id === codexForkTerminalId
+      && forkIpcCreates.length === 1,
+    `snapshot refresh와 담당 노드 재클릭이 기존 Codex fork PTY를 재사용하지 않았습니다: ${JSON.stringify({ codexReuse, managerForks, forkIpcCreates })}`);
+    await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLiveMarker)})`,
+      'Codex fork PTY를 다시 연 뒤 기존 xterm 출력이 유지되지 않았습니다.');
+
     const summary = {
       terminalId,
       pid: session.pid,
@@ -1006,6 +1065,8 @@ async function run() {
       codexForkSourceSessionId: codexForkSource.id,
       codexForkArgs: codexLaunchArgs,
       codexForkLiveMarker: codexLiveMarker,
+      codexForkCreateCount: codexReuse.createCountAfterReopen,
+      codexForkReusedAfterRefresh: codexReuse.reopened,
       hostEndpoint: hostInfo.endpoint,
       authenticatedHostClients: server.clients.size,
       hydrationMarker,

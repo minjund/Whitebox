@@ -1632,7 +1632,11 @@ function registerUiContractTests(context) {
     assert.ok(actualPtyRunner.includes('fs.rmSync(exactRoot'));
     assert.ok(actualPtyRunner.includes('process.exitCode = cleanupError'));
     assert.ok(actualPtyIntegration.includes("const codexLaunchArgs = ['fork', codexForkExternalId]"));
-    assert.ok(actualPtyIntegration.includes('forkForAgent(source'));
+    assert.ok(actualPtyIntegration.includes("status: 'running'"));
+    assert.ok(actualPtyIntegration.includes("document.querySelector('.control-room-main[data-pty-focus-trigger="));
+    assert.ok(actualPtyIntegration.includes('main.click()'));
+    assert.equal(actualPtyIntegration.includes('forkForAgent(source'), false,
+      '실제 PTY 통합 검증은 API로 fork를 미리 만들지 말고 실행 중 담당 노드 클릭부터 시작해야 합니다.');
     assert.ok(actualPtyIntegration.includes('client.get(codexForkTerminalId, true)'));
     assert.ok(pkg.build.mac.target.some(item => item.arch.includes('arm64') && item.arch.includes('x64')));
   });
@@ -2654,6 +2658,7 @@ function registerUiContractTests(context) {
     const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
     const terminalAgent = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const sharedSource = fs.readFileSync(path.join(root, 'renderer', 'shared.js'), 'utf8');
+    const i18nSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
     const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'renderer', 'styles-workflow-map.css'), 'utf8');
     const controlRoomStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-control-room.css'), 'utf8');
@@ -2667,13 +2672,55 @@ function registerUiContractTests(context) {
     const historySource = dashboard.slice(dashboard.indexOf('if (historyList) {'), dashboard.indexOf('const projectSelect ='));
     const graphFilterSource = dashboard.slice(dashboard.indexOf('function graphFilteredSessions()'), dashboard.indexOf('function renderProviderVisibilitySettings()'));
     const historyEvents = filterEvents.slice(filterEvents.indexOf('$("#projectHistoryRail")'), filterEvents.indexOf('const controlProjectSelect'));
+    const sharedForkGuardSource = sharedSource.slice(
+      sharedSource.indexOf('canForkCodexDesktopSession(session)'),
+      sharedSource.indexOf('preserveScrollPositions', sharedSource.indexOf('canForkCodexDesktopSession(session)')),
+    );
+    const terminalForkGuardSource = terminalAgent.slice(
+      terminalAgent.indexOf('function forkSupport('),
+      terminalAgent.indexOf('function forkAssociationSupport('),
+    );
+    const sharedSandbox = {
+      window: { addEventListener() {} },
+      document: { addEventListener() {}, hidden: false },
+    };
+    vm.runInNewContext(sharedSource, sharedSandbox, { filename: 'renderer/shared.js' });
+    const { canForkCodexDesktopSession, canOpenResponsibleFocus } = sharedSandbox.window.WhiteboxRendererUtils;
+    const runningCanonicalCodex = {
+      id: 'codex:019f-running-canonical',
+      externalId: '019f-running-canonical',
+      provider: 'codex',
+      clientKind: 'codex-desktop',
+      status: 'running',
+    };
 
-    assert.match(graphNodeSource, /const writablePtySurface = !session\.parentId[\s\S]*const responsibleFocus = canOpenResponsibleFocus\(session\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
-      '선택한 작업 흐름의 담당 root가 PTY 또는 읽기 전용 집중 모드로 연결되지 않습니다.');
+    assert.equal(canForkCodexDesktopSession(runningCanonicalCodex), true,
+      '실행 중인 canonical Codex Desktop root도 기존 기록을 이어받은 별도 PTY를 만들 수 있어야 합니다.');
+    assert.equal(canForkCodexDesktopSession({ ...runningCanonicalCodex, status: 'waiting' }), true,
+      'canonical Codex Desktop 포크 가능 여부가 waiting 상태로 제한되면 안 됩니다.');
+    assert.equal(canForkCodexDesktopSession({ ...runningCanonicalCodex, status: 'completed' }), true,
+      'canonical Codex Desktop 포크 가능 여부가 completed 상태에만 묶이면 안 됩니다.');
+    assert.doesNotMatch(sharedForkGuardSource, /session\?*\.status/u,
+      'renderer 공용 포크 판정에 mutable status gate를 다시 추가하면 안 됩니다.');
+    assert.doesNotMatch(terminalForkGuardSource, /agentSession\.status/u,
+      'terminal 포크 launchSpec 판정에 mutable status gate를 다시 추가하면 안 됩니다.');
+
+    const nonForkableRoot = { ...runningCanonicalCodex, id: 'codex:other-source' };
+    assert.equal(canForkCodexDesktopSession(nonForkableRoot), false,
+      'canonical source identity가 일치하지 않는 root를 포크 가능한 세션으로 렌더하면 안 됩니다.');
+    assert.equal(canOpenResponsibleFocus(nonForkableRoot), true,
+      '포크 identity가 없는 native root는 읽기 전용 작업 기록 집중 화면으로 fallback할 수 있어야 합니다.');
+    assert.equal(canOpenResponsibleFocus({ ...nonForkableRoot, parentId: runningCanonicalCodex.id }), false,
+      '하위 AI는 root용 읽기 전용 집중 화면으로 fallback하지 않고 오른쪽 상세 패널로 가야 합니다.');
+
+    assert.match(graphNodeSource, /const forkableMainPty = canForkCodexDesktopSession\(session\);[\s\S]*const writablePtySurface = !session\.parentId && \(forkableMainPty[\s\S]*const transcriptSurface = !writablePtySurface;[\s\S]*const responsibleFocus = canOpenResponsibleFocus\(session\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
+      '선택한 작업 흐름의 담당 root는 forkable Codex를 PTY로, PTY가 없는 root만 읽기 전용 집중 모드로 연결해야 합니다.');
     assert.doesNotMatch(graphNodeSource, /data-inline-pty-trigger=/u,
       '루트 작업 노드가 과거 인라인 PTY 경로를 다시 노출하고 있습니다.');
-    assert.match(controlRoomSource, /const responsibleFocus = canOpenResponsibleFocus\(root\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
-      '작업 현황의 담당 root 노드가 PTY 또는 읽기 전용 집중 모드로 연결되지 않습니다.');
+    assert.match(controlRoomSource, /const forkableMainPty = canForkCodexDesktopSession\(root\);[\s\S]*const transcriptSurface = !forkableMainPty && !isAssociatedForkPty\(root\)[\s\S]*const responsibleFocus = canOpenResponsibleFocus\(root\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-focus-surface=/u,
+      '작업 현황의 forkable Codex root는 PTY로, PTY가 없는 root만 읽기 전용 집중 모드로 연결해야 합니다.');
+    assert.match(historySource, /const historyInteraction = hasWritablePtySurface\(session\)[\s\S]*data-pty-focus-trigger=[\s\S]*data-open-session=/u,
+      '작업 기록에서도 forkable root는 PTY 집중 모드로, 비-forkable 기록만 읽기 전용 상세로 라우팅해야 합니다.');
     assert.match(sharedSource, /function canOpenResponsibleFocus\(session\)[\s\S]*session\.parentId[\s\S]*session\.clientKind[\s\S]*session\.controlAuthority[\s\S]*session\.importMode/u,
       '담당 집중 모드는 하위·플러그인·외부 제어 projection과 native root를 구분해야 합니다.');
     assert.match(events, /const ptyFocus = event\.target\.closest\("\[data-pty-focus-trigger\]"\)[\s\S]*const requestedId = ptyFocus\.dataset\.ptyFocusTrigger[\s\S]*const root = ownerRootSession\(requestedId\)[\s\S]*const focusId = String\(root\?\.id \|\| requestedId \|\| ""\)[\s\S]*if \(canOpenPtyFocus\(root\)\)[\s\S]*await openDrawer\(focusId,[\s\S]*else if \(canOpenResponsibleFocus\(root\)\)[\s\S]*await openResponsibleFocus\(focusId,[\s\S]*await openDrawer\(requestedId,/u,
@@ -2753,6 +2800,10 @@ function registerUiContractTests(context) {
       '별도 PTY 하위 팝업 구현이 다시 추가되면 안 됩니다.');
     assert.match(ptyFocus, /function openResponsibleFocus\(sessionId, options = \{\}\)[\s\S]*activeFocusMode = "transcript"[\s\S]*refreshTranscriptDetail\(root\)/u,
       '독립 PTY가 없는 담당 노드는 full-screen 읽기 전용 작업 기록으로 열려야 합니다.');
+    assert.match(ptyFocus, /const forkedCodexPty = writablePty[\s\S]*canForkCodexDesktopSession\?\.\(root\) === true[\s\S]*ptyFocusTerminalHelp"\)\.textContent = t\(forkedCodexPty[\s\S]*"agent\.codex_desktop_fork_help"[\s\S]*"pty_focus\.terminal_help"/u,
+      'Codex Desktop 집중 모드는 원본 terminal 재사용 안내 대신 별도 fork PTY 안내를 표시해야 합니다.');
+    assert.match(i18nSource, /"agent\.codex_desktop_fork_help":\s*\{"ko":"(?=[^"]*원래 Codex 대화)(?=[^"]*(?:별도|새) Codex 세션)(?=[^"]*PTY)[^"]+"/u,
+      '한국어 집중 모드 도움말은 원본 대화를 건드리지 않고 별도 Codex 세션을 PTY로 연다는 점을 밝혀야 합니다.');
     assert.match(ptyFocus, /function mergedTranscriptMessages\(detail, live\)[\s\S]*function refreshTranscriptDetail\(root\)[\s\S]*loadSessionDetail\(id, true, snapshotVersion\)[\s\S]*function syncPendingPtyFocus\(\)[\s\S]*activeFocusMode === "transcript"\) refreshTranscriptDetail\(root\)/u,
       '열린 읽기 전용 집중 화면은 최신 snapshot을 즉시 합치고 버전이 바뀐 전체 기록을 다시 읽어야 합니다.');
     assert.match(ptyFocus, /const previousText = String\(previous\?\.text \|\| ""\)[\s\S]*const liveText = String\(message\?\.text \|\| ""\)[\s\S]*previousText\.length > liveText\.length \? previousText : liveText/u,

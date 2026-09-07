@@ -338,7 +338,6 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const canonicalSourceSessionId = sessionId ? `codex:${sessionId}` : '';
     const runId = String(agentSession.runId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,193}$/.test(sessionId)
-      || String(agentSession.status || '').toLowerCase() !== 'completed'
       || sourceSessionId !== canonicalSourceSessionId
       || /^(?:terminal|bridge):/i.test(sessionId)
       || /^process-\d+$/i.test(sessionId)
@@ -367,11 +366,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   }
 
   function forkAssociationSupport(agentSession) {
-    // Completion is required to create a new Codex fork, but an already
-    // running fork PTY must remain reachable if the source task becomes live
-    // again. Re-run every canonical/source/environment check while ignoring
-    // only that mutable presentation status; this path never creates a PTY.
-    return forkSupport(agentSession ? { ...agentSession, status: 'completed' } : agentSession);
+    // A fork association is tied to the canonical source identity, not to its
+    // mutable running/completed presentation status.
+    return forkSupport(agentSession);
   }
 
   function resultError(result, fallback) {
