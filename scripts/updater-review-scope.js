@@ -11,6 +11,7 @@ const SENSITIVE_PATH_PATTERNS = Object.freeze([
   /^renderer\/(?:app[^/]*\.js|index\.html|i18n-messages\.js)$/,
   /^scripts\/(?:after-pack|windows-artifact-check|windows-[^/]*update[^/]*|mac-update-integration-test|package-content-check|check-legacy-update-channel|check-update-compatibility-cohorts|legacy-update-bridge\.config|legacy-update-compatibility|release-asset-contract|updater-review-scope)\.js$/,
   /^scripts\/update-compatibility-cohorts\.json$/,
+  /^scripts\/(?:mac-packaged-update-button|packaged-update-button|update-restart-regression|electron-asar-cleanup-check)\.js$/,
   /^scripts\/tests\/core-update-workspace\.js$/,
   /^\.github\/workflows\/(?:legacy-update-bridge|legacy-update-channel-canary|release|v173-update-compatibility)\.yml$/,
   /^\.github\/pull_request_template\.md$/,

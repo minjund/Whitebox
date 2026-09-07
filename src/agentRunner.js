@@ -653,6 +653,7 @@ class AgentRunner extends EventEmitter {
       : DEFAULT_PERSIST_DELAY_MS;
     this.disposing = false;
     this.disposePromise = null;
+    this.disposeResult = null;
     ensureDir(this.runsDir);
     pruneManagedRuns(this.runsDir, {
       retentionDays: options.retentionDays,
@@ -678,7 +679,11 @@ class AgentRunner extends EventEmitter {
   }
 
   resumeAfterUpdateFailure() {
-    if (this.disposePromise) return false;
+    // Reuse a completely stopped runner, but never revive unconfirmed work or
+    // reset a disposal that is still in flight.
+    if (this.disposePromise && (!this.disposeResult || this.disposeResult.errors.length || this.active.size)) return false;
+    this.disposePromise = null;
+    this.disposeResult = null;
     this.disposing = false;
     return true;
   }
@@ -1218,10 +1223,11 @@ class AgentRunner extends EventEmitter {
     if (this.disposePromise) return this.disposePromise;
     this.disposing = true;
     const runs = [...this.active.values()];
-    this.disposePromise = Promise.all(runs.map(run => this.disposeRun(run))).then(results => ({
-      stopped: runs.length,
-      errors: results.flat(),
-    }));
+    this.disposeResult = null;
+    this.disposePromise = Promise.all(runs.map(run => this.disposeRun(run))).then(results => {
+      this.disposeResult = { stopped: runs.length, errors: results.flat() };
+      return this.disposeResult;
+    });
     return this.disposePromise;
   }
 }

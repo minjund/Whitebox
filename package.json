@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "A local-first desktop control room for seeing and steering Claude, Codex, Gemini, and Grok at work.",
   "main": "main.js",
   "author": "wincube AX",
@@ -59,7 +59,7 @@
     "check:source": "node scripts/check-source.js",
     "check:package": "node scripts/package-content-check.js",
     "check:release-assets": "node scripts/release-asset-contract.js",
-    "test": "node scripts/regression-test.js && node scripts/execution-activity-test.js && node scripts/conversation-layout-test.js",
+    "test": "node scripts/regression-test.js && node scripts/execution-activity-test.js && node scripts/conversation-layout-test.js && node scripts/update-restart-regression.js && node scripts/electron-asar-cleanup-check.js",
     "test:accuracy": "node scripts/accuracy-evaluation.js",
     "test:terminal": "electron scripts/terminal-integration-test.js",
     "test:terminal:tmux-pane": "electron scripts/exact-tmux-pane-integration.js",
