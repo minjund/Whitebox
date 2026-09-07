@@ -1181,7 +1181,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     $("#latestVersion").textContent = update.latestVersion || window.WhiteboxI18n.t("ui.not_checked");
     const compactVersion = $("#updateCompactVersion");
     if (compactVersion) {
-      compactVersion.textContent = `현재 ${current || "확인 중"} → 새 버전 ${update.latestVersion || "확인 중"} · 약 3분 · 설치 중에는 이 화면에서 작업 상태를 볼 수 없음`;
+      compactVersion.textContent = available
+        ? `현재 ${comparisonCurrent || "확인 중"} → 새 버전 ${update.latestVersion || "확인 중"} · 약 3분 · 설치 중에는 이 화면에서 작업 상태를 볼 수 없음`
+        : title;
     }
     const versionComparison = $("#versionComparisonLabel");
     if (versionComparison) {
@@ -1193,12 +1195,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             ? t("update.comparison_checking")
             : t("update.comparison_unchecked");
     }
-    $("#installationType").textContent = installationTypeLabel(
+    $("#installationType").textContent = available && (update.asset || downloaded) ? installationTypeLabel(
       update.installType,
       update.latestVersion || "—",
       update.targetInstallType,
       comparisonCurrent || "—",
-    );
+    ) : title;
     $("#releasePublishedAt").textContent = update.publishedAt
       ? window.WhiteboxI18n.t("update.published", {
           version: update.latestVersion || "—",
