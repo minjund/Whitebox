@@ -24,6 +24,7 @@ const {
   findInstalledDesktopApp,
   canInstallSilently,
   preflightAutomaticUpdate,
+  macAppBundlePath,
   launchDownloadedUpdate,
   readDesktopAppVersion,
   verifyDownloadedInstaller,
@@ -1423,7 +1424,9 @@ async function updateInstallPlan() {
     installType: sourceInstallType,
     appPath: process.execPath,
   });
-  const automatic = Boolean(desktopAppPath) && (process.platform === 'win32' || process.platform === 'darwin');
+  const macBundle = process.platform === 'darwin' ? macAppBundlePath(desktopAppPath) : '';
+  const automatic = Boolean(desktopAppPath) && (process.platform === 'win32'
+    || (Boolean(macBundle) && !macBundle.startsWith('/Volumes/')));
   return {
     sourceInstallType,
     installType: automatic ? 'desktop' : sourceInstallType,

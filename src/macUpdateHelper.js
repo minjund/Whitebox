@@ -1,6 +1,9 @@
 'use strict';
 
-const fs = require('fs');
+// The detached helper also runs under Electron's Node mode. Its patched fs
+// treats app.asar as a directory, so recursive bundle removal leaves that real
+// file behind (ENOTEMPTY). Bundle operations must use the physical filesystem.
+const fs = process.versions.electron ? require('original-fs') : require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
@@ -529,6 +532,7 @@ module.exports = {
   pathIsDirectory,
   pathIsExecutableFile,
   readBundleMetadata,
+  removePath,
   runCommand,
   runCli,
   terminateApplication,
