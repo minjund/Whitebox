@@ -318,6 +318,53 @@ async function run() {
       throw new Error(`새 stamp 확인도 동일한 담당 PTY를 재사용해야 합니다: ${JSON.stringify(secondReview)}`);
     }
 
+    // A response request is a read receipt, not an approval or result review.
+    const attentionSelector = `.home-attention-item[data-open-session="${resultSessionId}"]`;
+    await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      appControl.closePtyFocus();
+      window.interactionTest.updateSession(${JSON.stringify(resultSessionId)}, {
+        status: 'waiting', updatedAt: new Date().toISOString(),
+        attention: { category: 'required', required: true, kind: 'input', source: 'input-tool',
+          requestId: 'read-receipt-a', requestedAt: new Date().toISOString(), summary: '환경을 선택하세요.' },
+      });
+      window.interactionTest.emitSnapshot();
+      appControl.selectView('all');
+      appControl.render();
+    })()`);
+    await waitFor(win, `Boolean(document.querySelector(${JSON.stringify(attentionSelector)}))`,
+      '새 사용자 요청이 메인 확인 필요 목록에 표시되지 않았습니다.');
+    await win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(attentionSelector)}).click()`);
+    await waitFor(win, `(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      return appControl.isProjectNoticeSeen('attention', session)
+        && !appControl.needsManagementInbox(session)
+        && !document.querySelector(${JSON.stringify(attentionSelector)})
+        && appControl.needsUserResponse(session);
+    })()`, '요청을 열어 읽은 뒤 메인 확인 필요 목록이 즉시 갱신되지 않았습니다.');
+    await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      appControl.closePtyFocus();
+      appControl.state.projectNoticeAcks.clear();
+      appControl.loadProjectNoticeAcks();
+      appControl.render();
+    })()`);
+    await waitFor(win, `!document.querySelector(${JSON.stringify(attentionSelector)})`,
+      '읽음 기록을 다시 불러온 뒤 같은 요청이 재등장했습니다.');
+    await win.webContents.executeJavaScript(`(() => {
+      const appControl = window.WhiteboxApp;
+      const session = appControl.state.snapshot.sessions.find(item => item.id === ${JSON.stringify(resultSessionId)});
+      window.interactionTest.updateSession(session.id, {
+        attention: { ...session.attention, requestId: 'read-receipt-b' },
+      });
+      window.interactionTest.emitSnapshot();
+      appControl.render();
+    })()`);
+    await waitFor(win, `Boolean(document.querySelector(${JSON.stringify(attentionSelector)}))`,
+      '새 요청 ID가 확인 필요 목록에 다시 표시되지 않았습니다.');
+
+    process.stdout.write(`요청 열람 → 메인 확인 필요 제거 → 저장 복원 → 새 요청 재등장 검증 통과\n`);
     process.stdout.write(`완료 기록 → verified PTY focus → 확인 저장/재등장 검증 통과\n${JSON.stringify({
       setup, initial, projectAcknowledged, firstReview, reappeared, secondReview, themeStates,
     }, null, 2)}\n${Object.values(outputs).join('\n')}\n`);

@@ -15,6 +15,7 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
     isLiveSession = session => ["starting", "running"].includes(session && session.status),
     controlRoomStatus = session => session?.status,
     isResultReviewComplete = () => false,
+    isProjectNoticeSeen = () => false,
     resultReviewTargets = () => [],
     agentRoleLabel = value => String(value || ""),
     renderGlobalStats = () => {},
@@ -82,12 +83,12 @@ window.WhiteboxAppFactories.createManagement = function createManagement(context
   const needsManagementReview = (session, now = Date.now()) => Boolean(
     !isResultReviewComplete(session)
     && isRecentSession(session, now)
-    && (needsUserResponse(session) || needsDirectResultReview(session)),
+    && ((needsUserResponse(session) && !isProjectNoticeSeen("attention", session)) || needsDirectResultReview(session)),
   );
   const needsManagementInbox = (session, now = Date.now()) => Boolean(
     !isResultReviewComplete(session)
     && isRecentSession(session, now)
-    && (needsUserResponse(session) || needsDirectResultReview(session)),
+    && ((needsUserResponse(session) && !isProjectNoticeSeen("attention", session)) || needsDirectResultReview(session)),
   );
   const prioritySummary = value => {
     const lines = String(value || "")

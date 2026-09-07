@@ -1964,17 +1964,34 @@ function registerUiContractTests(context) {
     assert.deepStrictEqual(Array.from(reloaded.resultReviewTargets(result), session => session.id), ['notice-result'],
       '새 결과 stamp는 확인 목록에도 다시 나타나야 합니다.');
 
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'app-management.js'), 'utf8'), sandbox);
+    const management = sandbox.window.WhiteboxAppFactories.createManagement(core);
+    const noticeNow = Date.parse(attention.updatedAt);
+    assert.equal(management.needsManagementInbox(attention, noticeNow), true);
+    assert.equal(management.rootManagementReviews([attention], noticeNow).length, 1);
     assert.equal(core.markProjectNoticeSeen('attention', attention), true);
+    assert.equal(management.needsManagementInbox(attention, noticeNow), false,
+      '읽은 요청은 메인 확인 필요 목록과 개수에서도 제거되어야 합니다.');
+    assert.equal(management.rootManagementReviews([attention], noticeNow).length, 0);
+    assert.equal(management.needsUserResponse(attention), true,
+      '읽음 처리가 실제 답변이나 권한 승인으로 간주되면 안 됩니다.');
+    const afterRestart = sandbox.window.WhiteboxAppFactories.createCore({});
+    afterRestart.state.snapshot = core.state.snapshot;
+    const reloadedManagement = sandbox.window.WhiteboxAppFactories.createManagement(afterRestart);
+    assert.equal(reloadedManagement.needsManagementInbox(attention, noticeNow), false);
     assert.equal(core.isProjectNoticeSeen('attention', attention), true);
     attention.updatedAt = '2026-08-12T01:02:00.000Z';
     attention.attention = { ...attention.attention, summary: '환경을 지금 고르세요.' };
     assert.equal(core.isProjectNoticeSeen('attention', attention), true,
       '같은 requestId의 문구나 갱신 시각 변화만으로 프로젝트 알림이 되살아나면 안 됩니다.');
+    assert.equal(management.needsManagementInbox(attention, noticeNow), false);
     attention.attention = { ...attention.attention, requestId: 'request-b' };
     assert.equal(core.isProjectNoticeSeen('attention', attention), true,
       '함께 확인한 요청 중 하나가 해결되어도 남은 기존 요청을 새 알림처럼 표시하면 안 됩니다.');
     attention.attention = { ...attention.attention, requestId: 'request-b|request-c' };
     assert.equal(core.isProjectNoticeSeen('attention', attention), false, '새 요청 ID만 다시 프로젝트에 표시해야 합니다.');
+    assert.equal(management.needsManagementInbox(attention, noticeNow), true);
+    assert.equal(management.rootManagementReviews([attention], noticeNow).length, 1);
 
     const firstPrompt = { fingerprint: 'prompt-a', target: { id: 'terminal-a' } };
     assert.equal(core.markProjectNoticeSeen('terminal', attention, firstPrompt), true);
@@ -2168,6 +2185,7 @@ function registerUiContractTests(context) {
     const viewFallbacks = [];
     const fallbackToasts = [];
     const acknowledgements = [];
+    const noticeRenders = [];
     const raceState = { details: new Map(), selectedId: '' };
     const raceDrawer = sandbox.window.WhiteboxAppFactories.createDrawer({
       state: raceState,
@@ -2186,6 +2204,7 @@ function registerUiContractTests(context) {
         return Promise.resolve({ opened: true });
       },
       acknowledgeSessionNotices: session => { acknowledgements.push(session.id); return 1; },
+      renderSessions: reason => noticeRenders.push(reason),
       selectView: view => viewFallbacks.push(view),
       toast: message => fallbackToasts.push(message),
     });
@@ -2200,6 +2219,8 @@ function registerUiContractTests(context) {
     assert.deepStrictEqual(fallbackToasts, [], '취소된 A open이 B 위에 실패 toast를 띄우면 안 됩니다.');
     assert.deepStrictEqual(acknowledgements, [currentRoot.id],
       'stale A 알림은 확인 처리하지 않고 verified B만 처리해야 합니다.');
+    assert.deepStrictEqual(noticeRenders, ['notice-seen'],
+      '검증된 PTY 열람 후 확인 필요 목록을 즉시 다시 렌더링해야 합니다.');
     assert.equal(raceState.selectedId, currentRoot.id);
   });
 

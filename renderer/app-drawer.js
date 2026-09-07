@@ -215,7 +215,10 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
           if (reviewed > 0) {
             renderSessions("result-reviewed");
             renderWorkspaces();
-          } else if (acknowledged > 0) renderWorkspaces();
+          } else if (acknowledged > 0) {
+            renderSessions("notice-seen");
+            renderWorkspaces();
+          }
           return true;
         }
       } catch (error) {
@@ -248,7 +251,10 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
       && options.attentionActivation !== true;
     state.drawerForceLatest = state.drawerTab === "chat";
     const reviewed = options.resultReview === true ? markResultReviewComplete(selected || id) : 0;
-    if (options.acknowledge !== false && acknowledgeSessionNotices(selected || id) > 0) renderWorkspaces();
+    if (options.acknowledge !== false && acknowledgeSessionNotices(selected || id) > 0) {
+      renderSessions("notice-seen");
+      renderWorkspaces();
+    }
     openDrawerSurface(resolvedPresentation(options));
     renderDrawer();
     if (reviewed > 0) {
@@ -292,7 +298,10 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.agentCommandRoutes.delete(id);
     state.drawerForceLatest = true;
     const reviewed = options.resultReview === true ? markResultReviewComplete(child) : 0;
-    if (options.acknowledge !== false && acknowledgeSessionNotices(child) > 0) renderWorkspaces();
+    if (options.acknowledge !== false && acknowledgeSessionNotices(child) > 0) {
+      renderSessions("notice-seen");
+      renderWorkspaces();
+    }
     openDrawerSurface("modal");
     renderDrawer();
     if (reviewed > 0) {
