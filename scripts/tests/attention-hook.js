@@ -4,6 +4,7 @@ const assert = require('assert');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { Readable } = require('stream');
@@ -160,6 +161,48 @@ function fakeIdentity(runtimeFile, port = 31_337, nonce = 'a'.repeat(64)) {
 }
 
 function registerAttentionHookTests(context) {
+  context.test('앱 종료는 미완성 HTTP 요청과 헤더 없는 연결을 닫고 실제 서버 종료까지 기다린다', async () => {
+    const server = new AttentionHookServer({ runtimeFile: path.join(temporaryRoot(), 'runtime.json') });
+    const identity = await server.start();
+    const sockets = [];
+    let timer;
+    try {
+      for (const partialBody of [false, true]) {
+        const socket = net.createConnection(identity.port, identity.host);
+        sockets.push(socket);
+        socket.on('error', () => {});
+        await new Promise(resolve => socket.once('connect', resolve));
+        if (partialBody) {
+          const received = new Promise(resolve => server.server.once('request', resolve));
+          socket.write(`POST ${identity.path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{`);
+          await received;
+        }
+      }
+      const closed = sockets.map(socket => new Promise(resolve => socket.once('close', resolve)));
+      const disposing = server.dispose();
+      assert.strictEqual(server.dispose(), disposing, 'Concurrent quit callers must await the same cleanup');
+      await Promise.race([
+        Promise.all([disposing, ...closed]),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Hook server shutdown stalled')), 3000); }),
+      ]);
+      assert.equal(fs.existsSync(server.runtimeFile), false);
+      assert(sockets.every(socket => socket.destroyed));
+    } finally {
+      clearTimeout(timer);
+      for (const socket of sockets) socket.destroy();
+      await server.dispose();
+    }
+  });
+
+  context.test('서버 시작과 앱 종료가 겹쳐도 listening 소켓과 runtime 파일이 남지 않는다', async () => {
+    const server = new AttentionHookServer({ runtimeFile: path.join(temporaryRoot(), 'runtime.json') });
+    const starting = server.start();
+    const disposing = server.dispose();
+    await Promise.all([starting, disposing]);
+    assert.equal(server.server, null);
+    assert.equal(server.identity, null);
+    assert.equal(fs.existsSync(server.runtimeFile), false);
+  });
   const { test } = context;
 
   test('명령 훅은 Whitebox runtime 경로를 우선하고 기존 환경 변수도 이어받는다', () => {

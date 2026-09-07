@@ -109,7 +109,21 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
-  return [...validated.frozen];
+  const recent = [
+    { version: '1.8.4', size: 85300893, sha256: '79a922dc265aaeab7a5d7d30cd763d0446eba6f162eae703e2c714b05b12955d' },
+    { version: '1.8.5', size: 85301431, sha256: '7b769ba143c4d70eb312a88b8994f963737cda49ff621b0070ea3231eb1666c2' },
+  ].map(value => validateCohort({ ...value,
+    url: `https://github.com/minjund/Whitebox/releases/download/v${value.version}/Whitebox-Setup-${value.version}.exe`,
+    env: `WHITEBOX_V${value.version.replaceAll('.', '')}_INSTALLER`, installMode: 'automatic',
+  }, { expectedInstallMode: 'automatic', label: `recent ${value.version}` }));
+  const cohorts = [...validated.frozen, ...recent];
+  const duplicate = cohorts.find(value => value.version === validated.previousFixed.version);
+  if (duplicate) {
+    for (const key of COHORT_KEYS) {
+      if (duplicate[key] !== validated.previousFixed[key]) throw new Error(`Pinned recent cohort differs from previousFixed: ${key}`);
+    }
+  } else cohorts.push(validated.previousFixed);
+  return cohorts;
 }
 
 function validateLatestStableRelease(manifest, release) {

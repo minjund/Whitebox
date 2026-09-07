@@ -435,6 +435,8 @@ class AttentionHookServer {
     this.pending = new Map();
     this.startPromise = null;
     this.disposed = false;
+    this.disposePromise = null;
+    this.connections = new Set();
   }
 
   _enabledNow() {
@@ -456,6 +458,11 @@ class AttentionHookServer {
     if (this.startPromise) return this.startPromise;
     this.startPromise = new Promise((resolve, reject) => {
       const server = http.createServer((request, response) => this._handleRequest(request, response));
+      server.on('connection', socket => {
+        this.connections.add(socket);
+        socket.once('close', () => this.connections.delete(socket));
+        if (this.disposed) socket.destroy();
+      });
       this.server = server;
       const onError = error => {
         server.removeListener('listening', onListening);
@@ -652,11 +659,17 @@ class AttentionHookServer {
     return [...this.pending.values()].map(entry => entry.request);
   }
 
-  async dispose() {
-    if (this.disposed) return;
+  dispose() {
+    if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
+    this.disposePromise = this._dispose();
+    return this.disposePromise;
+  }
+
+  async _dispose() {
     this.enabled = false;
     for (const entry of [...this.pending.values()]) this._settle(entry, { action: 'none' }, 'disposed');
+    if (this.startPromise) await this.startPromise.catch(() => {});
     const identity = this.identity;
     this.identity = null;
     this.startPromise = null;
@@ -669,7 +682,21 @@ class AttentionHookServer {
     const server = this.server;
     this.server = null;
     if (!server) return;
-    await new Promise(resolve => server.close(() => resolve()));
+    // Complete already parsed hook responses first. An incomplete HTTP body
+    // never enters pending, so server.close() alone can otherwise hold app
+    // shutdown past the updater's parent-exit deadline. Destroy remaining
+    // transports after the response flush grace period, then await the actual
+    // server-close acknowledgement; the timer itself is never success.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        for (const socket of this.connections) socket.destroy();
+      }, 500);
+      server.close(error => {
+        clearTimeout(timer);
+        if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+        else resolve();
+      });
+    });
   }
 }
 
