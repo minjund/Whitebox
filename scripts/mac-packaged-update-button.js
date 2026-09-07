@@ -25,8 +25,9 @@ async function waitFor(predicate, label, timeout = 120000) {
 }
 async function stopOwned(pid) {
   if (!pid || !alive(pid)) return;
-  const command = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {encoding:'utf8'}).trim();
-  assert(command.startsWith(executable), 'Refusing to stop unrelated process: ' + command);
+  // process.title changes ps output; lsof's executable mapping is authoritative.
+  const mapped = execFileSync('/usr/sbin/lsof', ['-a','-p',String(pid),'-d','txt','-Fn'], {encoding:'utf8'});
+  assert(mapped.split('\n').includes('n'+executable), 'Refusing to stop unrelated process: ' + mapped);
   process.kill(pid, 'SIGTERM');
   await waitFor(() => !alive(pid), 'isolated app cleanup', 30000);
 }

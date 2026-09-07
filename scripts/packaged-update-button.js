@@ -8,6 +8,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 async function openInspectedApp(executable, args, env) {
+  env = { ...env };
+  delete env.WHITEBOX_DEMO_CAPTURE;
+  delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(executable, ['--inspect=127.0.0.1:0', ...args], {
     env, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'],
   });
