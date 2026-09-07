@@ -37,14 +37,17 @@ async function openInspectedApp(executable, args, env) {
     const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id); clearTimeout(request.timer);
-    if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
+    if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message) + '\nExpression: ' + request.expression));
     else request.resolve(message.result?.result?.value);
   });
   const evaluate = expression => new Promise((resolve, reject) => {
     const id = ++sequence;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('Debugger evaluation timed out')); }, 30000);
-    pending.set(id, { resolve, reject, timer });
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
+    pending.set(id, { resolve, reject, timer, expression });
+    // Inspector awaitPromise holds only a weak reference. Keep executeJavaScript
+    // promises alive in the main context until the next sequential evaluation.
+    const retainedExpression = `globalThis.__whiteboxPackagedEvaluation = (${expression})`;
+    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: retainedExpression, awaitPromise: true, returnByValue: true } }));
   });
   // Electron replaces its bootstrap V8 context during startup.
   await new Promise(resolve => setTimeout(resolve, 2000));
