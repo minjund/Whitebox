@@ -859,13 +859,57 @@ function registerCliAndUpdateTests(context) {
     );
   });
 
-  test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', () => {
+  test('검수 에이전트와 CI는 구버전 패키지 업데이트 계약을 필수 게이트로 유지한다', async () => {
     const agentInstructions = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     const releaseGuide = fs.readFileSync(path.join(root, 'docs', 'RELEASING.md'), 'utf8');
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'v173-update-compatibility.yml'), 'utf8');
     const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     const frozenClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-v173-update-integration.js'), 'utf8');
     const legacyClientTest = fs.readFileSync(path.join(root, 'scripts', 'windows-legacy-update-bridge-integration.js'), 'utf8');
+    const waiterSource = frozenClientTest.slice(
+      frozenClientTest.indexOf('async function waitForRelaunchLog('),
+      frozenClientTest.indexOf('async function waitForInstalledPackage('),
+    );
+    const readyLog = [
+      'candidate=fixture;version=1.8.1', 'relaunchStarted=true;attempt=1;pid=42',
+      'rendererReady=true;pid=42', 'relaunchReady=true;attempt=1;pid=42',
+    ].join('\r\n');
+    function relaunchPollingFixture(reads) {
+      let now = 0;
+      let readCount = 0;
+      let profileChecks = 0;
+      const sandbox = {
+        assert, readWindowsUpdateLogForPolling,
+        Date: { now: () => now },
+        setTimeout(resolve, delay) { now += delay; resolve(); },
+        readLog() {
+          const value = reads[Math.min(readCount++, reads.length - 1)];
+          if (value instanceof Error) throw value;
+          return value;
+        },
+        fatalLogLines: lines => lines.filter(line => line.startsWith('error=')),
+        linesStarting: (lines, prefix) => lines.filter(line => line.startsWith(prefix)),
+        assertInstalledAppProfileIsolation() { profileChecks += 1; },
+        assertProfileDirectoryUsed() { profileChecks += 1; },
+        installedExecutable: 'fixture.exe', inheritedUserDataDir: 'fixture-profile',
+      };
+      const wait = require('vm').runInNewContext(`${waiterSource}\nwaitForRelaunchLog`, sandbox);
+      return { run: () => wait('fixture.log', '1.8.1', 600), checks: () => profileChecks };
+    }
+    for (const code of ['EBUSY', 'EPERM']) {
+      const locked = Object.assign(new Error('log writer holds the file'), { code });
+      const recovered = relaunchPollingFixture([locked, readyLog]);
+      assert.equal(await recovered.run(), 42);
+      assert.equal(recovered.checks(), 2, 'A readable ready log must still validate the process and profile.');
+      const persistent = relaunchPollingFixture([locked]);
+      await assert.rejects(persistent.run(), /Timed out waiting for updater relaunch.*[\s\S]*Last log read error/);
+      assert.equal(persistent.checks(), 0, 'A persistent log lock must never count as relaunch success.');
+      await assert.rejects(relaunchPollingFixture([locked, 'error=failed']).run(), /Updater helper failed/);
+      await assert.rejects(relaunchPollingFixture([locked, readyLog + '\r\nrelaunchReady=true;attempt=1;pid=42']).run(), /more than once/);
+      await assert.rejects(relaunchPollingFixture([locked, readyLog.replace('rendererReady=true;pid=42', '')]).run(), /renderer-ready handshake/);
+    }
+    const fatalRead = Object.assign(new Error('invalid log path'), { code: 'EINVAL' });
+    await assert.rejects(relaunchPollingFixture([fatalRead]).run(), error => error === fatalRead);
     const exactLogEvidence = '\uFEFFhelperStarted=true\r\nmalformed-or-stale-evidence=true\r\n';
     assert.deepStrictEqual(
       readWindowsUpdateLogForPolling(() => exactLogEvidence),
