@@ -755,6 +755,7 @@ function createCodexParser(dependencies) {
     const rawFinalResponse = state.lastFinalAnswerRaw
       || (state.lastTurnCompleted ? state.lastAssistantRaw : '');
     session.comprehensionContractObserved = state.comprehensionContractObserved;
+    session.comprehensionUserPromptFingerprints = normalizedComprehensionContractPromptFingerprints(state.comprehensionUserPromptFingerprints);
     session.comprehensionContractPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
       state.comprehensionContractPromptFingerprints,
     );

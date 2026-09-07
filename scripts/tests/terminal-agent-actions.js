@@ -87,12 +87,10 @@ function registerTerminalAgentActionTests(context) {
     assert.deepStrictEqual(injected, ['원래 사용자 요청']);
     assert.equal(creates.length, 1, '계약 주입은 추가 AI 실행이나 PTY 생성을 만들면 안 됩니다.');
     assert.equal(creates[0].initialCommand, '<contract>same-generation-only</contract>\n\n원래 사용자 요청');
-    assert.equal(creates[0].initialCommandInArgs, false);
-    assert(!creates[0].args.some(argument => String(argument).includes('<contract>')),
-      '여러 줄 계약을 AI 실행 인자로 전달하면 안 됩니다.');
-    assert.equal(commands.length, 1, '계약이 포함된 최초 요청은 같은 PTY에 정확히 한 번 전달해야 합니다.');
-    assert.equal(commands[0][0], 'terminal:contract');
-    assert.equal(commands[0][1], creates[0].initialCommand);
+    assert.equal(creates[0].initialCommandInArgs, true);
+    assert.equal(creates[0].args.at(-1), '원래 사용자 요청',
+      'terminal host가 시작 전에 내부 지시와 사용자 요청을 분리할 수 있어야 합니다.');
+    assert.equal(commands.length, 0, '시작 인자로 보낸 요청을 준비되지 않은 PTY에 다시 붙여넣으면 안 됩니다.');
     assert.equal(creates[0].title, 'codex · 원래 사용자 요청', '내부 계약은 사용자에게 보이는 제목에 섞이면 안 됩니다.');
   });
 

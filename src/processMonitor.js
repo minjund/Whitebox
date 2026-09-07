@@ -571,6 +571,10 @@ function bridgePromptMatches(session, bridge) {
   const expected = String(bridge?.initialPromptFingerprint || '').trim().toLowerCase();
   const bridgeStart = Date.parse(bridge?.startedAt || 0);
   if (!/^[a-f0-9]{64}$/u.test(expected) || !Number.isFinite(bridgeStart)) return false;
+  if (bridge?.initialPromptFingerprintVersion === 'instructions-v1') {
+    return bridgeComprehensionLaunchOwned(bridge)
+      && normalizedComprehensionContractPromptFingerprints(session.comprehensionUserPromptFingerprints).includes(expected);
+  }
   if (bridge?.initialPromptFingerprintVersion === 'raw-v1') {
     const exactPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
       session.comprehensionContractPromptFingerprints,
@@ -615,7 +619,7 @@ function bridgeComprehensionBindingOwned(session, bridge) {
 
 function promoteBridgeComprehension(session, bridge, authority) {
   if (!bridgeComprehensionLaunchOwned(bridge)
-    || session?.comprehensionContractObserved !== true
+    || (bridge.initialPromptFingerprintVersion !== 'instructions-v1' && session?.comprehensionContractObserved !== true)
     || !bridgePromptMatches(session, bridge)) return false;
   return promoteComprehensionCandidate(session, authority);
 }

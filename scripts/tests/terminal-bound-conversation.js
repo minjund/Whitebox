@@ -519,6 +519,36 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
   });
 
   test('fresh 계약 PTY 소유권만 binding과 함께 영속되고 종료 후 provenance-only로 복원된다', async () => {
+    for (const provider of ['claude', 'codex']) {
+      const nativeStore = path.join(temp, `native-instructions-${provider}.json`);
+      const native = managerFixture(root, { storeFile: nativeStore });
+      const prompt = '테스트해줘봐';
+      const injected = injectComprehensionContract(prompt);
+      const request = {
+        type: 'agent', provider, cwd: root, args: [prompt], initialCommand: injected,
+        initialCommandInArgs: true, sessionBackend: 'direct', transient: false,
+        creationId: `create:native-${provider}`, deliveryId: `start:native-${provider}`,
+      };
+      const result = native.manager.create(request);
+      assert.equal(result.deliveryState, 'accepted');
+      assert.equal(result.initialPromptFingerprintVersion, 'instructions-v1');
+      assert.equal(result.initialPromptFingerprint, comprehensionPromptFingerprint(prompt));
+      const args = native.spawns[0].args;
+      assert.equal(args.at(-1), prompt, '사용자 요청만 CLI 시작 프롬프트에 들어가야 합니다.');
+      assert.equal(args.at(-2), '--');
+      if (provider === 'claude') {
+        assert.equal(args[0], '--append-system-prompt');
+        assert.equal(args[1], require('../../src/comprehensionPacket').COMPREHENSION_CONTRACT.replace(/\s+/gu, ' '));
+      } else {
+        assert.equal(args[0], '-c');
+        assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), require('../../src/comprehensionPacket').COMPREHENSION_CONTRACT);
+      }
+      native.manager.create(request);
+      assert.equal(native.spawns.length, 1, '동일 생성 재시도는 최초 요청을 재실행하면 안 됩니다.');
+      assert.equal(native.writes.length, 0, 'CLI 준비 전 PTY 입력을 쓰면 안 됩니다.');
+      const restored = managerFixture(root, { storeFile: nativeStore });
+      assert.equal(restored.manager.get(result.id).initialPromptFingerprintVersion, 'instructions-v1');
+    }
     const storeFile = path.join(temp, 'fresh-comprehension-ownership.json');
     const { manager } = managerFixture(root, { storeFile });
     const originalPrompt = `완료 뒤 이해 패킷까지 같은 응답에서 만들어 주세요\n${'긴'.repeat(7_500)}\nTERMINAL-LONG-PROMPT-TAIL`;

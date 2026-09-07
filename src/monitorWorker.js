@@ -572,6 +572,7 @@ function publicDetailSession(stored, runtime) {
   delete session.comprehensionOrigin;
   delete session.comprehensionContractObserved;
   delete session.comprehensionContractPromptFingerprints;
+  delete session.comprehensionUserPromptFingerprints;
   delete session.comprehensionProvenanceOnly;
   return session;
 }
