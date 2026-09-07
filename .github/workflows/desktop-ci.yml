@@ -103,6 +103,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - run: npm run test:artifacts:mac
+      - run: node scripts/mac-packaged-update-button.js
       - run: npm run test:terminal-restart
         env:
           WHITEBOX_TEST_EXECUTABLE: ${{ github.workspace }}/release/mac/Whitebox.app/Contents/MacOS/Whitebox

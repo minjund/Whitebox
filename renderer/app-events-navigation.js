@@ -91,13 +91,22 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
       renderUpdateSettings();
     });
     $("#installUpdateBtn").addEventListener("click", async () => {
+      if (state.updateInstallPending) return;
+      state.updateInstallPending = true;
       state.update = { ...(state.update || {}), status: "downloading", error: "" };
       renderUpdateSettings();
-      const update = await performUiAction(() => window.whitebox.installDownloadedUpdate(), "ui.could_not_prepare_the_update_file", $("#installUpdateBtn"));
-      if (update) state.update = update;
-      else if (state.update && state.update.asset) state.update.status = "available";
-      renderUpdateSettings();
-      if (state.update && state.update.installMode === "manual") toast(t("ui.open_installer"));
+      try {
+        const update = await window.whitebox.installDownloadedUpdate();
+        if (update) state.update = update;
+        if (update?.installMode === "manual") toast(t("ui.open_installer"));
+      } catch (error) {
+        const message = window.WhiteboxI18n.errorText(error, "ui.could_not_prepare_the_update_file");
+        state.update = { ...(state.update || {}), status: state.update?.asset ? "available" : "error", error: message };
+        toast(message);
+      } finally {
+        state.updateInstallPending = false;
+        renderUpdateSettings();
+      }
     });
     $("#openReleaseBtn").addEventListener("click", async () => {
       await performUiAction(() => window.whitebox.openUpdateRelease(), "ui.could_not_open_the_github_release_page", $("#openReleaseBtn"));

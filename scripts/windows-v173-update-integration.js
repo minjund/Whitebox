@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { Readable } = require('stream');
+const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-button');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
@@ -1160,6 +1161,41 @@ async function main() {
   assertProfileDirectoryUsed(directUserDataDir, 'Explicit direct Electron profile');
   assertProfileDirectoryUsed(inheritedUserDataDir, 'Updater-inherited Whitebox Electron profile');
   assertInstalledAppProfileIsolation(activeAppPid, installedExecutable, 'completed frozen-client attempt');
+
+  // Exercise the packaged renderer -> preload -> IPC -> real main lifecycle.
+  // Preserve the existing low-level handshake assertions above as well.
+  closeInstalledAppGracefully(activeAppPid);
+  await waitForProcessExit(activeAppPid);
+  const buttonProfile = path.join(isolatedAppDataRoot, 'button-profile');
+  const driver = await openInspectedApp(installedExecutable, [`--user-data-dir=${buttonProfile}`], process.env);
+  activeAppPid = driver.child.pid;
+  const buttonParentPid = activeAppPid;
+  try {
+    await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true });
+  } finally { driver.close(); }
+  const attemptLog = path.join(buttonProfile, 'updates', 'install-attempts.jsonl');
+  let events = [];
+  let buttonLaunch = null;
+  const buttonDeadline = Date.now() + 120000;
+  while (!buttonLaunch && Date.now() < buttonDeadline) {
+    if (fs.existsSync(attemptLog)) {
+      events = fs.readFileSync(attemptLog, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const failures = events.filter(event => event.stage === 'failed');
+      assert.equal(failures.length <= 1, true, JSON.stringify(failures));
+      buttonLaunch = events.find(event => event.stage === 'helper-ready');
+    }
+    if (!buttonLaunch) await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  assert(buttonLaunch, 'Real packaged update button never acknowledged its helper: ' + JSON.stringify(events));
+  for (const event of events.filter(event => event.stage === 'downloaded')) updateInstallerPaths.add(event.downloadedPath);
+  const successfulEvents = events.filter(event => event.attemptId === buttonLaunch.attemptId).map(event => event.stage);
+  assert(successfulEvents.indexOf('workload-stopped') < successfulEvents.indexOf('helper-ready'));
+  await waitForProcessExit(buttonParentPid);
+  activeAppPid = await waitForRelaunchLog(buttonLaunch.logPath, targetVersion);
+  await waitForInstalledPackage(targetVersion);
+  await waitForUpdateArtifactCleanup(buttonLaunch);
+  assertCompletedInstall(buttonLaunch.logPath, { parentPid: buttonParentPid, expectedVersion: targetVersion });
+  console.log('PASS actual packaged update button: persistent failure, retry, workload shutdown, verified install and renderer-ready relaunch');
 
   console.log(`✓ Official Whitebox ${SOURCE_VERSION} reached ${targetVersion} through its packaged ${sourceCohort.installMode} path; the candidate updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }

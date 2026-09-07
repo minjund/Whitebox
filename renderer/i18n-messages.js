@@ -339,6 +339,7 @@
     "activity.waiting_for_result_short": {"ko":"결과를 기다리는 중","en":"Waiting for a result","zh-CN":"正在等待结果"},
     "activity.waiting_for_next": {"ko":"다음 할 일을 기다리는 중","en":"Waiting for the next task","zh-CN":"正在等待下一个任务"},
     "settings.update.auto_install_restart": {"ko":"앱이 종료된 뒤 업데이트를 자동으로 설치하고 다시 시작합니다.","en":"The app will close, install the update automatically, and restart.","zh-CN":"应用将关闭、自动安装更新，然后重新启动。"},
+    "settings.update.installing": {"ko":"업데이트 설치 및 재시작 준비 중…","en":"Preparing update installation and restart…","zh-CN":"正在准备安装更新并重新启动…"},
     "settings.update.file_verified": {"ko":"파일 안전 확인 완료","en":"File verified","zh-CN":"文件验证完成"},
     "agent.resume_preparing": {"ko":"AI 대화를 다시 이어갈 준비를 하고 있습니다.","en":"Preparing to reopen the AI conversation.","zh-CN":"正在准备继续 AI 对话。"},
     "agent.resume_check_failed": {"ko":"이 대화를 다시 열 수 있는지 확인하지 못했습니다.","en":"Could not determine whether this conversation can be reopened.","zh-CN":"无法确认此对话是否可以重新打开。"},

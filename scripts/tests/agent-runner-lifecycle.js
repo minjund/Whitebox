@@ -505,8 +505,9 @@ function registerAgentRunnerLifecycleTests(context) {
     runner.active.delete(controlled.id);
     assert.deepStrictEqual(runner.prepareForUpdate([]), { active: 0 });
     assert.deepStrictEqual(await runner.dispose(), { stopped: 0, errors: [] });
-    assert.equal(runner.resumeAfterUpdateFailure(), false, 'dispose가 시작된 runner를 다시 활성화하면 안 됩니다.');
-    assert.match(runner.start({}).error, /종료 중/);
+    assert.equal(runner.resumeAfterUpdateFailure(), true, '성공적으로 종료된 빈 runner는 업데이트 재시도를 허용해야 합니다.');
+    assert.deepStrictEqual(runner.prepareForUpdate([]), { active: 0 });
+    await runner.dispose();
   });
 
   test('앱 종료는 POSIX 직접 실행 AI의 자연스러운 close를 기다리고 상태를 저장한다', async () => {

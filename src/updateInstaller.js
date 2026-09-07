@@ -576,6 +576,18 @@ function canInstallSilently(options) {
   return Boolean(automaticInstallPlatform(options || {}));
 }
 
+async function preflightAutomaticUpdate(options = {}) {
+  if (automaticInstallPlatform(options) !== 'darwin') return;
+  const target = macAppBundlePath(options.appPath);
+  const access = options.access || fs.promises.access;
+  try {
+    await access(path.dirname(target), fs.constants.W_OK);
+    await access(target, fs.constants.W_OK);
+  } catch (_error) {
+    throw new Error('앱 설치 위치에 쓰기 권한이 없어 자동 업데이트할 수 없습니다. 릴리스 페이지에서 DMG를 받아 Applications 폴더의 앱을 교체해 주세요.');
+  }
+}
+
 function windowsPowerShell(environment = process.env) {
   const systemRoot = String(environment.SystemRoot || environment.WINDIR || 'C:\\Windows');
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -895,6 +907,7 @@ async function launchDownloadedUpdate(options = {}) {
 
   const spawn = options.spawn || spawnProcess;
   if (automaticPlatform === 'darwin') {
+    await preflightAutomaticUpdate(options);
     const targetApp = macAppBundlePath(appPath);
     if (!targetApp || !fs.existsSync(targetApp)) throw new Error('현재 설치된 macOS 앱을 찾지 못했습니다.');
     const helperPath = path.join(downloadsDir, 'install-update-macos.js');
@@ -1090,6 +1103,7 @@ module.exports = {
   WINDOWS_UPDATE_HELPER,
   automaticInstallPlatform,
   canInstallSilently,
+  preflightAutomaticUpdate,
   findInstalledDesktopApp,
   isWithinDirectory,
   launchDownloadedUpdate,

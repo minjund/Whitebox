@@ -22,6 +22,8 @@ const { normalizeWslList } = require('./src/tmuxMonitor');
 const { UpdateManager } = require('./src/updateManager');
 const {
   findInstalledDesktopApp,
+  canInstallSilently,
+  preflightAutomaticUpdate,
   launchDownloadedUpdate,
   readDesktopAppVersion,
   verifyDownloadedInstaller,
@@ -1489,9 +1491,20 @@ async function connectTerminalForStartup(timeoutMs = 4_000) {
   }
 }
 
-async function performDownloadedUpdateInstall() {
+function recordUpdateInstallEvent(attemptId, stage, detail = {}) {
+  try {
+    fs.mkdirSync(userFile('updates'), { recursive: true });
+    fs.appendFileSync(userFile('updates/install-attempts.jsonl'), JSON.stringify({
+      at: new Date().toISOString(), attemptId, stage, pid: process.pid, ...detail,
+    }) + '\n', 'utf8');
+  } catch (error) { reportRecoverableError('update-install-log', error); }
+}
+
+async function performDownloadedUpdateInstall(attemptId) {
   if (!updateManager) throw new Error('업데이트 기능이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.');
+  recordUpdateInstallEvent(attemptId, 'download');
   const downloaded = await updateManager.download();
+  recordUpdateInstallEvent(attemptId, 'downloaded', { downloadedPath: downloaded.downloadedPath, version: downloaded.latestVersion });
   const installPlan = await updateInstallPlan();
   const launchOptions = {
     platform: process.platform,
@@ -1507,12 +1520,14 @@ async function performDownloadedUpdateInstall() {
   };
   let terminalShutdownAttempted = false;
   let agentRunnerPrepared = false;
-  if (installPlan.installMode === 'automatic') {
+  let prepareWorkload = null;
+  if (canInstallSilently(launchOptions)) {
     const impact = await updateWorkloadImpact();
     if (!await confirmActiveTerminalUpdate(impact)) {
       return { ...updateManager.getState(), installMode: 'automatic', installCanceled: true };
     }
-    launchOptions.beforeAutomaticInstall = async () => {
+    prepareWorkload = async () => {
+      recordUpdateInstallEvent(attemptId, 'workload-shutdown');
       if (runner) {
         runner.prepareForUpdate(impact.agentRuns);
         agentRunnerPrepared = true;
@@ -1524,11 +1539,18 @@ async function performDownloadedUpdateInstall() {
       } else if (terminalManager) {
         await terminalManager.dispose({ preserveSessions: true });
       }
+      recordUpdateInstallEvent(attemptId, 'workload-stopped');
     };
   }
   let outcome;
   try {
+    updateManager.setState({ status: 'installing', error: '' });
+    // Start the helper's parent-exit timer only after workload shutdown.
+    await verifyDownloadedInstaller(launchOptions);
+    await preflightAutomaticUpdate(launchOptions);
+    if (prepareWorkload) await prepareWorkload();
     outcome = await launchDownloadedUpdate(launchOptions);
+    recordUpdateInstallEvent(attemptId, 'helper-ready', outcome);
   } catch (error) {
     let failure = error;
     const cancellationUnconfirmed = error?.code === 'UPDATE_HELPER_CANCELLATION_UNCONFIRMED';
@@ -1555,21 +1577,29 @@ async function performDownloadedUpdateInstall() {
     throw failure;
   }
   if (outcome.mode === 'automatic') {
+    recordUpdateInstallEvent(attemptId, 'quit-requested');
     isQuitting = true;
     setImmediate(() => app.quit());
   } else if (terminalShutdownAttempted && terminalManager instanceof TerminalHostClient) {
     terminalManager.recoverAfterUpdateFailure()
       .catch(error => reportRecoverableError('update-terminal-host-recover', error));
   }
+  if (outcome.mode !== 'automatic') updateManager.setState({ status: 'downloaded', error: '' });
   return { ...updateManager.getState(), installMode: outcome.mode };
 }
 
 function installDownloadedUpdate() {
   if (updateInstallPromise) return updateInstallPromise;
-  updateInstallPromise = performDownloadedUpdateInstall().then(result => {
+  const attemptId = crypto.randomUUID();
+  updateInstallPromise = performDownloadedUpdateInstall(attemptId).then(result => {
     if (result.installMode !== 'automatic' || result.installCanceled) updateInstallPromise = null;
     return result;
   }, error => {
+    recordUpdateInstallEvent(attemptId, 'failed', { error: error.message, code: error.code || '' });
+    if (updateManager) {
+      const current = updateManager.getState();
+      updateManager.setState({ status: current.downloadedPath ? 'downloaded' : current.asset ? 'available' : 'error', error: error.message });
+    }
     updateInstallPromise = null;
     throw error;
   });

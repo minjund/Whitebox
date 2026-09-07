@@ -1152,6 +1152,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           ? window.WhiteboxI18n.t("settings.update.auto_install_restart")
           : window.WhiteboxI18n.t("ui.open_the_installer_and_follow_its_instructions_to_finish_updating"),
       ],
+      installing: [
+        "↻", window.WhiteboxI18n.t("settings.update.installing"), window.WhiteboxI18n.t("settings.update.installing"),
+        window.WhiteboxI18n.t("settings.update.auto_install_restart"),
+      ],
       error: [
         "!", window.WhiteboxI18n.t("ui.check_failed"), window.WhiteboxI18n.t("ui.could_not_check_for_updates"),
         window.WhiteboxI18n.t("ui.check_your_internet_connection_and_try_again"),
@@ -1167,7 +1171,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   function renderUpdateSettings() {
     const update = state.update || { status: "idle", currentVersion: state.versions.app || "" };
     const [glyph, label, title, text] = updatePresentation(update);
-    const available = ["available", "downloading", "downloaded"].includes(update.status);
+    const available = ["available", "downloading", "downloaded", "installing"].includes(update.status);
+    const installing = update.status === "installing";
+    const pending = Boolean(state.updateInstallPending) || installing;
     const downloading = update.status === "downloading";
     const downloaded = update.status === "downloaded";
     const runningCurrent = state.versions.app || update.currentVersion || "";
@@ -1217,19 +1223,19 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     $("#updateStateLabel").textContent = label;
     $("#updateStateTitle").textContent = title;
     $("#updateStateText").textContent = text;
-    $("#checkUpdateBtn").disabled = update.status === "checking" || downloading || update.blocked === true;
+    $("#checkUpdateBtn").disabled = pending || update.status === "checking" || downloading || update.blocked === true;
     $("#checkUpdateBtn").classList.toggle("hidden", available);
     $("#checkUpdateBtn").textContent =
       update.status === "checking" ? window.WhiteboxI18n.t("ui.checking") : window.WhiteboxI18n.t("settings.update.check");
     const install = $("#installUpdateBtn");
     install.classList.toggle("hidden", !(available && (update.asset || downloaded)));
-    install.disabled = downloading;
+    install.disabled = downloading || pending;
     const downloadLabel = update.installMode === "automatic"
       ? window.WhiteboxI18n.t("settings.update.download", { version: update.latestVersion || "—" })
       : downloaded
         ? window.WhiteboxI18n.t("ui.open_installer")
         : window.WhiteboxI18n.t("settings.update.download_manual", { version: update.latestVersion || "—" });
-    install.textContent = downloading
+    install.textContent = installing ? window.WhiteboxI18n.t("settings.update.installing") : downloading
       ? window.WhiteboxI18n.t("ui.downloading_2")
       : downloadLabel;
     const progress = $("#updateProgress");
