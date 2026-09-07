@@ -10,6 +10,7 @@ const { Readable } = require('stream');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
+const { readWindowsUpdateLogForPolling } = require('./windows-update-log-read');
 const { cohortList, readCohortManifest } = require('./check-update-compatibility-cohorts');
 const {
   assertReleaseAssetSelections,
@@ -681,10 +682,21 @@ async function waitForUpdateArtifactCleanup(launched, timeoutMs = 20_000) {
 
 async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000) {
   const startedAt = Date.now();
+  let lastReadableLog = '';
+  let lastTransientReadError = null;
   while (Date.now() - startedAt < timeoutMs) {
-    const lines = logLines(logPath);
+    const snapshot = readWindowsUpdateLogForPolling(() => readLog(logPath));
+    if (snapshot.status === 'retry') {
+      lastTransientReadError = snapshot.error;
+      await new Promise(resolve => setTimeout(resolve, 200));
+      continue;
+    }
+    lastReadableLog = snapshot.rawLog;
+    lastTransientReadError = null;
+    const lines = lastReadableLog.split(/\r?\n/)
+      .map(line => line.replace(/^\uFEFF/, '').trim()).filter(Boolean);
     const fatal = fatalLogLines(lines);
-    if (fatal.length) throw new Error(`Updater helper failed before relaunch: ${fatal.join(', ')}\n${readLog(logPath)}`);
+    if (fatal.length) throw new Error(`Updater helper failed before relaunch: ${fatal.join(', ')}\n${lastReadableLog}`);
     const ready = linesStarting(lines, 'relaunchReady=');
     if (ready.length) {
       assert.equal(ready.length, 1, 'The helper relaunched the app more than once.');
@@ -700,7 +712,7 @@ async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000)
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${readLog(logPath) || '(no update log)'}`);
+  throw new Error(`Timed out waiting for updater relaunch ${expectedVersion}:\n${lastReadableLog || '(no update log)'}${lastTransientReadError ? `\nLast log read error: ${lastTransientReadError.code}` : ''}`);
 }
 
 async function waitForInstalledPackage(expectedVersion, timeoutMs = 120_000, stableChecksRequired = 3) {
