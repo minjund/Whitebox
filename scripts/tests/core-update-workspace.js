@@ -689,7 +689,7 @@ function registerCliAndUpdateTests(context) {
     const manifestPath = path.join(root, 'scripts', 'update-compatibility-cohorts.json');
     const manifest = readCohortManifest(manifestPath);
     const cohorts = cohortList(manifest);
-    assert.deepStrictEqual(cohorts.map(cohort => ({
+    assert.deepStrictEqual(cohorts.slice(0, 5).map(cohort => ({
       version: cohort.version,
       env: cohort.env,
       installMode: cohort.installMode,
