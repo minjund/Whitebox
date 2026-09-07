@@ -1251,7 +1251,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     error.textContent = update.error
       ? update.blocked === true && update.currentVersionKnown === false
         ? window.WhiteboxI18n.t("settings.update.installed_version_unavailable")
-        : window.WhiteboxI18n.errorText(update.error, "ui.could_not_check_for_updates")
+        : String(update.error)
       : "";
     const notes = $("#releaseNotes");
     notes.classList.toggle("hidden", !update.latestVersion);

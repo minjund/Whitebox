@@ -78,6 +78,10 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     return true;
   })()`);
   const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
+  while (!await renderer(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(version)}`)) {
+    if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
   await renderer(`document.querySelector('#sidebarSettingsBtn').click(); document.querySelector('#checkUpdateBtn').click(); true`);
   while (!await renderer(`!document.querySelector('#installUpdateBtn').classList.contains('hidden') && !document.querySelector('#installUpdateBtn').disabled`)) {
     if (Date.now() >= deadline) throw new Error('Packaged update button did not become available');

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const asar = require('@electron/asar');
 const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-button');
 
@@ -31,10 +32,41 @@ async function stopOwned(pid) {
 }
 (async () => {
   fs.mkdirSync(path.dirname(app), {recursive:true});
-  execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
+  // Reproduce the reported installed macOS 1.7.3 cohort from official bytes.
+  const pinned = process.arch === 'arm64'
+    ? {size:118203096,sha256:'4de9ff62f526326d718bbd9de9b5ef296cf6236573c0910b85f40f6739a131ed'}
+    : {size:119993464,sha256:'0cfbfa66d4ea202a0929b5f7eda1b72c2568d245df30ee5c5d15f642dc99e768'};
+  const sourceName = `Whitebox-1.7.3-${process.arch}.dmg`;
+  const sourceUrl = `https://github.com/minjund/Whitebox/releases/download/v1.7.3/${sourceName}`;
+  const sourceResponse = await fetch(sourceUrl); assert(sourceResponse.ok);
+  const sourceBytes = Buffer.from(await sourceResponse.arrayBuffer());
+  assert.equal(sourceBytes.length,pinned.size);
+  assert.equal(crypto.createHash('sha256').update(sourceBytes).digest('hex'),pinned.sha256);
+  const sourceDmg = path.join(root,sourceName); fs.writeFileSync(sourceDmg,sourceBytes);
+  const mount = path.join(root,'source-mount');
+  execFileSync('/usr/bin/hdiutil',['attach',sourceDmg,'-nobrowse','-readonly','-mountpoint',mount]);
+  try {execFileSync('/usr/bin/ditto',[path.join(mount,'Whitebox.app'),app]);}
+  finally {execFileSync('/usr/bin/hdiutil',['detach',mount]);}
+  const sourceMetadata=JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'),'package.json'));
+  assert.equal(sourceMetadata.version,'1.7.3');
+  console.log('PASS pinned official macOS v1.7.3 app.asar: '+sourceUrl+' '+pinned.size+' '+pinned.sha256);
+  // Existing broken updaters require manual replacement once. Preserve the
+  // profile across that replacement, then exercise the candidate's own updater.
+  const sentinel=path.join(profile,'update-recovery-sentinel.json');
+  fs.mkdirSync(profile,{recursive:true});fs.writeFileSync(sentinel,'{"preserved":true}');
   const home = path.join(root, 'home'); fs.mkdirSync(home);
   const env = {...process.env, HOME:home, WHITEBOX_TEST_INSTANCE:'1', WHITEBOX_DEMO_CAPTURE:'1'};
   delete env.ELECTRON_RUN_AS_NODE;
+  driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
+  assert.equal(await driver.evaluate(`process.mainModule.require('electron').app.getVersion()`),'1.7.3');
+  await waitFor(async () => driver.evaluate(`(async () => {
+    const w=process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
+    return w ? await w.webContents.executeJavaScript("document.querySelector('#currentVersion')?.textContent.trim() === '1.7.3'") : false;
+  })()`),'official macOS 1.7.3 renderer');
+  await driver.evaluate(`setTimeout(()=>process.mainModule.require('electron').app.quit(),100);true`);
+  driver.close();await waitFor(()=>!alive(driver.child.pid),'official macOS 1.7.3 shutdown');
+  fs.rmSync(app,{recursive:true,force:true});
+  execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
   driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
   await clickPackagedUpdate(driver, installer, version, {retryAfterFailure:true});
   driver.close();
@@ -58,6 +90,7 @@ async function stopOwned(pid) {
   assert(alive(relaunchedPid));
   const metadata = JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'), 'package.json'));
   assert.equal(metadata.version, version);
+  assert.equal(JSON.parse(fs.readFileSync(sentinel,'utf8')).preserved,true);
   assert.equal((log.match(/update installed and renderer ready;/g)||[]).length,1);
   await waitFor(() => !fs.existsSync(launch.readyPath) && !fs.existsSync(launch.rendererReadyPath)
     && fs.readdirSync(path.dirname(app)).every(name => !/\.update-|\.backup-|\.failed-/.test(name)), 'helper signals and staging cleanup');

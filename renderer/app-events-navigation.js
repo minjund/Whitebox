@@ -100,7 +100,8 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
         if (update) state.update = update;
         if (update?.installMode === "manual") toast(t("ui.open_installer"));
       } catch (error) {
-        const message = window.WhiteboxI18n.errorText(error, "ui.could_not_prepare_the_update_file");
+        const message = String(error?.message || '').replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '').trim()
+          || t("ui.could_not_prepare_the_update_file");
         state.update = { ...(state.update || {}), status: state.update?.asset ? "available" : "error", error: message };
         toast(message);
       } finally {
