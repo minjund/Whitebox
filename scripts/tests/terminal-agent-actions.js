@@ -1574,6 +1574,8 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(createCalls, 0,
       'state.session이 비어 보이는 passive 첫 mount가 새 Codex fork를 만들었습니다.');
 
+    session.status = 'running';
+    assert.equal(actions.forkSupport(session).supported, true);
     const explicit = await actions.ensureForAgent(session, {
       forkIfOriginOwned: true,
       forkCreationGesture: true,
