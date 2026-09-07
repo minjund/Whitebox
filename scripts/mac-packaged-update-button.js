@@ -97,7 +97,16 @@ async function stopOwned(pid) {
   await waitFor(() => !fs.existsSync(launch.readyPath) && !fs.existsSync(launch.rendererReadyPath)
     && fs.readdirSync(path.dirname(app)).every(name => !/\.update-|\.backup-|\.failed-/.test(name)), 'helper signals and staging cleanup');
   console.log('PASS packaged macOS update button: persistent failure, retry, actual install, renderer-ready relaunch and cleanup');
-})().catch(error => {console.error(error.stack || error);process.exitCode=1;}).finally(async () => {
+})().catch(error => {
+  console.error(error.stack || error);process.exitCode=1;
+  const updates=path.join(profile,'updates');
+  for(const name of ['install-attempts.jsonl','install-update.log']) {
+    const file=path.join(updates,name);
+    if(fs.existsSync(file))console.error(name+'\n'+fs.readFileSync(file,'utf8'));
+  }
+  if(fs.existsSync(updates))console.error('Remaining update files: '+JSON.stringify(fs.readdirSync(updates)));
+  if(fs.existsSync(path.dirname(app)))console.error('Remaining application files: '+JSON.stringify(fs.readdirSync(path.dirname(app))));
+}).finally(async () => {
   try {
     if(driver) driver.close();
     await stopOwned(relaunchedPid);
