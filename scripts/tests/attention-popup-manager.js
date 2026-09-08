@@ -675,12 +675,12 @@ test('renderer failure waits for in-flight decisions and user dismissals instead
 
 test('popup ownership keeps hooks pending, disabling releases them, and PTY-only routing remains available', async () => {
   const vm = require('vm');
-  const source = fs.readFileSync(path.resolve(__dirname, '../../main.js'), 'utf8');
+  const source = fs.readFileSync(path.resolve(__dirname, '../../main.js'), 'utf8').replace(/\r\n/g, '\n');
   const extract = name => {
     const start = source.search(new RegExp(`(?:async )?function ${name}\\(`));
     const remaining = source.slice(start);
     const end = remaining.indexOf('\n}\n');
-    assert.ok(start >= 0 && end >= 0);
+    assert.ok(start >= 0 && end >= 0, `Unable to extract ${name} from main.js`);
     return remaining.slice(0, end + 2);
   };
   let enabled = true;
