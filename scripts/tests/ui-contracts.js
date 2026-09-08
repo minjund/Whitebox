@@ -2912,6 +2912,7 @@ function registerUiContractTests(context) {
       requestAnimationFrame: callback => { callback(); return 1; },
     };
     vm.runInNewContext(source, sandbox, { filename: 'app-events-sessions-review-complete.js' });
+    const archiveRenders = [];
     const bindings = sandbox.window.WhiteboxAppFactories.createSessionEventBindings({
       $: selector => element(String(selector).replace(/^#/, '')),
       state: {
@@ -2937,7 +2938,9 @@ function registerUiContractTests(context) {
         completed.push([sessionId, options]);
         return committedResults.shift();
       },
-      renderSessions: reason => rendered.push(reason),
+      renderSessions: reason => { rendered.push(reason); archiveRenders.push(reason); },
+      renderWorkspaces: () => archiveRenders.push('sidebar'),
+      archiveSession: id => id === 'finished-task',
       announce: message => announcements.push(message),
     });
     bindings.bindSessionAndAgentEvents();
@@ -3018,6 +3021,18 @@ function registerUiContractTests(context) {
     assert.equal(completed.length, markAttemptsBeforeFork + 1, 'reject된 safe fork를 확인 완료로 저장하면 안 됩니다.');
     assert.equal(announcements.at(-1), 'agent.open_terminal_failed');
     assert.deepStrictEqual(reportedErrors, [['result-review-open-pty', 'fork rejected']]);
+    const archiveButton = {
+      dataset: { sessionArchive: 'finished-task' },
+      closest: selector => selector === '[data-session-archive]' ? archiveButton : null,
+    };
+    archiveRenders.length = 0;
+    await elements.get('liveSessionGrid').listeners.get('click')({ target: archiveButton, stopPropagation() {} });
+    assert.deepStrictEqual(archiveRenders, ['sidebar', 'archive'],
+      '작업 완료 클릭은 사이드바와 중앙 목록을 즉시 함께 갱신해야 합니다.');
+    archiveButton.dataset.sessionArchive = 'still-running';
+    archiveRenders.length = 0;
+    await elements.get('liveSessionGrid').listeners.get('click')({ target: archiveButton, stopPropagation() {} });
+    assert.deepStrictEqual(archiveRenders, [], '기록 이동이 거절되면 목록을 완료 상태로 갱신하면 안 됩니다.');
   });
 
   test('프로젝트 선택은 화면 렌더를 기다리게 하지 않고 최상위 AI PTY 사전 연결을 시작한다', () => {
@@ -3357,6 +3372,7 @@ function registerUiContractTests(context) {
     const visibleSessions = () => sessions.filter(session => (
       !session.sourcePluginId || state.sourcePluginSettings.enabledPluginIds.includes(session.sourcePluginId)
     ));
+    const activeSessionIds = new Set(sessions.map(session => session.id));
     const dashboard = sandbox.window.WhiteboxAppFactories.createDashboard({
       $: selector => selector === '#projectSidebarList' ? sidebar : null,
       esc: value => String(value),
@@ -3365,7 +3381,7 @@ function registerUiContractTests(context) {
       state,
       visibleSessions,
       isProviderVisible: () => true,
-      isControlRoomSession: () => false,
+      isControlRoomSession: session => activeSessionIds.has(session.id),
     });
 
     const tagWith = (markup, marker) => {
@@ -3558,6 +3574,44 @@ function registerUiContractTests(context) {
       && interactionSource.includes("{ selector: '[data-sidebar-source-toggle]', action: 'workspace:source-toggle' }"),
     '분리된 프로젝트·프로그램 펼침 화살표가 상호작용 전수 점검 매니페스트에 없습니다.');
     assertIncludesAll(workspaceHandler, ['state.sidebarCollapsedProjects', 'state.sidebarCollapsedSources', 'renderWorkspaces()']);
+    activeSessionIds.delete('direct-root');
+    activeSessionIds.delete('direct-root-2');
+    dashboard.renderWorkspaces();
+    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'), false,
+      '기록으로 이동한 작업은 사이드바에서 제거되어야 합니다.');
+    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-2"'), false);
+    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-4"'),
+      '기록을 제외한 뒤 다음 현재 작업이 미리보기를 채워야 합니다.');
+    assert.equal(sidebar.innerHTML.includes('project-sidebar-session-more'), false,
+      '더 있음 개수에서도 지난 기록을 제외해야 합니다.');
+    activeSessionIds.delete('builtin.opencode:open-root');
+    dashboard.renderWorkspaces();
+    assert.ok(sidebar.innerHTML.includes('data-open-session="builtin.opencode:open-root"'),
+      '하위 작업이 실행 중이면 부모 작업은 사이드바에 유지되어야 합니다.');
+    activeSessionIds.delete('builtin.opencode:open-child');
+    activeSessionIds.delete('direct-projectless');
+    dashboard.renderWorkspaces();
+    assert.equal(sidebar.innerHTML.includes('data-open-session="builtin.opencode:open-root"'), false);
+    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-projectless"'), false);
+    assert.equal(sidebar.innerHTML.includes(`data-sidebar-source-key="${sourceKey(projectKey, 'builtin.opencode')}"`), false,
+      '표시할 작업이 없는 프로그램 항목 자체를 숨겨야 합니다.');
+    assert.equal(sidebar.innerHTML.includes(`data-sidebar-source-key="${sourceKey(projectlessKey, 'direct')}"`), false);
+    assert.equal(sidebar.innerHTML.includes('project-sidebar-session-empty'), false);
+    state.view = 'active';
+    state.workspace = 'all';
+    state.workspaceSource = 'all';
+    assert.ok(dashboard.filteredSessions().some(session => session.id === 'direct-root'),
+      '사이드바에서 제거한 작업은 지난 기록에서 계속 조회할 수 있어야 합니다.');
+    activeSessionIds.add('direct-root');
+    dashboard.renderWorkspaces();
+    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'),
+      '작업이 다시 활성화되면 사이드바에도 복귀해야 합니다.');
+    activeSessionIds.clear();
+    dashboard.renderWorkspaces();
+    assert.equal(sidebar.innerHTML.includes('data-sidebar-source-key='), false);
+    assert.equal(sidebar.innerHTML.includes('data-sidebar-project-key='), false,
+      '현재 작업이 없는 자동 수집 프로젝트와 프로젝트 없음 그룹도 숨겨야 합니다.');
+    sessions.forEach(session => activeSessionIds.add(session.id));
     const concreteSourceSync = workspaceHandler.slice(
       workspaceHandler.indexOf('if (requestedSource !== "all")'),
       workspaceHandler.indexOf('acknowledgeProjectNotices(requestedWorkspace, requestedSource)'),
