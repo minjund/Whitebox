@@ -185,9 +185,40 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     extra.debug = true;
     assert.ok(validateComprehensionPacket(extra).issues.some(row => row.code === 'PACKET_KEYS'));
     const duplicate = packet();
-    duplicate.questions[0].options[0].id = 'e1';
-    duplicate.questions[0].answerId = 'e1';
+    duplicate.questions[0].id = 'e1';
     assert.ok(validateComprehensionPacket(duplicate).issues.some(row => row.code === 'DUPLICATE_ID'));
+  });
+
+  test('choice IDs are scoped to each question and variant, including escaped provider envelopes', () => {
+    const value = packet(2);
+    for (const question of value.questions) {
+      for (const target of [question, question.variant]) {
+        target.options = [option('a', '정답'), option('b', '오답')];
+        target.answerId = 'a';
+      }
+    }
+    const response = `답변\n\\${PACKET_OPEN}${JSON.stringify(value)}\\${PACKET_CLOSE}`;
+    const session = { id: 'owned', status: 'completed', completionObserved: true, comprehensionContractInjected: true };
+    const result = finalizeComprehension(session, response);
+    assert.equal(result.body, '답변');
+    assert.equal(result.comprehension.status, 'ready');
+    assert(rendererComprehension.isEligibleSession({ ...session, comprehension: result.comprehension }));
+    value.questions[0].options[1].id = 'a';
+    assert(validateComprehensionPacket(value).issues.some(row => row.code === 'DUPLICATE_ID'));
+  });
+
+  test('damaged or repeated private envelopes stay hidden without manufacturing questions', () => {
+    for (const payload of [
+      `${PACKET_OPEN}{broken`,
+      `${PACKET_OPEN}{broken\n${envelope(packet())}`,
+      '<whitebox-comprehension-packet version=',
+      `${PACKET_OPEN}{broken}${PACKET_CLOSE}`,
+    ]) {
+      const result = extractComprehensionPacket(`답변\n${payload}`);
+      assert.equal(result.body, '답변');
+      assert.equal(result.comprehension.status, 'invalid');
+      assert.equal(result.comprehension.packet, null);
+    }
   });
 
   test('이해 패킷 스키마는 선택지 정답과 근거 참조를 검증한다', () => {
@@ -307,7 +338,7 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     const text = `${PACKET_CLOSE}\n본문\n${envelope(packet())}`;
     const extracted = extractComprehensionPacket(text);
     assert.equal(extracted.comprehension.status, 'invalid');
-    assert.equal(extracted.body, text);
+    assert.equal(extracted.body, `${PACKET_CLOSE}\n본문`);
   });
 
   test('eligibility는 완료 메인 owned 작업만 허용한다', () => {
@@ -449,7 +480,8 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     const malformed = `${PACKET_OPEN}{"detail"dd}${PACKET_CLOSE}`;
     const wrapped = malformed.replace('comprehension-packet', 'comprehension-\r\n  packet')
       .replace(PACKET_CLOSE, '</whitebox-comprehension-\r\n packet>');
-    for (const raw of [alteredContract, malformed, wrapped, `${PACKET_OPEN}${'x'.repeat(600000)}${PACKET_CLOSE}`]) {
+    const escaped = `\\${PACKET_OPEN}{broken}\\${PACKET_CLOSE}`;
+    for (const raw of [alteredContract, malformed, wrapped, escaped, `${PACKET_OPEN}${'x'.repeat(600000)}${PACKET_CLOSE}`]) {
       const filter = make();
       const visible = splitEveryBoundary(`앞${raw}뒤`).map(chunk => filter.consume(chunk)).join('') + filter.flush();
       assert.equal(visible, '앞뒤');

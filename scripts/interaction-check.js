@@ -1011,8 +1011,22 @@ async function exercisePtyFocus(win, round) {
 async function exerciseComprehensionPacket(win, round) {
   const generation = '2026-08-01T12:34:56.000Z';
   await prepareProject(win);
-  const readyComprehension = await rendererValue(win,
+  let readyComprehension = await rendererValue(win,
     "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
+  for (const question of readyComprehension.packet.questions) {
+    for (const target of [question, question.variant]) {
+      const answerIndex = target.options.findIndex(option => option.id === target.answerId);
+      target.options.forEach((option, index) => { option.id = String.fromCharCode(97 + index); });
+      target.answerId = target.options[answerIndex].id;
+    }
+  }
+  const { extractComprehensionPacket, PACKET_OPEN, PACKET_CLOSE } = require('../src/comprehensionPacket');
+  const extracted = extractComprehensionPacket(`완료\n\\${PACKET_OPEN}${JSON.stringify(readyComprehension.packet)}\\${PACKET_CLOSE}`);
+  assert(extracted.body === '완료' && extracted.comprehension.status === 'ready',
+    'escaped provider packet with question-local choice IDs was not privately parsed');
+  readyComprehension = extracted.comprehension;
+  await rendererValue(win,
+    "window.interactionTest.updateSession('fixture-root',{comprehension:" + JSON.stringify(readyComprehension) + "})");
   if (round === 1) {
     await rendererValue(win,
       "window.interactionTest.updateSession('fixture-root',{comprehension:{status:'missing',schemaVersion:1}})");
@@ -1076,9 +1090,9 @@ async function exerciseComprehensionPacket(win, round) {
       '미응답 문제의 일괄 제출이 차단되지 않았습니다: ' + JSON.stringify(unanswered));
 
     for (const selector of [
-      '[data-comprehension-question-id="q-change"][data-comprehension-option-id="q-change-b"]',
-      '[data-comprehension-question-id="q-decision"][data-comprehension-option-id="q-decision-a"]',
-      '[data-comprehension-question-id="q-risk"][data-comprehension-option-id="q-risk-b"]',
+      '[data-comprehension-question-id="q-change"][data-comprehension-option-id="b"]',
+      '[data-comprehension-question-id="q-decision"][data-comprehension-option-id="a"]',
+      '[data-comprehension-question-id="q-risk"][data-comprehension-option-id="b"]',
     ]) await rendererValue(win, `document.querySelector(${JSON.stringify(selector)})?.click()`);
     await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit')?.click()");
     await waitFor(win,
@@ -1095,14 +1109,14 @@ async function exerciseComprehensionPacket(win, round) {
 
     await rendererValue(win,
       "document.querySelector('[data-comprehension-question-id=\"q-change\"]"
-        + "[data-comprehension-option-id=\"q-change-va\"]')?.click();"
+        + "[data-comprehension-option-id=\"a\"]')?.click();"
         + "document.querySelector('[data-comprehension-variant-submit=\"q-change\"]')?.click()");
     await waitFor(win,
       "document.querySelector('#comprehensionPacketScore')?.textContent.includes('2/3')",
       '변형 문제 정답이 최종 점수에 반영되지 않았습니다.');
     await rendererValue(win,
       "document.querySelector('[data-comprehension-question-id=\"q-risk\"]"
-        + "[data-comprehension-option-id=\"q-risk-vb\"]')?.click();"
+        + "[data-comprehension-option-id=\"b\"]')?.click();"
         + "document.querySelector('[data-comprehension-variant-submit=\"q-risk\"]')?.click()");
     await waitFor(win,
       "Boolean(document.querySelector('[data-comprehension-understood=\"q-risk\"]'))",

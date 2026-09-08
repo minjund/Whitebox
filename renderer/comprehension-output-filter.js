@@ -197,7 +197,7 @@
     }
 
     function markerText(value) {
-      return ownsHiddenOutput() ? value.replace(/\s/gu, '').toLowerCase() : value;
+      return ownsHiddenOutput() ? value.replace(/[\s\\]/gu, '').toLowerCase() : value;
     }
 
     function authority() {
@@ -242,10 +242,11 @@
 
     function retainOpeningSuffix(output) {
       let retainCount = 0;
-      const maximum = Math.min(scanUnits.length, Math.max(...RESERVED_ENVELOPES.map(item => item.open.length - 1)));
+      const maximum = Math.min(scanUnits.length, 1024);
       for (let count = 1; count <= maximum; count += 1) {
         const suffix = scanUnits.slice(-count).map(unit => unit.text).join("");
-        if (markerText(suffix) && RESERVED_ENVELOPES.some(item => markerText(item.open).startsWith(markerText(suffix)))) retainCount = count;
+        if ((ownsHiddenOutput() && suffix === '\\')
+          || (markerText(suffix) && RESERVED_ENVELOPES.some(item => markerText(item.open).startsWith(markerText(suffix))))) retainCount = count;
       }
       const emitCount = scanUnits.length - retainCount;
       if (emitCount > 0) output.push(serializedUnits(scanUnits.slice(0, emitCount)));
@@ -338,7 +339,7 @@
       if (candidate.hidden) {
         // Keep only a closing-marker suffix, even for malformed or oversized
         // payloads. Never replay private bytes on flush or an input boundary.
-        if (token.text && !/\s/u.test(token.text)) {
+        if (token.text && !/[\s\\]/u.test(token.text)) {
           candidate.plain = (candidate.plain + token.text.toLowerCase()).slice(-candidate.definition.close.length);
           if (candidate.plain === candidate.definition.close) candidate = null;
         }

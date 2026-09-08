@@ -102,7 +102,7 @@ function safeId(value, path, issues, definedIds = null) {
   return id;
 }
 
-function validateOptions(value, path, issues, definedIds) {
+function validateOptions(value, path, issues) {
   if (!Array.isArray(value) || value.length < 2 || value.length > MAX_OPTIONS) {
     issues.push(issue(path, 'OPTION_COUNT', `must contain 2-${MAX_OPTIONS} options`));
     return new Set();
@@ -115,8 +115,8 @@ function validateOptions(value, path, issues, definedIds) {
       issues.push(issue(optionPath, 'OPTION_KEYS', 'must contain exactly id and label'));
       return;
     }
-    const id = safeId(option.id, `${optionPath}.id`, issues, definedIds);
-    if (id) ids.add(id);
+    // answerId is resolved within this list, so other questions may reuse a/b/c.
+    safeId(option.id, `${optionPath}.id`, issues, ids);
     const label = safeText(option.label, `${optionPath}.label`, 500, issues);
     if (label && labels.has(label)) {
       issues.push(issue(`${optionPath}.label`, 'OPTION_LABEL_DUPLICATE', `duplicates option label ${label}`));
@@ -208,7 +208,7 @@ function validateComprehensionPacket(value) {
         });
       }
 
-      const optionIds = validateOptions(question.options, `${questionPath}.options`, issues, definedIds);
+      const optionIds = validateOptions(question.options, `${questionPath}.options`, issues);
       validAnswer(question.answerId, optionIds, `${questionPath}.answerId`, issues);
 
       if (!Array.isArray(question.evidenceIds) || question.evidenceIds.length < 1 || question.evidenceIds.length > MAX_EVIDENCE) {
@@ -229,7 +229,7 @@ function validateComprehensionPacket(value) {
       } else {
         safeText(question.variant.prompt, `${questionPath}.variant.prompt`, 1200, issues);
         safeText(question.variant.explanation, `${questionPath}.variant.explanation`, 2400, issues);
-        const variantOptionIds = validateOptions(question.variant.options, `${questionPath}.variant.options`, issues, definedIds);
+        const variantOptionIds = validateOptions(question.variant.options, `${questionPath}.variant.options`, issues);
         validAnswer(question.variant.answerId, variantOptionIds, `${questionPath}.variant.answerId`, issues);
       }
     });
@@ -265,10 +265,17 @@ function comprehensionState(status, packet = null) {
 }
 
 function extractComprehensionPacket(value) {
-  const body = typeof value === 'string' ? value : String(value == null ? '' : value);
+  // Providers sometimes Markdown-escape the envelope. Normalize only reserved
+  // delimiters, never JSON strings or ordinary user-visible Markdown.
+  const body = (typeof value === 'string' ? value : String(value == null ? '' : value))
+    .replace(/\\(?=<\/?whitebox-comprehension-packet\b)/giu, '');
+  // Privacy must not depend on valid JSON, a closing tag, or unique envelopes.
+  // Keep validation fail-closed while withholding damaged protocol payloads.
+  const privateStart = body.search(/<whitebox-comprehension-packet\b/iu);
+  const redactedBody = privateStart < 0 ? body : body.slice(0, privateStart).replace(/(?:\r?\n){1,2}$/u, '');
   if (byteLength(body) > MAX_RESPONSE_BYTES) {
     return {
-      body,
+      body: redactedBody,
       comprehension: comprehensionState('invalid'),
       error: packetError('최종 응답이 이해 패킷 추출 한도를 초과했습니다.', 'COMPREHENSION_RESPONSE_TOO_LARGE'),
     };
@@ -278,17 +285,21 @@ function extractComprehensionPacket(value) {
   const closePattern = /<\/whitebox-comprehension-packet\s*>/giu;
   const openingTags = [...body.matchAll(openPattern)];
   const closingTags = [...body.matchAll(closePattern)];
-  if (!openingTags.length) return { body, comprehension: comprehensionState('missing'), error: null };
+  if (!openingTags.length) return {
+    body: redactedBody,
+    comprehension: comprehensionState(privateStart < 0 ? 'missing' : 'invalid'),
+    error: privateStart < 0 ? null : packetError('이해 패킷 시작 태그가 잘렸습니다.'),
+  };
   if (openingTags.length !== 1 || openingTags[0][0] !== PACKET_OPEN) {
     return {
-      body,
+      body: redactedBody,
       comprehension: comprehensionState('invalid'),
       error: packetError('이해 패킷 envelope 시작 태그가 올바르지 않습니다.'),
     };
   }
   if (closingTags.length !== 1 || closingTags[0][0] !== PACKET_CLOSE) {
     return {
-      body,
+      body: redactedBody,
       comprehension: comprehensionState('invalid'),
       error: packetError('이해 패킷 envelope 종료 태그가 없거나 중복되었습니다.'),
     };
@@ -299,7 +310,7 @@ function extractComprehensionPacket(value) {
   const close = closingTags[0].index;
   if (close < contentStart) {
     return {
-      body,
+      body: redactedBody,
       comprehension: comprehensionState('invalid'),
       error: packetError('이해 패킷 envelope 종료 태그가 없거나 중복되었습니다.'),
     };
