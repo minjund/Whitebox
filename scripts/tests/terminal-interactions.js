@@ -329,6 +329,7 @@ function createWorkbench(root, options = {}) {
       },
     },
   };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'terminal-ime.js'), 'utf8'), sandbox, { filename: 'terminal-ime.js' });
   vm.runInNewContext(source, sandbox, { filename: 'terminal-workbench.js' });
   const state = {
     sessions: session ? [session] : [],

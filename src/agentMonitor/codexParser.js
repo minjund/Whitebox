@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { finalizedActivityState, observeActivity } = require('./activityState');
+const { finalizedActivityState, observeActivity, activityAfterToolResult } = require('./activityState');
 const { createCodexCollaboration } = require('./codexCollaboration');
 const { createExecutionTracker, reconcileExecutionActivities } = require('./executionActivity');
 const { structuredInputRequest, structuredInputRequestText } = require('./responseIntent');
@@ -545,7 +545,7 @@ function createCodexParser(dependencies) {
       isError: payload.is_error === true || payload.status === 'failed',
     });
     state.turnHadMeaningfulOutput = true;
-    observeActivity(state, 'working', row.timestamp);
+    observeActivity(state, activityAfterToolResult(session, state.executionTracker), row.timestamp);
     state.pendingUserInputCalls.delete(String(payload.call_id || ''));
     state.pendingUserInputAt.delete(String(payload.call_id || ''));
     state.pendingUserInputText.delete(String(payload.call_id || ''));

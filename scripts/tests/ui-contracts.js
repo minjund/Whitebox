@@ -62,6 +62,7 @@ const SYNTAX_CHECK_FILES = [
   'renderer/app-events.js',
   'renderer/attention-activation.js',
   'renderer/app-bootstrap.js',
+  'renderer/terminal-ime.js',
   'renderer/terminal-workbench.js',
   'renderer/terminal-agent.js',
   'renderer/terminal-events.js',
@@ -132,12 +133,6 @@ const REQUIRED_UI_IDS = [
 ];
 
 const REMOVED_UI_IMPLEMENTATIONS = [
-  'renderer/attention-popup.html',
-  'renderer/attention-popup.js',
-  'renderer/attention-popup.css',
-  'renderer/app-attention-popup-settings.js',
-  'src/attentionPopupManager.js',
-  'src/attentionPopupPreferenceStore.js',
   'renderer/drawer-terminal.js',
   'renderer/app-runtime-overview.js',
   'renderer/app-tmux-render.js',
@@ -151,8 +146,6 @@ const REMOVED_UI_IDS = [
   'advancedToolsNav',
   'ptyFocusChildModal',
   'ptyFocusChildBody',
-  'attentionPopupSettingsCard',
-  'attentionPopupEnabled',
   'automationOverview',
   'tmuxSection',
   'tmuxCreateModal',
@@ -1125,16 +1118,9 @@ function registerUiContractTests(context) {
     for (const file of REMOVED_UI_IMPLEMENTATIONS) {
       assert.equal(fs.existsSync(path.join(root, file)), false, `${file} 삭제 UI 구현 파일이 다시 추가되었습니다.`);
     }
-    const attentionPopupPlaceholder = fs.readFileSync(path.join(root, 'attention-popup-preload.js'), 'utf8');
-    const attentionPopupExecutable = attentionPopupPlaceholder
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '')
-      .trim();
-    assert.equal(attentionPopupExecutable, "'use strict';",
-      '패키지 호환 attention popup preload는 API·IPC·실행 코드가 없는 no-op placeholder여야 합니다.');
-    assert.doesNotMatch(attentionPopupPlaceholder,
-      /\brequire\s*\(|contextBridge|ipcRenderer|exposeInMainWorld|addEventListener|postMessage/u,
-      '패키지 호환 placeholder가 삭제된 popup API나 IPC를 다시 노출합니다.');
+    const attentionPopupPreload = fs.readFileSync(path.join(root, 'attention-popup-preload.js'), 'utf8');
+    assert.match(attentionPopupPreload, /contextBridge\.exposeInMainWorld/);
+    assert.match(attentionPopupPreload, /attention-popup:decide/);
     const runtimeOverviewCompatibility = fs.readFileSync(
       path.join(root, 'scripts', 'runtime-overview-visual.js'),
       'utf8',
@@ -1152,7 +1138,7 @@ function registerUiContractTests(context) {
     for (const restoredScript of ['app-drawer-data.js', 'app-drawer-content.js']) {
       assert.equal(html.includes(`src="${restoredScript}"`), true, `${restoredScript} 상세 패널 런타임이 로드되지 않습니다.`);
     }
-    for (const removedScript of ['drawer-terminal.js', 'app-attention-popup-settings.js']) {
+    for (const removedScript of ['drawer-terminal.js']) {
       assert.equal(html.includes(`src="${removedScript}"`), false, `${removedScript} 삭제 화면 런타임이 다시 로드됩니다.`);
     }
     for (const id of RUN_COMPOSER_IDS) assert.ok(html.includes(`id="${id}"`));
@@ -2283,6 +2269,8 @@ function registerUiContractTests(context) {
       loadQualityState() {},
       saveDashboardPreferences() {},
       loadProviderVisibility() {},
+      loadAttentionPopupSettings() {},
+      bindAttentionPopupSettings() {},
       projectVisibleSnapshot: snapshot => snapshot,
       visibleSnapshot: () => state.snapshot,
       isProviderVisible: () => true,
@@ -2306,7 +2294,7 @@ function registerUiContractTests(context) {
       refreshProviderUsage: async () => null,
     };
     const factoryNames = [
-      'createCore', 'createProviderVisibility', 'createDashboard',
+      'createCore', 'createProviderVisibility', 'createAttentionPopupSettings', 'createDashboard',
       'createGraphModel', 'createGraphView', 'createGraphLayout', 'createGraphOrchestration',
       'createAgentActions', 'createManagement', 'createSessionRenderer',
       'createDrawerData', 'createDrawerContent', 'createPtyFocusMode',
@@ -3934,12 +3922,12 @@ function registerUiContractTests(context) {
       'body[data-current-view="settings"] .source-plugin-toggle',
     ]);
 
-    assert.equal(settings.includes('attentionPopupSettingsCard'), false,
-      '삭제된 오른쪽 팝업 설정 카드가 설정 화면에 다시 노출되었습니다.');
-    assert.equal(settings.includes('attentionPopupEnabled'), false,
-      '삭제된 오른쪽 팝업 토글이 설정 화면에 다시 노출되었습니다.');
-    assert.equal(html.includes('src="app-attention-popup-settings.js"'), false,
-      '삭제된 오른쪽 팝업 설정 런타임을 renderer가 다시 로드하면 안 됩니다.');
+    assert.equal(settings.includes('attentionPopupSettingsCard'), true,
+      '질문·승인 팝업 설정 카드가 설정 화면에 있어야 합니다.');
+    assert.equal(settings.includes('attentionPopupEnabled'), true,
+      '질문·승인 팝업을 켜고 끌 수 있어야 합니다.');
+    assert.equal(html.includes('src="app-attention-popup-settings.js"'), true,
+      '팝업 설정 런타임이 로드되어야 합니다.');
   });
 
   test('AI 표시 설정은 기본값·저장값·세션과 tmux 투영을 일관되게 적용한다', () => {

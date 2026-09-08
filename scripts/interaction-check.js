@@ -232,10 +232,10 @@ async function exerciseNavigationAndSettings(win) {
     + "if(language){language.value=before||'ko';language.dispatchEvent(new Event('change',{bubbles:true}));}"
     + "return{languageRestored:Boolean(language&&language.value===(before||'ko')),light,dark,providerChanged,"
       + "providerRestored:Boolean(restoredProvider&&restoredProvider.checked===providerBefore),"
-      + "noPopupSettings:!document.querySelector('#attentionPopupSettingsCard,#attentionPopupEnabled')};"
+      + "popupSettingsPresent:!!document.querySelector('#attentionPopupSettingsCard #attentionPopupEnabled')};"
     + "})()");
   assert(settings.languageRestored && settings.light && settings.dark
-    && settings.providerChanged && settings.providerRestored && settings.noPopupSettings,
+    && settings.providerChanged && settings.providerRestored && settings.popupSettingsPresent,
   '언어·테마·AI 표시 설정 상호작용이 올바르지 않습니다: ' + JSON.stringify(settings));
 
   await rendererValue(win, "(()=>{window.interactionTest.restoreCurrentUpdate();"
@@ -727,6 +727,24 @@ async function closeFocusedRoot(win) {
   'PTY 집중 모드에서 작업 현황으로 돌아오지 못했습니다.');
 }
 
+// Carry the detached v1.7.7 worktree's real screen-click coverage forward to
+// the current PTY focus surface (the old drawerTerminalViewport was retired).
+async function focusPtyScreen(win) {
+  const point = await rendererValue(win, `(() => {
+    const screen = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen:not(.hidden) .xterm-screen');
+    if (!screen) return null;
+    const rect = screen.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0
+      ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+  })()`);
+  assert(point, 'PTY 화면 클릭 위치를 찾지 못했습니다.');
+  await rendererValue(win, "document.querySelector('#ptyFocusBackBtn')?.focus({preventScroll:true})");
+  win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+  win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+  await waitFor(win, "document.activeElement === document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')",
+    '실제 PTY 화면 클릭이 xterm 입력 초점을 복원하지 못했습니다.');
+}
+
 async function exercisePtyFocus(win, round) {
   await prepareProject(win);
   const rootClick = await rendererValue(win, "(()=>{"
@@ -734,6 +752,7 @@ async function exercisePtyFocus(win, round) {
     + "trigger?.click();return Boolean(trigger);})()");
   assert(rootClick, '작업 현황의 root PTY trigger가 없습니다.');
   await assertFocusedRoot(win, 'root 작업 클릭');
+  await focusPtyScreen(win);
 
   const marker = 'PTY_INTERACTION_ROUND_' + round + '_' + Date.now();
   await rendererValue(win, "window.interactionTest.emitTerminalData('terminal-main',"
@@ -992,6 +1011,12 @@ async function exercisePtyFocus(win, round) {
 async function exerciseComprehensionPacket(win, round) {
   const generation = '2026-08-01T12:34:56.000Z';
   await prepareProject(win);
+  const readyComprehension = await rendererValue(win,
+    "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
+  if (round === 1) {
+    await rendererValue(win,
+      "window.interactionTest.updateSession('fixture-root',{comprehension:{status:'missing',schemaVersion:1}})");
+  }
   await rendererValue(win, "(() => {"
     + "window.interactionTest.updateSession('fixture-root',{status:'completed',statusDetail:'이해 패킷 검증 완료',"
       + "completionObserved:true,completedAt:'" + generation + "',updatedAt:'" + generation + "'});"
@@ -1005,9 +1030,16 @@ async function exerciseComprehensionPacket(win, round) {
   await assertFocusedRoot(win, '이해 패킷 완료 노드 클릭');
 
   if (round === 1) {
+    assert(await rendererValue(win,
+      "!window.WhiteboxApp.comprehensionPacketController.getSessionId()"),
+    '질문 데이터가 아직 없는 완료 작업에 퀴즈를 표시했습니다.');
+    await rendererValue(win,
+      "window.interactionTest.updateSession('fixture-root',{comprehension:"
+        + JSON.stringify(readyComprehension) + "});window.interactionTest.emitSnapshot()");
     await waitFor(win,
-      "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
-      '완료된 메인 노드의 최초 PTY 진입에서 이해 패킷이 자동 표시되지 않았습니다.');
+      "Boolean(document.querySelector('#comprehensionPacketOverlay')"
+        + "&&!document.querySelector('#comprehensionPacketOverlay').hidden)",
+      '열린 대화에 질문 데이터가 늦게 도착했지만 이해 패킷이 자동 표시되지 않았습니다.');
     const briefing = await rendererValue(win, "(() => {"
       + "const dialog=document.querySelector('#comprehensionPacketDialog');"
       + "return{dialog:Boolean(dialog&&dialog.getAttribute('role')==='dialog'"

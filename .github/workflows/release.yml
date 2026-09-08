@@ -125,6 +125,8 @@ jobs:
           path: |
             artifacts/drawer-terminal-visual.log
             artifacts/inline-actual-pty-integration.log
+            artifacts/pty-focus-actual-pty-integration.log
+            artifacts/whitebox-pty-focus-actual-pty-failure.png
             artifacts/whitebox-drawer-*.png
             artifacts/whitebox-inline-*.png
             artifacts/whitebox-history-empty.png

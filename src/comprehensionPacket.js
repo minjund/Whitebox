@@ -28,6 +28,13 @@ The JSON must use schemaVersion 1 and exactly these fields:
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question and its pre-generated variant must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
 ${CONTRACT_CLOSE}`;
 
+// Keep the version-1 contract byte-stable: persisted launch fingerprints and
+// historical transcript stripping depend on it. Clarify turn scope only in
+// the private provider instruction channel.
+const COMPREHENSION_INSTRUCTIONS = `${COMPREHENSION_CONTRACT}
+
+Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.`;
+
 const PACKET_KEYS = Object.freeze([
   'schemaVersion', 'id', 'title', 'summary', 'difficulty', 'difficultyReason', 'evidence', 'questions',
 ]);
@@ -476,6 +483,7 @@ function promoteComprehensionCandidate(session, authority = 'whitebox-terminal-b
 
 module.exports = {
   COMPREHENSION_CONTRACT,
+  COMPREHENSION_INSTRUCTIONS,
   CONTRACT_CLOSE,
   CONTRACT_OPEN,
   MAX_PACKET_BYTES,

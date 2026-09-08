@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { finalizedActivityState, observeActivity } = require('./activityState');
+const { finalizedActivityState, observeActivity, activityAfterToolResult } = require('./activityState');
 const { createExecutionTracker, reconcileExecutionActivities } = require('./executionActivity');
 const { structuredInputRequest, structuredInputRequestText } = require('./responseIntent');
 const {
@@ -399,9 +399,9 @@ function createClaudeParser(dependencies) {
         at: row.timestamp,
         isError: item.is_error === true,
       });
-      observeActivity(state, 'working', row.timestamp);
       recordClaudeAgentToolResult(session, state, item, row.timestamp);
       settleLifecycle(session, item.tool_use_id, item.is_error ? 'failed' : 'done', row.timestamp);
+      observeActivity(state, activityAfterToolResult(session, state.executionTracker), row.timestamp);
       addLifecycle(session, {
         id: `result:${item.tool_use_id || id}`,
         type: 'tool-result',

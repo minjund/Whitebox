@@ -22,7 +22,7 @@ const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
 const { applyRuntimePresence } = require('../src/processMonitor');
 const {
   comprehensionPromptFingerprint,
-  COMPREHENSION_CONTRACT,
+  COMPREHENSION_INSTRUCTIONS,
   hasComprehensionContract,
   stripComprehensionContract,
 } = require('../src/comprehensionPacket');
@@ -650,7 +650,7 @@ async function run() {
 
     const directLaunchMarker = fixtureLaunchArgumentsMarker([
       ...directCreateOptions.args.slice(0, -1),
-      '--append-system-prompt', COMPREHENSION_CONTRACT.replace(/\s+/gu, ' '),
+      '--append-system-prompt', COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '),
       '--', directPrompt,
     ]);
     await waitUntil(async () => {

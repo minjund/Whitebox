@@ -5,6 +5,17 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.9 - 2026-09-08
+
+- Keep Korean terminal composition readable during mid-line edits, output
+  redraws, and input at the right edge without changing committed input bytes.
+- Add configurable permission and question popups with direct responses and
+  stale-request checks, and improve activity-state update latency.
+- Improve PTY focus layout and carry historical terminal screen-click coverage
+  forward to the current interface.
+- Retain the fixed 1.8.7 installer cohort and attest the official 1.8.8 installer
+  as the previous stable release for packaged update compatibility checks.
+
 ## 1.8.8 - 2026-09-08
 
 - Remove archived and expired tasks from the sidebar immediately, including

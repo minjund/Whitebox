@@ -572,6 +572,7 @@ const currentUpdate = {
 
 let terminals = clone(initialTerminals);
 let update = clone(availableUpdate);
+let attentionPopups = { enabled: true, hookStatus: 'installed', hookDetail: '' };
 let calls = [];
 let failures = new Map();
 let delays = new Map();
@@ -640,6 +641,7 @@ const api = {
         localShellLabel: '실제 PTY 통합 검증 명령창',
         nativeTmux: process.platform !== 'win32',
       } : { id: 'win32', label: 'Windows', computerName: '작업용-PC', localShell: 'powershell', localShellLabel: '작업용-PC에서 실행하는 작업', nativeTmux: false },
+      attentionPopups: clone(attentionPopups),
       versions: { app: currentUpdate.currentVersion, electron: '31.0.0', node: '20.0.0' }, update: bootstrapUpdate,
     };
   },
@@ -698,6 +700,11 @@ const api = {
       grok: { provider: 'grok', available: false, source: 'provider', reason: 'usage-not-supported' },
     },
   }),
+  setAttentionPopups: async preference => {
+    await controlled('setAttentionPopups', [preference]);
+    attentionPopups = { ...attentionPopups, enabled: preference?.enabled === true };
+    return clone(attentionPopups);
+  },
   setProviderVisibility: preference => controlled('setProviderVisibility', [preference]),
   syncAttentionPrompts: prompts => controlled('syncAttentionPrompts', [prompts], { ok: true, count: Array.isArray(prompts) ? prompts.length : 0 }),
   listWorkspaces: async () => realTerminalFixture ? [

@@ -44,6 +44,9 @@ jobs:
         run: npm run test:result-review
       - run: npm audit --audit-level=high
       - run: npm run test:terminal
+      - name: Verify Korean terminal composition
+        if: runner.os == 'Windows'
+        run: npm run test:terminal:ime
       - run: npm run test:terminal:startup
       - run: npm run test:terminal:tmux-pane
       - run: npm run test:bridge
@@ -63,6 +66,8 @@ jobs:
           path: |
             artifacts/drawer-terminal-visual.log
             artifacts/inline-actual-pty-integration.log
+            artifacts/pty-focus-actual-pty-integration.log
+            artifacts/whitebox-pty-focus-actual-pty-failure.png
             artifacts/whitebox-drawer-*.png
             artifacts/whitebox-inline-*.png
             artifacts/whitebox-history-empty.png

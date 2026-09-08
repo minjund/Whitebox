@@ -15,6 +15,7 @@
   [
     "createCore",
     "createProviderVisibility",
+    "createAttentionPopupSettings",
     "createDashboard",
     "createGraphModel",
     "createGraphView",
@@ -106,6 +107,7 @@
     state.providers = bootstrap.providers || [];
     state.providerMap = new Map(state.providers.map((provider) => [provider.id, provider]));
     loadProviderVisibility(bootstrap.providerVisibility);
+    app.loadAttentionPopupSettings(bootstrap.attentionPopups);
     state.availability = bootstrap.availability || {};
     state.sourcePlugins = bootstrap.sourcePlugins || [];
     state.sourcePluginSettings = bootstrap.sourcePluginSettings || state.sourcePluginSettings;
@@ -217,6 +219,7 @@
       showInitializationError(detail);
       toast(detail);
     });
+    app.bindAttentionPopupSettings();
     bindEvents();
     render();
     syncPendingPtyFocus();
@@ -252,6 +255,9 @@
         render();
         saveDashboardPreferences();
         syncPendingPtyFocus();
+        // A completed packet can arrive without changing the focus surface's
+        // attributes, so its MutationObserver alone cannot refresh the quiz.
+        app.syncComprehensionPacket();
         if (state.selectedId && $("#detailDrawer")?.classList.contains("open")) {
           const card = (renderedSnapshot?.sessions || []).find(session => session.id === state.selectedId);
           const detail = state.details.get(state.selectedId);
