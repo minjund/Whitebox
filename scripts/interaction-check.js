@@ -3102,11 +3102,15 @@ async function exerciseRunModal(win, round) {
 
 async function exerciseDrawer(win, round) {
   await win.webContents.executeJavaScript(`(() => {
+    window.WhiteboxI18n.setLocale('ko');
     const app = window.WhiteboxApp;
     app.state.search = '';
     app.state.providerFilters = new Set();
     app.state.workspace = 'all';
     app.state.sort = 'recent';
+    app.state.view = 'active';
+    app.render('drawer-fixture');
+    document.querySelector('[data-session-id="fixture-ended"]')?.focus({ preventScroll: true });
     app.openDrawer('fixture-root');
   })()`);
   const drawerDragSafe = await win.webContents.executeJavaScript(`(() => {
@@ -3895,8 +3899,24 @@ async function writeToEmbeddedXterm(win, viewportSelector, text) {
   })()`, `${viewportSelector}의 xterm 입력이 연결된 PTY로 전달되지 않았습니다.`);
 }
 
+async function focusEmbeddedXtermFromScreen(win, viewportSelector, action) {
+  const point = await win.webContents.executeJavaScript(`(() => {
+    const screen = document.querySelector(${JSON.stringify(`${viewportSelector} > .terminal-screen:not(.hidden) .xterm-screen`)});
+    if (!screen) return null;
+    const rect = screen.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0
+      ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) }
+      : null;
+  })()`);
+  assert(point, `${viewportSelector}의 보이는 xterm 화면을 찾지 못했습니다.`);
+  win.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+  win.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+  mark(action);
+  await waitFor(win, `document.activeElement === document.querySelector(${JSON.stringify(`${viewportSelector} > .terminal-screen:not(.hidden) .xterm-helper-textarea`)})`,
+  `${viewportSelector}의 보이는 PTY 화면을 눌러 입력 커서를 옮기지 못했습니다.`);
+}
+
 async function exerciseAgentControls(win, round) {
-  const visibleDrawerXtermScreen = '#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-screen';
   await click(win, '[data-view="all"]', 'nav:all');
   await resetGraphToOverview(win);
 
@@ -3916,16 +3936,12 @@ async function exerciseAgentControls(win, round) {
   mark('agent:command-submit');
   assert(await callCount(win, 'terminalCommand') === 0, 'PTY 직접 입력이 별도 메시지 command 경로를 호출했습니다.');
   await win.webContents.executeJavaScript(`document.querySelector('#drawerTerminalViewport > .terminal-screen').dataset.interactionTerminalIdentity = 'fixture-root-main'`);
-  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
-  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-helper-textarea')`,
-  'PTY 화면을 클릭해도 실제 xterm 입력 커서로 이동하지 않았습니다.');
+  await focusEmbeddedXtermFromScreen(win, '#drawerTerminalViewport', 'drawer:terminal-focus');
   await writeToEmbeddedXterm(win, '#drawerTerminalViewport', 'TERMINAL_DRAWER_CONTINUE');
   mark('agent:command-submit');
   assert(await callCount(win, 'terminalCommand') === 0, 'PTY 직접 입력이 구조화 메시지 경로를 호출했습니다.');
   await clearCalls(win);
-  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
-  await waitFor(win, `document.activeElement === document.querySelector('#drawerTerminalViewport > .terminal-screen:not(.hidden) .xterm-helper-textarea')`,
-  'PTY 화면의 Ctrl+C 입력 전에 실제 xterm 입력 커서를 준비하지 못했습니다.');
+  await focusEmbeddedXtermFromScreen(win, '#drawerTerminalViewport', 'drawer:terminal-focus');
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'C', modifiers: ['control'] });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'C', modifiers: ['control'] });
   await waitFor(win, `window.interactionTest.getCalls().filter(item => item.name === 'terminalWrite'
@@ -4049,7 +4065,7 @@ async function exerciseAgentControls(win, round) {
     && document.querySelector('#drawerComposer')?.classList.contains('hidden')
     && !document.querySelector('#drawerComposer')?.children.length`,
   '외부 CLI 세션의 실제 PTY가 같은 대화창에 연결되지 않았습니다.');
-  await click(win, visibleDrawerXtermScreen, 'drawer:terminal-focus');
+  await focusEmbeddedXtermFromScreen(win, '#drawerTerminalViewport', 'drawer:terminal-focus');
   await win.webContents.executeJavaScript(`(() => {
     window.interactionTest.setSessionRuntimePresence('fixture-root', []);
     window.interactionTest.removeTerminal('terminal-main');
