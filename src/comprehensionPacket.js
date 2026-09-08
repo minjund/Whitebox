@@ -115,7 +115,8 @@ function validateOptions(value, path, issues) {
       issues.push(issue(optionPath, 'OPTION_KEYS', 'must contain exactly id and label'));
       return;
     }
-    const id = safeId(option.id, `${optionPath}.id`, issues, ids);
+    // answerId is resolved within this list, so other questions may reuse a/b/c.
+    safeId(option.id, `${optionPath}.id`, issues, ids);
     const label = safeText(option.label, `${optionPath}.label`, 500, issues);
     if (label && labels.has(label)) {
       issues.push(issue(`${optionPath}.label`, 'OPTION_LABEL_DUPLICATE', `duplicates option label ${label}`));
