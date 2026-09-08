@@ -35,6 +35,7 @@
     "bin",
     "build/icon.png",
     "build/icon.ico",
+    "build/generated/whitebox-signature-check.exe",
     "main.js",
     "preload.js",
     "attention-popup-preload.js",

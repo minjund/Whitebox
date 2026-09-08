@@ -73,6 +73,10 @@ const draftFiles = unexpectedDocs.filter(file => file.startsWith('docs/assets/ux
 const otherUnexpectedDocs = unexpectedDocs.filter(file => !draftFiles.includes(file));
 const missingAssets = allowedDocsAssets.filter(file => !packageFileSet.has(file));
 const missingRuntimeFiles = requiredRuntimeFiles.filter(file => !packageFileSet.has(file));
+if (process.env.WHITEBOX_REQUIRE_NATIVE_VERIFIER === 'true'
+    && !packageFileSet.has('build/generated/whitebox-signature-check.exe')) {
+  missingRuntimeFiles.push('build/generated/whitebox-signature-check.exe');
+}
 const tarballsAfter = tarballState();
 const writtenTarballs = [...tarballsAfter]
   .filter(([name, state]) => tarballsBefore.get(name) !== state)
