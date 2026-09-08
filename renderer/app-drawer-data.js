@@ -8,6 +8,24 @@ window.WhiteboxAppFactories.createDrawerData = function createDrawerData(context
   const detailRequests = new Map();
   let detailRequestGeneration = 0;
 
+  function cacheDetail(id, detail) {
+    state.details.delete(id);
+    state.details.set(id, detail);
+    const protectedIds = new Set([id, state.selectedId, state.ptyFocusSessionId]);
+    for (const selected of [...protectedIds]) {
+      const session = state.details.get(selected)
+        || state.snapshot?.sessions?.find(row => row.id === selected);
+      if (session?.parentId) protectedIds.add(session.parentId);
+    }
+    for (const cachedId of state.details.keys()) {
+      if (state.details.size <= 12) break;
+      if (protectedIds.has(cachedId) || detailRequests.has(cachedId)
+        || state.pendingConversationMessages?.has(cachedId)) continue;
+      state.details.delete(cachedId);
+      state.detailErrors.delete(cachedId);
+    }
+  }
+
   function observedSnapshotVersion(id, explicitVersion = "") {
     const requested = String(explicitVersion || "").trim();
     if (requested) return requested;
@@ -24,7 +42,11 @@ window.WhiteboxAppFactories.createDrawerData = function createDrawerData(context
   }
 
   async function loadSessionDetail(id, force = false, snapshotVersion = "", followup = false) {
-    if (!force && state.details.has(id)) return state.details.get(id);
+    if (!force && state.details.has(id)) {
+      const detail = state.details.get(id);
+      cacheDetail(id, detail);
+      return detail;
+    }
     const observedVersion = observedSnapshotVersion(id, snapshotVersion);
     // A live snapshot can advance again while the previous detail request is
     // still running. Share that request instead of stacking more full-history
@@ -55,7 +77,7 @@ window.WhiteboxAppFactories.createDrawerData = function createDrawerData(context
         // the live preview/cache with the now-known stale response. The queued
         // follow-up below owns the next committed full-history value.
         if (active?.generation === generation && !active.refreshQueued && detail) {
-          state.details.set(id, detail);
+          cacheDetail(id, detail);
           // PTY focus details do not own the drawer selection, so the drawer's
           // selectedId-based rerender below cannot refresh their open modal.
           // Notify that surface only after a full-history value actually

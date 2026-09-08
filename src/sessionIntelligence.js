@@ -32,18 +32,17 @@ function latestActivity(session) {
 }
 
 function latestMeaningfulText(session) {
-  const messages = [...(session.messages || [])].reverse();
-  const latest = messages.find(row => row && text(row.text));
+  const latest = (session.messages || []).findLast(row => row && /\S/.test(row.text || ''));
   return text((latest || {}).text || session.statusDetail || session.result || '', 360);
 }
 
 function currentResponseIntent(session) {
   const responseIntent = session.responseIntent || {};
   if (responseIntent.source === 'input-tool') return responseIntent;
-  const latestConversation = [...(session.messages || [])].reverse().find(row => (
+  const latestConversation = (session.messages || []).findLast(row => (
     row
     && (row.role === 'assistant' || row.role === 'user')
-    && text(row.text)
+    && /\S/.test(row.text || '')
   ));
   if (latestConversation?.role !== 'user') return responseIntent;
   // Parsers retain the previous assistant prose so completed turns can still
@@ -184,11 +183,6 @@ function progressFor(session, attention) {
 }
 
 function extractArtifacts(session) {
-  const body = [
-    session.result,
-    ...(session.messages || []).map(row => row && row.text),
-    ...(session.lifecycle || []).map(row => row && `${row.label || ''} ${row.detail || ''}`),
-  ].filter(Boolean).join('\n');
   const artifacts = [];
   const seen = new Set();
   const add = (kind, value, verified = false) => {
@@ -203,6 +197,7 @@ function extractArtifacts(session) {
     ...(Array.isArray(session.outcome?.artifacts) ? session.outcome.artifacts : []),
   ];
   for (const artifact of explicitArtifacts) {
+    if (artifacts.length >= 24) break;
     if (artifact == null) continue;
     if (typeof artifact === 'string') {
       add('file', artifact, false);
@@ -214,13 +209,25 @@ function extractArtifacts(session) {
       Boolean(artifact.verified),
     );
   }
+  if (artifacts.length >= 24) return artifacts;
+  const body = [
+    session.result,
+    ...(session.messages || []).map(row => row && row.text),
+    ...(session.lifecycle || []).map(row => row && `${row.label || ''} ${row.detail || ''}`),
+  ].filter(Boolean).join('\n');
   const filePattern = /(?:[A-Za-z]:\\|\/)?(?:[\w.@-]+[\\/])+[\w.@()+-]+\.[A-Za-z0-9]{1,12}/g;
-  for (const match of body.match(filePattern) || []) add(TEST_PATTERN.test(match) ? 'test' : 'file', match, false);
+  for (const [match] of body.matchAll(filePattern)) {
+    add(TEST_PATTERN.test(match) ? 'test' : 'file', match, false);
+    if (artifacts.length >= 24) return artifacts;
+  }
   if (/(?:commit|커밋)/i.test(body)) {
     // A hash mentioned in a log is only a candidate reference. Confirming that
     // the commit exists belongs to repository verification, which this view
     // intentionally does not perform.
-    for (const match of body.match(/\b[0-9a-f]{7,40}\b/gi) || []) add('commit', match, false);
+    for (const [match] of body.matchAll(/\b[0-9a-f]{7,40}\b/gi)) {
+      add('commit', match, false);
+      if (artifacts.length >= 24) break;
+    }
   }
   return artifacts;
 }
@@ -236,11 +243,13 @@ function outcomeFor(session, evidence) {
       timestamp: row.completedAt || row.timestamp || null,
     }));
   const messages = Array.isArray(session.messages) ? session.messages : [];
-  const latestUserIndex = messages.reduce((latest, row, index) => (
-    row && row.role === 'user' && text(row.text) ? index : latest
-  ), -1);
-  const latestAssistant = messages.slice(latestUserIndex + 1).reverse()
-    .find(row => row && row.role === 'assistant' && text(row.text));
+  let latestAssistant = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const row = messages[index];
+    if (!row || !/\S/.test(row.text || '')) continue;
+    if (row.role === 'user') break;
+    if (!latestAssistant && row.role === 'assistant') latestAssistant = row;
+  }
   return {
     status: session.status === 'completed' ? 'completed'
       : session.status === 'failed' ? 'failed'

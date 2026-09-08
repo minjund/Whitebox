@@ -5,6 +5,18 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.12 - 2026-09-08
+
+- Reduce dashboard refresh work by reusing normalized project paths and
+  preserving unchanged sidebar, history, filter, and provider elements.
+- Release obsolete streaming transcript generations and bound full-history
+  caches while retaining selected conversations and reloading history on demand.
+- Stop artifact searches once their existing display limit is filled, avoid
+  duplicate enrichment after unchanged plugin scans, and scope file discovery
+  invalidation to the provider whose history changed.
+- Add repeatable performance workloads and regression coverage for cache
+  freshness, history reload, plugin updates, and unchanged dashboard rendering.
+
 ## 1.8.11 - 2026-09-08
 
 - Replace PowerShell-based Windows update signature checks with a packaged

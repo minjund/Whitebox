@@ -1,5 +1,7 @@
 'use strict';
 
+const { isDeepStrictEqual } = require('util');
+
 function normalizedSourceSnapshot(value) {
   return {
     sessions: Array.isArray(value?.sessions) ? value.sessions : [],
@@ -22,6 +24,7 @@ function createSnapshotPublicationCoordinator(options = {}) {
   let latestCoreSnapshot = null;
   let sourceScanPromise = null;
   let sourceRescanRequested = false;
+  let sourcePublicationPending = false;
   let stopped = false;
 
   function report(scope, error) {
@@ -54,8 +57,12 @@ function createSnapshotPublicationCoordinator(options = {}) {
       .then(() => options.scanSource())
       .then(async sourceSnapshot => {
         if (stopped) return;
-        lastSourceSnapshot = normalizedSourceSnapshot(sourceSnapshot);
-        await publishSafely(latestCoreSnapshot, lastSourceSnapshot);
+        const next = normalizedSourceSnapshot(sourceSnapshot);
+        // Core observations already publish immediately. An unchanged plugin
+        // refresh must not repeat all runtime linking and history enrichment.
+        if (!sourcePublicationPending && isDeepStrictEqual(next, lastSourceSnapshot)) return;
+        lastSourceSnapshot = next;
+        sourcePublicationPending = !await publishSafely(latestCoreSnapshot, lastSourceSnapshot);
       })
       .catch(error => report('scan', error))
       .finally(() => {

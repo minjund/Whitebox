@@ -23,6 +23,15 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     preserveFocusDuringRender = callback => callback(),
   } = context;
 
+  // These containers are owned by this renderer. Preserve their DOM, focus,
+  // scroll and observers when a snapshot generates identical markup.
+  const renderedHtml = new WeakMap();
+  function setDashboardHtml(element, html) {
+    if (!element || renderedHtml.get(element) === html) return;
+    element.innerHTML = html;
+    renderedHtml.set(element, html);
+  }
+
   function displaySessions() {
     return visibleSessions().filter((session) => (
       typeof context.isRecentSession !== "function" || context.isRecentSession(session)
@@ -75,7 +84,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   }
 
   function renderProviderRail() {
-    $("#providerRail").innerHTML = visibleProviders()
+    setDashboardHtml($("#providerRail"), visibleProviders()
       .map((provider) => {
         const available = !!state.availability[provider.id];
         const connectionStatus = available ? window.WhiteboxI18n.t("ui.cli_found") : window.WhiteboxI18n.t("ui.setup_required");
@@ -85,7 +94,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         <span class="connection-dot" aria-hidden="true"></span>
       </div>`;
       })
-      .join("");
+      .join(""));
   }
 
   function isProjectlessSession(session) {
@@ -100,15 +109,21 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return String(session && (session.originCwd || session.cwd) || "").trim();
   }
 
+  const normalizedPaths = new Map();
   function normalizedProjectPath(value) {
-    let normalized = String(value ?? "").trim().replace(/\\/g, "/");
+    const input = String(value ?? "");
+    if (normalizedPaths.has(input)) return normalizedPaths.get(input);
+    let normalized = input.trim().replace(/\\/g, "/");
     if (!normalized) return "";
     const posixRoot = /^\/+$/u.test(normalized);
     normalized = normalized.replace(/^\/\/\?\/([a-z]:\/)/i, "$1");
     const wslWindowsMount = normalized.match(/^\/mnt\/([a-z])(?:\/(.*))?$/i);
     if (wslWindowsMount) normalized = `${wslWindowsMount[1]}:/${wslWindowsMount[2] || ""}`;
     normalized = normalized.replace(/\/+$/, "");
-    return (normalized || (posixRoot ? "/" : "")).toLocaleLowerCase();
+    const result = (normalized || (posixRoot ? "/" : "")).toLocaleLowerCase();
+    if (normalizedPaths.size >= 1024) normalizedPaths.clear();
+    normalizedPaths.set(input, result);
+    return result;
   }
 
   function projectContainsPath(projectPath, candidatePath) {
@@ -802,7 +817,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const mobileList = $("#mobileWorkspaceList");
     const sidebarList = $("#projectSidebarList");
     if (desktopList) {
-      desktopList.innerHTML = desktopHtml;
+      setDashboardHtml(desktopList, desktopHtml);
       const updateProjectOverflow = () => {
         const overflowing = desktopList.scrollWidth > desktopList.clientWidth + 2;
         const scrolledEnd = desktopList.scrollLeft + desktopList.clientWidth >= desktopList.scrollWidth - 2;
@@ -819,10 +834,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       }
       requestAnimationFrame(updateProjectOverflow);
     }
-    if (mobileList) mobileList.innerHTML = mobileHtml;
+    if (mobileList) setDashboardHtml(mobileList, mobileHtml);
     if (sidebarList) {
       sidebarList.dataset.selectedProject = state.workspace === "all" ? "false" : "true";
-      sidebarList.innerHTML = sidebarHtml;
+      setDashboardHtml(sidebarList, sidebarHtml);
     }
     const historyList = $("#projectHistoryList");
     const historyTitle = $("#projectHistoryTitle");
@@ -856,7 +871,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         : state.workspace === PROJECTLESS_WORKSPACE
           ? t("ui.no_project")
           : selectedProject?.name || projectName(state.workspace);
-      historyTitle.innerHTML = `<span class="project-history-scope">${esc(scopeLabel)}</span><span class="project-history-title-suffix">${esc(t("studio.history.title_suffix"))}</span>`;
+      setDashboardHtml(historyTitle, `<span class="project-history-scope">${esc(scopeLabel)}</span><span class="project-history-title-suffix">${esc(t("studio.history.title_suffix"))}</span>`);
     }
     if (historyList) {
       const historySessions = allVisibleSessions
@@ -864,7 +879,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         .filter(isPastRecord)
         .filter(matchesWorkspaceFilter)
       const latestHistorySessions = latestSessionSort(historySessions).slice(0, 8);
-      historyList.innerHTML = latestHistorySessions.length
+      setDashboardHtml(historyList, latestHistorySessions.length
         ? latestHistorySessions.map((session) => {
           const provider = state.providerMap.get(session.provider);
           const providerLabel = provider?.label || String(session.provider || "AI").toUpperCase();
@@ -880,20 +895,20 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             <span><b>${esc(shortText(session.title, 54))}</b><small>${esc([providerLabel, updatedLabel].filter(Boolean).join(" · "))}</small></span><i aria-hidden="true">›</i>
           </button>`;
         }).join("")
-        : `<p class="project-history-empty"><span aria-hidden="true">○</span><b>${esc(t("studio.history.empty"))}</b><small>${esc(t("studio.history.empty_detail"))}</small></p>`;
+        : `<p class="project-history-empty"><span aria-hidden="true">○</span><b>${esc(t("studio.history.empty"))}</b><small>${esc(t("studio.history.empty_detail"))}</small></p>`);
     }
     const projectSelect = $("#controlRoomProjectSelect");
     if (projectSelect) {
-      projectSelect.innerHTML = `<option value="all">${esc(t("control.all_projects_filter"))}</option>`
+      setDashboardHtml(projectSelect, `<option value="all">${esc(t("control.all_projects_filter"))}</option>`
         + liveProjects.map((item) => `<option value="${esc(item.path)}">${esc(beginnerWorkLocation(item.name))}</option>`).join("")
-        + (liveProjectlessCount ? `<option value="${PROJECTLESS_WORKSPACE}">${esc(t("control.other_projects"))}</option>` : "");
+        + (liveProjectlessCount ? `<option value="${PROJECTLESS_WORKSPACE}">${esc(t("control.other_projects"))}</option>` : ""));
       projectSelect.value = [...projectSelect.options].some((option) => option.value === state.workspace) ? state.workspace : "all";
     }
     const memoryProjectSelect = $("#memoryWorkspaceFilter");
     if (memoryProjectSelect) {
-      memoryProjectSelect.innerHTML = `<option value="all">${esc(t("project.all"))}</option>`
+      setDashboardHtml(memoryProjectSelect, `<option value="all">${esc(t("project.all"))}</option>`
         + projects.map((item) => `<option value="${esc(item.path)}">${esc(item.name)} · ${esc(t("memory.metric_count", { count: Number(item.count || 0) }))}</option>`).join("")
-        + (projectlessCount ? `<option value="${PROJECTLESS_WORKSPACE}">${esc(t("ui.no_project"))} · ${esc(t("memory.metric_count", { count: projectlessCount }))}</option>` : "");
+        + (projectlessCount ? `<option value="${PROJECTLESS_WORKSPACE}">${esc(t("ui.no_project"))} · ${esc(t("memory.metric_count", { count: projectlessCount }))}</option>` : ""));
       memoryProjectSelect.value = [...memoryProjectSelect.options].some((option) => option.value === state.workspace) ? state.workspace : "all";
     }
     const controlSort = $("#controlRoomSortSelect");
@@ -933,7 +948,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       [window.WhiteboxI18n.t("management.health.critical"), criticalCount, window.WhiteboxI18n.t("ui.items"), "critical"],
       [window.WhiteboxI18n.t("management.risk_total"), riskCount, window.WhiteboxI18n.t("ui.items"), "warning"],
     ];
-    $("#globalStats").innerHTML = items
+    setDashboardHtml($("#globalStats"), items
       .map(
         ([label, value, unit, cls], index) => `<div class="global-stat ${cls}" data-motion-key="stat:${index}" data-motion-value="${esc(value)}">
       <span>${label}</span>
@@ -941,7 +956,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       <em>${unit}</em>
       </div>`,
       )
-      .join("");
+      .join(""));
     const activeRootCount = sessions.filter((session) => !session.parentId && isControlRoomSession(session)).length
       + (state.workspace === "all" ? unlinkedLiveTmuxSessions().length : 0);
     const memoryRootCount = sessions.filter((session) => (
@@ -1353,14 +1368,14 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       { id: "all", label: window.WhiteboxI18n.t("ui.all_ai") },
       ...visibleProviders().map((provider) => ({ id: provider.id, label: provider.label })),
     ].map(({ id, label }) => `<option value="${esc(id)}" ${id === mobileSelectedId ? "selected" : ""}>${esc(label)}</option>`).join("");
-    $("#providerFilter").innerHTML =
+    setDashboardHtml($("#providerFilter"),
       `<span class="provider-filter-label">${esc(window.WhiteboxI18n.t("memory.agent"))}</span>` +
       `<label class="mobile-provider-filter" for="mobileProviderFilterSelect">
         <span>${esc(window.WhiteboxI18n.t("memory.agent"))}</span>
         <select id="mobileProviderFilterSelect" aria-label="${esc(window.WhiteboxI18n.t("ui.ai_provider_filter"))}">${mobileOptions}</select>
       </label>` +
       button("all", window.WhiteboxI18n.t("ui.all_ai")) +
-      visibleProviders().map((provider) => button(provider.id, provider.label, provider.mark)).join("");
+      visibleProviders().map((provider) => button(provider.id, provider.label, provider.mark)).join(""));
   }
 
   function announceProviderFilter() {
@@ -1534,6 +1549,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     ];
     const desktopSessionCount = (clientKind) => (state.rawSnapshot?.sessions || state.snapshot?.sessions || [])
       .filter((session) => !session.sourcePluginId && String(session.clientKind || "").toLowerCase() === clientKind).length;
+    // Switch inputs can be changed by the browser before a save fails. Rebuild
+    // this small form to restore checked/disabled state even for identical HTML.
     list.innerHTML = definitions.map((definition) => {
       const source = statuses.get(definition.id) || {};
       const enabled = enabledPluginIds.has(definition.id);
