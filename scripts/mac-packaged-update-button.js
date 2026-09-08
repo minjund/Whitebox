@@ -40,6 +40,9 @@ async function stopOwned(pid) {
     : {size:119993464,sha256:'0cfbfa66d4ea202a0929b5f7eda1b72c2568d245df30ee5c5d15f642dc99e768'};
   const pins = {
     '1.7.3': originalPinned,
+    '1.8.6': process.arch === 'arm64'
+      ? {size:118205927,sha256:'5b15aad4f70ebac77a403fcb93adbc457cee4922e1c5cbaf04c1e5320191af14'}
+      : {size:120000980,sha256:'026eeae970882d576c88a6e2039bedda0eca0c5589b7ee6021d8d413f4472e2a'},
     '1.8.4': process.arch === 'arm64'
       ? {size:118201325,sha256:'d783426277328002a470a6d51fc0442036cad978b775e47f953ab0775f58c681'}
       : {size:120000089,sha256:'62aac017fecde3798c0f616392e2484a876ad3193a763edc60fe159f87954f40'},

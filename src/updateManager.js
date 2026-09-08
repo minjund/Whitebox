@@ -16,6 +16,7 @@ const MAX_UPDATE_CHECK_BYTES = 2 * 1024 * 1024;
 const MAX_UPDATE_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+const UPDATE_CHECK_INTERVAL_MS = 15 * 60_000;
 
 function boundedPositiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
   const number = Number(value);
@@ -236,6 +237,8 @@ class UpdateManager extends EventEmitter {
     this.checkPromise = null;
     this.checkSurfaceErrorRequested = false;
     this.downloadPromise = null;
+    this.isInstallBusy = options.isInstallBusy || (() => false);
+    this.periodicCheckTimer = null;
     this.activeDownloadPaths = new Set();
     this.state = {
       status: this.blockedReason
@@ -255,6 +258,7 @@ class UpdateManager extends EventEmitter {
       totalBytes: 0,
       downloadedPath: '',
       checkedAt: '',
+      checkError: '',
       error: this.blockedReason,
       platform: this.platform,
       arch: this.arch,
@@ -325,6 +329,8 @@ class UpdateManager extends EventEmitter {
   }
 
   async check(options = {}) {
+    if (this.state.status === 'installing'
+      || (!options.forDownload && (this.downloadPromise || this.isInstallBusy()))) return this.getState();
     const surfaceError = options.surfaceError !== false;
     if (this.checkPromise) {
       if (surfaceError) this.checkSurfaceErrorRequested = true;
@@ -343,7 +349,7 @@ class UpdateManager extends EventEmitter {
 
   async performCheck() {
     const previousState = this.getState();
-    this.setState({ status: 'checking', error: '', checkedAt: new Date().toISOString() });
+    this.setState({ status: 'checking', error: '', checkError: '' });
     if (!this.downloadPromise) await this.cleanupManagedDownloads([this.state.downloadedPath]);
     const controller = this.AbortController ? new this.AbortController() : null;
     const timeoutMessage = '업데이트 확인 시간이 초과되었습니다. 다시 시도해 주세요.';
@@ -359,7 +365,9 @@ class UpdateManager extends EventEmitter {
     try {
       if (typeof this.fetch !== 'function') throw new Error('업데이트 서버에 연결할 수 없습니다.');
       const response = await awaitCheck(() => this.fetch(this.apiUrl, {
+        cache: 'no-store',
         headers: {
+          'Cache-Control': 'no-cache',
           Accept: 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2022-11-28',
           'User-Agent': `Whitebox/${this.currentVersion}`,
@@ -375,6 +383,9 @@ class UpdateManager extends EventEmitter {
       const release = await readJsonResponse(response, awaitCheck, this.maxCheckBytes);
       const latest = normalizeVersion(release && release.tag_name);
       if (!latest || release.draft || release.prerelease) throw new Error('공개된 최신 정식 버전 정보가 올바르지 않습니다.');
+      if (previousState.latestVersion && compareVersions(latest.raw, previousState.latestVersion) < 0) {
+        throw new Error('업데이트 서버가 이전 확인보다 오래된 버전을 반환했습니다. 잠시 후 다시 확인해 주세요.');
+      }
       const releaseUrl = trustedReleasePage(release.html_url) ? release.html_url : RELEASE_PAGE;
       const selectionOptions = { platform: this.platform, arch: this.arch, version: latest.raw };
       const expectedName = automaticAssetName(selectionOptions);
@@ -389,19 +400,24 @@ class UpdateManager extends EventEmitter {
       const candidateAsset = available && hasTrustedDigest(asset) ? publicAsset(asset) : null;
       const assetTooLarge = Boolean(candidateAsset && candidateAsset.size > this.maxDownloadBytes);
       const exposedAsset = assetTooLarge ? null : candidateAsset;
+      const keepDownload = previousState.downloadedPath && exposedAsset
+        && previousState.latestVersion === latest.raw
+        && ['name', 'url', 'size', 'digest'].every(key => previousState.asset?.[key] === exposedAsset[key])
+        && fs.existsSync(previousState.downloadedPath);
       return this.setState({
-        status: available ? 'available' : 'current',
+        status: keepDownload ? 'downloaded' : available ? 'available' : 'current',
         latestVersion: latest.raw,
         tag: String(release.tag_name || `v${latest.raw}`),
         releaseUrl,
         publishedAt: String(release.published_at || ''),
         notes: String(release.body || '').slice(0, 12_000),
         asset: exposedAsset,
-        progress: 0,
-        downloadedBytes: 0,
+        progress: keepDownload ? previousState.progress : 0,
+        downloadedBytes: keepDownload ? previousState.downloadedBytes : 0,
         totalBytes: exposedAsset ? exposedAsset.size : 0,
-        downloadedPath: '',
+        downloadedPath: keepDownload ? previousState.downloadedPath : '',
         checkedAt: new Date().toISOString(),
+        checkError: '',
         error: assetTooLarge
           ? '업데이트 파일이 허용된 최대 크기를 초과해 자동으로 받을 수 없습니다.'
           : (available && !asset
@@ -417,21 +433,46 @@ class UpdateManager extends EventEmitter {
         return this.setState({
           ...previousState,
           status: previousState.status === 'checking' ? 'idle' : previousState.status,
-          error: previousState.status === 'error' ? previousState.error : '',
+          error: previousState.error,
+          checkError: error.message || '최신 버전 정보를 갱신하지 못했습니다.',
         });
       }
-      return this.setState({ status: 'error', error: error && error.message || '업데이트 확인 중 문제가 발생했습니다.', checkedAt: new Date().toISOString() });
+      return this.setState({ status: 'error', error: error && error.message || '업데이트 확인 중 문제가 발생했습니다.', checkError: error.message || '최신 버전 정보를 갱신하지 못했습니다.' });
     }
   }
 
   async download() {
     if (this.downloadPromise) return this.downloadPromise;
     if (this.blockedReason) throw new Error(this.blockedReason);
+    this.downloadPromise = this.prepareDownload().finally(() => { this.downloadPromise = null; });
+    return this.downloadPromise;
+  }
+
+  async prepareDownload() {
+    if (this.checkPromise) await this.checkPromise;
+    // Refresh stale selections before opening a cached installer, too.
+    if (this.state.checkError || this.state.status === 'error'
+      || (this.state.checkedAt && Date.now() - Date.parse(this.state.checkedAt) >= UPDATE_CHECK_INTERVAL_MS)) {
+      const refreshed = await this.check({ forDownload: true });
+      if (refreshed.status === 'error') throw new Error(refreshed.error);
+    }
     if (this.state.status === 'downloaded' && this.state.downloadedPath && fs.existsSync(this.state.downloadedPath)) return this.getState();
     if (!this.state.asset || !trustedDownloadUrl(this.state.asset.url)) throw new Error('받을 설치 파일이 없습니다.');
     if (!hasTrustedDigest(this.state.asset)) throw new Error('원본 여부를 확인할 수 없는 설치 파일은 받을 수 없습니다.');
-    this.downloadPromise = this.performDownload().finally(() => { this.downloadPromise = null; });
-    return this.downloadPromise;
+    return this.performDownload();
+  }
+
+  startPeriodicChecks(intervalMs = UPDATE_CHECK_INTERVAL_MS) {
+    this.stopPeriodicChecks();
+    this.periodicCheckTimer = setInterval(() => {
+      this.check({ surfaceError: false }).catch(error => reportRecoverableError('periodic-update-check', error));
+    }, intervalMs);
+    this.periodicCheckTimer.unref?.();
+  }
+
+  stopPeriodicChecks() {
+    if (this.periodicCheckTimer) clearInterval(this.periodicCheckTimer);
+    this.periodicCheckTimer = null;
   }
 
   async performDownload() {

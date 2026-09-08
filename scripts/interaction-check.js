@@ -333,6 +333,8 @@ async function exerciseUpdateDetails(win) {
   const updateCheckCount = await rendererValue(win,
     "window.interactionTest.getCalls().filter(call=>call.name==='checkForUpdate').length");
   assert(updateCheckCount === 1, '업데이트 확인 연속 클릭이 중복 요청을 만들었습니다: ' + updateCheckCount);
+  assert(await rendererValue(win, "!document.querySelector('#checkUpdateBtn').classList.contains('hidden') && Boolean(document.querySelector('#updateCheckedAt').textContent)"),
+    '새 버전이 있어도 다시 확인 버튼과 확인 시각이 보여야 합니다.');
   const updateBadge = await rendererValue(win, "(()=>{const badge=document.querySelector('#navUpdateBadge');"
     + "const settings=document.querySelector('#sidebarSettingsBtn');return{available:Boolean(badge&&!badge.classList.contains('hidden')"
       + "&&badge.textContent.trim()),label:settings?.getAttribute('aria-label')||'',"
@@ -453,10 +455,10 @@ async function exerciseKeyboardAndRunModal(win) {
     && submitted.payload.cwd === 'D:\\fixture'
     && submitted.payload.initialCommand.startsWith('<whitebox-comprehension-contract version="1">')
     && submitted.payload.initialCommand.endsWith('\n\n실제 DOM submit PTY 집중 모드 검증')
-    && submitted.payload.initialCommandInArgs === false
+    && submitted.payload.initialCommandInArgs === true
     && submitted.payload.title === 'GPT · 실제 DOM submit PTY 집중 모드 검증'
     && submitted.payload.args.includes('gpt-fixture')
-    && !submitted.payload.args.includes('실제 DOM submit PTY 집중 모드 검증')
+    && submitted.payload.args.filter(arg => arg === '실제 DOM submit PTY 집중 모드 검증').length === 1
     && submitted.payload.args.includes('workspace-write')
     && Boolean(submitted.payload.creationId),
   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));

@@ -1781,6 +1781,7 @@ async function setupRuntime() {
     installMode: installPlan.installMode,
     currentVersionKnown: updateCurrentVersionKnown,
     blockedReason: updateBlockedReason,
+    isInstallBusy: () => Boolean(updateInstallPromise) || isQuitting,
     fetch: (...args) => net.fetch(...args),
     shell,
     downloadsDir: userFile('updates'),
@@ -1814,6 +1815,7 @@ async function setupRuntime() {
     if (typeof sourcePluginRefreshTimer.unref === 'function') sourcePluginRefreshTimer.unref();
   }
   if (!demoCapture) {
+    updateManager.startPeriodicChecks();
     updateManager.check({ surfaceError: false }).then(update => {
       if (update.status !== 'idle' || isQuitting) return;
       startupUpdateRetryTimer = setTimeout(() => {
@@ -2258,6 +2260,7 @@ async function cleanupBeforeQuit() {
     }),
     quitCleanupTask('startup-update-retry-timer', () => {
       if (startupUpdateRetryTimer) clearTimeout(startupUpdateRetryTimer);
+      updateManager?.stopPeriodicChecks();
       startupUpdateRetryTimer = null;
     }),
     quitCleanupTask('interim-profile-guard', () => {

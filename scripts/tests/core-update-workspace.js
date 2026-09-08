@@ -979,7 +979,7 @@ function registerCliAndUpdateTests(context) {
       assert(workflowSource.includes('foreach ($cohort in $cohorts)'), `${label} workflow가 모든 cohort를 순회해야 합니다.`);
       assert(workflowSource.includes('$env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version'), `${label} workflow가 매니페스트 버전으로 테스트를 실행해야 합니다.`);
       assert(workflowSource.includes('& npm.cmd run test:update:win:frozen'), `${label} workflow가 패키지 E2E를 실행해야 합니다.`);
-      assert(workflowSource.includes('$cohorts.Count -lt 5') && workflowSource.includes('$attempt -ne $cohorts.Count'), `${label} workflow는 모든 고정 설치본이 실행되지 않으면 실패해야 합니다.`);
+      assert(workflowSource.includes('$cohorts.Count -lt 7') && workflowSource.includes('$attempt -ne $cohorts.Count'), `${label} workflow는 모든 고정 설치본이 실행되지 않으면 실패해야 합니다.`);
       assert(workflowSource.includes('LoadToAgent-Setup-1.6.3.exe'), `${label} workflow가 공식 v1.6.3 설치본을 고정해야 합니다.`);
       assert(workflowSource.includes('LoadToAgent-Setup-1.6.23.exe'), `${label} workflow가 공식 immutable bridge를 고정해야 합니다.`);
       assert(workflowSource.includes('WHITEBOX_LEGACY_CANDIDATE_E2E=true'), `${label} workflow가 후보 버전 legacy 모드를 명시해야 합니다.`);

@@ -32,6 +32,120 @@ function managerWithAsset(options, updateAsset) {
 function registerUpdateDownloadLimitTests(context) {
   const { test, temp } = context;
 
+  test('조회와 다운로드는 직렬화되고 동일 파일 새로고침은 준비 상태를 보존한다', async () => {
+    const payload = Buffer.from('verified installer');
+    const item = { ...asset('Whitebox-Setup-3.1.0.exe', payload.length, payload), state: 'uploaded' };
+    item.browser_download_url = item.url;
+    const release = { tag_name: 'v3.1.0', assets: [item] };
+    let finishCheck;
+    let checks = 0;
+    let files = 0;
+    const manager = new UpdateManager({ currentVersion: '3.0.0', platform: 'win32', arch: 'x64',
+      downloadsDir: path.join(temp, 'serialized-refresh'),
+      fetch: async (url, options) => {
+        if (url.includes('/latest')) {
+          checks++;
+          assert.equal(options.cache, 'no-store');
+          if (checks === 1) await new Promise(resolve => { finishCheck = resolve; });
+          return new Response(JSON.stringify(release));
+        }
+        files++;
+        return new Response(payload);
+      },
+    });
+    const checking = manager.check();
+    while (!finishCheck) await new Promise(resolve => setImmediate(resolve));
+    const downloading = manager.download();
+    assert.equal(files, 0);
+    finishCheck();
+    await checking;
+    const ready = await downloading;
+    assert.equal(ready.status, 'downloaded');
+    const refreshed = await manager.check();
+    assert.equal(refreshed.status, 'downloaded');
+    assert.equal(refreshed.downloadedPath, ready.downloadedPath);
+    assert.equal(files, 1);
+    manager.setState({ status: 'installing' });
+    await manager.check();
+    assert.equal(checks, 2);
+    assert.equal(manager.getState().status, 'installing');
+  });
+
+  test('백그라운드 확인 실패는 마지막 성공 시각을 유지하며 오래된 파일 설치를 차단한다', async () => {
+    let calls = 0;
+    const manager = managerWithAsset({downloadsDir: path.join(temp, 'stale-refresh'), fetch: async () => {
+      calls++;
+      return new Response('offline', { status: 503 });
+    }}, asset('Whitebox-Setup-3.1.0.exe', 4, Buffer.from('test')));
+    const checkedAt = '2020-01-01T00:00:00.000Z';
+    manager.setState({ checkedAt, latestVersion: '3.1.0' });
+    await manager.check({surfaceError: false});
+    assert.equal(manager.getState().checkedAt, checkedAt);
+    assert.match(manager.getState().checkError, /HTTP 503/);
+    await assert.rejects(manager.download(), /HTTP 503/);
+    assert.equal(calls, 2);
+    assert.equal(manager.getState().downloadedPath, '');
+  });
+
+  test('오래된 설치 선택을 갱신하고 다운로드 중 조회와 서버 버전 역행을 차단한다', async () => {
+    const payload = Buffer.from('new version');
+    const digest = 'sha256:' + crypto.createHash('sha256').update(payload).digest('hex');
+    let version = '3.2.0';
+    let releaseChecks = 0;
+    let finishDownload;
+    const manager = managerWithAsset({downloadsDir: path.join(temp, 'newer-selection'), fetch: async url => {
+      if (url.includes('/latest')) {
+        releaseChecks++;
+        const name = `Whitebox-Setup-${version}.exe`;
+        return new Response(JSON.stringify({tag_name: 'v'+version, assets: [{name, state:'uploaded', size:payload.length, digest,
+          browser_download_url:`https://github.com/minjund/Whitebox/releases/download/v${version}/${name}`}]}));
+      }
+      assert(url.includes('/v3.2.0/'), 'must download the newly discovered version');
+      await new Promise(resolve => { finishDownload = resolve; });
+      return new Response(payload);
+    }}, asset('Whitebox-Setup-3.1.0.exe', 4, Buffer.from('test')));
+    manager.setState({latestVersion:'3.1.0', checkedAt:'2020-01-01T00:00:00.000Z'});
+    const download = manager.download();
+    while (!finishDownload) await new Promise(resolve => setImmediate(resolve));
+    await manager.check();
+    assert.equal(releaseChecks, 1);
+    finishDownload();
+    const result = await download;
+    assert.equal(result.latestVersion, '3.2.0');
+    assert.equal(result.status, 'downloaded');
+    version = '3.1.0';
+    await manager.check({surfaceError:false});
+    assert.equal(manager.getState().latestVersion, '3.2.0');
+    assert.equal(manager.getState().downloadedPath, result.downloadedPath);
+    assert.match(manager.getState().checkError, /오래된 버전/);
+  });
+
+  test('주기적 확인은 새 릴리스를 찾고 설치 중에는 멈추며 종료 시 타이머를 해제한다', async () => {
+    let busy = true;
+    let calls = 0;
+    const manager = new UpdateManager({currentVersion: '3.0.0', platform: 'win32', arch: 'x64',
+      isInstallBusy: () => busy, fetch: async () => {
+        calls++;
+        return new Response(JSON.stringify({tag_name: 'v3.2.0', assets: []}));
+      }});
+    manager.startPeriodicChecks(10);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 35));
+      assert.equal(calls, 0);
+      busy = false;
+      const deadline = Date.now() + 2000;
+      while (manager.getState().latestVersion !== '3.2.0') {
+        assert(Date.now() < deadline, 'periodic check did not discover release');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    } finally { manager.stopPeriodicChecks(); }
+    if (manager.checkPromise) await manager.checkPromise;
+    const stopped = calls;
+    await new Promise(resolve => setTimeout(resolve, 35));
+    assert.equal(calls, stopped);
+    assert.equal(manager.periodicCheckTimer, null);
+  });
+
   test('업데이트 확인은 응답 본문이 멈추면 제한 시간 안에 중단한다', async () => {
     const downloadsDir = path.join(temp, 'update-cache-cleanup');
     const activeInstaller = path.join(downloadsDir, 'Whitebox-Setup-3.0.0.exe');
