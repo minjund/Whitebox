@@ -1224,7 +1224,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     $("#updateStateTitle").textContent = title;
     $("#updateStateText").textContent = text;
     $("#checkUpdateBtn").disabled = pending || update.status === "checking" || downloading || update.blocked === true;
-    $("#checkUpdateBtn").classList.toggle("hidden", available);
+    $("#checkUpdateBtn").classList.remove("hidden");
     $("#checkUpdateBtn").textContent =
       update.status === "checking" ? window.WhiteboxI18n.t("ui.checking") : window.WhiteboxI18n.t("settings.update.check");
     const install = $("#installUpdateBtn");
@@ -1247,12 +1247,17 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       ? `${formatBytes(update.totalBytes || update.downloadedBytes)} · ${window.WhiteboxI18n.t("settings.update.file_verified")}`
       : `${formatBytes(update.downloadedBytes)} / ${update.totalBytes ? formatBytes(update.totalBytes) : window.WhiteboxI18n.t("ui.checking_size")}`;
     const error = $("#updateError");
-    error.classList.toggle("hidden", !update.error);
-    error.textContent = update.error
+    const updateError = update.error || update.checkError;
+    error.classList.toggle("hidden", !updateError);
+    error.textContent = updateError
       ? update.blocked === true && update.currentVersionKnown === false
         ? window.WhiteboxI18n.t("settings.update.installed_version_unavailable")
-        : String(update.error)
+        : String(updateError)
       : "";
+    const checked = $("#updateCheckedAt");
+    if (checked) checked.textContent = t("update.last_checked", {
+      time: update.checkedAt ? new Date(update.checkedAt).toLocaleString(uiLocale()) : t("ui.not_checked"),
+    });
     const notes = $("#releaseNotes");
     notes.classList.toggle("hidden", !update.latestVersion);
     $("#releaseNotesText").textContent =

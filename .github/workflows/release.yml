@@ -147,7 +147,7 @@ jobs:
             throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
           }
           $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
-          if ($cohorts.Count -lt 5) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
+          if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
           $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-frozen-source'
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
           function Assert-PinnedInstaller([string]$Path, [long]$ExpectedSize, [string]$ExpectedSha256) {
@@ -246,7 +246,7 @@ jobs:
             throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
           }
           $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
-          if ($cohorts.Count -lt 5) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
+          if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
           $attempt = 0
           foreach ($cohort in $cohorts) {
             $attempt += 1

@@ -5,6 +5,16 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.7 - 2026-09-08
+
+- Keep the refresh button visible when an update is available, display the last
+  successful check, and check the public stable release every 15 minutes.
+- Bypass the HTTP cache, reject a release older than the last observed release,
+  and refresh stale installer selections before downloading or reopening them.
+- Serialize checks with downloads and installation, preserve verified downloads
+  on unchanged releases, and report failed refreshes without a false success time.
+- Add official Windows 1.8.1 and Windows/Mac 1.8.6 to packaged compatibility tests.
+
 ## 1.8.2 - 2026-09-07
 
 - Remove viewed requests from the home needs-review list immediately and keep

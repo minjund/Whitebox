@@ -1485,6 +1485,7 @@
     "ui.keep_the_app_open_until_the_download_finishes": {"ko":"업데이트 파일을 다 받을 때까지 앱을 종료하지 마세요.","en":"Keep the app open until the download finishes.","zh-CN":"下载完成前请勿退出应用。"},
     "ui.language": {"ko":"표시 언어","en":"Language","zh-CN":"语言"},
     "ui.latest_github_tag": {"ko":"공개된 최신 정식 버전","en":"Latest published stable version","zh-CN":"最新公开正式版本"},
+    "update.last_checked": {"ko":"마지막 확인: {time} · 15분마다 자동 확인","en":"Last checked: {time} · Checks automatically every 15 minutes","zh-CN":"上次检查：{time} · 每15分钟自动检查"},
     "ui.latest_version": {"ko":"최신 버전","en":"Latest version","zh-CN":"最新版本"},
     "ui.leave_blank_if_unsure": {"ko":"몰라도 비워두세요","en":"Leave blank if unsure","zh-CN":"不确定时请留空"},
     "ui.leave_blank_to_let_the_ai_choose": {"ko":"비워두면 AI가 알아서 선택합니다","en":"Leave blank to let the AI choose","zh-CN":"留空则由 AI 自动选择"},
