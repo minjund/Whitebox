@@ -7,8 +7,8 @@ GitHub release notes remain the authoritative version history.
 
 ## 1.8.11 - 2026-09-08
 
-- Fix Windows update signature checks crashing while loading the PowerShell
-  security module; verify through the inbox security assembly instead.
+- Replace PowerShell-based Windows update signature checks with a packaged
+  native WinVerifyTrust verifier, avoiding PowerShell startup and module crashes.
 - Reject missing or ambiguous signature results and show a concise failure
   reason instead of exposing an encoded PowerShell command.
 - Exercise signed, unsigned, and tampered files through the packaged verifier.

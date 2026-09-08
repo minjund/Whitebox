@@ -820,42 +820,25 @@ async function verifyDownloadedInstaller(options = {}) {
   const execFile = options.execFile || execFileProcess;
   if (!installerPath || !fs.existsSync(installerPath)) throw new Error('안전성을 확인할 설치 파일을 찾지 못했습니다.');
   if (platform === 'win32') {
-    const systemRoot = String(options.environment?.SystemRoot || options.environment?.WINDIR || process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows');
-    const windowsModulePath = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      // Import the inbox Windows PowerShell assembly, not a discoverable module
-      // manifest. This avoids the manifest/type-data loading path that can
-      // fail or crash before Authenticode verification starts.
-      "$security = [System.Reflection.Assembly]::Load('Microsoft.PowerShell.Security, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')",
-      'Import-Module -Assembly $security -ErrorAction Stop',
-      '(Get-AuthenticodeSignature -LiteralPath $env:WHITEBOX_VERIFY_PATH -ErrorAction Stop).Status.ToString()',
-    ].join('; ');
-    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
+    const verifierRoot = path.basename(path.dirname(__dirname)) === 'app.asar'
+      ? path.dirname(path.dirname(__dirname)) : path.resolve(__dirname, '../build/generated');
+    const verifier = path.join(verifierRoot,
+      'whitebox-signature-check.exe');
     let result;
     try {
-      result = await execFile(windowsPowerShell(options.environment), [
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-EncodedCommand',
-        encodedScript,
-      ], {
+      result = await execFile(verifier, [installerPath], {
         windowsHide: true,
         timeout: 20_000,
         maxBuffer: 256 * 1024,
         env: {
           ...process.env,
           ...(options.environment || {}),
-          PSModulePath: windowsModulePath,
-          WHITEBOX_VERIFY_PATH: installerPath,
-          WHITEBOX_ALLOW_UNSIGNED_WINDOWS: String(options.allowUnsignedWindowsUpdates === true),
         },
       });
     } catch (cause) {
       const detail = Number.isInteger(cause?.code)
         ? `0x${(cause.code >>> 0).toString(16).toUpperCase()}`
-        : (cause?.killed ? 'timeout' : 'PowerShell');
+        : (cause?.killed ? 'timeout' : 'WinVerifyTrust');
       const error = new Error(`Windows 설치 파일 서명 검사를 완료하지 못했습니다 (${detail}). 앱을 종료하지 않았습니다.`);
       error.code = 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED';
       error.cause = cause;

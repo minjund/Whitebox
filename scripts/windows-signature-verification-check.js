@@ -11,6 +11,8 @@ async function runPackagedCheck() {
   const archive = path.join(path.dirname(process.execPath), 'resources', 'app.asar');
   assert.equal(require(path.join(archive, 'package.json')).version, version);
   const { verifyDownloadedInstaller } = require(path.join(archive, 'src', 'updateInstaller.js'));
+  const verifier = path.join(path.dirname(archive), 'whitebox-signature-check.exe');
+  assert(fs.statSync(verifier).size > 0, 'The native verifier must be packaged beside app.asar');
   const unsigned = process.env.WHITEBOX_SIGNATURE_TEST_UNSIGNED_INSTALLER
     || path.resolve('release', `Whitebox-Setup-${version}.exe`);
   const signed = process.env.WHITEBOX_SIGNATURE_TEST_SIGNED_NODE;
@@ -42,12 +44,19 @@ async function runPackagedCheck() {
     fs.writeFileSync(tampered, bytes);
     await assert.rejects(verify(tampered, true), error => error.code === 'UPDATE_INSTALLER_SIGNATURE_INVALID'
       && error.message.includes('HashMismatch'));
+    bytes.fill(0, bytes.readUInt32LE(security), bytes.readUInt32LE(security) + bytes.readUInt32LE(security + 4));
+    const damagedCertificate = path.join(temp, 'damaged-certificate.exe');
+    fs.writeFileSync(damagedCertificate, bytes);
+    await assert.rejects(verify(damagedCertificate, true), error => error.code === 'UPDATE_INSTALLER_SIGNATURE_INVALID');
+    const malformed = path.join(temp, 'malformed.exe');
+    fs.writeFileSync(malformed, 'This is not a PE installer');
+    await assert.rejects(verify(malformed, true), error => error.code === 'UPDATE_INSTALLER_SIGNATURE_INVALID');
   } finally {
     assert.equal(path.dirname(fs.realpathSync(temp)), tempRoot);
     await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     assert.equal(fs.existsSync(temp), false, 'Signature fixture cleanup must complete');
   }
-  console.log(`PASS packaged ${version} Windows signature verification: signed accepted; unsigned policy enforced; tampered signature rejected; module path isolated.`);
+  console.log(`PASS packaged ${version} native Windows signature verification: signed accepted; unsigned policy enforced; tampered, malformed, and damaged certificates rejected; cleanup complete; no PowerShell required.`);
 }
 
 if (process.platform !== 'win32') {

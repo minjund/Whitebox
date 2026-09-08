@@ -166,7 +166,9 @@
     ],
     "npmRebuild": false,
     "afterPack": "scripts/after-pack.js",
+    "beforePack": "scripts/before-pack.js",
     "win": {
+      "extraResources": [{ "from": "build/generated/whitebox-signature-check.exe", "to": "whitebox-signature-check.exe" }],
       "icon": "build/icon.ico",
       "target": [
         {
