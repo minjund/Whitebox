@@ -2392,7 +2392,7 @@ function registerCliAndUpdateTests(context) {
     assert.equal(signatureCalls[0].options.env.WHITEBOX_ALLOW_UNSIGNED_WINDOWS, 'false');
     const encodedIndex = signatureCalls[0].args.indexOf('-EncodedCommand') + 1;
     assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Get-AuthenticodeSignature/);
-    assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /NotSigned/);
+    assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Status.ToString\(\)/);
     assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Import-Module -Assembly \$security/);
     assert.doesNotMatch(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Import-Module Microsoft.PowerShell.Security/);
 
@@ -2414,19 +2414,21 @@ function registerCliAndUpdateTests(context) {
         installerPath: downloaded.downloadedPath,
         environment: { SystemRoot: 'C:\\Windows' },
         allowUnsignedWindowsUpdates: true,
-        execFile: async () => { throw Object.assign(new Error('signature command failed'), {
-          code: 2, stderr: 'WHITEBOX_SIGNATURE_STATUS=HashMismatch\r\n',
-        }); },
+        execFile: async () => ({ stdout: 'HashMismatch\r\n' }),
       }),
       /HashMismatch/,
     );
 
-    for (const stdout of ['', 'unexpected', 'Valid\nNotSigned', 'NotSigned']) {
+    for (const stdout of ['', 'unexpected', 'Valid\nNotSigned']) {
       await assert.rejects(verifyDownloadedInstaller({
         platform: 'win32', installerPath: downloaded.downloadedPath,
         execFile: async () => ({ stdout }),
       }), error => error.code === 'UPDATE_WINDOWS_SIGNATURE_RESULT_INVALID');
     }
+    await assert.rejects(verifyDownloadedInstaller({
+      platform: 'win32', installerPath: downloaded.downloadedPath,
+      execFile: async () => ({ stdout: 'NotSigned' }),
+    }), error => error.code === 'UPDATE_INSTALLER_SIGNATURE_INVALID');
     await assert.rejects(verifyDownloadedInstaller({
       platform: 'win32', installerPath: downloaded.downloadedPath,
       allowUnsignedWindowsUpdates: true,

@@ -13,7 +13,8 @@ async function runPackagedCheck() {
   const { verifyDownloadedInstaller } = require(path.join(archive, 'src', 'updateInstaller.js'));
   const unsigned = process.env.WHITEBOX_SIGNATURE_TEST_UNSIGNED_INSTALLER
     || path.resolve('release', `Whitebox-Setup-${version}.exe`);
-  const signed = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const signed = process.env.WHITEBOX_SIGNATURE_TEST_SIGNED_NODE;
+  assert(signed, 'The parent must supply its official signed Node executable');
   const verify = (installerPath, allowUnsignedWindowsUpdates = false) => verifyDownloadedInstaller({
     platform: 'win32', installerPath, allowUnsignedWindowsUpdates,
     environment: { ...process.env, PSModulePath: 'Z:\\whitebox-invalid-module-search-path' },
@@ -30,6 +31,10 @@ async function runPackagedCheck() {
     const pe = bytes.readUInt32LE(0x3c);
     assert.equal(bytes.readUInt32LE(pe), 0x4550);
     const firstSection = pe + 24 + bytes.readUInt16LE(pe + 20);
+    const optional = pe + 24;
+    const security = optional + (bytes.readUInt16LE(optional) === 0x20b ? 112 : 96) + 32;
+    assert(bytes.readUInt32LE(security) > 0 && bytes.readUInt32LE(security + 4) > 0,
+      'Tamper test requires an embedded signature, not a catalog-only system file');
     const codeOffset = bytes.readUInt32LE(firstSection + 20);
     assert(codeOffset > firstSection && codeOffset + 32 < bytes.length);
     bytes[codeOffset + 32] ^= 1;
@@ -51,7 +56,9 @@ if (process.platform !== 'win32') {
 } else {
   const executable = path.resolve('release', 'win-unpacked', 'Whitebox.exe');
   const child = spawn(executable, [__filename, '--inside-package'], {
-    windowsHide: true, stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    windowsHide: true, stdio: 'inherit', env: {
+      ...process.env, ELECTRON_RUN_AS_NODE: '1', WHITEBOX_SIGNATURE_TEST_SIGNED_NODE: process.execPath,
+    },
   });
   child.once('error', error => { console.error(error); process.exitCode = 1; });
   child.once('exit', code => { process.exitCode = code === 0 ? 0 : 1; });

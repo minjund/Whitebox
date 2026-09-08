@@ -824,18 +824,12 @@ async function verifyDownloadedInstaller(options = {}) {
     const windowsModulePath = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
     const script = [
       "$ErrorActionPreference = 'Stop'",
-      "$ProgressPreference = 'SilentlyContinue'",
-      'try {',
       // Import the inbox Windows PowerShell assembly, not a discoverable module
       // manifest. This avoids the manifest/type-data loading path that can
       // fail or crash before Authenticode verification starts.
       "$security = [System.Reflection.Assembly]::Load('Microsoft.PowerShell.Security, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')",
       'Import-Module -Assembly $security -ErrorAction Stop',
-      '$signature = Get-AuthenticodeSignature -LiteralPath $env:WHITEBOX_VERIFY_PATH -ErrorAction Stop',
-      "if ($signature.Status -eq 'Valid') { Write-Output 'Valid'; exit 0 }",
-      "if (($env:WHITEBOX_ALLOW_UNSIGNED_WINDOWS -eq 'true') -and ($signature.Status -eq 'NotSigned')) { Write-Output 'NotSigned'; exit 0 }",
-      "[Console]::Error.WriteLine('WHITEBOX_SIGNATURE_STATUS=' + $signature.Status); exit 2",
-      "} catch { [Console]::Error.WriteLine('WHITEBOX_SIGNATURE_CHECK_FAILED'); exit 1 }",
+      '(Get-AuthenticodeSignature -LiteralPath $env:WHITEBOX_VERIFY_PATH -ErrorAction Stop).Status.ToString()',
     ].join('; ');
     const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
     let result;
@@ -859,12 +853,11 @@ async function verifyDownloadedInstaller(options = {}) {
         },
       });
     } catch (cause) {
-      const status = String(cause?.stderr || '').match(/WHITEBOX_SIGNATURE_STATUS=([A-Za-z]+)/u)?.[1];
-      const detail = status || (Number.isInteger(cause?.code)
+      const detail = Number.isInteger(cause?.code)
         ? `0x${(cause.code >>> 0).toString(16).toUpperCase()}`
-        : (cause?.killed ? 'timeout' : 'PowerShell'));
+        : (cause?.killed ? 'timeout' : 'PowerShell');
       const error = new Error(`Windows 설치 파일 서명 검사를 완료하지 못했습니다 (${detail}). 앱을 종료하지 않았습니다.`);
-      error.code = status ? 'UPDATE_INSTALLER_SIGNATURE_INVALID' : 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED';
+      error.code = 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED';
       error.cause = cause;
       throw error;
     }
@@ -872,6 +865,11 @@ async function verifyDownloadedInstaller(options = {}) {
     if (status === 'Valid') return { platform, verified: true, unsignedAllowed: false };
     if (status === 'NotSigned' && options.allowUnsignedWindowsUpdates === true) {
       return { platform, verified: false, unsignedAllowed: true };
+    }
+    if (['NotSigned', 'HashMismatch', 'NotTrusted', 'UnknownError', 'NotSupportedFileFormat', 'Incompatible'].includes(status)) {
+      const error = new Error(`Windows 설치 파일 서명 검사를 통과하지 못했습니다 (${status}). 앱을 종료하지 않았습니다.`);
+      error.code = 'UPDATE_INSTALLER_SIGNATURE_INVALID';
+      throw error;
     }
     const error = new Error('Windows 설치 파일 서명 검사에서 유효한 확인 결과를 받지 못했습니다. 앱을 종료하지 않았습니다.');
     error.code = 'UPDATE_WINDOWS_SIGNATURE_RESULT_INVALID';
