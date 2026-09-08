@@ -193,7 +193,7 @@ async function settingsMetrics(win) {
       + "update:Boolean(document.querySelector('#checkUpdateBtn')),"
       + "updateOverflow:Boolean(document.querySelector('#updatePanel')"
         + "&&document.querySelector('#updatePanel').scrollWidth>document.querySelector('#updatePanel').clientWidth+2),"
-      + "popupSettingsAbsent:!document.querySelector('#attentionPopupSettingsCard,"
+      + "popupSettingsPresent:!!document.querySelector('#attentionPopupSettingsCard "
         + "#attentionPopupEnabled')};})()");
 }
 
@@ -385,7 +385,7 @@ async function run() {
       assert(settings.visible && settings.sectionInside && !settings.bodyOverflow
         && settings.controls >= 8 && settings.outside === 0 && settings.short === 0
         && settings.language && settings.themes >= 2 && settings.providers >= 1
-        && settings.update && !settings.updateOverflow && settings.popupSettingsAbsent,
+        && settings.update && !settings.updateOverflow && settings.popupSettingsPresent,
       requested.join('×') + ' 설정 배치가 올바르지 않습니다: ' + JSON.stringify(settings));
 
       const modal = await runModalMetrics(win);

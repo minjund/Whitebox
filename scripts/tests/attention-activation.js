@@ -689,8 +689,8 @@ function registerAttentionActivationTests(context) {
       '자동 attention activation은 사용자 전용 pending terminal focus API를 호출하면 안 됩니다.');
     assert.match(ptyFocusSource, /const alreadyFocusedExact = isPtyFocusActive\(\)[\s\S]*const closeOperationFocus = \(\) => \{[\s\S]*!alreadyFocusedExact[\s\S]*state\.ptyFocusSessionId[\s\S]*state\.ptyFocusTargetId/u,
       '취소된 verified open은 자신이 새로 연 exact root/target focus만 닫아야 합니다.');
-    assert.match(mainSource, /const ATTENTION_PTY_OPEN_TIMEOUT_MS = 12_000;[\s\S]*requestTimeoutMs: ATTENTION_PTY_OPEN_TIMEOUT_MS/u,
-      'renderer ACK가 반복 실패해도 provider hook을 12초 안에 fail-open해야 합니다.');
+    assert.match(mainSource, /const ATTENTION_PTY_OPEN_TIMEOUT_MS = 12_000;[\s\S]*requestTimeoutMs: preference.enabled \? 9 \* 60 \* 1000 : ATTENTION_PTY_OPEN_TIMEOUT_MS/u,
+      '팝업에서는 사용자 응답을 기다리고 PTY 모드에서는 hook을 12초 안에 해제해야 합니다.');
 
     const instrumented = ptyFocusSource
       .replace(

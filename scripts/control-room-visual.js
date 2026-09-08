@@ -496,12 +496,12 @@ app.whenReady().then(async () => {
       legacyConversationRemoved: !document.querySelector('#terminalSection, #terminalHistoryPanel, #terminalViewport, #terminalCommandForm'),
       drawerRemoved: !document.querySelector('#detailDrawer, #drawerBackdrop, #drawerContent, #drawerComposer'),
       childModalRemoved: !document.querySelector('#ptyFocusChildModal'),
-      rightPopupRemoved: !document.querySelector('#attentionPopupSettingsCard, #attentionPopupEnabled'),
+      popupSettingsPresent: !!document.querySelector('#attentionPopupSettingsCard #attentionPopupEnabled'),
       currentView: window.WhiteboxApp.state.view,
     }))()`);
     if (!removedSurfaceMetrics.additionalToolsRemoved || !removedSurfaceMetrics.legacyConversationRemoved
       || !removedSurfaceMetrics.drawerRemoved || !removedSurfaceMetrics.childModalRemoved
-      || !removedSurfaceMetrics.rightPopupRemoved || removedSurfaceMetrics.currentView !== 'all') {
+      || !removedSurfaceMetrics.popupSettingsPresent || removedSurfaceMetrics.currentView !== 'all') {
       throw new Error(`삭제된 대화·추가 기능 surface 검증 실패: ${JSON.stringify(removedSurfaceMetrics)}`);
     }
 

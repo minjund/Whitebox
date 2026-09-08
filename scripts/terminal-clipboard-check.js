@@ -27,7 +27,7 @@ app.whenReady().then(async () => {
   };
   try {
     const files = ['node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
-      'renderer/comprehension-output-filter.js', 'renderer/terminal-workbench.js'];
+      'renderer/comprehension-output-filter.js', 'renderer/terminal-ime.js', 'renderer/terminal-workbench.js'];
     const html = path.join(profile, 'fixture.html');
     fs.writeFileSync(html, '<div id="terminalRuntimeMount"></div>' + files.map(file =>
       `<script src="${pathToFileURL(path.join(root, file)).href}"></script>`).join(''));

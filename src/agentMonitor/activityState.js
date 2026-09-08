@@ -38,4 +38,11 @@ function finalizedActivityState(options = {}) {
   return ACTIVITY_STATES.has(options.observed) ? options.observed : 'idle';
 }
 
-module.exports = { finalizedActivityState, observeActivity };
+function activityAfterToolResult(session, tracker) {
+  const pendingTool = (session.lifecycle || []).some(event =>
+    ['tool', 'collaboration'].includes(event.type) && event.status === 'running');
+  const runningExecution = (tracker.activities || []).some(activity => activity.status === 'running');
+  return pendingTool || runningExecution ? 'working' : 'thinking';
+}
+
+module.exports = { finalizedActivityState, observeActivity, activityAfterToolResult };
