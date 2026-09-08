@@ -727,6 +727,24 @@ async function closeFocusedRoot(win) {
   'PTY 집중 모드에서 작업 현황으로 돌아오지 못했습니다.');
 }
 
+// Carry the detached v1.7.7 worktree's real screen-click coverage forward to
+// the current PTY focus surface (the old drawerTerminalViewport was retired).
+async function focusPtyScreen(win) {
+  const point = await rendererValue(win, `(() => {
+    const screen = document.querySelector('#ptyFocusTerminalViewport > .terminal-screen:not(.hidden) .xterm-screen');
+    if (!screen) return null;
+    const rect = screen.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0
+      ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+  })()`);
+  assert(point, 'PTY 화면 클릭 위치를 찾지 못했습니다.');
+  await rendererValue(win, "document.querySelector('#ptyFocusBackBtn')?.focus({preventScroll:true})");
+  win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+  win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+  await waitFor(win, "document.activeElement === document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea')",
+    '실제 PTY 화면 클릭이 xterm 입력 초점을 복원하지 못했습니다.');
+}
+
 async function exercisePtyFocus(win, round) {
   await prepareProject(win);
   const rootClick = await rendererValue(win, "(()=>{"
@@ -734,6 +752,7 @@ async function exercisePtyFocus(win, round) {
     + "trigger?.click();return Boolean(trigger);})()");
   assert(rootClick, '작업 현황의 root PTY trigger가 없습니다.');
   await assertFocusedRoot(win, 'root 작업 클릭');
+  await focusPtyScreen(win);
 
   const marker = 'PTY_INTERACTION_ROUND_' + round + '_' + Date.now();
   await rendererValue(win, "window.interactionTest.emitTerminalData('terminal-main',"
