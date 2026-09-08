@@ -284,6 +284,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     $("#guideBtn").setAttribute("aria-expanded", guideVisible ? "true" : "false");
     renderUpdateSettings();
     if (settingsView) {
+      context.renderAttentionPopupSettings?.();
       $("#liveSection").classList.add("hidden");
       renderSourcePluginSettings();
       renderProviderVisibilitySettings();

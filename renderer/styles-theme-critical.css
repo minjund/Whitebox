@@ -149,3 +149,6 @@ html[data-theme] #ptyFocusSurface :is(
 ) {
   color: #c1ced6 !important;
 }
+
+html[data-theme] #ptyFocusSurface .pty-focus-node.is-running .pty-focus-node-state { color: #4dd2a2 !important; }
+html[data-theme] #ptyFocusSurface .pty-focus-node.is-waiting .pty-focus-node-state { color: #e5b85f !important; }

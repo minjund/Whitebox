@@ -849,7 +849,7 @@ function registerCodexParserTests(context) {
       { timestamp: '2026-07-14T05:00:05Z', type: 'response_item', payload: { type: 'function_call_output', call_id: 'shell-before-complete', output: 'Exit code: 0' } },
     ]));
     assert.equal(toolOutput.status, 'running');
-    assert.equal(toolOutput.activityState, 'working');
+    assert.equal(toolOutput.activityState, 'thinking');
     assert.equal(toolOutput.completionObserved, false);
     assert.equal(toolOutput.completedAt, null);
 

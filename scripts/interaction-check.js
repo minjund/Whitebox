@@ -232,10 +232,10 @@ async function exerciseNavigationAndSettings(win) {
     + "if(language){language.value=before||'ko';language.dispatchEvent(new Event('change',{bubbles:true}));}"
     + "return{languageRestored:Boolean(language&&language.value===(before||'ko')),light,dark,providerChanged,"
       + "providerRestored:Boolean(restoredProvider&&restoredProvider.checked===providerBefore),"
-      + "noPopupSettings:!document.querySelector('#attentionPopupSettingsCard,#attentionPopupEnabled')};"
+      + "popupSettingsPresent:!!document.querySelector('#attentionPopupSettingsCard #attentionPopupEnabled')};"
     + "})()");
   assert(settings.languageRestored && settings.light && settings.dark
-    && settings.providerChanged && settings.providerRestored && settings.noPopupSettings,
+    && settings.providerChanged && settings.providerRestored && settings.popupSettingsPresent,
   '언어·테마·AI 표시 설정 상호작용이 올바르지 않습니다: ' + JSON.stringify(settings));
 
   await rendererValue(win, "(()=>{window.interactionTest.restoreCurrentUpdate();"
@@ -992,6 +992,12 @@ async function exercisePtyFocus(win, round) {
 async function exerciseComprehensionPacket(win, round) {
   const generation = '2026-08-01T12:34:56.000Z';
   await prepareProject(win);
+  const readyComprehension = await rendererValue(win,
+    "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
+  if (round === 1) {
+    await rendererValue(win,
+      "window.interactionTest.updateSession('fixture-root',{comprehension:{status:'missing',schemaVersion:1}})");
+  }
   await rendererValue(win, "(() => {"
     + "window.interactionTest.updateSession('fixture-root',{status:'completed',statusDetail:'이해 패킷 검증 완료',"
       + "completionObserved:true,completedAt:'" + generation + "',updatedAt:'" + generation + "'});"
@@ -1005,9 +1011,16 @@ async function exerciseComprehensionPacket(win, round) {
   await assertFocusedRoot(win, '이해 패킷 완료 노드 클릭');
 
   if (round === 1) {
+    assert(await rendererValue(win,
+      "!window.WhiteboxApp.comprehensionPacketController.getSessionId()"),
+    '질문 데이터가 아직 없는 완료 작업에 퀴즈를 표시했습니다.');
+    await rendererValue(win,
+      "window.interactionTest.updateSession('fixture-root',{comprehension:"
+        + JSON.stringify(readyComprehension) + "});window.interactionTest.emitSnapshot()");
     await waitFor(win,
-      "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
-      '완료된 메인 노드의 최초 PTY 진입에서 이해 패킷이 자동 표시되지 않았습니다.');
+      "Boolean(document.querySelector('#comprehensionPacketOverlay')"
+        + "&&!document.querySelector('#comprehensionPacketOverlay').hidden)",
+      '열린 대화에 질문 데이터가 늦게 도착했지만 이해 패킷이 자동 표시되지 않았습니다.');
     const briefing = await rendererValue(win, "(() => {"
       + "const dialog=document.querySelector('#comprehensionPacketDialog');"
       + "return{dialog:Boolean(dialog&&dialog.getAttribute('role')==='dialog'"

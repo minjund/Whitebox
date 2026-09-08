@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const { app } = require('electron');
 const { TerminalManager } = require('../src/terminalManager');
-const { COMPREHENSION_CONTRACT, injectComprehensionContract } = require('../src/comprehensionPacket');
+const { COMPREHENSION_INSTRUCTIONS, injectComprehensionContract } = require('../src/comprehensionPacket');
 
 app.whenReady().then(async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-comprehension-start-'));
@@ -50,10 +50,10 @@ setTimeout(() => process.exit(0), 100);
         assert.equal(args.at(-2), '--');
         if (provider === 'claude') {
           assert.equal(args[0], '--append-system-prompt');
-          assert.equal(args[1], COMPREHENSION_CONTRACT.replace(/\s+/gu, ' '));
+          assert.equal(args[1], COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '));
         } else {
           assert.equal(args[0], '-c');
-          assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), COMPREHENSION_CONTRACT);
+          assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), COMPREHENSION_INSTRUCTIONS);
         }
         assert.ok(!output.includes('whitebox-comprehension-contract'), 'Internal instructions must not enter the input editor.');
         await manager.close(session.id);

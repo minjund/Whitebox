@@ -276,6 +276,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const fit = new window.FitAddon.FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
+    if (!readOnly) terminal.loadAddon(window.WhiteboxTerminalIme.createAddon());
     if (typeof terminal.attachCustomKeyEventHandler === 'function') {
       terminal.attachCustomKeyEventHandler(event => {
         const clipboardKey = String(event.key || '').toLowerCase();

@@ -17,6 +17,7 @@ const { enrichSession, enrichSessions } = require('./sessionIntelligence');
 const { SourcePluginMonitorHost } = require('./sourcePlugins/monitorHost');
 const { comprehensionState, validateComprehensionPacket } = require('./comprehensionPacket');
 const { createSnapshotPublicationCoordinator } = require('./monitorPublicationCoordinator');
+const { createMonitorScanScheduler } = require('./monitorScanScheduler');
 
 const tmuxMonitor = new TmuxMonitor();
 tmuxMonitor.scan();
@@ -43,18 +44,13 @@ let lastFingerprint = '';
 let lastPublishedSessions = [];
 let currentBridges = Array.isArray(workerData.bridges) ? workerData.bridges : [];
 const discoveryWatchers = [];
-let scheduledScanTimer = null;
+const scanScheduler = createMonitorScanScheduler(() => monitor.scanNow());
 let stopping = false;
 
 monitor.setBridgePresence(currentBridges);
 
-function scheduleScan(delayMs = 120) {
-  if (scheduledScanTimer) clearTimeout(scheduledScanTimer);
-  scheduledScanTimer = setTimeout(() => {
-    scheduledScanTimer = null;
-    monitor.scanNow();
-  }, Math.max(0, Number(delayMs) || 0));
-  if (typeof scheduledScanTimer.unref === 'function') scheduledScanTimer.unref();
+function scheduleScan(delayMs = 80) {
+  scanScheduler.request(delayMs);
 }
 
 const resolvedWatchPaths = new Map();
@@ -610,8 +606,7 @@ parentPort.on('message', message => {
   if (message.type === 'stop') {
     stopping = true;
     publicationCoordinator.stop();
-    if (scheduledScanTimer) clearTimeout(scheduledScanTimer);
-    scheduledScanTimer = null;
+    scanScheduler.stop();
     monitor.stop();
     discoveryWatchers.forEach(watcher => watcher.close());
     Promise.resolve(sourcePluginHost.dispose()).finally(() => parentPort.postMessage({ type: 'stopped' }));

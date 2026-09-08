@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   setProviderVisibility: preference => ipcRenderer.invoke('app:set-provider-visibility', preference),
   ackAttentionActivation: result => ipcRenderer.invoke('app:ack-attention-activation', result),
   syncAttentionPrompts: prompts => ipcRenderer.invoke('app:sync-attention-prompts', prompts),
+  setAttentionPopups: preference => ipcRenderer.invoke('app:set-attention-popups', preference),
   notifyAttentionPrompt: prompt => ipcRenderer.invoke('app:notify-attention-prompt', prompt),
   checkForUpdate: () => ipcRenderer.invoke('app:update-check'),
   downloadUpdate: () => ipcRenderer.invoke('app:update-download'),

@@ -180,6 +180,20 @@
           <div id="providerVisibilityList" class="provider-visibility-list"></div>
         </section>
 
+        <section id="attentionPopupSettingsCard" class="attention-popup-settings-card" data-enabled="true" aria-labelledby="attentionPopupSettingsTitle">
+          <div class="attention-popup-settings-mark" aria-hidden="true">↗</div>
+          <div class="attention-popup-settings-copy">
+            <span data-i18n="settings.attention_popups.eyebrow">권한과 질문</span>
+            <h3 id="attentionPopupSettingsTitle" data-i18n="settings.attention_popups.title">오른쪽 아래 응답 창</h3>
+            <p id="attentionPopupSettingsDescription" data-i18n="settings.attention_popups.description">AI가 권한이나 답변을 요청하면 다른 창 위에서도 바로 확인하고 응답할 수 있는 작은 창을 표시합니다.</p>
+          </div>
+          <label class="attention-popup-switch" for="attentionPopupEnabled">
+            <input id="attentionPopupEnabled" type="checkbox" role="switch" aria-describedby="attentionPopupSettingsDescription attentionPopupStatus" checked />
+            <span class="attention-popup-toggle" aria-hidden="true"><i></i></span>
+            <span><b data-i18n="settings.attention_popups.toggle_label">권한·질문 팝업</b><small id="attentionPopupStatus" aria-live="polite">켜짐</small></span>
+          </label>
+        </section>
+
         <div id="updatePanel" class="update-panel" data-update-status="idle" aria-labelledby="updateStateTitle">
           <div class="version-route" aria-label="실행 중인 버전과 최신 버전 비교" data-i18n-aria-label="ui.compare_running_and_latest_versions">
             <article class="version-node local-version-node">
@@ -502,7 +516,9 @@
   <script src="app-events-dialogs.js"></script>
   <script src="app-events.js"></script>
   <script src="attention-activation.js"></script>
+  <script src="app-attention-popup-settings.js"></script>
   <script src="app-bootstrap.js"></script>
+  <script src="terminal-ime.js"></script>
   <script src="terminal-workbench.js"></script>
   <script src="terminal-agent.js"></script>
   <script src="terminal-events.js"></script>

@@ -265,10 +265,10 @@ async function run() {
         + "themes:document.querySelectorAll('[data-theme-choice]').length,"
         + "providers:document.querySelectorAll('[data-provider-visibility]').length,"
         + "update:Boolean(document.querySelector('#updatePanel,#checkUpdateBtn')),"
-        + "noPopupSettings:!document.querySelector('#attentionPopupSettingsCard,#attentionPopupEnabled'),"
+        + "popupSettingsPresent:!!document.querySelector('#attentionPopupSettingsCard #attentionPopupEnabled'),"
         + "noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+2};})()");
     assert(settings.visible && settings.language && settings.themes >= 2 && settings.providers >= 1
-      && settings.update && settings.noPopupSettings && settings.noOverflow,
+      && settings.update && settings.popupSettingsPresent && settings.noOverflow,
     '설정 화면 시각 계약이 올바르지 않습니다: ' + JSON.stringify(settings));
     outputs.push(await capture(win, 'whitebox-language-settings.png'));
 

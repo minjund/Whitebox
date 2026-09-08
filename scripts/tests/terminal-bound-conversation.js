@@ -538,10 +538,10 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
       assert.equal(args.at(-2), '--');
       if (provider === 'claude') {
         assert.equal(args[0], '--append-system-prompt');
-        assert.equal(args[1], require('../../src/comprehensionPacket').COMPREHENSION_CONTRACT.replace(/\s+/gu, ' '));
+        assert.equal(args[1], require('../../src/comprehensionPacket').COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '));
       } else {
         assert.equal(args[0], '-c');
-        assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), require('../../src/comprehensionPacket').COMPREHENSION_CONTRACT);
+        assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), require('../../src/comprehensionPacket').COMPREHENSION_INSTRUCTIONS);
       }
       native.manager.create(request);
       assert.equal(native.spawns.length, 1, '동일 생성 재시도는 최초 요청을 재실행하면 안 됩니다.');

@@ -13,7 +13,7 @@ const { ensureMacNodePtyRuntime } = require('./nodePtyRuntime');
 const {
   comprehensionPromptFingerprint,
   hasComprehensionContract,
-  COMPREHENSION_CONTRACT,
+  COMPREHENSION_INSTRUCTIONS,
   stripComprehensionContract,
 } = require('./comprehensionPacket');
 const {
@@ -3269,8 +3269,8 @@ class TerminalManager extends EventEmitter {
     const options = recoveryArgs ? { ...launchOptions, args: recoveryArgs } : launchOptions;
     const instructionArgs = separateComprehensionInstructions
       ? (launchOptions.provider === 'claude'
-        ? ['--append-system-prompt', COMPREHENSION_CONTRACT.replace(/\s+/gu, ' ')]
-        : ['-c', `developer_instructions=${JSON.stringify(COMPREHENSION_CONTRACT)}`])
+        ? ['--append-system-prompt', COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' ')]
+        : ['-c', `developer_instructions=${JSON.stringify(COMPREHENSION_INSTRUCTIONS)}`])
       : [];
     const spawnOptions = separateComprehensionInstructions
       ? { ...launchOptions, args: [...launchOptions.args.slice(0, -1), ...instructionArgs, '--', userPrompt] }
