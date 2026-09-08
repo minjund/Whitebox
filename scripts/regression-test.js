@@ -36,6 +36,7 @@ const fixtures = createRegressionFixtures(root);
 const harness = createTestHarness();
 const context = { ...fixtures, test: harness.test };
 require('./tests/monitor-state-latency').registerMonitorStateLatencyTests(context);
+require('./tests/performance-regressions').registerPerformanceRegressionTests(context);
 
 registerCoreUpdateWorkspaceTests(context);
 registerAttentionNotifierTests(context);
@@ -66,8 +67,8 @@ registerAgentParserTests(context);
 registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
 
-if (harness.count() !== 477) {
-  throw new Error(`회귀 테스트 등록 수가 477개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 483) {
+  throw new Error(`회귀 테스트 등록 수가 483개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

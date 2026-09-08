@@ -744,7 +744,7 @@ class AgentMonitor extends EventEmitter {
       paths = cached.paths;
     } else {
       paths = walkRecent(root, predicate, max, depth).map(item => item.file);
-      this.listCache.set(key, { at: Date.now(), paths });
+      this.listCache.set(key, { at: Date.now(), root: path.resolve(root), paths });
     }
     return paths.map(file => {
       const stat = safeStat(file);
@@ -752,10 +752,20 @@ class AgentMonitor extends EventEmitter {
     }).filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, max);
   }
 
+  invalidateFiles(root) {
+    const resolved = path.resolve(root);
+    for (const [key, entry] of this.listCache) {
+      if (entry.root === resolved) this.listCache.delete(key);
+    }
+  }
+
   parseFile(info, parser, variant = '') {
-    const key = `${info.file}|${info.mtimeMs}|${info.size}|${variant}`;
+    // One generation per transcript/variant. Streaming output must not retain
+    // hundreds of obsolete copies of the same large conversation.
+    const key = `${info.file}|${variant}`;
     const cachedEntry = this.parseCache.get(key);
-    const cached = cachedEntry && cachedEntry.value || cachedEntry;
+    const cached = cachedEntry && cachedEntry.mtimeMs === info.mtimeMs
+      && cachedEntry.size === info.size ? cachedEntry.value : null;
     const parsedAt = Number(cachedEntry && cachedEntry.parsedAt || 0);
     const timeSensitive = Boolean(cached && (
       cached.status === 'running'
@@ -763,12 +773,29 @@ class AgentMonitor extends EventEmitter {
       || ['thinking', 'working', 'juggling'].includes(cached.activityState)
       || (cached.executions || []).some(execution => execution.status === 'running')
     ));
-    if (cached && (!timeSensitive || Date.now() - parsedAt < ACTIVE_THRESHOLD_MS)) return cached;
+    if (cached && (!timeSensitive || Date.now() - parsedAt < ACTIVE_THRESHOLD_MS)) {
+      this.parseCache.delete(key);
+      this.parseCache.set(key, cachedEntry);
+      return cached;
+    }
+    this.parseCache.delete(key);
     const value = parser(info);
-    if (value) this.parseCache.set(key, { value, parsedAt: Date.now() });
-    if (this.parseCache.size > 500) {
-      const keep = [...this.parseCache.entries()].slice(-300);
-      this.parseCache = new Map(keep);
+    if (value) this.parseCache.set(key, {
+      value, parsedAt: Date.now(), mtimeMs: info.mtimeMs, size: info.size,
+      fullHistory: variant === 'full-history',
+    });
+    // Full transcripts have a separate small budget; keep the current card
+    // working set hot instead of evicting it based on raw log size (most raw
+    // provider events are discarded by the parsers).
+    let fullHistory = 0;
+    let count = 0;
+    for (const [entryKey, entry] of [...this.parseCache].reverse()) {
+      if (count >= 300 || (entry.fullHistory && fullHistory >= 8)) {
+        this.parseCache.delete(entryKey);
+      } else {
+        count += 1;
+        fullHistory += Number(entry.fullHistory);
+      }
     }
     return value;
   }

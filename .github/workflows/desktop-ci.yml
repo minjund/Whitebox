@@ -34,6 +34,7 @@ jobs:
       - run: npm run check:source
       - run: npm test
       - run: npm run test:accuracy
+      - run: npm run test:performance
       - name: Verify renderer profile recovery and idempotence
         run: npm run test:brand-profile-recovery
       - name: Verify cross-version profile locking

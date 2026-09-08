@@ -1013,7 +1013,7 @@ function registerUiContractTests(context) {
 
   test('프로젝트 경로 정규화는 빈 경로와 POSIX 루트를 구분한다', () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
-    const helperStart = source.indexOf('function normalizedProjectPath(value)');
+    const helperStart = source.indexOf('const normalizedPaths = new Map();');
     const helperEnd = source.indexOf('function projectName(projectPath)', helperStart);
     assert.ok(helperStart >= 0 && helperEnd > helperStart, '프로젝트 경로 helper를 찾을 수 없습니다.');
     const sandbox = {};

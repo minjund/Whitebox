@@ -76,13 +76,13 @@ for (const root of [
   try {
     const watcher = fs.watch(root, { recursive: process.platform === 'win32' || process.platform === 'darwin' }, (eventType, filename) => {
       if (eventType === 'rename') {
-        monitor.listCache.clear();
+        monitor.invalidateFiles(root);
         scheduleScan();
         return;
       }
       const changed = filename ? path.resolve(root, String(filename)) : '';
       const known = changed && [...monitor.listCache.values()].some(entry => (entry.paths || []).some(file => resolveWatchPath(file) === changed));
-      if (!known) monitor.listCache.clear();
+      if (!known) monitor.invalidateFiles(root);
       scheduleScan();
     });
     discoveryWatchers.push(watcher);
