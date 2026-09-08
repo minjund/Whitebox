@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.8 - 2026-09-08
+
+- Remove archived and expired tasks from the sidebar immediately, including
+  preview counts, while keeping active child work and resumed tasks visible.
+- Hide empty program rows and automatically discovered projects with no current
+  tasks. Keep saved projects selectable and past conversations in history.
+
 ## 1.8.7 - 2026-09-08
 
 - Keep the refresh button visible when an update is available, display the last

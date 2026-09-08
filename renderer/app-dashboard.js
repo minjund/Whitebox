@@ -525,9 +525,13 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
           ? isProjectlessSession(root)
           : !isProjectlessSession(root)
             && normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(item.path));
-      const sessions = latestSessionSort(rootSessions.filter(rootMatches));
       const relatedSessions = allVisibleSessions.filter((session) => rootMatches(rootSessionFor(session)));
       const live = uniqueRootSessions(relatedSessions.filter(isControlRoomSession));
+      // Match the control room, including parents whose child is still active.
+      // Archived and expired tasks remain available through project history.
+      const liveIds = new Set(live.map(session => String(session.id)));
+      const sessions = latestSessionSort(rootSessions.filter(session => rootMatches(session)
+        && liveIds.has(String(session.id))));
       const notices = noticeModel.signalsForProject(item.path, sourceId);
       const attention = notices.filter(signal => signal.attention.length).map(signal => signal.root);
       const resultReady = notices.filter(signal => signal.result.length).map(signal => signal.root);
@@ -566,10 +570,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         resultReady: [],
       };
       const scopedState = sourceState(item, sourceId, projectless);
-      if (!scopedState.sessions.length) {
-        sidebarProjectNodes.set(key, current);
-        return;
-      }
+      if (!scopedState.sessions.length) return;
       const source = {
         ...item,
         ...scopedState,
@@ -611,6 +612,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const sidebarPriorityRank = { attention: 0, "result-ready": 1, live: 2, idle: 3 };
     const sidebarNameCollator = new Intl.Collator("ko-KR", { numeric: true, sensitivity: "base" });
     const defaultSidebarProjects = [...sidebarProjectNodes.values()]
+      .filter((item) => item.saved || item.sources.length > 0)
       .filter((item) => item.key !== PROJECTLESS_WORKSPACE)
       .sort((left, right) => sidebarPriorityRank[left.priority] - sidebarPriorityRank[right.priority]
         || sidebarNameCollator.compare(String(left.name || ""), String(right.name || ""))

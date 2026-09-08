@@ -12,6 +12,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
     moveSessionOrder = () => false,
     moveProjectOrder = () => false,
     archiveSession = () => false,
+    renderWorkspaces = () => {},
     refreshProviderUsage = async () => null,
     resultReviewTargets = () => [],
     resultReviewPtyTarget = () => null,
@@ -455,6 +456,7 @@ window.WhiteboxAppFactories.createSessionEventBindings = function createSessionE
         event.stopPropagation();
         if (archiveSession(archive.dataset.sessionArchive)) {
           if (state.graphFocusId === archive.dataset.sessionArchive) state.graphFocusId = null;
+          renderWorkspaces();
           renderSessions("archive");
           announce(window.WhiteboxI18n.t("control.moved_to_history"));
         }
