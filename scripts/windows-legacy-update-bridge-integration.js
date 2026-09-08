@@ -2709,13 +2709,18 @@ async function main() {
     const candidateAllowsUnsigned = candidateMetadata.whitebox?.distributionChannel === 'internal'
       && candidateMetadata.whitebox?.allowUnsignedWindowsUpdates === true;
     assert.equal(candidateAllowsUnsigned, true, 'The installed candidate cannot perform its unsigned CI reinstall.');
-    const candidateModuleDir = path.join(testRoot, 'candidate-packaged-src');
+    const candidateResources = path.join(testRoot, 'candidate-packaged', 'resources');
+    const candidateModuleDir = path.join(candidateResources, 'app.asar', 'src');
     extractModuleTree(candidateAsar, candidateModuleDir, [
       'diagnostics.js',
       'macUpdateHelper.js',
       'updateInstaller.js',
       'updateManager.js',
     ]);
+    const installedVerifier = path.join(path.dirname(candidateAsar), 'whitebox-signature-check.exe');
+    const extractedVerifier = path.join(candidateResources, 'whitebox-signature-check.exe');
+    fs.copyFileSync(installedVerifier, extractedVerifier);
+    assert.equal(sha256(extractedVerifier), sha256(installedVerifier));
     const candidateInstallerModule = require(path.join(candidateModuleDir, 'updateInstaller.js'));
     const candidateUpdaterModule = require(path.join(candidateModuleDir, 'updateManager.js'));
     assert.equal(typeof candidateInstallerModule.waitForUpdateBootstrapExit, 'function',
