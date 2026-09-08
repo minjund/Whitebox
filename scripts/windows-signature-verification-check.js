@@ -44,7 +44,8 @@ async function runPackagedCheck() {
       && error.message.includes('HashMismatch'));
   } finally {
     assert.equal(path.dirname(fs.realpathSync(temp)), tempRoot);
-    fs.rmSync(temp, { recursive: true, force: true });
+    await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    assert.equal(fs.existsSync(temp), false, 'Signature fixture cleanup must complete');
   }
   console.log(`PASS packaged ${version} Windows signature verification: signed accepted; unsigned policy enforced; tampered signature rejected; module path isolated.`);
 }
