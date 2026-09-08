@@ -117,6 +117,7 @@ function cohortList(manifest) {
     { version: '1.8.7', size: 85302264, sha256: '1a0d8ddf8ee4f373e5620ffa416cc697ae034c8e38090502034984462b861047' },
     { version: '1.8.8', size: 85303444, sha256: '25d9406df0a3c27ce1f5846fcb9965b42f73727caf109b4be11b50b2af39810a' },
     { version: '1.8.9', size: 85321051, sha256: '8b95949603129c66431ac11c4e1ba9a2fb559b56ca3b8e616fa00dff96b0eb0e' },
+    { version: '1.8.10', size: 85320539, sha256: '88d145fc4a1a6217f798bd0359751b4bba7d0e9615fe4e49e0bff845478114e3' },
   ].map(value => validateCohort({ ...value,
     url: `https://github.com/minjund/Whitebox/releases/download/v${value.version}/Whitebox-Setup-${value.version}.exe`,
     env: `WHITEBOX_V${value.version.replaceAll('.', '')}_INSTALLER`, installMode: 'automatic',
