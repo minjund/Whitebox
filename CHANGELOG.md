@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.10 - 2026-09-08
+
+- Hide escaped and damaged comprehension response packets from the visible
+  answer and terminal while processing their structured data in the background.
+- Open comprehension questions when providers reuse choice IDs such as a/b/c
+  across questions and variants; still reject ambiguous choices within a question.
+
 ## 1.8.9 - 2026-09-08
 
 - Keep Korean terminal composition readable during mid-line edits, output
