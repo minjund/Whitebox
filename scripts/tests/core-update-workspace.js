@@ -2387,12 +2387,9 @@ function registerCliAndUpdateTests(context) {
     });
     assert.deepStrictEqual(signedWindowsResult, { platform: 'win32', verified: true, unsignedAllowed: false });
     assert.equal(signatureCalls.length, 1);
-    assert(signatureCalls[0].args.includes('-EncodedCommand'));
-    assert.equal(signatureCalls[0].options.env.WHITEBOX_VERIFY_PATH, downloaded.downloadedPath);
-    assert.equal(signatureCalls[0].options.env.WHITEBOX_ALLOW_UNSIGNED_WINDOWS, 'false');
-    const encodedIndex = signatureCalls[0].args.indexOf('-EncodedCommand') + 1;
-    assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Get-AuthenticodeSignature/);
-    assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /NotSigned/);
+    assert.equal(path.basename(signatureCalls[0].command), 'whitebox-signature-check.exe');
+    assert.deepEqual(signatureCalls[0].args, [downloaded.downloadedPath]);
+    assert.equal(signatureCalls[0].options.windowsHide, true);
 
     const unsignedWindowsResult = await verifyDownloadedInstaller({
       platform: 'win32',
@@ -2400,7 +2397,6 @@ function registerCliAndUpdateTests(context) {
       environment: { SystemRoot: 'C:\\Windows' },
       allowUnsignedWindowsUpdates: true,
       execFile: async (command, args, options) => {
-        assert.equal(options.env.WHITEBOX_ALLOW_UNSIGNED_WINDOWS, 'true');
         return { stdout: 'NotSigned\r\n' };
       },
     });
@@ -2412,10 +2408,29 @@ function registerCliAndUpdateTests(context) {
         installerPath: downloaded.downloadedPath,
         environment: { SystemRoot: 'C:\\Windows' },
         allowUnsignedWindowsUpdates: true,
-        execFile: async () => { throw new Error('Invalid Authenticode signature: HashMismatch'); },
+        execFile: async () => ({ stdout: 'HashMismatch\r\n' }),
       }),
       /HashMismatch/,
     );
+
+    for (const stdout of ['', 'unexpected', 'Valid\nNotSigned']) {
+      await assert.rejects(verifyDownloadedInstaller({
+        platform: 'win32', installerPath: downloaded.downloadedPath,
+        execFile: async () => ({ stdout }),
+      }), error => error.code === 'UPDATE_WINDOWS_SIGNATURE_RESULT_INVALID');
+    }
+    await assert.rejects(verifyDownloadedInstaller({
+      platform: 'win32', installerPath: downloaded.downloadedPath,
+      execFile: async () => ({ stdout: 'NotSigned' }),
+    }), error => error.code === 'UPDATE_INSTALLER_SIGNATURE_INVALID');
+    await assert.rejects(verifyDownloadedInstaller({
+      platform: 'win32', installerPath: downloaded.downloadedPath,
+      allowUnsignedWindowsUpdates: true,
+      execFile: async () => { throw Object.assign(new Error('Command failed: powershell.exe -EncodedCommand SECRET'), {
+        code: 3221225477, stderr: '',
+      }); },
+    }), error => error.code === 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED'
+      && error.message.includes('0xC0000005') && !error.message.includes('EncodedCommand'));
 
     const macSignatureCalls = [];
     const signedMacResult = await verifyDownloadedInstaller({

@@ -140,6 +140,9 @@ jobs:
         run: npm run test:artifacts:win
         env:
           WHITEBOX_ALLOW_UNSIGNED: "true"
+      - name: Verify packaged Windows Authenticode checks
+        if: runner.os == 'Windows'
+        run: node scripts/windows-signature-verification-check.js
       - name: Download every installer pinned by the compatibility cohort manifest
         if: runner.os == 'Windows'
         shell: pwsh
@@ -273,6 +276,13 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.files }}
+          if-no-files-found: error
+      - name: Preserve the verified native helper for npm Windows clients
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-signature-verifier
+          path: release/win-unpacked/resources/whitebox-signature-check.exe
           if-no-files-found: error
 
   verify-mac-arm64:
@@ -414,6 +424,17 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@latest
       - run: npm ci
+      - name: Include the verified Windows helper in the npm distribution
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: native-signature-verifier
+          path: build/generated
+      - name: Verify npm runtime contents
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        run: npm run check:package
+        env:
+          WHITEBOX_REQUIRE_NATIVE_VERIFIER: "true"
       - name: Check whether npm version already exists
         if: ${{ vars.PUBLISH_NPM == 'true' }}
         id: npm_version

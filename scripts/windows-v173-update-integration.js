@@ -1120,13 +1120,19 @@ async function main() {
   const targetAllowsUnsigned = targetMetadata.whitebox?.distributionChannel === 'internal'
     && targetMetadata.whitebox?.allowUnsignedWindowsUpdates === true;
   assert.equal(targetAllowsUnsigned, true, 'Freshly packaged target cannot perform the unsigned CI reinstall.');
-  const targetModuleDir = path.join(testRoot, 'target-packaged-src');
+  const targetResources = path.join(testRoot, 'target-packaged', 'resources');
+  const targetModuleDir = path.join(targetResources, 'app.asar', 'src');
   extractModuleTree(installedAsar, targetModuleDir, [
     'diagnostics.js',
     'macUpdateHelper.js',
     'updateInstaller.js',
     'updateManager.js',
   ]);
+  const installedVerifier = path.join(path.dirname(installedAsar), 'whitebox-signature-check.exe');
+  const extractedVerifier = path.join(targetResources, 'whitebox-signature-check.exe');
+  existingFile(installedVerifier, 'Installed candidate native signature verifier');
+  fs.copyFileSync(installedVerifier, extractedVerifier);
+  assert.equal(sha256(extractedVerifier), sha256(installedVerifier));
   const targetInstallerModule = require(path.join(targetModuleDir, 'updateInstaller.js'));
   const targetUpdaterModule = require(path.join(targetModuleDir, 'updateManager.js'));
   assert.equal(typeof targetInstallerModule.waitForUpdateBootstrapExit, 'function', 'The target package lacks bootstrap acknowledgement support.');

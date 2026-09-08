@@ -5,6 +5,14 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.11 - 2026-09-08
+
+- Replace PowerShell-based Windows update signature checks with a packaged
+  native WinVerifyTrust verifier, avoiding PowerShell startup and module crashes.
+- Reject missing or ambiguous signature results and show a concise failure
+  reason instead of exposing an encoded PowerShell command.
+- Exercise signed, unsigned, and tampered files through the packaged verifier.
+
 ## 1.8.10 - 2026-09-08
 
 - Hide escaped and damaged comprehension response packets from the visible

@@ -820,36 +820,43 @@ async function verifyDownloadedInstaller(options = {}) {
   const execFile = options.execFile || execFileProcess;
   if (!installerPath || !fs.existsSync(installerPath)) throw new Error('안전성을 확인할 설치 파일을 찾지 못했습니다.');
   if (platform === 'win32') {
-    const systemRoot = String(options.environment?.SystemRoot || options.environment?.WINDIR || process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows');
-    const windowsModulePath = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
-    const script = [
-      'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
-      '$signature = Get-AuthenticodeSignature -LiteralPath $env:WHITEBOX_VERIFY_PATH',
-      "if ($signature.Status -eq 'Valid') { Write-Output 'Valid'; exit 0 }",
-      "if (($env:WHITEBOX_ALLOW_UNSIGNED_WINDOWS -eq 'true') -and ($signature.Status -eq 'NotSigned')) { Write-Output 'NotSigned'; exit 0 }",
-      "if ($signature.Status -ne 'Valid') { throw ('Invalid Authenticode signature: ' + $signature.Status) }",
-    ].join('; ');
-    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
-    const result = await execFile(windowsPowerShell(options.environment), [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-EncodedCommand',
-      encodedScript,
-    ], {
-      windowsHide: true,
-      timeout: 20_000,
-      maxBuffer: 256 * 1024,
-      env: {
-        ...process.env,
-        ...(options.environment || {}),
-        PSModulePath: windowsModulePath,
-        WHITEBOX_VERIFY_PATH: installerPath,
-        WHITEBOX_ALLOW_UNSIGNED_WINDOWS: String(options.allowUnsignedWindowsUpdates === true),
-      },
-    });
-    const unsignedAllowed = String(result && result.stdout || '').trim() === 'NotSigned';
-    return { platform, verified: !unsignedAllowed, unsignedAllowed };
+    const verifierRoot = path.basename(path.dirname(__dirname)) === 'app.asar'
+      ? path.dirname(path.dirname(__dirname)) : path.resolve(__dirname, '../build/generated');
+    const verifier = path.join(verifierRoot,
+      'whitebox-signature-check.exe');
+    let result;
+    try {
+      result = await execFile(verifier, [installerPath], {
+        windowsHide: true,
+        timeout: 20_000,
+        maxBuffer: 256 * 1024,
+        env: {
+          ...process.env,
+          ...(options.environment || {}),
+        },
+      });
+    } catch (cause) {
+      const detail = Number.isInteger(cause?.code)
+        ? `0x${(cause.code >>> 0).toString(16).toUpperCase()}`
+        : (cause?.killed ? 'timeout' : 'WinVerifyTrust');
+      const error = new Error(`Windows 설치 파일 서명 검사를 완료하지 못했습니다 (${detail}). 앱을 종료하지 않았습니다.`);
+      error.code = 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED';
+      error.cause = cause;
+      throw error;
+    }
+    const status = String(result?.stdout || '').trim();
+    if (status === 'Valid') return { platform, verified: true, unsignedAllowed: false };
+    if (status === 'NotSigned' && options.allowUnsignedWindowsUpdates === true) {
+      return { platform, verified: false, unsignedAllowed: true };
+    }
+    if (['NotSigned', 'HashMismatch', 'NotTrusted', 'UnknownError', 'NotSupportedFileFormat', 'Incompatible'].includes(status)) {
+      const error = new Error(`Windows 설치 파일 서명 검사를 통과하지 못했습니다 (${status}). 앱을 종료하지 않았습니다.`);
+      error.code = 'UPDATE_INSTALLER_SIGNATURE_INVALID';
+      throw error;
+    }
+    const error = new Error('Windows 설치 파일 서명 검사에서 유효한 확인 결과를 받지 못했습니다. 앱을 종료하지 않았습니다.');
+    error.code = 'UPDATE_WINDOWS_SIGNATURE_RESULT_INVALID';
+    throw error;
   }
   if (platform === 'darwin') {
     try {

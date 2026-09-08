@@ -8,3 +8,4 @@ artifacts/
 *.stackdump
 .claude/*.local.md
 .understand-anything/.trash-*/
+build/generated/
