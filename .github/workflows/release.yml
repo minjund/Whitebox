@@ -140,6 +140,9 @@ jobs:
         run: npm run test:artifacts:win
         env:
           WHITEBOX_ALLOW_UNSIGNED: "true"
+      - name: Verify packaged Windows Authenticode checks
+        if: runner.os == 'Windows'
+        run: node scripts/windows-signature-verification-check.js
       - name: Download every installer pinned by the compatibility cohort manifest
         if: runner.os == 'Windows'
         shell: pwsh

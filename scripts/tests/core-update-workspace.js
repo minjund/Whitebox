@@ -2393,6 +2393,8 @@ function registerCliAndUpdateTests(context) {
     const encodedIndex = signatureCalls[0].args.indexOf('-EncodedCommand') + 1;
     assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Get-AuthenticodeSignature/);
     assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /NotSigned/);
+    assert.match(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Import-Module -Assembly \$security/);
+    assert.doesNotMatch(Buffer.from(signatureCalls[0].args[encodedIndex], 'base64').toString('utf16le'), /Import-Module Microsoft.PowerShell.Security/);
 
     const unsignedWindowsResult = await verifyDownloadedInstaller({
       platform: 'win32',
@@ -2412,10 +2414,27 @@ function registerCliAndUpdateTests(context) {
         installerPath: downloaded.downloadedPath,
         environment: { SystemRoot: 'C:\\Windows' },
         allowUnsignedWindowsUpdates: true,
-        execFile: async () => { throw new Error('Invalid Authenticode signature: HashMismatch'); },
+        execFile: async () => { throw Object.assign(new Error('signature command failed'), {
+          code: 2, stderr: 'WHITEBOX_SIGNATURE_STATUS=HashMismatch\r\n',
+        }); },
       }),
       /HashMismatch/,
     );
+
+    for (const stdout of ['', 'unexpected', 'Valid\nNotSigned', 'NotSigned']) {
+      await assert.rejects(verifyDownloadedInstaller({
+        platform: 'win32', installerPath: downloaded.downloadedPath,
+        execFile: async () => ({ stdout }),
+      }), error => error.code === 'UPDATE_WINDOWS_SIGNATURE_RESULT_INVALID');
+    }
+    await assert.rejects(verifyDownloadedInstaller({
+      platform: 'win32', installerPath: downloaded.downloadedPath,
+      allowUnsignedWindowsUpdates: true,
+      execFile: async () => { throw Object.assign(new Error('Command failed: powershell.exe -EncodedCommand SECRET'), {
+        code: 3221225477, stderr: '',
+      }); },
+    }), error => error.code === 'UPDATE_WINDOWS_SIGNATURE_CHECK_FAILED'
+      && error.message.includes('0xC0000005') && !error.message.includes('EncodedCommand'));
 
     const macSignatureCalls = [];
     const signedMacResult = await verifyDownloadedInstaller({

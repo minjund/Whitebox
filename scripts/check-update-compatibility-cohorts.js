@@ -110,6 +110,7 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
   const recent = [
+    { version: '1.8.9', size: 85321051, sha256: '8b95949603129c66431ac11c4e1ba9a2fb559b56ca3b8e616fa00dff96b0eb0e' },
     { version: '1.8.4', size: 85300893, sha256: '79a922dc265aaeab7a5d7d30cd763d0446eba6f162eae703e2c714b05b12955d' },
     { version: '1.8.5', size: 85301431, sha256: '7b769ba143c4d70eb312a88b8994f963737cda49ff621b0070ea3231eb1666c2' },
     { version: '1.8.1', size: 85298672, sha256: 'd62511bc82dfdab4b4b851cc0c180f4ac0d04aa2baef0f82145e246c1aa2dd91' },
