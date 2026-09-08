@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { spawn } = require('child_process');
+const { assertCodexWriterAvailable } = require('../../src/codexWriterLock');
 const {
   comprehensionPromptFingerprint,
   injectComprehensionContract,
@@ -179,6 +181,72 @@ function persistedBoundRecord(root, pid) {
 }
 
 function registerTerminalBoundConversationTests({ test, root, temp }) {
+  test('Codex writer 검사 실패는 잠금 파일을 삭제하지 않고 연결을 거절한다', () => {
+    const options = { type: 'agent', provider: 'codex', args: ['resume', '--', 'writer-test'] };
+    for (const code of ['EBUSY', 'EACCES', 'EIO']) {
+      let closed = false;
+      const fileSystem = {
+        openSync: () => 9,
+        readSync: () => { throw Object.assign(new Error(code), { code }); },
+        closeSync: descriptor => { assert.equal(descriptor, 9); closed = true; },
+      };
+      assert.throws(() => assertCodexWriterAvailable(options, {
+        platform: 'win32', env: { CODEX_HOME: temp }, fileSystem,
+      }), error => error.code === (code === 'EBUSY' ? 'CODEX_SESSION_WRITER_ACTIVE' : 'CODEX_SESSION_WRITER_CHECK_FAILED')
+        && error.creationState === 'rejected' && error.deliveryState === 'rejected');
+      assert.equal(closed, true);
+      for (const skipped of [{ ...options, distro: 'Ubuntu' }, { ...options, args: ['fork', 'writer-test'] }, { ...options, provider: 'claude' }]) {
+        assertCodexWriterAvailable(skipped, { platform: 'win32', fileSystem });
+      }
+      assertCodexWriterAvailable(options, { platform: 'linux', fileSystem });
+    }
+  });
+
+  test('Windows 실제 Codex writer 잠금은 PTY 생성을 막고 해제 후 같은 대화를 허용한다', async () => {
+    if (process.platform !== 'win32') return;
+    const codexHome = path.join(temp, 'writer-lock-home');
+    const lockPath = path.join(codexHome, 'thread-writer-locks', 'writer-test.lock');
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    const { manager, spawns } = managerFixture(root, { platform: 'win32' });
+    const options = boundOptions(root, { args: ['resume', 'writer-test'], recoveryArgs: ['resume', 'writer-test'], bridgeId: 'codex:writer-test', sessionBackend: 'direct' });
+    const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      '$f = [System.IO.File]::Open($env:WHITEBOX_TEST_LOCK, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite); try { $f.Lock(0, 1); [Console]::WriteLine("locked"); [Console]::ReadLine() | Out-Null } finally { $f.Dispose() }'],
+    { windowsHide: true, env: { ...process.env, WHITEBOX_TEST_LOCK: lockPath }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = new Promise(resolve => holder.once('exit', resolve));
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Writer lock fixture timed out')), 15000);
+        let output = '';
+        holder.stdout.on('data', data => {
+          output += data;
+          if (output.includes('locked')) { clearTimeout(timer); resolve(); }
+        });
+        holder.once('error', error => { clearTimeout(timer); reject(error); });
+        holder.once('exit', () => { clearTimeout(timer); reject(new Error('Writer lock fixture exited')); });
+      });
+      assert.throws(() => manager.create(options), error => error.code === 'CODEX_SESSION_WRITER_ACTIVE');
+      assert.equal(spawns.length, 0);
+      assert.equal(manager.sessions.size, 0);
+      assert.equal(fs.existsSync(lockPath), true);
+      holder.stdin.end('\n');
+      await exited;
+      assert.equal(fs.statSync(lockPath).size, 0);
+      const created = manager.create(options);
+      assert.equal(created.status, 'running');
+      assert.equal(spawns.length, 1);
+      assert.equal(manager.create(options).id, created.id);
+      assert.equal(spawns.length, 1, '기존 PTY는 중복 생성하지 않고 재사용한다');
+    } finally {
+      holder.stdin.end();
+      if (holder.exitCode === null) holder.kill();
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      await manager.dispose();
+    }
+  });
+
   test('fresh PTY는 첫 질문이 일치하는 실제 provider 기록에만 영속 연결한다', () => {
     const storeFile = path.join(temp, 'fresh-inferred-binding.json');
     const { manager } = managerFixture(root, { storeFile });

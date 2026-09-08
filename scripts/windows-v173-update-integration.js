@@ -1031,13 +1031,21 @@ async function main() {
     && v173Metadata.whitebox?.allowUnsignedWindowsUpdates === true;
   assert.equal(v173AllowsUnsigned, true, `Packaged v${SOURCE_VERSION} unsigned update policy changed.`);
 
-  const v173ModuleDir = path.join(testRoot, 'v173-packaged-src');
+  const sourceResources = path.join(testRoot, 'source-packaged', 'resources');
+  const v173ModuleDir = path.join(sourceResources, 'app.asar', 'src');
   extractModuleTree(installedAsar, v173ModuleDir, [
     'diagnostics.js',
     'macUpdateHelper.js',
     'updateInstaller.js',
     'updateManager.js',
   ]);
+  const sourceNativeVerifier = path.join(path.dirname(installedAsar), 'whitebox-signature-check.exe');
+  if (compareVersions(SOURCE_VERSION, '1.8.11') >= 0) {
+    existingFile(sourceNativeVerifier, 'Official source native signature verifier');
+    const extractedNativeVerifier = path.join(sourceResources, 'whitebox-signature-check.exe');
+    fs.copyFileSync(sourceNativeVerifier, extractedNativeVerifier);
+    assert.equal(sha256(extractedNativeVerifier), sha256(sourceNativeVerifier));
+  }
   const v173InstallerModule = require(path.join(v173ModuleDir, 'updateInstaller.js'));
   const v173UpdaterModule = require(path.join(v173ModuleDir, 'updateManager.js'));
   const firstDownloadsDir = path.join(testRoot, 'v173-first-hop-downloads');

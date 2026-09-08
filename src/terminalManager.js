@@ -10,6 +10,7 @@ const { runBestEffort } = require('./diagnostics');
 const { ManagedTmuxRuntime } = require('./managedTmuxRuntime');
 const { createTmuxControlProxyHandle } = require('./tmuxControlProxy');
 const { ensureMacNodePtyRuntime } = require('./nodePtyRuntime');
+const { assertCodexWriterAvailable } = require('./codexWriterLock');
 const {
   comprehensionPromptFingerprint,
   hasComprehensionContract,
@@ -3259,6 +3260,7 @@ class TerminalManager extends EventEmitter {
         };
       }
     }
+    assertCodexWriterAvailable(launchOptions, { platform: this.platform });
     this.deduplicateAgentBridgeSessions();
     this.reclaimFinishedSessions(1);
     if (this.sessions.size >= MAX_SESSIONS) throw new Error(`동시에 열 수 있는 명령창은 최대 ${MAX_SESSIONS}개입니다.`);
@@ -3716,6 +3718,7 @@ class TerminalManager extends EventEmitter {
         env: terminalEnvironment(session.spec.env || {}),
         useConpty: this.platform === 'win32',
       };
+      assertCodexWriterAvailable(session.options, { platform: this.platform, env: spawnOptions.env });
       if (this.platform !== 'win32') spawnOptions.encoding = 'utf8';
       processHandle = session.spec?.exactPaneProxy
         ? this.tmuxControlProxyFactory(session.spec.args[1])
