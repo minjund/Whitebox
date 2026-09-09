@@ -1009,6 +1009,14 @@ function registerCliAndUpdateTests(context) {
     assert(releaseWorkflow.includes('fetch-depth: 0'), '릴리스 태그 검증에는 전체 Git 계보가 필요합니다.');
     assert(releaseWorkflow.includes('${GITHUB_REF}^{commit}') && releaseWorkflow.includes('${GITHUB_SHA,,}'), '릴리스는 tag SHA, tag commit, HEAD가 모두 같은지 확인해야 합니다.');
     assert(releaseWorkflow.includes('git merge-base --is-ancestor "$tag_commit" origin/main'), '릴리스 태그 커밋은 origin/main의 선조여야 합니다.');
+    assert(releaseWorkflow.includes('Release validation recovery must run from main.')
+      && releaseWorkflow.includes('Recovery changes a file outside the verification allowlist'),
+    '기존 태그의 검증 복구는 main의 허용된 테스트 변경만 사용해야 합니다.');
+    assert.equal((releaseWorkflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g) || []).length, 5,
+      '모든 후속 checkout은 main의 제품 코드가 아닌 검증한 태그의 정확한 SHA를 사용해야 합니다.');
+    assert(releaseWorkflow.indexOf('Use the reviewed test driver after building the immutable candidate')
+      > releaseWorkflow.indexOf('Verify packaged Windows Authenticode checks'),
+    '검증 드라이버 교체는 태그의 원본 제품을 빌드하고 확인한 다음에만 허용해야 합니다.');
     assert(frozenClientTest.includes("require('./check-update-compatibility-cohorts')"), 'Windows E2E가 공용 cohort 매니페스트 검증기를 읽어야 합니다.');
     assert(frozenClientTest.includes('installationStarted = true;'), 'Windows E2E는 설치 시작 이후 정리 계약을 반드시 활성화해야 합니다.');
     assert(frozenClientTest.includes("assert.equal(uninstallerAttemptCount, 0, 'The installed-product uninstaller must be invoked exactly once per attempt.')"),

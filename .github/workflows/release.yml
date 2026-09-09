@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable tag to rebuild with a corrected test driver; run from main only
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,21 +21,44 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.tag.outputs.source_sha }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
       - name: Verify the tag commit is on origin/main
+        id: tag
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          [[ "$GITHUB_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || exit 1
           git fetch --no-tags origin main:refs/remotes/origin/main
-          tag_commit="$(git rev-parse --verify "${GITHUB_REF}^{commit}")"
           checked_out_commit="$(git rev-parse --verify HEAD)"
-          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || [ "$checked_out_commit" != "${GITHUB_SHA,,}" ]; then
-            echo "Checked out commit $checked_out_commit does not match event tag SHA ${GITHUB_SHA:-<missing>}."
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [ "$GITHUB_REF" = refs/heads/main ] || { echo 'Release validation recovery must run from main.'; exit 1; }
+            tag_commit="$(git rev-parse --verify "refs/tags/${REQUESTED_TAG}^{commit}")"
+            # A recovery may update only verification code. Product sources,
+            # dependencies, package metadata and build hooks remain identical.
+            git diff --name-only --no-renames "$tag_commit" "$GITHUB_SHA" > "$RUNNER_TEMP/validation-changes.txt"
+            while IFS= read -r file; do
+              case "$file" in
+                .github/workflows/release.yml|scripts/packaged-update-button.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
+                *) echo "Recovery changes a file outside the verification allowlist: $file"; exit 1 ;;
+              esac
+            done < "$RUNNER_TEMP/validation-changes.txt"
+            echo "Validation source: $GITHUB_SHA; immutable product source: $tag_commit"
+          else
+            tag_commit="$(git rev-parse --verify "${GITHUB_REF}^{commit}")"
+            if [ "$checked_out_commit" != "${GITHUB_SHA,,}" ]; then
+              echo "Checked out commit $checked_out_commit does not match event tag SHA ${GITHUB_SHA:-<missing>}."
+              exit 1
+            fi
           fi
           if [ "$checked_out_commit" != "$tag_commit" ]; then
             echo "Checked out commit $checked_out_commit does not match tag commit $tag_commit."
@@ -39,6 +68,7 @@ jobs:
             echo "Release tag commit $tag_commit is not an ancestor of origin/main."
             exit 1
           fi
+          echo "source_sha=$tag_commit" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
@@ -53,7 +83,7 @@ jobs:
       - run: npm run check:package
       - name: Verify release version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           node -e "const expected=process.env.RELEASE_TAG.replace(/^v/,'');const actual=require('./package.json').version;if(!/^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)$/.test(actual))throw new Error('release version must be stable SemVer: '+actual);if(actual!==expected)throw new Error('package version '+actual+' does not match release '+expected)"
 
@@ -80,11 +110,12 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - name: Verify the exact Windows tag commit
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
           if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'Tag event SHA must be a full 40-character commit SHA' }
           $actual = (git rev-parse HEAD).Trim()
@@ -186,6 +217,18 @@ jobs:
           "WHITEBOX_CURRENT_INSTALLER_SIZE=$targetSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Use the reviewed test driver after building the immutable candidate
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          VALIDATION_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'The immutable candidate changed before validation driver selection' }
+          git fetch --no-tags origin $env:VALIDATION_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the reviewed validation source' }
+          node -e "const fs=require('fs'),cp=require('child_process');const sha=process.env.VALIDATION_SOURCE_SHA;if(!/^[0-9a-f]{40}$/.test(sha))throw new Error('Invalid validation SHA');fs.writeFileSync('scripts/packaged-update-button.js',cp.execFileSync('git',['show',sha+':scripts/packaged-update-button.js']));const changed=cp.execFileSync('git',['diff','--name-only'],{encoding:'utf8'}).trim();if(changed&&changed!=='scripts/packaged-update-button.js')throw new Error('Recovery changed more than the test driver: '+changed);console.log('Reviewed test driver '+sha+'; file SHA-256 '+require('crypto').createHash('sha256').update(fs.readFileSync('scripts/packaged-update-button.js')).digest('hex'));"
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to bind the reviewed test driver' }
       - name: Download and verify the official legacy update inputs
         if: runner.os == 'Windows'
         shell: pwsh
@@ -286,10 +329,13 @@ jobs:
           if-no-files-found: error
 
   verify-mac-arm64:
-    needs: build-desktop
+    needs: [prepare, build-desktop]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22
@@ -305,7 +351,7 @@ jobs:
           node scripts/mac-update-cohort-check.js
 
   draft-release:
-    needs: [build-desktop, verify-mac-arm64]
+    needs: [prepare, build-desktop, verify-mac-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -313,6 +359,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: Whitebox-*
@@ -321,7 +368,7 @@ jobs:
       - name: Create a draft GitHub release and attach verified files
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -409,7 +456,7 @@ jobs:
           NODE
 
   publish-npm:
-    needs: draft-release
+    needs: [prepare, draft-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -418,6 +465,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -466,7 +514,7 @@ jobs:
           exit 1
 
   publish-release:
-    needs: publish-npm
+    needs: [prepare, publish-npm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -474,7 +522,7 @@ jobs:
       - name: Publish the fully verified GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -504,7 +552,7 @@ jobs:
           fi
 
   verify-legacy-update-channel:
-    needs: publish-release
+    needs: [prepare, publish-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -512,10 +560,11 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
       - name: Verify v1.6.3 -> bridge -> latest update path
         env:
-          EXPECTED_CURRENT_TAG: ${{ github.ref_name }}
+          EXPECTED_CURRENT_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: node scripts/check-legacy-update-channel.js
