@@ -1208,8 +1208,9 @@ async function main() {
   const driver = await openInspectedApp(installedExecutable, [`--user-data-dir=${buttonProfile}`], process.env);
   activeAppPid = driver.child.pid;
   const buttonParentPid = activeAppPid;
+  let buttonTerminalPid = 0;
   try {
-    await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true });
+    ({ terminalPid: buttonTerminalPid } = await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true }));
   } finally { driver.close(); }
   const attemptLog = path.join(buttonProfile, 'updates', 'install-attempts.jsonl');
   let events = [];
@@ -1227,6 +1228,10 @@ async function main() {
   assert(buttonLaunch, 'Real packaged update button never acknowledged its helper: ' + JSON.stringify(events));
   for (const event of events.filter(event => event.stage === 'downloaded')) updateInstallerPaths.add(event.downloadedPath);
   const successfulEvents = events.filter(event => event.attemptId === buttonLaunch.attemptId).map(event => event.stage);
+  assert.equal(successfulEvents.filter(stage => stage === 'workload-force-confirmed').length, 1);
+  assert.equal(successfulEvents.filter(stage => stage === 'workload-force-stopped').length, 1);
+  assert(successfulEvents.indexOf('workload-force-stopped') < successfulEvents.indexOf('helper-ready'));
+  assert.equal(processAlive(buttonTerminalPid), false, 'The app-owned packaged PTY must exit before the installer helper starts');
   assert(successfulEvents.indexOf('workload-stopped') < successfulEvents.indexOf('helper-ready'));
   await waitForProcessExit(buttonParentPid);
   activeAppPid = await waitForRelaunchLog(buttonLaunch.logPath, targetVersion);

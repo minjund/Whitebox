@@ -56,6 +56,7 @@ async function openInspectedApp(executable, args, env) {
 
 async function clickPackagedUpdate(driver, installer, version, options = {}) {
   const { evaluate } = driver;
+  let terminalPid = 0;
   const bytes = fs.readFileSync(installer);
   const name = path.basename(installer);
   const asset = { name, size: bytes.length, digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex'),
@@ -124,11 +125,32 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   }
   if (options.retryAfterFailure) {
     await evaluate(`(() => {
+      const dialog = process.mainModule.require('electron').dialog;
+      const showMessageBox = dialog.showMessageBox;
+      globalThis.__whiteboxForceDialogResponses = [];
+      dialog.showMessageBox = async function(...args) {
+        const options = args.at(-1);
+        if (options.buttons?.some(button => /강제|Force-stop|强制/.test(button))) {
+          const response = globalThis.__whiteboxForceDialogResponses.length ? 1 : 0;
+          globalThis.__whiteboxForceDialogResponses.push(response);
+          if (options.defaultId !== 0 || options.cancelId !== 0) throw new Error('Force update must default to cancel');
+          return { response };
+        }
+        if (options.buttons?.some(button => /^(업데이트하고 다시 시작|Update and restart|更新并重新启动)$/.test(button))) {
+          return { response: 1 };
+        }
+        return showMessageBox.apply(this, args);
+      };
       const Host = process.mainModule.require('./src/terminalHost').TerminalHostClient;
       const shutdown = Host.prototype.shutdownForUpdate;
-      Host.prototype.shutdownForUpdate = function(...args) {
+      let failures = 0;
+      Host.prototype.shutdownForUpdate = async function(...args) {
+        if (!args[2]?.force && failures++ < 2) {
+          await this.listFresh();
+          throw new Error('update-button-fixture: shutdown failure');
+        }
         Host.prototype.shutdownForUpdate = shutdown;
-        return Promise.reject(new Error('update-button-fixture: shutdown failure'));
+        return shutdown.apply(this, args);
       };
       return true;
     })()`);
@@ -141,9 +163,20 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     await new Promise(resolve => setTimeout(resolve, 3600));
     assert.equal(await renderer(`document.querySelector('#updateError').textContent.includes('update-button-fixture')`), true);
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
+    const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
+    const cwd = await evaluate(`process.mainModule.require('electron').app.getPath('userData')`);
+    let terminal = await renderer(`window.whitebox.terminalCreate(${JSON.stringify({ type, cwd })})`);
+    const pidDeadline = Date.now() + 10000;
+    while (!Number.isSafeInteger(Number(terminal.pid)) || Number(terminal.pid) <= 0) {
+      if (Date.now() >= pidDeadline) throw new Error('Packaged force-update PTY PID was not ready');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      terminal = await renderer(`window.whitebox.terminalGet(${JSON.stringify(terminal.id)})`);
+    }
+    terminalPid = Number(terminal.pid);
+    assert(Number.isSafeInteger(terminalPid) && terminalPid > 0, 'Packaged force update requires a live app-owned PTY');
   }
   await renderer(`document.querySelector('#installUpdateBtn').click(); true`);
-  return { renderer, asset };
+  return { renderer, asset, terminalPid };
 }
 
 module.exports = { openInspectedApp, clickPackagedUpdate };

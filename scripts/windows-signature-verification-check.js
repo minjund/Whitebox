@@ -13,6 +13,12 @@ async function runPackagedCheck() {
   const { verifyDownloadedInstaller } = require(path.join(archive, 'src', 'updateInstaller.js'));
   const verifier = path.join(path.dirname(archive), 'whitebox-signature-check.exe');
   assert(fs.statSync(verifier).size > 0, 'The native verifier must be packaged beside app.asar');
+  const { readWindowsHostProcess } = require(path.join(archive, 'src', 'updateWorkloadScope.js'));
+  const identity = await readWindowsHostProcess(process.pid);
+  assert.equal(identity.ProcessId, process.pid);
+  assert.equal(fs.realpathSync(identity.ExecutablePath).toLowerCase(), fs.realpathSync(process.execPath).toLowerCase());
+  assert(identity.CommandLine.includes('--inside-package'));
+  assert.match(identity.Started, /^\d{14}\.\d{6}[+-]\d{3}$/);
   const unsigned = process.env.WHITEBOX_SIGNATURE_TEST_UNSIGNED_INSTALLER
     || path.resolve('release', `Whitebox-Setup-${version}.exe`);
   const signed = process.env.WHITEBOX_SIGNATURE_TEST_SIGNED_NODE;

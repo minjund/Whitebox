@@ -49,6 +49,51 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
     assert(runner.resumeAfterUpdateFailure());
   }
 
+  for (const scenario of ['cancel', 'force', 'force-fails', 'verification-fails', 'old-host', 'external-host']) {
+    const events = [];
+    let helpers = 0, quits = 0, prompts = 0, forceCalls = 0;
+    class Host {
+      constructor() { this.capabilities = scenario === 'old-host' ? {} : { forceStopForUpdate: 1 }; }
+      async shutdownForUpdate(_sessions, _timeout, options) {
+        if (!options?.force) throw new Error('terminal cleanup failed');
+        forceCalls += 1;
+        if (scenario === 'force-fails') throw new Error('process exit remains unconfirmed');
+      }
+      async recoverAfterUpdateFailure() {}
+      dispose(options) { assert.equal(options.preserveHost, true); assert.equal(this.updateShutdown, true); }
+    }
+    const manager = { state: { status: 'downloaded', downloadedPath: 'fixture', asset: {}, latestVersion: '1.8.13' },
+      async download() { return this.getState(); }, getState() { return { ...this.state }; },
+      setState(patch) { Object.assign(this.state, patch); } };
+    const lifecycle = { fs: { mkdirSync() {}, appendFileSync(_file, line) { events.push(JSON.parse(line)); } },
+      userFile: x => x, crypto: require('node:crypto'), process: { platform: 'win32', pid: 123 }, updateManager: manager,
+      updateInstallPlan: async () => ({ installType: 'desktop', installMode: 'automatic', appPath: 'fixture' }),
+      shell: {}, ALLOW_UNSIGNED_WINDOWS_UPDATES: true, ALLOW_UNSIGNED_MAC_UPDATES: true,
+      canInstallSilently: () => true,
+      verifyDownloadedInstaller: async () => { if (scenario === 'verification-fails') throw new Error('digest mismatch'); },
+      preflightAutomaticUpdate: async () => {},
+      updateWorkloadImpact: async () => ({ agentRuns: [], terminalSessions: [], externalHost: scenario === 'external-host' }),
+      externalTerminalHost: async () => true, confirmActiveTerminalUpdate: async () => true,
+      confirmForceTerminalUpdate: async () => { prompts += 1; return scenario !== 'cancel'; },
+      runner: null, TerminalHostClient: Host, terminalManager: new Host(),
+      launchDownloadedUpdate: async () => { helpers += 1; return { mode: 'automatic' }; }, reportRecoverableError() {},
+      updateInstallPromise: null, setImmediate: fn => fn(), app: { quit() { quits += 1; } }, isQuitting: false };
+    vm.createContext(lifecycle);
+    vm.runInContext(main.slice(main.indexOf('function recordUpdateInstallEvent('), main.indexOf('async function setupAttentionRuntime()')), lifecycle);
+    if (['force', 'external-host'].includes(scenario)) await lifecycle.installDownloadedUpdate();
+    else await assert.rejects(lifecycle.installDownloadedUpdate(), /cleanup failed|exit remains unconfirmed|digest mismatch/);
+    assert.equal(helpers, ['force', 'external-host'].includes(scenario) ? 1 : 0, scenario);
+    assert.equal(quits, helpers, scenario);
+    assert.equal(prompts, ['old-host', 'verification-fails', 'external-host'].includes(scenario) ? 0 : 1, scenario);
+    assert.equal(forceCalls, ['force', 'force-fails'].includes(scenario) ? 1 : 0, scenario);
+    if (scenario === 'force') {
+      assert.equal(new Set(events.map(event => event.attemptId)).size, 1);
+      const stages = events.map(event => event.stage);
+      assert(stages.indexOf('workload-force-confirmed') < stages.indexOf('workload-force-stopped'));
+      assert(stages.indexOf('workload-force-stopped') < stages.indexOf('helper-ready'));
+    }
+  }
+
   let calls=0, resolveInstall;
   const nodes=new Map();
   const $=selector=>{

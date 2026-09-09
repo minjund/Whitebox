@@ -16,7 +16,8 @@ const { snapshotWithoutSessions } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
 const { collectProviderUsage } = require('./src/providerUsage');
 const { TerminalManager, isInternalTerminalProjectionSessionId } = require('./src/terminalManager');
-const { TerminalHostClient, launchTerminalHost, resolveTerminalHostExecutable } = require('./src/terminalHost');
+const { TerminalHostClient, launchTerminalHost, resolveTerminalHostExecutable, requiresUpdateShutdown } = require('./src/terminalHost');
+const { externalTerminalHost } = require('./src/updateWorkloadScope');
 const { TmuxController } = require('./src/tmuxController');
 const { normalizeWslList } = require('./src/tmuxMonitor');
 const { UpdateManager } = require('./src/updateManager');
@@ -188,6 +189,10 @@ const MAIN_COPY = {
     updateActiveDetail: '업데이트를 계속하면 Whitebox와 명령창 연결 프로그램을 완전히 종료한 뒤 새 버전을 설치하고 다시 시작합니다. 관리형 명령창 작업은 분리해 유지하지만, 직접 실행 중인 작업은 중단되며 필요하면 업데이트 후 다시 시작해야 합니다.',
     updateLater: '나중에',
     updateNow: '업데이트하고 다시 시작',
+    updateForceTitle: '명령창 작업을 강제 종료하고 업데이트할까요?',
+    updateForceMessage: '명령창 정리를 완료하지 못했습니다.',
+    updateForceDetail: '진행 중인 명령창 작업을 중단하고 종료를 다시 시도합니다. 저장하지 않은 작업은 사라질 수 있습니다. 프로그램 종료를 확인한 뒤 새 버전을 설치하고 다시 시작합니다.\n\n{reason}',
+    updateForceNow: '작업 강제 종료 후 업데이트',
     updateCancellationGuardTitle: '업데이트 도우미 종료를 확인하는 중입니다',
     updateCancellationGuardMessage: '지금은 Whitebox를 종료하지 마세요.',
     updateCancellationGuardDetail: '앱을 종료하지 않은 채 최소 60초 기다린 뒤 업데이트를 다시 시도해 주세요.',
@@ -212,6 +217,10 @@ const MAIN_COPY = {
     updateActiveDetail: 'Continuing will fully close Whitebox and its terminal host, install the new version, and restart the app. Managed terminal work is detached and kept running, but direct work is stopped and may need to be restarted after the update.',
     updateLater: 'Later',
     updateNow: 'Update and restart',
+    updateForceTitle: 'Force-stop terminal work and update?',
+    updateForceMessage: 'Terminal cleanup could not finish.',
+    updateForceDetail: 'Interrupt active terminal work and retry termination. Unsaved work may be lost. The new version will install and restart after process shutdown is confirmed.\n\n{reason}',
+    updateForceNow: 'Force-stop work and update',
     updateCancellationGuardTitle: 'Waiting for the update helper to stop',
     updateCancellationGuardMessage: 'Do not quit Whitebox yet.',
     updateCancellationGuardDetail: 'Keep the app open for at least 60 seconds, then try the update again.',
@@ -236,6 +245,10 @@ const MAIN_COPY = {
     updateActiveDetail: '继续后将完全关闭 Whitebox 及终端连接程序，安装新版本并重新启动。受管理的终端任务会分离并继续运行，但直接运行的任务会停止，更新后可能需要重新启动。',
     updateLater: '稍后',
     updateNow: '更新并重新启动',
+    updateForceTitle: '强制结束终端任务并更新吗？',
+    updateForceMessage: '无法完成终端清理。',
+    updateForceDetail: '中断正在运行的终端任务并重试终止。未保存的工作可能丢失。确认程序已停止后将安装新版本并重新启动。\n\n{reason}',
+    updateForceNow: '强制结束任务并更新',
     updateCancellationGuardTitle: '正在确认更新助手已停止',
     updateCancellationGuardMessage: '现在请不要退出 Whitebox。',
     updateCancellationGuardDetail: '请保持应用打开至少 60 秒，然后再试一次更新。',
@@ -1560,12 +1573,15 @@ async function updateInstallPlan() {
   };
 }
 
-async function updateWorkloadImpact() {
+async function updateWorkloadImpact(appPath = process.execPath) {
   let sessions = [];
   if (terminalManager instanceof TerminalHostClient) sessions = await terminalManager.listFresh();
   else if (terminalManager && typeof terminalManager.list === 'function') sessions = terminalManager.list();
+  const externalHost = terminalManager instanceof TerminalHostClient
+    && await externalTerminalHost(terminalManager, appPath);
   return {
-    terminalSessions: sessions.filter(session => ['running', 'starting', 'stopping'].includes(session.status)),
+    externalHost,
+    terminalSessions: externalHost ? [] : sessions.filter(requiresUpdateShutdown),
     agentRuns: backgroundAgentRuns(),
   };
 }
@@ -1580,6 +1596,23 @@ async function confirmActiveTerminalUpdate(impact) {
     message: mainText('updateActiveMessage', { terminalCount, runCount }),
     detail: mainText('updateActiveDetail'),
     buttons: [mainText('updateLater'), mainText('updateNow')],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+  return result.response === 1;
+}
+
+async function confirmForceTerminalUpdate(error) {
+  const options = {
+    type: 'warning',
+    title: mainText('updateForceTitle'),
+    message: mainText('updateForceMessage'),
+    detail: mainText('updateForceDetail', { reason: String(error?.message || '') }),
+    buttons: [mainText('updateLater'), mainText('updateForceNow')],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -1650,7 +1683,7 @@ async function performDownloadedUpdateInstall(attemptId) {
   let agentRunnerPrepared = false;
   let prepareWorkload = null;
   if (canInstallSilently(launchOptions)) {
-    const impact = await updateWorkloadImpact();
+    const impact = await updateWorkloadImpact(installPlan.appPath);
     if (!await confirmActiveTerminalUpdate(impact)) {
       return { ...updateManager.getState(), installMode: 'automatic', installCanceled: true };
     }
@@ -1663,7 +1696,26 @@ async function performDownloadedUpdateInstall(attemptId) {
       }
       terminalShutdownAttempted = true;
       if (terminalManager instanceof TerminalHostClient) {
-        await terminalManager.shutdownForUpdate(impact.terminalSessions);
+        if (impact.externalHost) {
+          if (!await externalTerminalHost(terminalManager, installPlan.appPath)) {
+            throw new Error('업데이트 준비 중 명령창 연결 프로그램의 소유자가 바뀌었습니다. 다시 시도해 주세요.');
+          }
+          // An external/development host and its work keep running. Disconnect
+          // this app only; never send shutdown-if-idle to that host.
+          terminalManager.updateShutdown = true;
+          terminalManager.dispose({ preserveHost: true });
+          recordUpdateInstallEvent(attemptId, 'external-terminal-host-preserved');
+        } else try {
+          await terminalManager.shutdownForUpdate(impact.terminalSessions);
+        } catch (error) {
+          if (terminalManager.capabilities?.forceStopForUpdate !== 1
+            || !await confirmForceTerminalUpdate(error)) throw error;
+          recordUpdateInstallEvent(attemptId, 'workload-force-confirmed');
+          // Re-read the workload after the dialog: sessions created while it
+          // was open were not part of the user's original confirmation.
+          await terminalManager.shutdownForUpdate(impact.terminalSessions, 8_000, { force: true });
+          recordUpdateInstallEvent(attemptId, 'workload-force-stopped');
+        }
       } else if (terminalManager) {
         await terminalManager.dispose({ preserveSessions: true });
       }

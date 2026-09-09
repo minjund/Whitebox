@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const assert = require('node:assert/strict');
 const { app } = require('electron');
 const { TerminalManager } = require('../src/terminalManager');
 
@@ -97,6 +98,30 @@ app.whenReady().then(async () => {
     manager.signal(sessionId, 'interrupt');
     await interrupted;
     process.stdout.write('✓ bound 실제 PTY 장기 작업 xterm 입력·Ctrl+C 중단 검증\n');
+    const killTree = manager.killTree;
+    const originalPid = manager.sessions.get(sessionId).pid;
+    let attempts = 0;
+    manager.killTree = (...args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error('Injected first process-tree termination failure');
+        error.code = 'PTY_TREE_EXIT_UNCONFIRMED';
+        return Promise.reject(error);
+      }
+      assert.equal(args[1], originalPid, 'Force retry must target the original live PTY');
+      assert.equal(args[3].posixSignal, 'SIGKILL');
+      return killTree(...args);
+    };
+    await assert.rejects(manager.stop(sessionId), /Injected first/);
+    assert.equal(manager.get(sessionId).terminationUncertain, true);
+    await manager.forceStopForUpdate(sessionId);
+    assert.equal(attempts, 2);
+    assert.equal(manager.get(sessionId).status, 'stopped');
+    assert.equal(manager.get(sessionId).terminationUncertain, false);
+    assert.equal(manager.sessions.get(sessionId).process, null);
+    assert.throws(() => process.kill(originalPid, 0), error => error.code === 'ESRCH');
+    manager.killTree = killTree;
+    process.stdout.write('✓ 실제 PTY 종료 실패 후 강제 업데이트 종료·프로세스 소멸 확인\n');
     await finish();
   } catch (error) {
     await finish(error);

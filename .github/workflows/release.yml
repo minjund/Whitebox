@@ -244,7 +244,7 @@ jobs:
       - name: Verify frozen and recent packaged Whitebox compatibility cohorts
         if: runner.os == 'Windows'
         shell: pwsh
-        timeout-minutes: 30
+        timeout-minutes: 90
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
           if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {

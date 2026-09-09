@@ -5,6 +5,20 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.13 - 2026-09-09
+
+- Limit update shutdown to the installation's own terminal host and its live
+  connections. Keep an external development host and its tasks running; stale
+  records from a previous host no longer block replacement of the current app.
+- Preserve managed tmux tasks when releasing the app's terminal connections.
+- Offer "Force-stop work and update" when terminal cleanup blocks installation,
+  with an explicit warning about interrupted and unsaved work and cancellation
+  selected by default.
+- Retry the retained live terminal process and confirm shutdown before starting
+  the installer. Ambiguous or orphaned process identities still block installation.
+- Verify cancellation and confirmed force-update through the packaged update
+  button, and exercise recovery from a termination failure with a real PTY.
+
 ## 1.8.12 - 2026-09-08
 
 - Reduce dashboard refresh work by reusing normalized project paths and

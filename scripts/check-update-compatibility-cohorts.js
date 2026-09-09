@@ -110,6 +110,17 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
   const recent = [
+    {"version":"1.7.6","size":85321320,"sha256":"0fda64f5cf6e051c70e417b39489797125720d84b31e8422c3d168faa3d7f341"},
+    {"version":"1.7.8","size":85325513,"sha256":"ff3d775449c6a670e0a3cc9f28f9af0e2dfdf371f500cdaa5d5daff03d7f5311"},
+    {"version":"1.7.9","size":85325656,"sha256":"ff68ea266100f683354f9020b9560b51ebf001efc520fa1a997d00b44a43ac81"},
+    {"version":"1.7.11","size":85327244,"sha256":"f126797cdcae732d99225b3df7613bafa983b9dbc870d0068f368d8f7ac73178"},
+    {"version":"1.7.12","size":85335488,"sha256":"07610ac268a0932d70eaeb44a61a775daed9482b7409d53aa46dc6200200e75d"},
+    {"version":"1.7.13","size":85244079,"sha256":"5e731d5b7434634f421ca32f40a36101b469d06286ecded690eba5afe5fe18bd"},
+    {"version":"1.7.14","size":85246819,"sha256":"aaa2cb066fcefccf9fff36ff3757b04b3df2df4be8b2a430c5f69c28d7d0a187"},
+    {"version":"1.7.15","size":85266395,"sha256":"f2ae2cecd39b1bd324735f92dde348d1f6fd8e6ddf1616d1054b514d0a0d583f"},
+    {"version":"1.7.16","size":85268679,"sha256":"896e2e950a492234dc463865f087ae9ab4184ce20558bfdf7a92e934bf009e04"},
+    {"version":"1.8.2","size":85298702,"sha256":"de9389e3e11a00e8d9ac8d4c31935b097c75b1cf8c4f285073177d67330291ae"},
+    {"version":"1.8.3","size":85299286,"sha256":"8ff9f8895183f45fdc76d14e1413ea741a9b938645920f2629743c42d1931347"},
     { version: '1.8.4', size: 85300893, sha256: '79a922dc265aaeab7a5d7d30cd763d0446eba6f162eae703e2c714b05b12955d' },
     { version: '1.8.5', size: 85301431, sha256: '7b769ba143c4d70eb312a88b8994f963737cda49ff621b0070ea3231eb1666c2' },
     { version: '1.8.1', size: 85298672, sha256: 'd62511bc82dfdab4b4b851cc0c180f4ac0d04aa2baef0f82145e246c1aa2dd91' },
@@ -118,6 +129,7 @@ function cohortList(manifest) {
     { version: '1.8.8', size: 85303444, sha256: '25d9406df0a3c27ce1f5846fcb9965b42f73727caf109b4be11b50b2af39810a' },
     { version: '1.8.9', size: 85321051, sha256: '8b95949603129c66431ac11c4e1ba9a2fb559b56ca3b8e616fa00dff96b0eb0e' },
     { version: '1.8.10', size: 85320539, sha256: '88d145fc4a1a6217f798bd0359751b4bba7d0e9615fe4e49e0bff845478114e3' },
+    { version: '1.8.11', size: 85400839, sha256: 'f6a46fe7b7293f78b86864a3a5a81e37cfc9dcf79d1a559968214edfdabe79e5' },
   ].map(value => validateCohort({ ...value,
     url: `https://github.com/minjund/Whitebox/releases/download/v${value.version}/Whitebox-Setup-${value.version}.exe`,
     env: `WHITEBOX_V${value.version.replaceAll('.', '')}_INSTALLER`, installMode: 'automatic',
