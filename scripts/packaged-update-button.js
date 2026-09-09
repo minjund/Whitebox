@@ -40,18 +40,39 @@ async function openInspectedApp(executable, args, env) {
     if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message) + '\nExpression: ' + request.expression));
     else request.resolve(message.result?.result?.value);
   });
-  const evaluate = expression => new Promise((resolve, reject) => {
+  const evaluate = (expression, { awaitPromise = true } = {}) => new Promise((resolve, reject) => {
     const id = ++sequence;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('Debugger evaluation timed out')); }, 30000);
     pending.set(id, { resolve, reject, timer, expression });
     // Inspector awaitPromise holds only a weak reference. Keep executeJavaScript
     // promises alive in the main context until the next sequential evaluation.
-    const retainedExpression = `globalThis.__whiteboxPackagedEvaluation = (0, eval)(${JSON.stringify(expression)})`;
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: retainedExpression, awaitPromise: true, returnByValue: true } }));
+    const retainedExpression = awaitPromise
+      ? `globalThis.__whiteboxPackagedEvaluation = Promise.resolve((0, eval)(${JSON.stringify(expression)}))`
+      : expression;
+    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: retainedExpression, awaitPromise, returnByValue: true } }));
   });
-  // Electron replaces its bootstrap V8 context during startup.
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  return { child, evaluate, close: () => socket.close(), diagnostics: () => stderr };
+  const driver = { child, evaluate, close: () => socket.close(), diagnostics: () => stderr };
+  try {
+    await waitForPackagedRenderer(driver);
+    return driver;
+  } catch (error) {
+    socket.close();
+    child.kill();
+    throw error;
+  }
+}
+
+async function waitForPackagedRenderer(driver, { timeoutMs = 60000, pollMs = 200 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  // Electron replaces its bootstrap V8 context. A read-only synchronous probe
+  // must not create an Inspector promise in that temporary context. Only an
+  // actual application window satisfies readiness; transport errors fail.
+  // Inspector can interrupt a module while Electron's lazy exports are still
+  // initializing. Do not require those exports until the main module finished.
+  while (!await driver.evaluate(`Boolean(typeof process !== 'undefined' && process.mainModule?.loaded && process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')))`, { awaitPromise: false })) {
+    if (Date.now() >= deadline) throw new Error('Packaged renderer did not open');
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
 }
 
 async function clickPackagedUpdate(driver, installer, version, options = {}) {
@@ -64,10 +85,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   const release = { tag_name: 'v' + version, draft: false, prerelease: false,
     html_url: `https://github.com/minjund/Whitebox/releases/tag/v${version}`, assets: [asset] };
   const deadline = Date.now() + 60000;
-  while (!await evaluate(`Boolean(process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')))`)) {
-    if (Date.now() >= deadline) throw new Error('Packaged renderer did not open');
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
+  await waitForPackagedRenderer(driver);
   // Replace only the external HTTP boundary. Production release selection,
   // streaming download, hash verification, IPC, workload shutdown and helpers run.
   await evaluate(`(() => {
@@ -182,4 +200,4 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   return { renderer, asset, terminalPid };
 }
 
-module.exports = { openInspectedApp, clickPackagedUpdate };
+module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer };

@@ -38,6 +38,7 @@ const context = { ...fixtures, test: harness.test };
 require('./tests/update-workload-scope').registerUpdateWorkloadScopeTests(context);
 require('./tests/monitor-state-latency').registerMonitorStateLatencyTests(context);
 require('./tests/performance-regressions').registerPerformanceRegressionTests(context);
+require('./tests/packaged-update-driver').registerPackagedUpdateDriverTests(context);
 
 registerCoreUpdateWorkspaceTests(context);
 registerAttentionNotifierTests(context);
@@ -68,8 +69,8 @@ registerAgentParserTests(context);
 registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
 
-if (harness.count() !== 487) {
-  throw new Error(`회귀 테스트 등록 수가 487개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 488) {
+  throw new Error(`회귀 테스트 등록 수가 488개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

@@ -181,3 +181,17 @@ review-agent verdict rules.
 
 If a job fails, fix the cause and rerun the same workflow. Do not replace a
 version already published to npm or overwrite an existing tag's artifacts.
+
+When a test-driver defect blocks an existing, unpublished tag, fix and review
+the driver on `main` first. The Release workflow can then be dispatched from
+`main` with `release_tag` set to that immutable tag. Recovery rejects every
+tag-to-workflow change outside its explicit verification-file allowlist.
+Every checkout and build uses the original tag SHA. Only after the unchanged
+candidate has been built may the reviewed
+`scripts/packaged-update-button.js` replace its test-side counterpart; this
+driver is excluded from the product package and also drives both macOS checks.
+Record both source SHAs and the
+driver hash. All packaged source attempts, candidate self-reinstallation,
+cleanup, macOS checks, draft byte validation and public-channel checks still
+run on fresh state. A failed original run remains failed and is not evidence
+of success; publication requires a complete successful run after the fix.
