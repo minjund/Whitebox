@@ -28,6 +28,12 @@ function registerUpdateWorkloadScopeTests({ test, temp }) {
   });
 
   test('외부 과거 기록은 업데이트를 막지 않고 현재 호스트 소유 종료 불확실성은 차단한다', async () => {
+    let controls = 0;
+    const preservedClient = new TerminalHostClient({ discoveryFile: path.join(temp, 'preserved-client.json') });
+    preservedClient.socket = { destroyed: false, write() { controls += 1; }, end() {} };
+    preservedClient.dispose({ preserveHost: true });
+    preservedClient.dispose({ shutdownIfIdle: true });
+    assert.equal(controls, 0, 'An external host must never receive a shutdown control, including on later app quit');
     const external = { id: 'external-stale', status: 'stopping', terminationUncertain: true, updateOwned: false };
     assert.equal(requiresUpdateShutdown(external), false);
     assert.equal(requiresUpdateShutdown({ ...external, updateOwned: true }), true);
