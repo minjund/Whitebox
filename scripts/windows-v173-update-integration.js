@@ -1210,7 +1210,7 @@ async function main() {
   const buttonParentPid = activeAppPid;
   let buttonTerminalPid = 0;
   try {
-    ({ terminalPid: buttonTerminalPid } = await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true }));
+    ({ terminalPid: buttonTerminalPid } = await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true, forceRetry: true }));
   } finally { driver.close(); }
   const attemptLog = path.join(buttonProfile, 'updates', 'install-attempts.jsonl');
   let events = [];

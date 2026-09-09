@@ -145,7 +145,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       const shutdown = Host.prototype.shutdownForUpdate;
       let failures = 0;
       Host.prototype.shutdownForUpdate = async function(...args) {
-        if (!args[2]?.force && failures++ < 2) {
+        if (!args[2]?.force && failures++ < ${options.forceRetry === true ? 2 : 1}) {
           await this.listFresh();
           throw new Error('update-button-fixture: shutdown failure');
         }
@@ -163,6 +163,9 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     await new Promise(resolve => setTimeout(resolve, 3600));
     assert.equal(await renderer(`document.querySelector('#updateError').textContent.includes('update-button-fixture')`), true);
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
+  }
+  if (options.forceRetry === true) {
+    assert.equal(options.retryAfterFailure, true, 'Force retry must first exercise cancellation');
     const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
     const cwd = await evaluate(`process.mainModule.require('electron').app.getPath('userData')`);
     let terminal = await renderer(`window.whitebox.terminalCreate(${JSON.stringify({ type, cwd })})`);
