@@ -218,17 +218,24 @@ jobs:
           "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Use the reviewed test driver after building the immutable candidate
-        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
-        shell: pwsh
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
         env:
           VALIDATION_SOURCE_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
           git diff --exit-code
-          if ($LASTEXITCODE -ne 0) { throw 'The immutable candidate changed before validation driver selection' }
-          git fetch --no-tags origin $env:VALIDATION_SOURCE_SHA
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the reviewed validation source' }
-          node -e "const fs=require('fs'),cp=require('child_process');const sha=process.env.VALIDATION_SOURCE_SHA;if(!/^[0-9a-f]{40}$/.test(sha))throw new Error('Invalid validation SHA');fs.writeFileSync('scripts/packaged-update-button.js',cp.execFileSync('git',['show',sha+':scripts/packaged-update-button.js']));const changed=cp.execFileSync('git',['diff','--name-only'],{encoding:'utf8'}).trim();if(changed&&changed!=='scripts/packaged-update-button.js')throw new Error('Recovery changed more than the test driver: '+changed);console.log('Reviewed test driver '+sha+'; file SHA-256 '+require('crypto').createHash('sha256').update(fs.readFileSync('scripts/packaged-update-button.js')).digest('hex'));"
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to bind the reviewed test driver' }
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const sha = process.env.VALIDATION_SOURCE_SHA;
+          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
+          fs.writeFileSync('scripts/packaged-update-button.js', cp.execFileSync('git', ['show', sha + ':scripts/packaged-update-button.js']));
+          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
+          if (changed && changed !== 'scripts/packaged-update-button.js') throw new Error('Recovery changed more than the test driver: ' + changed);
+          console.log('Reviewed test driver ' + sha + '; file SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync('scripts/packaged-update-button.js')).digest('hex'));
+          NODE
       - name: Download and verify the official legacy update inputs
         if: runner.os == 'Windows'
         shell: pwsh
@@ -340,6 +347,24 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Use the reviewed test driver for the immutable ARM64 artifact
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VALIDATION_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const sha = process.env.VALIDATION_SOURCE_SHA;
+          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
+          fs.writeFileSync('scripts/packaged-update-button.js', cp.execFileSync('git', ['show', sha + ':scripts/packaged-update-button.js']));
+          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
+          if (changed && changed !== 'scripts/packaged-update-button.js') throw new Error('Recovery changed more than the test driver: ' + changed);
+          console.log('Reviewed test driver ' + sha + '; file SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync('scripts/packaged-update-button.js')).digest('hex'));
+          NODE
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: Whitebox-macOS
