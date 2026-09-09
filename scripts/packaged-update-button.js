@@ -67,7 +67,9 @@ async function waitForPackagedRenderer(driver, { timeoutMs = 60000, pollMs = 200
   // Electron replaces its bootstrap V8 context. A read-only synchronous probe
   // must not create an Inspector promise in that temporary context. Only an
   // actual application window satisfies readiness; transport errors fail.
-  while (!await driver.evaluate(`Boolean(typeof process !== 'undefined' && process.mainModule?.require('electron').BrowserWindow?.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')))`, { awaitPromise: false })) {
+  // Inspector can interrupt a module while Electron's lazy exports are still
+  // initializing. Do not require those exports until the main module finished.
+  while (!await driver.evaluate(`Boolean(typeof process !== 'undefined' && process.mainModule?.loaded && process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')))`, { awaitPromise: false })) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer did not open');
     await new Promise(resolve => setTimeout(resolve, pollMs));
   }
