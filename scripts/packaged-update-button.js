@@ -51,7 +51,15 @@ async function openInspectedApp(executable, args, env) {
       : expression;
     socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: retainedExpression, awaitPromise, returnByValue: true } }));
   });
-  return { child, evaluate, close: () => socket.close(), diagnostics: () => stderr };
+  const driver = { child, evaluate, close: () => socket.close(), diagnostics: () => stderr };
+  try {
+    await waitForPackagedRenderer(driver);
+    return driver;
+  } catch (error) {
+    socket.close();
+    child.kill();
+    throw error;
+  }
 }
 
 async function waitForPackagedRenderer(driver, { timeoutMs = 60000, pollMs = 200 } = {}) {
