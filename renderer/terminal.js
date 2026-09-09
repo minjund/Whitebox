@@ -377,17 +377,18 @@
       && (forkCreationSupported || Boolean(associatedForkTarget));
     const forkCreationGesture = forkCreationSupported && options.forkCreationGesture === true;
     const mountTargets = () => {
+      const directTargets = agentTargets(agentSession).filter(item => item.kind !== 'terminal'
+        || !excludedTerminalIds.has(String(item.terminalId || item.id || '')));
       if (forkIfOriginOwned) {
         const target = forkTargetForAgent(agentSession, {
           excludeTerminalIds: [...excludedTerminalIds],
         });
-        return target ? [target] : [];
+        return target ? [target, ...directTargets] : directTargets;
       }
-      return agentTargets(agentSession).filter(item => item.kind !== 'terminal'
-        || !excludedTerminalIds.has(String(item.terminalId || item.id || '')));
+      return directTargets;
     };
     const mountTargetMatches = target => {
-      if (!forkIfOriginOwned) return bindAgentConnection(agentSession, target);
+      if (!forkIfOriginOwned || !target?.forked) return bindAgentConnection(agentSession, target);
       const verified = forkTargetForAgent(agentSession, {
         excludeTerminalIds: [...excludedTerminalIds],
       });
@@ -517,6 +518,23 @@
     const signature = agentConnectionSignature(agentSession);
     const requestedTerminalId = String(options.terminalId || state.embeddedTerminalId || '');
     await refreshSessions();
+    const forkTarget = forkTargetForAgent(agentSession);
+    const forkTerminalId = String(forkTarget?.terminalId || forkTarget?.id || '');
+    if (forkTarget && (!requestedTerminalId || forkTerminalId === requestedTerminalId)) {
+      // Restarting `codex fork` would create another child and lose this
+      // child's ongoing conversation. Rehydrate xterm against the same PTY.
+      const listed = await window.whitebox.terminalList();
+      await refreshSessions({ change: 'reconnected', sessions: listed });
+      const currentFork = forkTargetForAgent(agentSession);
+      if (agentConnectionSignature(agentSession) !== signature
+        || !currentFork || String(currentFork.terminalId || currentFork.id || '') !== forkTerminalId) {
+        return { ok: false, reason: 'target-expired', targets: [] };
+      }
+      return {
+        ok: true, restarted: false, reused: true, target: currentFork, targets: [currentFork],
+        terminal: state.sessions.find(item => item.id === forkTerminalId) || currentFork.terminal,
+      };
+    }
     const targets = agentTargets(agentSession);
     const target = targets.find(item => item.kind === 'terminal'
       && (!requestedTerminalId || String(item.terminalId || item.id || '') === requestedTerminalId)) || null;

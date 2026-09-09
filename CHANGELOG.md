@@ -5,6 +5,15 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.14 - 2026-09-09
+
+- Open existing GPT conversations from external Codex CLI sessions in a fork,
+  preserving their history while avoiding the original session's active writer.
+- Reuse an existing Whitebox terminal when it already owns the conversation.
+  Reconnecting a live fork restores the same terminal and conversation.
+- Recognize Codex writer conflicts that occur during terminal startup and retain
+  a clear failure reason across restarts, including Windows terminal output.
+
 ## 1.8.13 - 2026-09-09
 
 - Limit update shutdown to the installation's own terminal host and its live

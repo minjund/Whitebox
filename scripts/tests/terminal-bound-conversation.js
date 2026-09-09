@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { spawn } = require('child_process');
-const { assertCodexWriterAvailable } = require('../../src/codexWriterLock');
+const { assertCodexWriterAvailable, codexResumeWriterConflict, CODEX_WRITER_ACTIVE_MESSAGE } = require('../../src/codexWriterLock');
 const {
   comprehensionPromptFingerprint,
   injectComprehensionContract,
@@ -230,6 +230,25 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
       assert.equal(spawns.length, 0);
       assert.equal(manager.sessions.size, 0);
       assert.equal(fs.existsSync(lockPath), true);
+      const forkFixture = managerFixture(root, { platform: 'win32' });
+      try {
+        const sourceId = 'codex:writer-test';
+        const sourceSignature = `acs1:${crypto.createHash('sha256')
+          .update(JSON.stringify([sourceId, 'codex', 'writer-test', 'windows', ''])).digest('hex')}`;
+        const forked = forkFixture.manager.create({
+          type: 'agent', provider: 'codex', args: ['fork', 'writer-test'], cwd: root,
+          sessionBackend: 'direct', agentForkSourceSessionId: sourceId,
+          agentForkSourceSignature: sourceSignature, creationId: 'create:locked-source-fork',
+        });
+        assert.equal(forked.status, 'running');
+        assert.equal(forkFixture.spawns.length, 1);
+        assert.deepStrictEqual(forkFixture.spawns[0].args.slice(-2), ['fork', 'writer-test']);
+        assert.throws(() => manager.create(options), error => error.code === 'CODEX_SESSION_WRITER_ACTIVE',
+          'fork creation must not release or remove the original writer lock');
+        forkFixture.manager.sessions.get(forked.id).process.exitCallback({ exitCode: 0 });
+      } finally {
+        await forkFixture.manager.dispose();
+      }
       holder.stdin.end('\n');
       await exited;
       assert.equal(fs.statSync(lockPath).size, 0);
@@ -243,6 +262,74 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
       if (holder.exitCode === null) holder.kill();
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;
+      await manager.dispose();
+    }
+  });
+
+  test('Codex 재개 직후 writer 충돌은 실패로 보존하고 다음 PTY 실행과 구분한다', async () => {
+    const options = boundOptions(root, {
+      args: ['resume', '--', 'writer-race-test'],
+      recoveryArgs: ['resume', '--', 'writer-race-test'],
+      bridgeId: 'codex:writer-race-test',
+      sessionBackend: 'direct',
+    });
+    const diagnostic = '╭\u001b[H\u001b[0 qError: \u001b[0 qFailed to resume session from C:\\Users\\test\\.codex\\sessions\\rollout-writer-race-test.jsonl: '
+      + 'thread/resume failed during TUI bootstrap: thread/resume failed: thread writer-race-test already has an active writer (code -32600)\r\n';
+    assert.equal(codexResumeWriterConflict(options, diagnostic, 1), true);
+    for (const exitCode of [0, null, undefined]) {
+      assert.equal(codexResumeWriterConflict(options, diagnostic, exitCode), false);
+    }
+    for (const unrelated of [
+      { ...options, args: ['resume', 'other-session'] },
+      { ...options, args: ['fork', 'writer-race-test'] },
+      { ...options, type: 'powershell' },
+      { ...options, provider: 'claude' },
+    ]) assert.equal(codexResumeWriterConflict(unrelated, diagnostic, 1), false);
+    assert.equal(codexResumeWriterConflict(options, `${diagnostic}Conversation continued.\r\n`, 1), false);
+    assert.equal(codexResumeWriterConflict(options, 'already has an active writer', 1), false);
+
+    const storeFile = path.join(temp, 'writer-race-terminals.json');
+    const { manager } = managerFixture(root, { storeFile });
+    let restored;
+    try {
+      const created = manager.create(options);
+      const firstPty = manager.sessions.get(created.id).process;
+      // Simulate a writer acquiring its lock after preflight, with ConPTY
+      // splitting both ANSI controls and the diagnostic across output chunks.
+      for (let offset = 0; offset < diagnostic.length; offset += 7) {
+        firstPty.dataCallback(diagnostic.slice(offset, offset + 7));
+      }
+      assert.equal(manager.get(created.id).status, 'running', 'output alone is not process-exit evidence');
+      firstPty.exitCallback({ exitCode: 1 });
+      const failed = manager.get(created.id, true);
+      assert.equal(failed.status, 'failed');
+      assert.equal(failed.pid, null);
+      assert.equal(failed.startupErrorCode, 'CODEX_SESSION_WRITER_ACTIVE');
+      assert.equal(failed.statusDetail, CODEX_WRITER_ACTIVE_MESSAGE);
+      assert.equal(failed.replay.split(`[Whitebox] ${CODEX_WRITER_ACTIVE_MESSAGE}`).length, 2);
+      assert.throws(() => manager.write(created.id, 'must not send'));
+
+      restored = managerFixture(root, { storeFile }).manager;
+      assert.equal(restored.get(created.id).status, 'failed');
+      assert.equal(restored.get(created.id).statusDetail, CODEX_WRITER_ACTIVE_MESSAGE);
+      assert.equal(restored.sessions.get(created.id).recoveryPending, false);
+      await restored.dispose();
+      restored = null;
+
+      await manager.restart(created.id);
+      assert.equal(manager.get(created.id).startupErrorCode, '');
+      assert.equal(manager.get(created.id).statusDetail, '');
+      const nextPty = manager.sessions.get(created.id).process;
+      firstPty.dataCallback(diagnostic);
+      firstPty.exitCallback({ exitCode: 1 });
+      assert.equal(manager.get(created.id).status, 'running');
+      // Even a nonzero exit must not reuse the old run's retained diagnostic.
+      nextPty.dataCallback('An unrelated CLI failure\r\n');
+      nextPty.exitCallback({ exitCode: 1 });
+      assert.equal(manager.get(created.id).startupErrorCode, '');
+      assert.equal(manager.get(created.id).status, 'exited');
+    } finally {
+      if (restored) await restored.dispose();
       await manager.dispose();
     }
   });

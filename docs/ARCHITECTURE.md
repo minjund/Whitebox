@@ -44,8 +44,14 @@ without preventing unrelated providers and shells from recovering. Claude,
 Gemini, Grok, and Windows WSL launch paths are unchanged. A thread originating
 in the official Codex Desktop app cannot join this server because that app's
 private stdio endpoint is not exposed. Turn-level completion is not proof that
-the writer was released, so renderer guards keep every Desktop-origin thread
-in its origin app.
+the writer was released. When a user opens a Codex conversation's PTY, the
+renderer reuses an existing signed app-owned terminal or runs `codex fork`
+with the source history ID. This applies to CLI and Desktop histories, so an
+external writer can keep running. Forks have their own conversation identity;
+the source card uses a separate fork association instead of a resume binding.
+Repeated opens reuse that fork, and passive refreshes cannot create new forks.
+Reconnecting a live fork rehydrates the terminal view without rerunning the
+fork command or interrupting the child's current work.
 
 Regression tests are registered by feature suites in `scripts/tests/` and run
 through a shared harness. Electron integration scripts cover renderer events,

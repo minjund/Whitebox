@@ -851,6 +851,116 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(workbenchOpened, false, '백그라운드 전송은 터미널 화면을 강제로 열지 않아야 합니다.');
   });
 
+  test('CLI GPT 대화의 PTY 열기는 포크를 한 번 만들고 기존 포크와 앱 소유 연결을 재사용한다', async () => {
+    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+    const creates = [];
+    const state = { sessions: [], platform: { id: 'win32' }, terminals: new Map(), embeddedGeneration: 0, terminalSessionRevision: 1 };
+    const sandbox = { window: {
+      WhiteboxI18n: { t: key => key },
+      whitebox: {
+        terminalCreate: async options => {
+          // Model an externally owned writer: attempting resume would fail.
+          assert.equal(options.args[0], 'fork');
+          creates.push(options);
+          const record = {
+            id: `terminal:cli-fork:${creates.length}`, type: 'agent', provider: 'codex',
+            backend: 'direct', status: 'running', conversationBound: false,
+            agentForkSourceSessionId: options.agentForkSourceSessionId,
+            agentForkSourceSignature: options.agentForkSourceSignature,
+            creationId: options.creationId,
+          };
+          state.sessions.push(record);
+          return record;
+        },
+      },
+    } };
+    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state, init: async () => {}, refreshSessions: async () => {},
+      preferredWorkspace: () => 'D:\\workspace', providerLabel: value => value,
+    });
+    const session = {
+      id: 'codex:external-cli', externalId: 'external-cli', provider: 'codex',
+      clientKind: 'codex-cli', cwd: 'D:\\workspace', environment: { kind: 'windows' }, status: 'running',
+    };
+    const original = JSON.stringify(session);
+    assert.equal(actions.forkSupport(session).supported, true);
+    assert.equal(actions.forkSupport({ ...session, clientKind: 'codex-desktop' }).supported, true);
+    assert.equal(actions.forkSupport({ ...session, provider: 'claude' }).supported, false);
+    assert.equal(actions.forkSupport({ ...session, source: 'whitebox-bridge' }).supported, false);
+    assert.equal(actions.forkSupport({ ...session, parentId: 'codex:parent' }).supported, false);
+    assert.equal(await actions.ensureForAgent(session, { forkIfOriginOwned: true }), null);
+    assert.equal(creates.length, 0, 'passive refresh must not create forks');
+    const open = { forkIfOriginOwned: true, forkCreationGesture: true };
+    const [first, duplicate] = await Promise.all([
+      actions.ensureForAgent(session, open), actions.ensureForAgent(session, open),
+    ]);
+    assert.equal(first.forked, true);
+    assert.equal(duplicate.id, first.id);
+    assert.equal(creates.length, 1);
+    assert.deepStrictEqual(Array.from(creates[0].args), ['fork', 'external-cli']);
+    assert.equal(creates[0].bridgeId, undefined);
+    assert.equal(creates[0].initialCommand, undefined);
+    assert.equal((await actions.ensureForAgent(session, { forkIfOriginOwned: true })).id, first.id);
+    assert.deepStrictEqual(Array.from(actions.agentTargets(session)), []);
+    assert.equal(JSON.stringify(session), original, 'the source identity must remain unchanged');
+
+    const owned = { ...session, id: 'codex:owned-cli', externalId: 'owned-cli' };
+    const ownedTerminal = {
+      id: 'terminal:owned-cli', type: 'agent', provider: 'codex', backend: 'direct',
+      status: 'running', conversationBound: true, bridgeId: owned.id,
+      agentResumeSessionId: owned.externalId, agentConnectionSignature: actions.agentConnectionSignature(owned),
+    };
+    state.sessions.push(ownedTerminal);
+    assert.equal((await actions.ensureForAgent(owned, open)).id, ownedTerminal.id);
+    assert.equal(creates.length, 1, 'an existing app-owned PTY should not be forked again');
+
+    // Exercise the actual embedded mounting path with the real action module.
+    const terminalSource = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
+    const start = terminalSource.indexOf('  async function mountForAgent(');
+    const end = terminalSource.indexOf('  function embeddedState()', start);
+    const mounted = [];
+    Object.assign(sandbox, actions, {
+      state, init: async () => {}, refreshSessions: async () => {}, detachEmbedded: () => {},
+      fitEntry: () => {}, ensureSessionTerminal: async terminal => ({
+        host: { id: terminal.id, classList: { remove() {} } },
+      }),
+    });
+    vm.runInNewContext(`${terminalSource.slice(start, end)}\nthis.mountForAgent = mountForAgent;`, sandbox);
+    const mount = { isConnected: true, appendChild: host => mounted.push(host.id) };
+    const forkMount = await sandbox.mountForAgent(session, { ...open, mount, createIfMissing: true });
+    const ownedMount = await sandbox.mountForAgent(owned, { ...open, mount, createIfMissing: true });
+    assert.equal(forkMount.ok, true);
+    assert.equal(forkMount.target.id, first.id);
+    assert.equal(ownedMount.ok, true);
+    assert.equal(ownedMount.target.id, ownedTerminal.id);
+    assert.deepStrictEqual(mounted, [first.id, ownedTerminal.id]);
+    assert.equal(creates.length, 1);
+
+    const reconnectEvents = [];
+    sandbox.window.whitebox.terminalRestart = () => { throw new Error('a fork must not be restarted'); };
+    sandbox.window.whitebox.terminalList = async () => state.sessions;
+    sandbox.refreshSessions = async event => { if (event) reconnectEvents.push(event); };
+    const restartStart = terminalSource.indexOf('  async function restartForAgent(');
+    const restartEnd = terminalSource.indexOf('  function pendingPromptForSession(', restartStart);
+    vm.runInNewContext(`${terminalSource.slice(restartStart, restartEnd)}\nthis.restartForAgent = restartForAgent;`, sandbox);
+    const reconnected = await sandbox.restartForAgent(session, { terminalId: first.id });
+    assert.equal(reconnected.ok, true);
+    assert.equal(reconnected.restarted, false);
+    assert.equal(reconnected.target.id, first.id);
+    assert.equal(reconnectEvents[0].change, 'reconnected');
+    assert.equal(creates.length, 1);
+    assert.equal((await sandbox.restartForAgent(session, { terminalId: 'terminal:unrelated' })).ok, false);
+
+    state.sessions.find(record => record.id === first.id).status = 'exited';
+    state.terminalSessionRevision += 1;
+    assert.equal(await actions.ensureForAgent(session, { forkIfOriginOwned: true }), null);
+    assert.equal(creates.length, 1, 'an exited fork requires a new user open gesture');
+    const reopened = await actions.ensureForAgent(session, open);
+    assert.notEqual(reopened.id, first.id);
+    assert.equal(creates.length, 2);
+  });
+
   test('실행 중 Codex Desktop 기록은 원본 resume이 아닌 별도 fork PTY를 만들고 같은 PTY를 재사용한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const createCalls = [];

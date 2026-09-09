@@ -13,7 +13,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   const ensurePromises = new Map();
   // A fork inherits history but owns a new provider conversation identity.
   // Keep its source-card association out of the strong resume binding map so
-  // the original Codex Desktop transcript can never become a writable route.
+  // the original Codex transcript can never become a writable route.
   const forkAssociations = new Map();
   const forkPromises = new Map();
   let preconnectRefreshPromise = null;
@@ -325,7 +325,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         reason: t('terminal.resume.parent_controlled'),
       };
     }
-    if (!isCodexDesktopSession(agentSession)) {
+    if (String(agentSession.provider || '').toLowerCase() !== 'codex') {
       return { supported: false, reason: t('terminal.agent.no_input_target') };
     }
     const sourcePlugin = agentSession.sourcePlugin;
@@ -1393,15 +1393,34 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   async function ensureForAgent(agentSession, options = {}) {
     if (!agentSession?.id) throw rejectedError(t('terminal.resume.no_session_info'));
     if (agentSession.parentId) throw rejectedError(t('terminal.resume.parent_controlled'));
-    if (isCodexDesktopSession(agentSession) && options.forkIfOriginOwned === true) {
+    if (String(agentSession.provider || '').toLowerCase() === 'codex' && options.forkIfOriginOwned === true) {
       const support = forkSupport(agentSession);
       if (!support.supported) {
         throw rejectedError(support.reason || t('terminal.agent.no_input_target'), support.code);
       }
+      await initializeBeforeDelivery();
+      if (!options.inventoryFresh) {
+        try {
+          await refreshSessions();
+        } catch (error) {
+          throw markRejectedBeforeDelivery(error);
+        }
+      }
+      // A CLI-origin conversation may already have an exact app-owned PTY.
+      // Reuse it before making a fork; external CLI/desktop writers are never
+      // resumed from this user-facing path. Once forked, keep that association.
+      if (!forkTargetForAgent(agentSession, options)) {
+        const excluded = new Set(options.excludeTerminalIds || []);
+        const existing = agentTargets(agentSession).find(target => target.kind === 'terminal'
+          && !excluded.has(terminalIdOf(target)));
+        if (existing && bindAgentConnection(agentSession, existing)) {
+          return { ...existing, reused: true, terminal: terminalConnectionRecord(existing) };
+        }
+      }
       return ensureForkTerminal(agentSession, support, {
         forkCreationGesture: options.forkCreationGesture === true,
         excludeTerminalIds: options.excludeTerminalIds,
-        inventoryFresh: options.inventoryFresh,
+        inventoryFresh: true,
         includeReplay: options.includeReplay,
         skipPostCreateRefresh: options.skipPostCreateRefresh,
       });

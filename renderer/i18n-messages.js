@@ -512,7 +512,7 @@
     "drawer.terminal_resume_failed": {"ko":"같은 대화를 연결하지 못했습니다","en":"Could not connect the same conversation","zh-CN":"无法连接同一对话"},
     "drawer.terminal_resume_failed_help": {"ko":"기존 외부 작업은 건드리지 않았습니다. 설치 상태와 작업 폴더를 확인한 뒤 다시 시도해 주세요.","en":"The existing external work was left untouched. Check the installation and workspace, then try again.","zh-CN":"现有外部任务未被更改。请检查安装状态和工作文件夹后重试。"},
     "drawer.terminal_fork_available": {"ko":"기존 기록으로 새 GPT 세션을 열 수 있습니다","en":"A new GPT session can be opened with the existing history","zh-CN":"可以使用现有历史记录打开新的 GPT 会话"},
-    "drawer.terminal_fork_available_help": {"ko":"원래 Codex Desktop 대화에는 연결하지 않습니다. 대화 기록을 이어받은 별도 Codex PTY를 만듭니다.","en":"This does not attach to the original Codex Desktop conversation. It creates a separate Codex PTY that inherits its history.","zh-CN":"不会连接到原 Codex Desktop 对话，而是创建一个继承其历史记录的独立 Codex PTY。"},
+    "drawer.terminal_fork_available_help": {"ko":"대화 기록을 이어받은 새 GPT 대화를 엽니다. 원래 대화와 진행 중인 작업은 유지됩니다.","en":"Opens a new GPT conversation with the existing history. The original conversation and ongoing work are preserved.","zh-CN":"打开一个继承现有历史记录的新 GPT 对话，并保留原对话和正在进行的工作。"},
     "drawer.terminal_fork_action": {"ko":"기록을 이어받아 새 세션 열기","en":"Open a new session with history","zh-CN":"继承历史记录并打开新会话"},
     "drawer.terminal_forking": {"ko":"새 GPT 세션 여는 중","en":"Opening a new GPT session","zh-CN":"正在打开新的 GPT 会话"},
     "drawer.terminal_forking_help": {"ko":"Codex가 기존 대화 기록을 참조하는 별도 세션과 PTY를 준비하고 있습니다.","en":"Codex is preparing a separate session and PTY that reference the existing conversation history.","zh-CN":"Codex 正在准备一个引用现有对话历史记录的独立会话和 PTY。"},

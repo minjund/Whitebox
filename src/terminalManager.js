@@ -10,7 +10,7 @@ const { runBestEffort } = require('./diagnostics');
 const { ManagedTmuxRuntime } = require('./managedTmuxRuntime');
 const { createTmuxControlProxyHandle } = require('./tmuxControlProxy');
 const { ensureMacNodePtyRuntime } = require('./nodePtyRuntime');
-const { assertCodexWriterAvailable } = require('./codexWriterLock');
+const { assertCodexWriterAvailable, codexResumeWriterConflict, CODEX_WRITER_ACTIVE_MESSAGE } = require('./codexWriterLock');
 const {
   comprehensionPromptFingerprint,
   hasComprehensionContract,
@@ -1658,6 +1658,8 @@ function publicSession(session, includeReplay = false) {
     terminationErrorMessage: session.terminationUncertain ? String(session.terminationErrorMessage || '') : '',
     pid: session.pid,
     status: session.status,
+    startupErrorCode: session.startupErrorCode || '',
+    statusDetail: session.startupErrorCode === 'CODEX_SESSION_WRITER_ACTIVE' ? CODEX_WRITER_ACTIVE_MESSAGE : '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     exitCode: session.exitCode,
@@ -1846,6 +1848,7 @@ function persistedSession(session) {
     title: session.title,
     shell: session.shell,
     status: session.status,
+    startupErrorCode: session.startupErrorCode || '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     exitCode: session.exitCode,
@@ -2141,6 +2144,7 @@ class TerminalManager extends EventEmitter {
             shell: cleanText(value.shell, 2_000),
             pid: Number.isSafeInteger(Number(value.pid)) && Number(value.pid) > 0 ? Number(value.pid) : null,
             status,
+            startupErrorCode: value.startupErrorCode === 'CODEX_SESSION_WRITER_ACTIVE' ? value.startupErrorCode : '',
             createdAt,
             updatedAt,
             exitCode: Number.isFinite(value.exitCode) ? value.exitCode : null,
@@ -3705,12 +3709,19 @@ class TerminalManager extends EventEmitter {
     session.proxyOutputBuffer = '';
     session.startupReady = !session.spec?.readyMarker;
     session.startupFailure = false;
+    session.startupErrorCode = '';
     session.status = 'starting';
     session.exitCode = null;
     session.signal = null;
     session.updatedAt = new Date().toISOString();
     this.emitState('updated', session);
     let processHandle = null;
+    // A second writer can win after the Windows preflight read. Retain a
+    // bounded, generation-local tail so that failure is reported after exit.
+    let codexResumeOutputTail = '';
+    const trackCodexResume = session.options.type === 'agent'
+      && session.options.provider === 'codex' && session.options.args?.[0] === 'resume'
+      && session.options.sessionBackend === 'direct';
     try {
       const spawnOptions = {
         name: 'xterm-256color',
@@ -3740,6 +3751,7 @@ class TerminalManager extends EventEmitter {
       }
       processHandle.onData(data => {
         if (session.generation !== generation) return;
+        if (trackCodexResume) codexResumeOutputTail = `${codexResumeOutputTail}${String(data || '')}`.slice(-16 * 1024);
         const readyPid = Number(processHandle.pid);
         if (Number.isSafeInteger(readyPid) && readyPid > 0) session.pid = readyPid;
         let text = this.consumeExactProxyFrames(session, String(data || ''));
@@ -3795,7 +3807,15 @@ class TerminalManager extends EventEmitter {
           this.emitState('updated', session);
           return;
         }
-        if (session.spec.readyMarker && !session.startupReady) {
+        if (codexResumeWriterConflict(session.options, codexResumeOutputTail, session.exitCode)) {
+          session.startupFailure = true;
+          session.startupErrorCode = 'CODEX_SESSION_WRITER_ACTIVE';
+          session.status = 'failed';
+          const failureMessage = `\r\n[Whitebox] ${CODEX_WRITER_ACTIVE_MESSAGE}\r\n`;
+          appendSessionReplay(session, failureMessage, { immediate: true });
+          session.outputSequence = (Number.isSafeInteger(session.outputSequence) ? session.outputSequence : 0) + 1;
+          this.emit('data', { id: session.id, data: failureMessage, outputSequence: session.outputSequence });
+        } else if (session.spec.readyMarker && !session.startupReady) {
           if (!session.startupFailure) {
             session.startupFailure = true;
             const failureMessage = '\r\n[Whitebox] 요청한 tmux pane 연결이 끝나 입력을 차단했습니다.\r\n';
@@ -3829,6 +3849,7 @@ class TerminalManager extends EventEmitter {
       this.emitState('updated', session);
     } catch (error) {
       error.terminalProcessStarted = Boolean(processHandle);
+      session.startupErrorCode = error.code === 'CODEX_SESSION_WRITER_ACTIVE' ? error.code : '';
       if (processHandle) {
         session.process = processHandle;
         const readyPid = Number(processHandle.pid);
