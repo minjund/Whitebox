@@ -1653,6 +1653,7 @@ function publicSession(session, includeReplay = false) {
     terminationPending: Boolean(session.terminationPending || session.retiring),
     terminationIntent: String(session.terminationIntent || ''),
     terminationUncertain: Boolean(session.terminationUncertain),
+    updateOwned: Boolean(session.createdInCurrentHost || session.process || session.updateTerminationContext),
     terminationErrorCode: session.terminationUncertain ? String(session.terminationErrorCode || '') : '',
     terminationErrorMessage: session.terminationUncertain ? String(session.terminationErrorMessage || '') : '',
     pid: session.pid,
@@ -3285,6 +3286,7 @@ class TerminalManager extends EventEmitter {
       spec,
       title: options.title || spec.label,
       shell: spec.file,
+      createdInCurrentHost: true,
       pid: null,
       status: 'starting',
       createdAt: now,
@@ -4335,7 +4337,23 @@ class TerminalManager extends EventEmitter {
     return stop.call(this.managedTmuxRuntime, options);
   }
 
-  transition(id, operation) {
+  async forceStopForUpdate(id) {
+    const terminalId = String(id || '');
+    const pending = this.transitionPromises.get(terminalId);
+    // Let the existing transition settle before retrying its exact process.
+    // A stuck transition remains a failure; it must not race a second kill.
+    if (pending) await pending.promise.catch(() => {});
+    const session = this.required(terminalId);
+    if (!session.createdInCurrentHost && !session.process && !session.updateTerminationContext) {
+      throw new Error('이 명령창은 현재 앱이 실행한 작업이 아니므로 종료하지 않았습니다.');
+    }
+    // A managed tmux task may also be used outside Whitebox. Only release the
+    // app's connection; never kill that independently running tmux session.
+    return this.transition(terminalId,
+      session.options.sessionBackend === 'managed-tmux' ? 'detach' : 'stop', { forceForUpdate: true });
+  }
+
+  transition(id, operation, { forceForUpdate = false } = {}) {
     const terminalId = String(id || '');
     const existing = this.transitionPromises.get(terminalId);
     if (existing) {
@@ -4350,8 +4368,23 @@ class TerminalManager extends EventEmitter {
       if (operation === 'retire') return { ok: true, alreadyRetired: true };
       return this.required(terminalId);
     }
-    if (session.terminationUncertain) throw this.uncertainTerminationError(session);
-    if (session.retiring || session.terminationPending) throw this.terminationInProgressError();
+    const previousTermination = forceForUpdate ? session.updateTerminationContext : null;
+    const uncertain = session.terminationUncertain || session.retiring || session.terminationPending;
+    if (forceForUpdate && uncertain) {
+      // Persisted PIDs cannot identify a process after a host restart. Only a
+      // retained transition with the same session/generation may be retried.
+      if (!previousTermination || previousTermination.session !== session
+        || (session.generation !== previousTermination.generation
+          && session.generation !== previousTermination.completionGeneration)
+        || (session.process && session.process !== previousTermination.handle)
+        || (!previousTermination.treeAcknowledged
+          && (!previousTermination.handle || previousTermination.handle.__whiteboxExited))) {
+        throw this.uncertainTerminationError(session);
+      }
+    } else {
+      if (session.terminationUncertain) throw this.uncertainTerminationError(session);
+      if (session.retiring || session.terminationPending) throw this.terminationInProgressError();
+    }
     if (operation === 'detach' && session.options.sessionBackend !== 'managed-tmux') {
       throw new Error('일반 명령창은 작업을 계속 둔 채 화면 연결만 끊을 수 없습니다.');
     }
@@ -4385,7 +4418,9 @@ class TerminalManager extends EventEmitter {
         || !['kill', 'detach', 'stop', 'close', 'retire', 'host-shutdown'].includes(operation),
       terminationComplete: false,
       managedSessionExists: null,
+      forceForUpdate,
     };
+    session.updateTerminationContext = context;
     this.transitionPromises.set(terminalId, { operation, promise });
     session.retiring = operation === 'close' || operation === 'retire';
     session.terminationPending = true;
@@ -4407,6 +4442,7 @@ class TerminalManager extends EventEmitter {
     this.emitState('updated', session);
 
     const settleSuccess = result => {
+      if (session.updateTerminationContext === context) delete session.updateTerminationContext;
       if (this.transitionPromises.get(terminalId)?.promise === promise) {
         this.transitionPromises.delete(terminalId);
       }
@@ -4445,7 +4481,8 @@ class TerminalManager extends EventEmitter {
                 PTY_EXIT_CONFIRM_TIMEOUT_MS,
                 { alwaysTerminate: true },
               )
-            : this.killTree(context.handle, context.pid)
+            : this.killTree(context.handle, context.pid, PTY_EXIT_CONFIRM_TIMEOUT_MS,
+                forceForUpdate ? { posixSignal: 'SIGKILL' } : {})
           : null;
         return treeResult && typeof treeResult.then === 'function'
           ? Promise.resolve(treeResult).then(() => this.finishTransitionAfterTree(context))
@@ -4692,10 +4729,11 @@ class TerminalManager extends EventEmitter {
     return this.transition(id, 'close');
   }
 
-  dispose({ preserveSessions = false } = {}) {
+  dispose({ preserveSessions = false, updateOnly = false } = {}) {
     if (preserveSessions) {
       const pending = [];
       for (const session of [...this.sessions.values()]) {
+        if (updateOnly && !session.createdInCurrentHost && !session.process && !session.updateTerminationContext) continue;
         if (session.terminationUncertain) {
           pending.push(Promise.reject(this.uncertainTerminationError(session)));
           continue;

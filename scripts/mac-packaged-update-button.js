@@ -85,8 +85,9 @@ async function stopOwned(pid) {
     execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
     driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
   }
-  await clickPackagedUpdate(driver, installer, version, {
+  const { terminalPid } = await clickPackagedUpdate(driver, installer, version, {
     retryAfterFailure:true,
+    forceRetry: sourceVersion === '1.7.3',
     currentVersion: sourceVersion === '1.7.3' ? version : sourceVersion,
     holdIncompleteHookRequest: sourceVersion === '1.7.3',
   });
@@ -100,6 +101,13 @@ async function stopOwned(pid) {
     launch = events.find(e => e.stage === 'helper-ready'); return Boolean(launch);
   }, 'production main helper acknowledgement');
   await waitFor(() => !alive(driver.child.pid), 'production app quit');
+  if (sourceVersion === '1.7.3') {
+    const stages = events.filter(event => event.attemptId === launch.attemptId).map(event => event.stage);
+    assert.equal(stages.filter(stage => stage === 'workload-force-confirmed').length, 1);
+    assert.equal(stages.filter(stage => stage === 'workload-force-stopped').length, 1);
+    assert(stages.indexOf('workload-force-stopped') < stages.indexOf('helper-ready'));
+    assert(terminalPid > 0 && !alive(terminalPid), 'Candidate force update must stop its own PTY');
+  }
   let log = '';
   await waitFor(() => {
     log = fs.existsSync(launch.logPath) ? fs.readFileSync(launch.logPath,'utf8') : '';

@@ -37,7 +37,7 @@ const UPDATE_REQUEST_TOKEN = Symbol('terminal-host-update-request');
 const ACTIVE_TERMINAL_STATUSES = new Set(['running', 'starting', 'stopping']);
 const HOST_OPERATIONS = new Set([
   'list', 'get', 'create', 'bindAgentSession', 'write', 'command', 'respond', 'resize', 'signal',
-  'restart', 'reconnect', 'detach', 'stop', 'close', 'retire',
+  'restart', 'reconnect', 'detach', 'stop', 'close', 'retire', 'forceStopForUpdate',
 ]);
 
 function isActiveTerminalSession(session) {
@@ -45,6 +45,10 @@ function isActiveTerminalSession(session) {
     && (ACTIVE_TERMINAL_STATUSES.has(session.status)
       || Boolean(session.terminationPending)
       || Boolean(session.terminationUncertain));
+}
+
+function requiresUpdateShutdown(session) {
+  return session?.updateOwned !== false && isActiveTerminalSession(session);
 }
 
 function sendFrame(socket, payload) {
@@ -64,9 +68,12 @@ function normalizedRawWriteDeliveryId(value) {
 }
 
 function normalizedTerminalHostCapabilities(value) {
-  return Number(value?.rawWriteDelivery) >= RAW_WRITE_DELIVERY_CAPABILITY
-    ? { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY }
-    : {};
+  return {
+    ...(Number(value?.rawWriteDelivery) >= RAW_WRITE_DELIVERY_CAPABILITY
+      ? { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY } : {}),
+    ...(value?.forceStopForUpdate === 1 ? { forceStopForUpdate: 1 } : {}),
+    ...(value?.scopedUpdateShutdown === 1 ? { scopedUpdateShutdown: 1 } : {}),
+  };
 }
 
 function rawWriteFingerprint(value) {
@@ -453,11 +460,14 @@ class TerminalHostServer {
     this.capabilities = normalizedTerminalHostCapabilities(
       Object.hasOwn(options, 'capabilities')
         ? options.capabilities
-        : { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY },
+        : { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY,
+            ...(typeof this.manager?.forceStopForUpdate === 'function'
+              ? { forceStopForUpdate: 1, scopedUpdateShutdown: 1 } : {}) },
     );
     this.server = null;
     this.clients = new Set();
     this.shutdownTimer = null;
+    this.updateOnlyShutdown = false;
     this.idleShutdownMs = Number.isFinite(Number(options.idleShutdownMs))
       ? Math.max(0, Number(options.idleShutdownMs))
       : 1_500;
@@ -623,6 +633,12 @@ class TerminalHostServer {
       this.scheduleShutdownIfIdle();
       return;
     }
+    if (message.type === 'control' && message.operation === 'shutdown-if-update-idle'
+      && this.capabilities.scopedUpdateShutdown === 1) {
+      this.updateOnlyShutdown = true;
+      this.scheduleShutdownIfIdle();
+      return;
+    }
     if (message.type !== 'request' || !HOST_OPERATIONS.has(message.operation)) {
       throw new Error('이 명령창 작업은 사용할 수 없습니다.');
     }
@@ -724,8 +740,10 @@ class TerminalHostServer {
   }
 
   scheduleShutdownIfIdle() {
+    const active = () => this.updateOnlyShutdown
+      ? this.manager.list().filter(requiresUpdateShutdown) : activeSessions(this.manager);
     const connectedClients = [...this.clients].filter(entry => entry.authenticated && !entry.socket.destroyed);
-    if (activeSessions(this.manager).length > 0 || connectedClients.length > 0) {
+    if (active().length > 0 || connectedClients.length > 0) {
       this.cancelIdleShutdown();
       return;
     }
@@ -733,7 +751,7 @@ class TerminalHostServer {
     this.shutdownTimer = setTimeout(() => {
       this.shutdownTimer = null;
       const activeClients = [...this.clients].filter(entry => entry.authenticated && !entry.socket.destroyed);
-      if (activeSessions(this.manager).length === 0 && activeClients.length === 0) this.onShutdown();
+      if (active().length === 0 && activeClients.length === 0) this.onShutdown({ updateOnly: this.updateOnlyShutdown });
     }, this.idleShutdownMs);
     if (typeof this.shutdownTimer.unref === 'function') this.shutdownTimer.unref();
   }
@@ -1387,7 +1405,7 @@ class TerminalHostClient extends EventEmitter {
 
   async waitForRetirements(sessions, deadline) {
     let current = Array.isArray(sessions) ? sessions : [];
-    while (current.some(session => session?.status === 'stopping'
+    while (current.filter(requiresUpdateShutdown).some(session => session?.status === 'stopping'
       || session?.terminationPending
       || session?.terminationUncertain)) {
       const remainingMs = deadline - Date.now();
@@ -1400,30 +1418,36 @@ class TerminalHostClient extends EventEmitter {
     return current;
   }
 
-  async shutdownForUpdate(sessions = null, timeoutMs = 8_000) {
+  async shutdownForUpdate(sessions = null, timeoutMs = 8_000, { force = false } = {}) {
     this.updateShutdown = true;
     try {
       const shutdownTimeoutMs = Math.max(1_000, Number(timeoutMs) || 8_000);
       const retirementDeadline = Date.now() + shutdownTimeoutMs;
       const confirmed = Array.isArray(sessions) ? sessions : null;
       let current = await this.listFreshForUpdate();
+      if (force && this.capabilities.forceStopForUpdate !== 1) {
+        throw new Error('이 명령창 연결 프로그램은 강제 업데이트를 지원하지 않습니다. 작업을 저장하고 프로그램을 완전히 종료한 뒤 설치 파일을 직접 실행해 주세요.');
+      }
       if (confirmed) {
         const confirmedIds = new Set(confirmed
-          .filter(isActiveTerminalSession)
+          .filter(requiresUpdateShutdown)
           .map(session => session.id));
-        const unconfirmed = current.find(session => isActiveTerminalSession(session)
+        const unconfirmed = current.find(session => requiresUpdateShutdown(session)
           && !confirmedIds.has(session.id));
         if (unconfirmed) throw new Error('업데이트 준비 중 새 명령창 작업이 시작되었습니다. 상태를 확인한 뒤 다시 시도해 주세요.');
       }
-      current = await this.waitForRetirements(current, retirementDeadline);
+      if (!force) current = await this.waitForRetirements(current, retirementDeadline);
       const active = current
-        .filter(session => session && ['running', 'starting'].includes(session.status))
+        .filter(session => requiresUpdateShutdown(session)
+          && (force || ['running', 'starting'].includes(session.status)))
         .sort((left, right) => Number(left.backend !== 'managed-tmux') - Number(right.backend !== 'managed-tmux'));
       for (const session of active) {
         let lastError = null;
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            if (session.backend === 'managed-tmux') {
+            if (force) {
+              await this.requestForUpdate('forceStopForUpdate', session.id);
+            } else if (session.backend === 'managed-tmux') {
               await this.requestForUpdate('detach', session.id, { waitForExit: true });
             } else {
               await this.requestForUpdate('stop', session.id, { waitForExit: true });
@@ -1435,7 +1459,7 @@ class TerminalHostClient extends EventEmitter {
             try {
               const latest = await this.listFreshForUpdate();
               const remaining = latest.find(candidate => candidate.id === session.id
-                && ['running', 'starting'].includes(candidate.status));
+                  && isActiveTerminalSession(candidate));
               if (!remaining) {
                 lastError = null;
                 break;
@@ -1448,7 +1472,7 @@ class TerminalHostClient extends EventEmitter {
         if (lastError) throw lastError;
       }
       const settled = await this.waitForRetirements(await this.listFreshForUpdate(), retirementDeadline);
-      const remaining = settled.filter(session => isActiveTerminalSession(session));
+      const remaining = settled.filter(requiresUpdateShutdown);
       if (remaining.length) throw new Error('업데이트 전에 모든 명령창 작업을 안전하게 정리하지 못했습니다.');
       const discovery = this.discovery || readHostDiscovery(this.discoveryFile, fs, this.expectedRuntime);
       const pid = Number(discovery.pid);
@@ -1457,10 +1481,11 @@ class TerminalHostClient extends EventEmitter {
       }
       this.disposed = true;
       this.connectGeneration += 1;
-      sendFrame(this.socket, { type: 'control', operation: 'shutdown-if-idle' });
+      sendFrame(this.socket, { type: 'control', operation: this.capabilities.scopedUpdateShutdown === 1
+        ? 'shutdown-if-update-idle' : 'shutdown-if-idle' });
       this.socket.end();
       const deadline = Date.now() + shutdownTimeoutMs;
-      while (processExists(pid)) {
+      while (this.processExists(pid)) {
         if (Date.now() >= deadline) {
           throw new Error('업데이트 전에 명령창 연결 프로그램이 완전히 종료되지 않았습니다.');
         }
@@ -1479,14 +1504,15 @@ class TerminalHostClient extends EventEmitter {
     return this.connect();
   }
 
-  dispose({ shutdownIfIdle = false } = {}) {
+  dispose({ shutdownIfIdle = false, preserveHost = false } = {}) {
+    if (preserveHost) this.preserveHostOnQuit = true;
     this.disposed = true;
     this.reconnectNeeded = false;
     this.reconnectAttempts = 0;
     this.cancelReconnectTimer();
     this.connectGeneration += 1;
     if (this.socket && !this.socket.destroyed) {
-      if (shutdownIfIdle) sendFrame(this.socket, { type: 'control', operation: 'shutdown-if-idle' });
+      if (shutdownIfIdle && !this.preserveHostOnQuit) sendFrame(this.socket, { type: 'control', operation: 'shutdown-if-idle' });
       this.socket.end();
     }
     for (const pending of this.pending.values()) {
@@ -1500,6 +1526,7 @@ class TerminalHostClient extends EventEmitter {
 }
 
 module.exports = {
+  requiresUpdateShutdown,
   TerminalHostServer,
   TerminalHostClient,
   TERMINAL_HOST_PROTOCOL,

@@ -32,7 +32,7 @@ function buildWindowsSignatureCheck() {
     `/Fo${path.join(output, 'windows-signature-check.obj')}`, `/Fe${executable}`, '/link',
     `/LIBPATH:${path.join(msvc, 'lib/x64')}`, `/LIBPATH:${path.join(lib, 'ucrt/x64')}`,
     `/LIBPATH:${path.join(lib, 'um/x64')}`, '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA',
-    'wintrust.lib', 'crypt32.lib',
+    'wintrust.lib', 'crypt32.lib', 'wbemuuid.lib', 'ole32.lib', 'oleaut32.lib',
   ], { stdio: 'inherit', windowsHide: true });
   if (!fs.statSync(executable).size) throw new Error('Native signature verifier build is empty');
   return executable;

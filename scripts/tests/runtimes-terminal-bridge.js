@@ -2040,6 +2040,31 @@ function registerTerminalLifecycleTests(context) {
     );
     stuckManager.dispose({ preserveSessions: true });
 
+    let forceAttempts = 0;
+    const forceHandle = new FakePty(8_899);
+    const forceManager = new TerminalManager({
+      platform: 'win32',
+      ptyModule: { spawn: () => forceHandle },
+      killTree: (handle, pid, _timeout, options) => {
+        forceAttempts += 1;
+        if (forceAttempts === 1) return Promise.reject(new Error('transient tree failure'));
+        assert.equal(handle, forceHandle);
+        assert.equal(pid, 8_899);
+        assert.equal(options.posixSignal, 'SIGKILL');
+        handle.emitExit();
+        return Promise.resolve({ ok: true, exited: true });
+      },
+    });
+    const forceSession = forceManager.create({ type: 'powershell', cwd: root });
+    await assert.rejects(forceManager.stop(forceSession.id), /transient tree failure/);
+    assert.throws(() => forceManager.stop(forceSession.id), /transient tree failure/);
+    await forceManager.forceStopForUpdate(forceSession.id);
+    assert.equal(forceAttempts, 2);
+    assert.equal(forceManager.get(forceSession.id).status, 'stopped');
+    assert.equal(forceManager.get(forceSession.id).terminationUncertain, false);
+    assert.equal(forceManager.sessions.get(forceSession.id).updateTerminationContext, undefined);
+    await forceManager.close(forceSession.id);
+
     const uncertainStore = path.join(temp, 'terminal-tree-exit-uncertain.json');
     const hangingTaskkill = new EventEmitter();
     hangingTaskkill.unref = () => {};
@@ -2091,6 +2116,9 @@ function registerTerminalLifecycleTests(context) {
     assert.equal(uncertainRecord.terminationUncertain, true);
     assert.equal(uncertainRecord.terminationErrorCode, 'PTY_TREE_EXIT_UNCONFIRMED');
     assert.equal(uncertainManager.sessions.get(uncertainSession.id).process, null);
+    await assert.rejects(uncertainManager.forceStopForUpdate(uncertainSession.id),
+      error => error.terminationUncertain === true,
+      'An exited root with an unconfirmed descendant tree cannot be force-approved or killed by a reused PID');
     await assert.rejects(
       uncertainManager.retire(uncertainSession.id),
       error => error.code === 'PTY_TREE_EXIT_UNCONFIRMED' && error.terminationUncertain === true,
@@ -2138,6 +2166,9 @@ function registerTerminalLifecycleTests(context) {
       ptyModule: { spawn: () => { throw new Error('복원된 uncertainty는 spawn하면 안 됩니다.'); } },
     });
     const restoredUncertain = restoredUncertainManager.get(uncertainSession.id);
+    await assert.rejects(restoredUncertainManager.forceStopForUpdate(uncertainSession.id),
+      /현재 앱이 실행한 작업이 아니므로/,
+      'Force update must not turn persisted uncertainty into fabricated shutdown evidence');
     assert.equal(restoredUncertainManager.list().length, 1, 'dedupe는 더 최신인 정상 행보다 sticky marker를 보존해야 합니다.');
     assert.equal(restoredUncertain.status, 'stopping');
     assert.equal(restoredUncertain.terminationUncertain, true);
@@ -2157,7 +2188,7 @@ function registerTerminalLifecycleTests(context) {
       : path.join(os.tmpdir(), `lta-host-uncertain-${uncertaintySuffix}.sock`);
     let uncertaintyShutdowns = 0;
     const uncertaintyServer = new TerminalHostServer({
-      manager: restoredUncertainManager,
+      manager: uncertainManager,
       endpoint: uncertaintyEndpoint,
       discoveryFile: uncertaintyDiscovery,
       token: 'uncertain-host-token',

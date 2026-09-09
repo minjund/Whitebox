@@ -792,7 +792,7 @@ const MAIN_PROCESS_CONTRACTS = [
   'setImmediate(() => app.quit())',
   "session?.status === 'running' || session?.status === 'starting'",
   '!isInternalTerminalProjectionSessionId(session.bridgeId)',
-  "terminalSessions: sessions.filter(session => ['running', 'starting', 'stopping'].includes(session.status))",
+  'terminalSessions: externalHost ? [] : sessions.filter(requiresUpdateShutdown)',
   "session.status === 'detached'",
   'event.preventDefault()',
   'mainWindow.hide()',

@@ -126,14 +126,14 @@ async function run(config = parseConfig()) {
       fs.appendFileSync(logFile, `${new Date().toISOString()} ${label}: ${error.stack || error.message}\n`, 'utf8');
     } catch {}
   };
-  const stop = () => {
+  const stop = ({ updateOnly = false } = {}) => {
     if (stopping) return stopPromise;
     stopping = true;
     if (bridge) bridge.dispose();
     if (host) host.dispose();
     stopPromise = (async () => {
       try {
-        await Promise.resolve(manager?.dispose({ preserveSessions: true }));
+        await Promise.resolve(manager?.dispose({ preserveSessions: true, updateOnly }));
         await Promise.resolve(codexAppServer?.dispose());
         await processLock.release();
         setImmediate(() => process.exit(0));

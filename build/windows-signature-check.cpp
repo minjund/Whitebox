@@ -3,6 +3,87 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <stdio.h>
+#include <wbemidl.h>
+#include <string>
+#include <vector>
+
+template<class T> struct ComObject {
+    T* value = nullptr;
+    ~ComObject() { if (value) value->Release(); }
+};
+struct BString {
+    BSTR value;
+    explicit BString(const wchar_t* text) : value(SysAllocString(text)) {}
+    ~BString() { SysFreeString(value); }
+};
+struct ComLifetime { ~ComLifetime() { CoUninitialize(); } };
+
+static std::wstring jsonString(const std::wstring& text) {
+    std::wstring result = L"\"";
+    for (wchar_t character : text) {
+        if (character == L'"' || character == L'\\') result += L'\\';
+        if (character < 32) {
+            wchar_t escaped[7] = {};
+            swprintf_s(escaped, L"\\u%04x", static_cast<unsigned int>(character));
+            result += escaped;
+        } else result += character;
+    }
+    return result + L"\"";
+}
+
+// WMI supplies both executable and launch command. An Electron executable
+// outside the install can still load that install's app.asar, so both matter.
+// This read-only mode does not depend on a user's PowerShell runtime/modules.
+static int processIdentity(const wchar_t* argument) {
+    wchar_t* end = nullptr;
+    const unsigned long pid = wcstoul(argument, &end, 10);
+    if (!pid || !end || *end || pid == MAXDWORD) return 10;
+    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return 11;
+    ComLifetime com;
+    const HRESULT security = CoInitializeSecurity(nullptr, -1, nullptr, nullptr,
+        RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE, nullptr);
+    if (FAILED(security) && security != RPC_E_TOO_LATE) return 12;
+    ComObject<IWbemLocator> locator;
+    if (FAILED(CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
+        IID_IWbemLocator, reinterpret_cast<void**>(&locator.value)))) return 13;
+    ComObject<IWbemServices> services;
+    BString space(L"ROOT\\CIMV2");
+    if (FAILED(locator.value->ConnectServer(space.value, nullptr, nullptr, nullptr,
+        0, nullptr, nullptr, &services.value))) return 14;
+    if (FAILED(CoSetProxyBlanket(services.value, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
+        nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE))) return 15;
+    const std::wstring query = L"SELECT ExecutablePath,CommandLine,CreationDate FROM Win32_Process WHERE ProcessId="
+        + std::to_wstring(pid);
+    BString language(L"WQL"), statement(query.c_str());
+    ComObject<IEnumWbemClassObject> rows;
+    if (FAILED(services.value->ExecQuery(language.value, statement.value,
+        WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &rows.value))) return 16;
+    ComObject<IWbemClassObject> row;
+    ULONG count = 0;
+    if (FAILED(rows.value->Next(5000, 1, &row.value, &count)) || count != 1) return 17;
+    const wchar_t* properties[] = { L"ExecutablePath", L"CommandLine", L"CreationDate" };
+    std::wstring values[3];
+    for (size_t index = 0; index < 3; ++index) {
+        VARIANT value;
+        VariantInit(&value);
+        const HRESULT status = row.value->Get(properties[index], 0, &value, nullptr, nullptr);
+        const bool valid = SUCCEEDED(status) && value.vt == VT_BSTR && value.bstrVal && *value.bstrVal;
+        if (valid) values[index] = value.bstrVal;
+        VariantClear(&value);
+        if (!valid) return 18;
+    }
+    const std::wstring output = L"{\"ProcessId\":" + std::to_wstring(pid)
+        + L",\"ExecutablePath\":" + jsonString(values[0])
+        + L",\"CommandLine\":" + jsonString(values[1])
+        + L",\"Started\":" + jsonString(values[2]) + L"}\n";
+    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, output.c_str(),
+        static_cast<int>(output.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return 19;
+    std::vector<char> bytes(static_cast<size_t>(size));
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, output.c_str(),
+        static_cast<int>(output.size()), bytes.data(), size, nullptr, nullptr) != size) return 19;
+    return fwrite(bytes.data(), 1, bytes.size(), stdout) == bytes.size() ? 0 : 20;
+}
 
 // Only a well-formed PE with an empty certificate table can be unsigned.
 // A damaged embedded signature must never enter the unsigned release policy.
@@ -38,6 +119,7 @@ static bool unsignedPe(HANDLE file) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 3 && wcscmp(argv[1], L"--process-info") == 0) return processIdentity(argv[2]);
     if (argc != 2) return 2;
     // Lock the verified bytes against modification while WinTrust reads them.
     HANDLE file = CreateFileW(argv[1], GENERIC_READ, FILE_SHARE_READ, nullptr,
