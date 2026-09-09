@@ -689,7 +689,7 @@ function registerCliAndUpdateTests(context) {
     const manifestPath = path.join(root, 'scripts', 'update-compatibility-cohorts.json');
     const manifest = readCohortManifest(manifestPath);
     const cohorts = cohortList(manifest);
-    assert.deepStrictEqual(cohorts.slice(0, 5).map(cohort => ({
+    assert.deepStrictEqual(cohorts.filter(cohort => ['1.7.3', '1.7.4', '1.7.5', '1.8.4', '1.8.5'].includes(cohort.version)).map(cohort => ({
       version: cohort.version,
       env: cohort.env,
       installMode: cohort.installMode,
@@ -700,6 +700,12 @@ function registerCliAndUpdateTests(context) {
       { version: '1.8.4', env: 'WHITEBOX_V184_INSTALLER', installMode: 'automatic' },
       { version: '1.8.5', env: 'WHITEBOX_V185_INSTALLER', installMode: 'automatic' },
     ]);
+    assert.deepStrictEqual(cohorts.map(cohort => cohort.version).sort(compareVersions), [
+      '1.7.3', '1.7.4', '1.7.5', '1.7.6', '1.7.8', '1.7.9',
+      '1.7.11', '1.7.12', '1.7.13', '1.7.14', '1.7.15', '1.7.16',
+      '1.8.1', '1.8.2', '1.8.3', '1.8.4', '1.8.5', '1.8.6',
+      '1.8.7', '1.8.8', '1.8.9', '1.8.10', '1.8.11', manifest.previousFixed.version,
+    ], 'Every published supported Windows installer must be exercised exactly once');
     const previousFixed = manifest.previousFixed;
     assert.equal(compareVersions(previousFixed.version, manifest.frozen.at(-1).version), 1,
       'previousFixed must be newer than every immutable frozen cohort.');
