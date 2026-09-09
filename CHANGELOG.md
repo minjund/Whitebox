@@ -18,6 +18,7 @@ GitHub release notes remain the authoritative version history.
   the installer. Ambiguous or orphaned process identities still block installation.
 - Verify cancellation and confirmed force-update through the packaged update
   button, and exercise recovery from a termination failure with a real PTY.
+- Update the build dependency js-yaml to 4.3.2 for its merge-source CPU fix.
 
 ## 1.8.12 - 2026-09-08
 
