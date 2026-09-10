@@ -568,7 +568,7 @@ const I18N_RUNTIME_CONTRACTS = [
   'whitebox:locale-changed',
   'MutationObserver',
   'function t(key, params)',
-  'function errorText(error, fallbackKey, params)',
+  'function errorText(error, fallbackKey, params, { includeDetails = false } = {})',
   'function observedText(value)',
   'data-i18n',
 ];

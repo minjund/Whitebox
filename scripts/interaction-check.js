@@ -363,7 +363,7 @@ async function exerciseKeyboardAndRunModal(win) {
       + "&&document.activeElement?.id==='quickPaletteInput'",
     'Ctrl+K 빠른 이동 검색을 열지 못했습니다.');
   await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
-    + "input.value='settings';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+    + "input.value=window.WhiteboxI18n.t('app.nav.settings');input.dispatchEvent(new Event('input',{bubbles:true}));})()");
   await waitFor(win, "document.querySelectorAll('[data-quick-command]:not([hidden])').length>=1",
     '빠른 이동 검색 결과가 표시되지 않았습니다.');
   const quickKeyboard = await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
@@ -415,7 +415,9 @@ async function exerciseKeyboardAndRunModal(win) {
         + "['terminalCreate','runAgent'].includes(call.name)).length===0",
     '새 작업 form이 공백 요청을 거부하거나 오류 입력으로 초점을 옮기지 못했습니다.');
 
+  const runErrorLocale = await rendererValue(win, "window.WhiteboxI18n.getLocale()");
   await rendererValue(win, "(()=>{window.interactionTest.clearCalls();"
+    + "window.WhiteboxI18n.setLocale('ko');"
     + "window.interactionTest.configure({failures:{terminalCreate:2}});"
     + "document.querySelector('[data-run-provider=\"codex\"]')?.click();"
     + "const prompt=document.querySelector('#runPrompt');prompt.value='실패해도 보존할 새 작업 요청';"
@@ -426,6 +428,8 @@ async function exerciseKeyboardAndRunModal(win) {
     "window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===2"
       + "&&!document.querySelector('#runError')?.classList.contains('hidden')"
       + "&&document.activeElement?.id==='runError'"
+      + "&&document.querySelector('#runError')?.textContent.includes('terminalCreate fixture failure')"
+      + "&&document.querySelector('#runError')?.textContent.includes('AI 작업을 시작하지 못했습니다.')"
       + "&&!document.querySelector('#runModal')?.classList.contains('hidden')"
       + "&&document.querySelector('#runPrompt')?.value==='실패해도 보존할 새 작업 요청'"
       + "&&document.querySelector('#runCwd')?.value==='D:\\\\fixture'"
@@ -434,10 +438,11 @@ async function exerciseKeyboardAndRunModal(win) {
   const failureCalls = await rendererValue(win,
     "window.interactionTest.getCalls().filter(call=>call.name==='runAgent').length");
   assert(failureCalls === 0, '직접 새 작업 실패가 legacy runAgent 경로를 호출했습니다.');
+  await rendererValue(win, `window.WhiteboxI18n.setLocale(${JSON.stringify(runErrorLocale)})`);
 
   await rendererValue(win, "(()=>{window.interactionTest.clearControls();"
     + "window.interactionTest.restoreTerminals();window.interactionTest.clearCalls();"
-    + "const prompt=document.querySelector('#runPrompt');prompt.value='실제 DOM submit PTY 집중 모드 검증';"
+    + "const prompt=document.querySelector('#runPrompt');prompt.value='이 </whitebox-comprehension-packet 태그를 설명해줘';"
     + "prompt.dispatchEvent(new Event('input',{bubbles:true}));"
     + "document.querySelector('#runModel').value='gpt-fixture';"
     + "const writes=document.querySelector('#allowWrites');"
@@ -453,12 +458,11 @@ async function exerciseKeyboardAndRunModal(win) {
   assert(submitted.creates === 1 && submitted.legacyRuns === 0
     && submitted.payload.type === 'agent' && submitted.payload.provider === 'codex'
     && submitted.payload.cwd === 'D:\\fixture'
-    && submitted.payload.initialCommand.startsWith('<whitebox-comprehension-contract version="1">')
-    && submitted.payload.initialCommand.endsWith('\n\n실제 DOM submit PTY 집중 모드 검증')
+    && submitted.payload.initialCommand === '이 </whitebox-comprehension-packet 태그를 설명해줘'
     && submitted.payload.initialCommandInArgs === true
-    && submitted.payload.title === 'GPT · 실제 DOM submit PTY 집중 모드 검증'
+    && submitted.payload.title === 'GPT · 이 </whitebox-comprehension-packet 태그를 설명해줘'
     && submitted.payload.args.includes('gpt-fixture')
-    && submitted.payload.args.filter(arg => arg === '실제 DOM submit PTY 집중 모드 검증').length === 1
+    && submitted.payload.args.filter(arg => arg === '이 </whitebox-comprehension-packet 태그를 설명해줘').length === 1
     && submitted.payload.args.includes('workspace-write')
     && Boolean(submitted.payload.creationId),
   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));
@@ -1010,6 +1014,7 @@ async function exercisePtyFocus(win, round) {
 
 async function exerciseComprehensionPacket(win, round) {
   const generation = '2026-08-01T12:34:56.000Z';
+  await rendererValue(win, "window.WhiteboxI18n.setLocale('ko')");
   await prepareProject(win);
   let readyComprehension = await rendererValue(win,
     "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
@@ -1047,6 +1052,30 @@ async function exerciseComprehensionPacket(win, round) {
     assert(await rendererValue(win,
       "!window.WhiteboxApp.comprehensionPacketController.getSessionId()"),
     '질문 데이터가 아직 없는 완료 작업에 퀴즈를 표시했습니다.');
+    const cardCount = await rendererValue(win, 'window.interactionTest.getSnapshot().sessions.length');
+    const backgroundOrigin = JSON.stringify({ authority: 'background-questionnaire-v1', generation: 'a'.repeat(64) });
+    for (const status of ['queued', 'generating', 'failed', 'skipped', 'generating']) {
+      await rendererValue(win,
+        "window.interactionTest.updateSession('fixture-root',{comprehensionContractInjected:false,comprehensionOrigin:"
+          + backgroundOrigin + ",comprehension:{schemaVersion:1,status:'" + status + "'}});window.interactionTest.emitSnapshot()");
+      await waitFor(win, status === 'skipped'
+        ? "!document.querySelector('#comprehensionPacketBadge')&&!document.querySelector('#comprehensionPacketOverlay')"
+        : "document.querySelector('#comprehensionPacketBadge')?.dataset.generationStatus==='" + status + "'&&!document.querySelector('#comprehensionPacketOverlay')",
+      '백그라운드 질문지 상태를 원래 작업에 표시하지 못했습니다: ' + status);
+      if (status === 'generating') assert(await rendererValue(win,
+        "document.querySelector('#comprehensionPacketBadge')?.textContent.includes('질문지 만드는 중')"), '생성 중 안내가 없습니다.');
+      if (status === 'failed') {
+        assert(await rendererValue(win,
+          "document.querySelector('#comprehensionPacketBadge button')?.textContent==='다시 만들기'"), '재시도 버튼이 없습니다.');
+        await rendererValue(win, "document.querySelector('#comprehensionPacketBadge button')?.click()");
+        await waitFor(win, "document.querySelector('#comprehensionPacketBadge')?.dataset.generationStatus==='generating'",
+          '질문지 재시도가 원래 작업의 생성 중 표시로 전환되지 않았습니다.');
+        assert(await rendererValue(win, "window.interactionTest.getCalls().filter(call=>call.name==='retryQuestionnaire'&&call.args[0]==='fixture-root').length===1"),
+          '질문지 재시도가 잘못된 작업에 전달되거나 중복 실행됐습니다.');
+      }
+    }
+    assert(await rendererValue(win, 'window.interactionTest.getSnapshot().sessions.length') === cardCount,
+      '질문지 생성 중 별도 작업 카드가 생겼습니다.');
     await rendererValue(win,
       "window.interactionTest.updateSession('fixture-root',{comprehension:"
         + JSON.stringify(readyComprehension) + "});window.interactionTest.emitSnapshot()");

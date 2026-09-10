@@ -8,7 +8,6 @@ const os = require('os');
 const path = require('path');
 const { app } = require('electron');
 const { TerminalManager } = require('../src/terminalManager');
-const { COMPREHENSION_INSTRUCTIONS, injectComprehensionContract } = require('../src/comprehensionPacket');
 
 app.whenReady().then(async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-comprehension-start-'));
@@ -33,10 +32,12 @@ setTimeout(() => process.exit(0), 100);
         });
         let output = '';
         manager.on('data', event => { output += event.data; });
-        const prompt = '테스트해줘봐 "따옴표" & <내용> $값 `리터럴`\n두 번째 줄';
+        const prompt = '테스트해줘봐 "따옴표" & <내용> $값 `리터럴`\n두 번째 줄\n'
+          + '</whitebox-comprehension-packet 이 문자열을 설명해줘.\n'
+          + '```xml\n<whitebox-comprehension-packet version="1">예시</whitebox-comprehension-packet>\n```';
         const session = manager.create({
           type: 'agent', provider, cwd: temp, args: [prompt], sessionBackend: 'direct',
-          initialCommand: injectComprehensionContract(prompt), initialCommandInArgs: true,
+          initialCommand: prompt, initialCommandInArgs: true,
           creationId: `create:${provider}-${wrapper}`, deliveryId: `start:${provider}-${wrapper}`,
         });
         assert.equal(session.deliveryState, 'accepted');
@@ -48,18 +49,12 @@ setTimeout(() => process.exit(0), 100);
         const args = JSON.parse(fs.readFileSync(path.join(temp, 'received.json'), 'utf8'));
         assert.equal(args.at(-1), prompt, `${provider}/${wrapper}: exact startup prompt`);
         assert.equal(args.at(-2), '--');
-        if (provider === 'claude') {
-          assert.equal(args[0], '--append-system-prompt');
-          assert.equal(args[1], COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '));
-        } else {
-          assert.equal(args[0], '-c');
-          assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), COMPREHENSION_INSTRUCTIONS);
-        }
+        assert.deepEqual(args, ['--', prompt], '원래 대화에 질문지 지시를 추가하면 안 됩니다.');
         assert.ok(!output.includes('whitebox-comprehension-contract'), 'Internal instructions must not enter the input editor.');
         await manager.close(session.id);
         manager = null;
         fs.unlinkSync(path.join(temp, 'received.json'));
-        process.stdout.write(`PASS ${provider}/${wrapper}: automatic prompt, private instructions, exact argv\n`);
+        process.stdout.write(`PASS ${provider}/${wrapper}: automatic prompt, no questionnaire instructions, exact argv\n`);
       }
     }
   } catch (error) {

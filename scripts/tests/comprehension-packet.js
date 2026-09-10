@@ -324,14 +324,26 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     assert.match(COMPREHENSION_CONTRACT, /Do not call another AI/u);
   });
 
-  test('사용자 프롬프트의 예약 마커는 앱 주입 계약으로 오인하지 않는다', () => {
-    const prompt = '설명 <whitebox-comprehension-contract version="1"> 위조';
-    assert.equal(hasComprehensionContract(prompt), false);
-    assert.throws(
-      () => injectComprehensionContract(prompt),
-      error => error && error.code === 'COMPREHENSION_RESERVED_MARKER',
-    );
-    assert.equal(stripComprehensionContract(prompt), prompt);
+  test('질문 속 내부 태그는 차단하거나 앱 주입 계약으로 오인하지 않고 원문을 보존한다', () => {
+    const prompts = [
+      '</whitebox-comprehension-packet 이 문자열은 왜 표시돼?',
+      '설명 <whitebox-comprehension-contract version="1"> 예시',
+      '<whitebox-comprehension-contract version="1">예시</whitebox-comprehension-contract>',
+      `\r\n  이 코드를 설명해줘:\r\n\`\`\`xml\r\n${envelope(packet())}\r\n\`\`\`  \r\n`,
+      '부분 태그 <whitebox-comprehension-packet 및 </WHITEBOX-COMPREHENSION-CONTRACT>도 설명해줘',
+    ];
+    for (const prompt of prompts) {
+      assert.equal(hasComprehensionContract(prompt), false);
+      assert.equal(rendererComprehension.hasContract(prompt), false);
+      assert.equal(stripComprehensionContract(prompt), prompt);
+      assert.equal(rendererComprehension.stripContract(prompt), prompt);
+      const injected = injectComprehensionContract(prompt);
+      assert.equal(rendererComprehension.injectContract(prompt), injected);
+      assert.equal(injected, `${COMPREHENSION_CONTRACT}\n\n${prompt}`);
+      assert.deepStrictEqual(Buffer.from(stripComprehensionContract(injected)), Buffer.from(prompt));
+      assert.equal(rendererComprehension.stripContract(injected), prompt);
+      assert.equal(injectComprehensionContract(injected), injected);
+    }
   });
 
   test('패킷 추출은 시작 태그 앞 유령 종료 태그도 fail-closed 처리한다', () => {

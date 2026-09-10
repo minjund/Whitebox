@@ -372,9 +372,8 @@ function injectComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
   if (!prompt.trim()) throw packetError('작업 내용을 입력하세요.', 'COMPREHENSION_PROMPT_EMPTY');
   if (hasComprehensionContract(prompt)) return prompt;
-  if (/<\/?whitebox-comprehension-(?:contract|packet)\b/iu.test(prompt)) {
-    throw packetError('작업 내용에 예약된 이해 패킷 태그가 포함되어 있습니다.', 'COMPREHENSION_RESERVED_MARKER');
-  }
+  // Tag examples are user content, not evidence of an app-injected contract.
+  // Keep them intact after the exact, byte-stable contract prefix.
   return `${COMPREHENSION_CONTRACT}\n\n${prompt}`;
 }
 

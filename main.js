@@ -12,6 +12,7 @@ const { fileURLToPath, pathToFileURL } = require('url');
 const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const { AgentRunner, probeProviders } = require('./src/agentRunner');
+const { BackgroundQuestionnaire } = require('./src/backgroundQuestionnaire');
 const { snapshotWithoutSessions } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
 const { collectProviderUsage } = require('./src/providerUsage');
@@ -121,6 +122,7 @@ let monitorWorkerConfig = null;
 let monitorWorkerRestartTimer = null;
 let monitorWorkerRestartAttempts = 0;
 let runner = null;
+let backgroundQuestionnaire = null;
 let terminalManager = null;
 let bridgeLauncher = null;
 let backgroundTray = null;
@@ -408,6 +410,7 @@ function visibleSnapshotSessions(snapshot = lastSnapshot) {
   const sourceSettings = sourcePluginSettingsStore?.snapshot() || { enabledPluginIds: [] };
   const hiddenDesktopIds = new Set();
   let sessions = (snapshot.sessions || []).filter(session => {
+    if (runner?.isQuestionnaireSession(session)) { hiddenDesktopIds.add(session.id); return false; }
     if (session.sourcePluginId) return isSourcePluginEnabled(sourceSettings, session.sourcePluginId);
     if (!isProviderVisible(session.provider)) return false;
     const desktopPluginId = desktopSourcePluginId(session.clientKind);
@@ -431,7 +434,7 @@ function visibleSnapshotSessions(snapshot = lastSnapshot) {
   }
   return {
     ...snapshot,
-    sessions,
+    sessions: backgroundQuestionnaire ? sessions.map(session => backgroundQuestionnaire.project(session)) : sessions,
     summary: summaryForSessions(snapshot.summary, sessions),
   };
 }
@@ -861,6 +864,7 @@ function startMonitorWorker() {
           ...guardedForkSessionIds,
         ])];
         lastSnapshot = snapshotWithoutSessions(message.snapshot, hiddenSessionIds, availability);
+        backgroundQuestionnaire?.observe(visibleSnapshotSessions(lastSnapshot).sessions);
         const snapshot = visibleSnapshotSessions(lastSnapshot);
         attentionNotifier.sync(snapshot);
         reconcileAttentionActivations();
@@ -1894,6 +1898,12 @@ async function setupRuntime() {
   if (!demoCapture) await setupAttentionRuntime();
   const runsDir = userFile('agent-runs');
   runner = new AgentRunner({ runsDir });
+  if (!demoCapture) {
+    backgroundQuestionnaire = new BackgroundQuestionnaire({
+      file: userFile('questionnaires.json'), runner, requestDetail: requestAgentDetail,
+    });
+    backgroundQuestionnaire.on('changed', () => sendSnapshot(visibleSnapshotSessions(lastSnapshot)));
+  }
   const terminalStoreFile = userFile('terminal-sessions.json');
   const terminalHostFile = userFile('terminal-host.json');
   terminalManager = demoCapture
@@ -2034,7 +2044,8 @@ async function setupRuntime() {
     sourcePluginSnapshots: sourcePluginState.snapshots,
   };
   startMonitorWorker();
-  runner.on('changed', () => {
+  runner.on('changed', event => {
+    if (runner.questionnaireIds.has(event.runId)) return;
     if (monitorWorker) monitorWorker.postMessage({ type: 'scan' });
     updateBackgroundTrayMenu();
   });
@@ -2135,7 +2146,7 @@ function bootstrapState() {
     availability,
     workspaces: listWorkspaces(),
     snapshot: visibleSnapshotSessions(lastSnapshot),
-    activeRuns: runner ? runner.listActive() : [],
+    activeRuns: runner ? runner.listVisibleActive() : [],
     versions: { app: app.getVersion(), electron: process.versions.electron, node: process.versions.node },
     platform: {
       id: process.platform,
@@ -2230,7 +2241,12 @@ function registerIpcHandlers() {
   registerAgentIpc({
     handleTrusted,
     snapshot: () => { refreshMonitor(); return visibleSnapshotSessions(lastSnapshot); },
-    requestDetail: requestAgentDetail,
+    requestDetail: async id => {
+      const detail = await requestAgentDetail(id);
+      if (runner?.isQuestionnaireSession(detail)) return null;
+      return detail && backgroundQuestionnaire ? backgroundQuestionnaire.project(detail) : detail;
+    },
+    retryQuestionnaire: id => backgroundQuestionnaire?.retry(id) || { ok: false },
     runner: () => runner,
     isProviderVisible,
     probeProviders: () => {

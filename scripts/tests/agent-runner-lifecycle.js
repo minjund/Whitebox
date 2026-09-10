@@ -84,7 +84,7 @@ function comprehensionPacketFixture() {
 function registerAgentRunnerLifecycleTests(context) {
   const { test, temp, root } = context;
 
-  test('관리 실행은 메인 프롬프트에 계약을 한 번만 주입하고 같은 최종 응답의 패킷을 저장한다', () => {
+  test('관리 실행은 원래 프롬프트를 보존하고 과거 패킷 파서는 계속 지원한다', () => {
     const executableDir = path.join(temp, 'agent-runner-comprehension-bin');
     fs.mkdirSync(executableDir, { recursive: true });
     for (const name of ['codex', 'codex.cmd']) {
@@ -113,18 +113,19 @@ function registerAgentRunnerLifecycleTests(context) {
       assert.equal(started.ok, true);
       assert.equal(spawnCalls.length, 1, '이해 패킷 때문에 별도 AI 프로세스를 시작하면 안 됩니다.');
       const launchedPrompt = spawnCalls[0].args.at(-1);
-      assert.equal(launchedPrompt.startsWith(`${COMPREHENSION_CONTRACT}\n\n`), true);
+      assert.equal(launchedPrompt, originalPrompt);
       assert.equal(launchedPrompt.endsWith(originalPrompt), true);
-      assert.equal(launchedPrompt.split('<whitebox-comprehension-contract').length - 1, 1);
+      assert.equal(launchedPrompt.includes('whitebox-comprehension-contract'), false);
 
       const run = runner.active.get(started.runId);
-      assert.equal(run.state.comprehensionContractInjected, true);
+      assert.equal(run.state.comprehensionContractInjected, false);
       assert.equal(run.state.title, '원래 제목');
       assert.equal(run.state.messages[0].text, originalPrompt);
       const meta = JSON.parse(fs.readFileSync(path.join(runsDir, started.runId, 'meta.json'), 'utf8'));
       assert.equal(meta.prompt, originalPrompt);
       assert.equal(meta.prompt.includes('whitebox-comprehension-contract'), false);
 
+      run.state.comprehensionContractInjected = true; // Historical, authenticated launch fixture.
       const visibleAnswer = `구현과 검증을 완료했습니다.\n${'긴 결과 본문 '.repeat(1_100)}`;
       assert(visibleAnswer.length > 8_000, 'fixture가 기존 결과 clip 한도를 넘어야 합니다.');
       const finalResponse = `${visibleAnswer}\n\n${PACKET_OPEN}\n${JSON.stringify(comprehensionPacketFixture())}\n${PACKET_CLOSE}`;
@@ -159,14 +160,23 @@ function registerAgentRunnerLifecycleTests(context) {
       children[1].emit('close', 0, null);
       assert.equal(runner.active.has(subagent.runId), false);
 
-      const runCountBeforeReservedPrompt = fs.readdirSync(runsDir).length;
-      const reserved = runner.start({
-        provider: 'codex', prompt: '<whitebox-comprehension-packet version="1">예약됨', cwd: root,
+      const tagQuestion = '<whitebox-comprehension-packet version="1"> 이 태그를 설명해줘';
+      const quoted = runner.start({
+        provider: 'codex', prompt: tagQuestion, cwd: root,
       });
-      assert.equal(reserved.ok, false);
-      assert.match(reserved.error, /예약된 이해 패킷 태그/);
-      assert.equal(spawnCalls.length, 2);
-      assert.equal(fs.readdirSync(runsDir).length, runCountBeforeReservedPrompt,
+      assert.equal(quoted.ok, true);
+      assert.equal(spawnCalls.length, 3);
+      assert.equal(spawnCalls[2].args.at(-1), tagQuestion);
+      assert.equal(runner.active.get(quoted.runId).state.messages[0].text, tagQuestion);
+      const quotedMeta = JSON.parse(fs.readFileSync(path.join(runsDir, quoted.runId, 'meta.json'), 'utf8'));
+      assert.equal(quotedMeta.prompt, tagQuestion);
+      children[2].emit('close', 0, null);
+      assert.equal(runner.active.has(quoted.runId), false);
+
+      const runCountBeforeEmptyPrompt = fs.readdirSync(runsDir).length;
+      assert.equal(runner.start({ provider: 'codex', prompt: '  ', cwd: root }).ok, false);
+      assert.equal(spawnCalls.length, 3);
+      assert.equal(fs.readdirSync(runsDir).length, runCountBeforeEmptyPrompt,
         '거부된 프롬프트 때문에 빈 실행 디렉터리를 남기면 안 됩니다.');
 
       const monitorWorker = fs.readFileSync(path.join(root, 'src', 'monitorWorker.js'), 'utf8');
@@ -212,6 +222,7 @@ function registerAgentRunnerLifecycleTests(context) {
         const started = runner.start({ provider, prompt: `${provider} 스트림 패킷`, cwd: root });
         assert.equal(started.ok, true, `${provider} 실행 fixture를 시작해야 합니다.`);
         const run = runner.active.get(started.runId);
+        run.state.comprehensionContractInjected = true; // Legacy packet parser fixture.
 
         if (provider === 'codex') {
           runner.handleLine(run, 'stdout', JSON.stringify({ type: 'turn.started' }));
@@ -292,6 +303,7 @@ function registerAgentRunnerLifecycleTests(context) {
 
       const oversized = runner.start({ provider: 'gemini', prompt: '응답 상한 검증', cwd: root });
       const oversizedRun = runner.active.get(oversized.runId);
+      oversizedRun.state.comprehensionContractInjected = true;
       runner.handleLine(oversizedRun, 'stdout', JSON.stringify({ type: 'init', session_id: 'gemini-oversized' }));
       const oversizedChunk = 'x'.repeat(64 * 1024);
       const oversizedChunkCount = Math.ceil(MAX_RESPONSE_BYTES / oversizedChunk.length) + 1;
@@ -346,6 +358,7 @@ function registerAgentRunnerLifecycleTests(context) {
           provider: 'codex', prompt: `${outcome.label} 종료 검증`, cwd: root,
         });
         const run = runner.active.get(started.runId);
+        run.state.comprehensionContractInjected = true; // Legacy packet parser fixture.
         runner.handleLine(run, 'stdout', JSON.stringify({
           type: 'item.completed',
           item: { id: `answer-${outcome.label}`, type: 'agent_message', text: finalResponse },

@@ -536,7 +536,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
         });
         toast(window.WhiteboxI18n.t("agent.delivery_uncertain"));
       } else {
-        $("#runError").textContent = window.WhiteboxI18n.errorText(error, "ui.could_not_start_the_task");
+        $("#runError").textContent = window.WhiteboxI18n.errorText(error, "ui.could_not_start_the_task", undefined, { includeDetails: true });
         $("#runError").classList.remove("hidden");
         $("#runError").focus({ preventScroll: true });
       }
