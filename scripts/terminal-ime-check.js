@@ -171,6 +171,78 @@ app.whenReady().then(async () => {
     assert.equal(commits.visible, false);
     checks.push('rapid adjacent Hangul composition commits exactly 가나다라, same as stock xterm');
 
+    // A busy renderer can deliver several syllables and Enter before xterm's
+    // zero-delay composition timers run. Do not yield between these events.
+    const burst = await evaluate(async () => {
+      const result = {};
+      for (const target of [baseline, term]) {
+        await reset(target);
+        const captured = target === baseline ? baselineWrites : writes;
+        captured.length = 0;
+        let value = '';
+        for (const syllable of ['알', '겠', '습', '니', '다']) {
+          start(target);
+          value += syllable;
+          update(target, syllable, value);
+          end(target, syllable);
+        }
+        target.textarea.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+        }));
+        target.textarea.dispatchEvent(new KeyboardEvent('keyup', {
+          key: 'Enter', keyCode: 13, which: 13, bubbles: true,
+        }));
+        await delay();
+        result[target === baseline ? 'baseline' : 'patched'] = captured.join('');
+      }
+      return result;
+    });
+    assert.equal(burst.patched, '알겠습니다\r', JSON.stringify(burst));
+    checks.push('back-to-back Hangul commits followed immediately by Enter preserve every syllable exactly once');
+
+    const transitions = await evaluate(async () => {
+      await reset(term); writes.length = 0;
+      start(term); update(term, '각');
+      // Browser composition events precede the final textarea mutation. An
+      // ending consonant moves to the following syllable: trust the value at
+      // the next start, not the stale compositionend payload.
+      end(term, '각'); term.textarea.value = '가';
+      start(term); update(term, '나', '가나');
+      await delay();
+      const duringNext = writes.join('');
+      end(term, '나');
+      start(term); update(term, '취소', '가나취소');
+      update(term, '', '가나'); end(term, '');
+      await delay();
+      const afterCancel = writes.join('');
+
+      await reset(term); writes.length = 0;
+      start(term); update(term, '한'); end(term, '한');
+      term.textarea.value = '한2';
+      await delay();
+      const trailingDigit = writes.join('');
+
+      await reset(term); writes.length = 0;
+      start(term); update(term, '한'); update(term, '하');
+      term.textarea.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+      }));
+      end(term, '하');
+      await delay();
+      const immediateEnter = writes.join('');
+
+      await reset(term); writes.length = 0;
+      start(term); update(term, '글'); end(term, '글'); term.blur();
+      await delay();
+      const blurCommit = writes.join('');
+      return { duringNext, afterCancel, trailingDigit, immediateEnter, blurCommit };
+    });
+    assert.deepEqual(transitions, {
+      duringNext: '가', afterCancel: '가나', trailingDigit: '한2', immediateEnter: '하\r', blurCommit: '글',
+    });
+    checks.push('받침 transfer uses corrected textarea text and never sends the next uncommitted syllable');
+    checks.push('cancellation, trailing digit, preedit deletion, immediate Enter and blur preserve exact input');
+
     // Chromium generates the browser composition events here. This exercises
     // xterm + the workbench input queue without hand-editing the helper value.
     await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
@@ -219,7 +291,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.nativeVisibility, '');
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, cdp, nativeWindowsImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, cdp, nativeWindowsImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());
