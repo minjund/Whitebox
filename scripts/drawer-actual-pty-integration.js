@@ -16,15 +16,12 @@ if (testNodeModules && fs.existsSync(testNodeModules)) {
   Module._initPaths();
 }
 
-const { TerminalManager, isInternalTerminalProjectionSessionId } = require('../src/terminalManager');
+const { TerminalManager, isInternalTerminalProjectionSessionId, promptFingerprint } = require('../src/terminalManager');
 const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost');
 const { registerTerminalIpc } = require('../src/ipc/registerTerminalIpc');
 const { applyRuntimePresence } = require('../src/processMonitor');
 const {
-  comprehensionPromptFingerprint,
-  COMPREHENSION_INSTRUCTIONS,
   hasComprehensionContract,
-  stripComprehensionContract,
 } = require('../src/comprehensionPacket');
 
 app.disableHardwareAcceleration();
@@ -633,8 +630,8 @@ async function run() {
       && directCreateOptions.cwd === root
       && directCreateOptions.sessionBackend === 'direct'
       && directCreateOptions.transient === false
-      && hasComprehensionContract(directCreateOptions.initialCommand)
-      && stripComprehensionContract(directCreateOptions.initialCommand) === directPrompt
+      && directCreateOptions.initialCommand === directPrompt
+      && !hasComprehensionContract(directCreateOptions.initialCommand)
       && directCreateOptions.initialCommandInArgs === true
       && directCreateOptions.args?.at(-1) === directPrompt
       && !(directCreateOptions.args || []).some(argument => hasComprehensionContract(argument))
@@ -650,7 +647,6 @@ async function run() {
 
     const directLaunchMarker = fixtureLaunchArgumentsMarker([
       ...directCreateOptions.args.slice(0, -1),
-      '--append-system-prompt', COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '),
       '--', directPrompt,
     ]);
     await waitUntil(async () => {
@@ -666,9 +662,9 @@ async function run() {
       && directSession.conversationBound === false
       && directSession.bridgeId === ''
       && directSession.creationId === directCreationId
-      && directSession.comprehensionContractInjected === true
-      && directSession.initialPromptFingerprintVersion === 'instructions-v1'
-      && directSession.initialPromptFingerprint === comprehensionPromptFingerprint(directPrompt)
+      && directSession.comprehensionContractInjected === false
+      && directSession.initialPromptFingerprintVersion === ''
+      && directSession.initialPromptFingerprint === promptFingerprint(directPrompt)
       && !String(directSession.replay || '').includes('UNEXPECTED_DRAWER_COMMAND:')
       && Number(directSession.pid) > 0
       && manager.list().length === directSessionCountBeforeCreate + 1,
@@ -679,7 +675,7 @@ async function run() {
       && directBridgePresence[0].id === directTerminalId
       && directBridgePresence[0].terminalId === directTerminalId
       && directBridgePresence[0].linkedSessionId === ''
-      && directBridgePresence[0].comprehensionContractInjected === true
+      && directBridgePresence[0].comprehensionContractInjected === false
       && directBridgePresence[0].comprehensionOwnershipVerified === false
       && directBridgePresence[0].creationId === directCreationId,
     `main bridge presence가 실제 fresh PTY의 terminalId + creationId를 보존하지 않았습니다: ${JSON.stringify(directBridgePresence)}`);
