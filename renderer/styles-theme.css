@@ -3708,7 +3708,7 @@ html[data-theme] .brand-icon {
   border: 0;
   border-radius: 9px;
   background: transparent;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  box-shadow: none;
 }
 
 /* PTY focus intentionally remains a dark terminal workspace in both app
