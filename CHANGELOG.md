@@ -5,6 +5,14 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.15 - 2026-09-10
+
+- Generate comprehension quizzes in background requests while keeping the
+  conversation prompt and visible terminal free of quiz instructions.
+- Improve open-book summaries, answer history, and quiz readability.
+- Preserve Korean IME commits during rapid terminal input.
+- Use the minimal Whitebox icon throughout the app and desktop packages.
+
 ## 1.8.14 - 2026-09-09
 
 - Open existing GPT conversations from external Codex CLI sessions in a fork,
