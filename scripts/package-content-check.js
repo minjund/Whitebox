@@ -61,7 +61,6 @@ const requiredRuntimeFiles = [
   'build/icon.png',
   'brand-profile-recovery-preload.js',
   'renderer/brand-profile-recovery.html',
-  'renderer/assets/whitebox-mark.svg',
   'src/interimProfileGuard.js',
   'src/interimProfileGuardProcess.js',
   'src/rendererStateRecovery.js',

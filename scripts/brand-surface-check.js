@@ -68,7 +68,7 @@ async function run() {
   assert.match(win.getTitle(), /Whitebox/, 'The native window title does not contain Whitebox');
   assert.match(brand.windowTitle, /Whitebox/, 'The document title does not contain Whitebox');
   assert.equal(brand.label, 'Whitebox', 'The in-app product name is missing');
-  assert.equal(brand.source, 'assets/whitebox-mark.svg', 'The in-app brand mark uses an unexpected asset');
+  assert.equal(brand.source, '../build/icon.png', 'The in-app brand mark must share the native application icon');
   assert.equal(brand.complete, true, 'The in-app brand mark did not finish loading');
   assert.ok(brand.naturalWidth >= 32 && brand.naturalHeight >= 32, 'The in-app brand mark has no readable intrinsic size');
   assert.ok(brand.width >= 31 && brand.height >= 31, 'The in-app brand mark is not visibly sized');
