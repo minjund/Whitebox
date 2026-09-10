@@ -33,7 +33,9 @@ ${CONTRACT_CLOSE}`;
 // the private provider instruction channel.
 const COMPREHENSION_INSTRUCTIONS = `${COMPREHENSION_CONTRACT}
 
-Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.`;
+Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.
+
+The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible AI answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Use a few short, readable paragraphs separated by blank lines, within 6000 characters. Make the summary self-contained so every initial question and variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
 
 const PACKET_KEYS = Object.freeze([
   'schemaVersion', 'id', 'title', 'summary', 'difficulty', 'difficultyReason', 'evidence', 'questions',
@@ -372,9 +374,8 @@ function injectComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
   if (!prompt.trim()) throw packetError('작업 내용을 입력하세요.', 'COMPREHENSION_PROMPT_EMPTY');
   if (hasComprehensionContract(prompt)) return prompt;
-  if (/<\/?whitebox-comprehension-(?:contract|packet)\b/iu.test(prompt)) {
-    throw packetError('작업 내용에 예약된 이해 패킷 태그가 포함되어 있습니다.', 'COMPREHENSION_RESERVED_MARKER');
-  }
+  // Tag examples are user content, not evidence of an app-injected contract.
+  // Keep them intact after the exact, byte-stable contract prefix.
   return `${COMPREHENSION_CONTRACT}\n\n${prompt}`;
 }
 

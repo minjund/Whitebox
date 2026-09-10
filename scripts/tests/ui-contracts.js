@@ -568,7 +568,7 @@ const I18N_RUNTIME_CONTRACTS = [
   'whitebox:locale-changed',
   'MutationObserver',
   'function t(key, params)',
-  'function errorText(error, fallbackKey, params)',
+  'function errorText(error, fallbackKey, params, { includeDetails = false } = {})',
   'function observedText(value)',
   'data-i18n',
 ];
@@ -1583,9 +1583,9 @@ function registerUiContractTests(context) {
     assert.ok(mainEntry.includes("new Tray(icon)"));
     assert.ok(mainEntry.includes("app.dock.setIcon(sourceDockIcon)"));
     assert.ok(html.includes('id="brandIcon"'));
-    assert.ok(html.includes('src="assets/whitebox-mark.svg"'));
-    const brandMark = fs.readFileSync(path.join(root, 'renderer', 'assets', 'whitebox-mark.svg'), 'utf8');
-    assert.match(brandMark, /<svg[^>]+viewBox="0 0 64 64"/);
+    assert.ok(html.includes('src="../build/icon.png"'));
+    assert.ok(pkg.files.includes('build/icon.png'));
+    assert.ok(pkg.build.files.includes('build/icon.png'));
     assert.ok(
       mainEntry.includes('WHITEBOX_SOURCE_LAUNCHER=1'),
       '소스 브리지에서 데스크톱 앱을 열 때 Electron 실행 파일과 앱 경로를 함께 전달해야 합니다.',

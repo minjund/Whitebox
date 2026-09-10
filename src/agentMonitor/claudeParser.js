@@ -718,6 +718,8 @@ function createClaudeParser(dependencies) {
     const finalizedComprehension = stageComprehensionCandidate(session, state.lastAssistantRawText, {
       stageCandidate: true,
     });
+    session.questionnaireSource = session.completionObserved && session.status === 'completed'
+      ? { prompt: state.latestUser, answer: finalizedComprehension.body } : null;
     if (finalizedComprehension.comprehension) {
       session.comprehension = finalizedComprehension.comprehension;
     }

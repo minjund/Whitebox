@@ -1,17 +1,81 @@
 'use strict';
 
-// A presentation-only addon: xterm still owns composition and onData. Keep its
-// native composition view measurable, but paint the preedit and the row it
-// temporarily covers together. No synthetic key/input events or PTY writes.
+// Preserve xterm's input path and paint the preedit together with the row it
+// covers. The commit guard below works around xterm 6.0's shared send timer;
+// committed text still travels through terminal.input -> onData, never the PTY
+// directly. No synthetic DOM events or changes to the textarea value.
 window.WhiteboxTerminalIme = {
   createAddon() {
     let cleanup = () => {};
+    function guardCommits(terminal, textarea, nativeView) {
+      // Keep this private-API workaround isolated and covered by the real
+      // bundled-xterm tests. Remove/revisit when upgrading xterm's helper:
+      // https://github.com/xtermjs/xterm.js/issues/6089
+      const helper = terminal._core?._compositionHelper;
+      if (!helper || typeof helper.compositionstart !== 'function'
+        || typeof helper._finalizeComposition !== 'function'
+        || typeof helper._compositionPosition?.start !== 'number'
+        || typeof helper._dataAlreadySent !== 'string'
+        || typeof helper._isComposing !== 'boolean'
+        || typeof terminal.input !== 'function') return () => {};
+      const originalStart = helper.compositionstart;
+      const originalFinalize = helper._finalizeComposition;
+      let pending = null;
+      const flush = () => {
+        if (!pending) return;
+        const commit = pending;
+        pending = null;
+        clearTimeout(commit.timer);
+        helper._isSendingComposition = false;
+        // Read after browser propagation, or immediately before the next
+        // composition starts. compositionend.data can still contain the old
+        // 받침 when the IME moves that consonant into the next syllable.
+        const input = textarea.value.slice(commit.start);
+        if (input) terminal.input(input, true);
+      };
+      const start = function () {
+        // The textarea still contains the previous committed value here. Drain
+        // it before xterm overwrites the start offset for the next syllable.
+        flush();
+        originalStart.call(this);
+      };
+      const finalize = function (waitForPropagation) {
+        const wasComposing = this._isComposing;
+        flush();
+        nativeView.classList.remove('active');
+        this._isComposing = false;
+        // A key can finalize synchronously before compositionend arrives.
+        // That later event must not enqueue the same syllable a second time.
+        if (!wasComposing) return;
+        pending = {
+          start: this._compositionPosition.start + this._dataAlreadySent.length,
+          timer: null,
+        };
+        this._isSendingComposition = true;
+        if (waitForPropagation) pending.timer = setTimeout(flush, 0);
+        else flush();
+      };
+      helper.compositionstart = start;
+      helper._finalizeComposition = finalize;
+      // xterm clears its textarea on blur. Commit a finished composition
+      // before that listener runs, without submitting an active preedit.
+      textarea.addEventListener('blur', flush, true);
+      return () => {
+        if (pending) clearTimeout(pending.timer);
+        pending = null;
+        helper._isSendingComposition = false;
+        textarea.removeEventListener('blur', flush, true);
+        if (helper.compositionstart === start) helper.compositionstart = originalStart;
+        if (helper._finalizeComposition === finalize) helper._finalizeComposition = originalFinalize;
+      };
+    }
     return {
       activate(terminal) {
         const textarea = terminal.textarea;
         const screen = terminal.element?.querySelector('.xterm-screen');
         const nativeView = terminal.element?.querySelector('.composition-view');
         if (!textarea || !screen || !nativeView) return;
+        const disposeCommitGuard = guardCommits(terminal, textarea, nativeView);
         const doc = textarea.ownerDocument;
         const view = doc.createElement('div');
         view.className = 'whitebox-ime-view';
@@ -164,6 +228,7 @@ window.WhiteboxTerminalIme = {
         observer.observe(nativeView, { attributes: true, attributeFilter: ['class'] });
         cleanup = () => {
           disposed = true;
+          disposeCommitGuard();
           reset();
           observer.disconnect();
           subscriptions.forEach(subscription => subscription.dispose());

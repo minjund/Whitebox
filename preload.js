@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   openUpdateRelease: () => ipcRenderer.invoke('app:update-open-release'),
   snapshot: () => ipcRenderer.invoke('agents:snapshot'),
   sessionDetail: sessionId => ipcRenderer.invoke('agents:detail', sessionId),
+  retryQuestionnaire: sessionId => ipcRenderer.invoke('agents:retry-questionnaire', sessionId),
   runAgent: options => ipcRenderer.invoke('agents:run', options),
   stopAgent: runId => ipcRenderer.invoke('agents:stop', runId),
   pauseAgent: runId => ipcRenderer.invoke('agents:pause', runId),
