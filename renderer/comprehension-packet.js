@@ -30,7 +30,6 @@
   const ENVELOPE_OPEN = '<whitebox-comprehension-packet version="1">';
   const ENVELOPE_CLOSE = "</whitebox-comprehension-packet>";
   const STORAGE_PREFIX = "whitebox:comprehension:v1";
-  const RESERVED_MARKER_PATTERN = /<\/?whitebox-comprehension-(?:contract|packet)\b/iu;
   let instanceSequence = 0;
 
   const FALLBACK_MESSAGES = Object.freeze({
@@ -77,6 +76,9 @@
     review_complete: "확인 완료",
     badge_complete: "이해 확인 · {score}/{total}",
     badge_debt: "이해 부채 · 미확인",
+    generating: "질문지 만드는 중",
+    generation_failed: "질문지를 만들지 못했습니다",
+    generation_retry: "다시 만들기",
     badge_open_aria: "{status}. 이해 패킷 열기",
     missing_initial: "{count}개 문항에 답해주세요.",
     all_correct: "모든 문제를 맞혔습니다.",
@@ -144,11 +146,8 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       throw error;
     }
     if (hasContract(prompt)) return prompt;
-    if (RESERVED_MARKER_PATTERN.test(prompt)) {
-      const error = new Error(translate("reserved_marker"));
-      error.code = "COMPREHENSION_RESERVED_MARKER";
-      throw error;
-    }
+    // Tag examples are user content. Only the exact contract prefix above is
+    // app framing; preserve every byte of the question after that prefix.
     return `${CONTRACT_BLOCK}\n\n${prompt}`;
   }
 
@@ -225,11 +224,16 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       && !session.parentId
       && Number(session.depth || 0) === 0
       && session.completionObserved === true
-      && session.comprehensionContractInjected === true
+      && (session.comprehensionContractInjected === true || hasBackgroundOrigin(session))
       && isRecord(session.comprehension)
       && session.comprehension.status === "ready"
       && session.comprehension.schemaVersion === SCHEMA_VERSION
       && isRenderablePacket(session.comprehension.packet));
+  }
+
+  function hasBackgroundOrigin(session) {
+    return session?.comprehensionOrigin?.authority === "background-questionnaire-v1"
+      && /^[a-f0-9]{64}$/u.test(session.comprehensionOrigin.generation || "");
   }
 
   function canonicalPacketJson(value, seen = new Set()) {
@@ -1517,6 +1521,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function onLocaleChanged() {
+      if (currentSession && !currentPacket) { mount(currentSession); return; }
       if (destroyed || !currentPacket || !overlay) return;
       const focusDescriptor = describeDynamicFocus(doc.activeElement);
       const scrollSnapshot = [overlay, dialog, quizPanel, questionList]
@@ -1593,6 +1598,46 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function mount(session = context.session, options = {}) {
+      const generationStatus = session?.comprehension?.status;
+      if (!destroyed && doc && hasBackgroundOrigin(session) && session.status === "completed"
+        && session.completionObserved === true && !session.parentId && !Number(session.depth || 0)
+        && ["queued", "generating", "failed"].includes(generationStatus)) {
+        const surface = resolveSurface();
+        if (!surface) return false;
+        const statusKey = generationStatus === "failed" ? "generation_failed" : "generating";
+        if (currentSession?.id === session.id && currentSurface === surface && !currentPacket && badge
+          && badge.dataset.generationStatus === generationStatus) {
+          badgeText.textContent = translate(statusKey);
+          if (badgeButton) badgeButton.textContent = translate("generation_retry");
+          return true;
+        }
+        unmount();
+        currentSession = session;
+        currentSurface = surface;
+        badge = createElement("div", "comprehension-packet-badge", {
+          id: "comprehensionPacketBadge", role: "status", "data-whitebox-comprehension-badge": "",
+          "data-generation-status": generationStatus,
+        });
+        badgeText = createElement("span", "", { text: translate(statusKey) });
+        append(badge, createElement("i", "", { "aria-hidden": "true" }), badgeText);
+        if (generationStatus === "failed") {
+          badgeButton = createElement("button", "comprehension-packet-badge-button", {
+            type: "button", text: translate("generation_retry"),
+          });
+          badgeButton.addEventListener("click", async () => {
+            const button = badgeButton;
+            button.disabled = true;
+            try {
+              const retry = context.retryQuestionnaire || root?.whitebox?.retryQuestionnaire;
+              await retry?.(session.id);
+            } catch (error) { report("comprehension-retry", error); }
+            finally { if (button.isConnected) button.disabled = false; }
+          });
+          badge.append(badgeButton);
+        }
+        surface.append(badge);
+        return true;
+      }
       if (destroyed || !doc || !isEligibleSession(session)) {
         if (currentSession) unmount();
         return false;

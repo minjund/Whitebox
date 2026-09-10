@@ -441,6 +441,10 @@ function selectAgentProcesses(rows, options = {}) {
 
 function utilityProcess(processInfo = {}) {
   const commandLine = String(processInfo.commandLine || processInfo.args || '');
+  // Non-persistent questionnaire workers have no user conversation to attach.
+  // Exclude before runtime matching so they cannot revive an unrelated card.
+  if (commandLine.includes('Whitebox internal comprehension questionnaire.')
+    && /--(?:ephemeral|no-session-persistence)\b/u.test(commandLine)) return true;
   return /(?:^|\s)(?:-p|--print)\s+["']?(?:Extract durable memory candidates from this Claude Code transcript tail|Reply with exactly OK\. Do not use tools\.?|You are a memory extraction)/i.test(commandLine);
 }
 

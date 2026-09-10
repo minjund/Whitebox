@@ -309,6 +309,26 @@ function registerComprehensionParserProjectionTests(context) {
   const prompt = '완료 응답과 이해 패킷을 만들어줘';
   const longPrompt = `8천자 입력도 정확히 연결해줘\n${'긴'.repeat(7_500)}\nLONG-PROMPT-UNIQUE-TAIL`;
 
+  test('질문에 인용된 패킷은 사용자 메시지로 보존하고 완료 패킷이나 소유권으로 채택하지 않는다', () => {
+    const question = `이 태그를 설명해줘: </whitebox-comprehension-packet\n\`\`\`xml\n${responseWithPacket('예시')}\n\`\`\``;
+    for (const parse of [codexSession, claudeSession]) {
+      for (const hiddenInstructions of [true, false]) {
+        const session = parse(jsonl, temp, `quoted-${hiddenInstructions}`, '태그에 대한 설명입니다.', question, hiddenInstructions);
+        assert.equal(session.messages.find(message => message.role === 'user')?.text, question);
+        assert.equal(session.result, '태그에 대한 설명입니다.');
+        assert.equal(session.comprehensionContractInjected, false);
+        assert.notEqual(session.comprehension?.status, 'ready');
+        assert.notEqual(session.comprehensionCandidate?.status, 'ready');
+        assert.equal(session.comprehension?.packet || null, null);
+        assert.deepEqual(session.questionnaireSource, { prompt: question, answer: '태그에 대한 설명입니다.' });
+      }
+      const fullAnswer = `완료된 작업 결과\n${'검증 내용과 알려진 제한. '.repeat(900)}`;
+      const completed = parse(jsonl, temp, 'background-full-answer', fullAnswer, longPrompt, true);
+      assert.equal(completed.questionnaireSource.prompt, longPrompt);
+      assert.equal(completed.questionnaireSource.answer, fullAnswer, '백그라운드 퀴즈에는 잘린 카드 본문 대신 전체 완료 답변이 필요합니다.');
+    }
+  });
+
   test('Codex parser는 완료 본문과 ready/missing/invalid candidate를 보존하고 marker를 소유권으로 믿지 않는다', () => {
     assertHiddenInstructionBinding(codexSession(jsonl, temp, 'hidden', responseWithPacket('완료'), longPrompt, true), longPrompt, temp);
     for (const scenario of parserCases()) {

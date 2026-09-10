@@ -677,6 +677,14 @@ const api = {
     return clone(response.detail);
   },
   runAgent: options => controlled('runAgent', [options], { ok: true, runId: 'fixture-new-run' }),
+  retryQuestionnaire: async id => {
+    await controlled('retryQuestionnaire', [id], { ok: true });
+    const session = snapshot.sessions.find(item => item.id === id);
+    if (!session) return { ok: false };
+    session.comprehension = { status: 'generating', schemaVersion: 1 };
+    snapshotListeners.forEach(listener => listener(clone(snapshot)));
+    return { ok: true };
+  },
   stopAgent: runId => controlled('stopAgent', [runId], { ok: true }),
   pauseAgent: runId => controlled('pauseAgent', [runId], { ok: true, status: 'paused' }),
   resumeAgentRun: runId => controlled('resumeAgentRun', [runId], { ok: true, status: 'running' }),

@@ -568,11 +568,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   function freshAgentLaunchOptions(options = {}) {
     const provider = String(options.provider || '').trim().toLowerCase();
     const userPrompt = String(options.prompt || '').trim();
-    const injectComprehensionPrompt = window.WhiteboxComprehension?.injectPrompt;
-    const comprehensionPromptInjected = typeof injectComprehensionPrompt === 'function';
-    const prompt = comprehensionPromptInjected
-      ? injectComprehensionPrompt(userPrompt)
-      : userPrompt;
+    const prompt = userPrompt;
     const model = String(options.model || '').trim();
     const allowWrites = Boolean(options.allowWrites);
     const requestedPermissionMode = String(options.permissionMode || '').trim();
@@ -602,13 +598,11 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       if (allowWrites) args.push('--always-approve');
     }
 
-    // Claude and Codex accept a startup prompt. The terminal host separates
-    // the internal contract into their instruction options before spawning;
-    // never race their interactive input editor with a startup paste.
-    const initialCommandInArgs = provider !== 'grok'
-      && (!comprehensionPromptInjected || ['claude', 'codex'].includes(provider));
+    // Questionnaire generation is a separate background request. Pass the
+    // original prompt directly to providers that accept startup input.
+    const initialCommandInArgs = provider !== 'grok';
     if (initialCommandInArgs && provider === 'gemini') args.push('--prompt-interactive', prompt);
-    else if (initialCommandInArgs) args.push(comprehensionPromptInjected ? userPrompt : prompt);
+    else if (initialCommandInArgs) args.push(prompt);
     return { provider, prompt, userPrompt, args, initialCommandInArgs };
   }
 

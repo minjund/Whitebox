@@ -11,9 +11,10 @@ const { reportRecoverableError, runBestEffort } = require('./diagnostics');
 const { pruneManagedRuns, restrictPathPermissions } = require('./dataRetention');
 const {
   finalizeComprehension,
-  injectComprehensionContract,
   MAX_RESPONSE_BYTES,
 } = require('./comprehensionPacket');
+const { questionnaireCommand } = require('./questionnaireCommand');
+const INTERNAL_QUESTIONNAIRE = Symbol('internal-questionnaire');
 
 const DEFAULT_TERMINATION_GRACE_MS = 1_000;
 const DEFAULT_PERSIST_DELAY_MS = 50;
@@ -639,6 +640,9 @@ class AgentRunner extends EventEmitter {
     super();
     this.runsDir = options.runsDir;
     this.active = new Map();
+    this.questionnaireCwd = path.join(path.dirname(this.runsDir), 'questionnaire-workspace');
+    this.questionnaireIds = new Set();
+    this.questionnaireTimeoutMs = options.questionnaireTimeoutMs || 180_000;
     this.platform = options.platform || process.platform;
     this.spawn = options.spawn || spawn;
     this.execFile = options.execFile || execFile;
@@ -663,6 +667,55 @@ class AgentRunner extends EventEmitter {
 
   listActive() {
     return [...this.active.values()].map(item => ({ runId: item.id, provider: item.provider, pid: item.child.pid, externalId: item.state.externalId }));
+  }
+
+  listVisibleActive() {
+    return this.listActive().filter(item => !this.questionnaireIds.has(item.runId));
+  }
+
+  isQuestionnaireSession(session) {
+    return Boolean(session && (this.questionnaireIds.has(session.runId)
+      || (session.cwd && path.resolve(session.cwd) === path.resolve(this.questionnaireCwd))));
+  }
+
+  generateQuestionnaire({ provider, prompt, model = '' }) {
+    if ([...this.active.values()].some(run => run.internalQuestionnaire)) {
+      return Promise.reject(new Error('이전 질문지 요청이 아직 종료되지 않았습니다.'));
+    }
+    ensureDir(this.questionnaireCwd);
+    return new Promise((resolve, reject) => {
+      let id = '';
+      let timeout;
+      const onChanged = event => {
+        if (event.runId !== id || this.active.has(id)) return;
+        clearTimeout(timeout);
+        this.removeListener('changed', onChanged);
+        if (event.state.status !== 'completed' || !event.state.completionObserved) {
+          reject(new Error(event.state.statusDetail));
+        } else resolve(lastAssistantResponse(event.state));
+      };
+      this.on('changed', onChanged);
+      let result;
+      try {
+        result = this.start({ provider, prompt, model, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: true });
+      } catch (error) {
+        this.removeListener('changed', onChanged);
+        reject(error);
+        return;
+      }
+      if (!result.ok) {
+        this.removeListener('changed', onChanged);
+        reject(new Error(result.error));
+        return;
+      }
+      id = result.runId;
+      timeout = setTimeout(() => {
+        this.removeListener('changed', onChanged);
+        reject(new Error('질문지 생성 시간이 초과되었습니다.'));
+        this.stop(id);
+      }, this.questionnaireTimeoutMs);
+      timeout.unref?.();
+    });
   }
 
   prepareForUpdate(confirmedRuns = []) {
@@ -698,18 +751,11 @@ class AgentRunner extends EventEmitter {
     const executable = findExecutable(PROVIDERS[provider].command);
     if (!executable) return { ok: false, error: `${PROVIDERS[provider].label} AI 프로그램이 설치되어 있지 않습니다.` };
 
-    let providerPrompt = prompt;
-    const comprehensionContractInjected = !raw.parentId;
-    if (comprehensionContractInjected) {
-      try {
-        providerPrompt = injectComprehensionContract(prompt);
-      } catch (error) {
-        return { ok: false, error: error.message };
-      }
-    }
+    const internalQuestionnaire = raw[INTERNAL_QUESTIONNAIRE] === true;
+    const comprehensionContractInjected = false;
     const id = runId();
     const dir = path.join(this.runsDir, id);
-    ensureDir(dir);
+    if (!internalQuestionnaire) ensureDir(dir);
     const opts = { ...raw, provider, prompt, cwd, comprehensionContractInjected };
     const state = makeSession(id, provider, opts);
     const meta = {
@@ -722,25 +768,29 @@ class AgentRunner extends EventEmitter {
       ...(raw.parentId ? { parentId: raw.parentId } : {}),
       createdAt: state.startedAt,
     };
-    atomicJson(path.join(dir, 'meta.json'), meta);
-    atomicJson(path.join(dir, 'session.json'), state);
-    const spec = commandSpec(provider, { ...opts, prompt: providerPrompt }, executable);
+    if (!internalQuestionnaire) {
+      atomicJson(path.join(dir, 'meta.json'), meta);
+      atomicJson(path.join(dir, 'session.json'), state);
+    }
 
     let child;
     try {
+      const spec = internalQuestionnaire
+        ? questionnaireCommand(provider, cwd, raw.model || '', this.platform)
+        : commandSpec(provider, opts, executable);
       child = this.spawn(spec.command, spec.args, {
         cwd,
         env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
         detached: this.platform !== 'win32',
         windowsHide: true,
         shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [internalQuestionnaire ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
       state.status = 'failed';
       state.activityState = 'error';
       state.statusDetail = error.message;
-      atomicJson(path.join(dir, 'session.json'), state);
+      if (!internalQuestionnaire) atomicJson(path.join(dir, 'session.json'), state);
       return { ok: false, error: error.message };
     }
 
@@ -748,8 +798,9 @@ class AgentRunner extends EventEmitter {
       id, provider, dir, child, state, stdoutBuffer: '', stderrBuffer: '', stopping: false,
       stdoutDecoder: new StringDecoder('utf8'), stderrDecoder: new StringDecoder('utf8'),
       processGroup: this.platform !== 'win32',
-      pendingEventLines: [], persistTimer: null, outputOverflow: false,
+      pendingEventLines: [], persistTimer: null, outputOverflow: false, internalQuestionnaire,
     };
+    if (internalQuestionnaire) this.questionnaireIds.add(id);
     this.active.set(id, run);
     state.status = 'running';
     state.activityState = 'thinking';
@@ -760,6 +811,10 @@ class AgentRunner extends EventEmitter {
     child.stdout.on('data', chunk => this.consume(run, 'stdout', chunk));
     child.stderr.on('data', chunk => this.consume(run, 'stderr', chunk));
     child.on('error', error => this.handleChildError(run, error));
+    if (internalQuestionnaire) {
+      child.stdin.on('error', error => this.handleChildError(run, error));
+      child.stdin.end(prompt, 'utf8');
+    }
     child.on('close', (code, signal) => {
       run.closed = true;
       run.closeCode = code;
@@ -920,6 +975,7 @@ class AgentRunner extends EventEmitter {
   }
 
   schedulePersist(run, eventLine = '') {
+    if (run.internalQuestionnaire) return;
     if (eventLine) {
       if (!Array.isArray(run.pendingEventLines)) run.pendingEventLines = [];
       run.pendingEventLines.push(eventLine);
@@ -936,6 +992,7 @@ class AgentRunner extends EventEmitter {
   }
 
   persist(run) {
+    if (run.internalQuestionnaire) return;
     if (run.persistTimer) {
       clearTimeout(run.persistTimer);
       run.persistTimer = null;

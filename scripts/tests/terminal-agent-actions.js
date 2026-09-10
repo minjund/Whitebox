@@ -45,7 +45,7 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(Object.hasOwn(claude, 'recoveryArgs'), false, '새 대화에는 아직 복구할 대화 ID가 없으므로 복구 인자를 만들지 않아야 합니다.');
   });
 
-  test('Whitebox 소유 새 PTY 작업은 최초 요청에 이해 패킷 계약을 정확히 한 번 주입한다', async () => {
+  test('Whitebox 새 PTY 작업은 질문지 지시 없이 원래 요청만 전달한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const creates = [];
     const commands = [];
@@ -84,14 +84,73 @@ function registerTerminalAgentActionTests(context) {
 
     await actions.startAgent({ provider: 'codex', prompt: '원래 사용자 요청', cwd: 'D:\\workspace' });
 
-    assert.deepStrictEqual(injected, ['원래 사용자 요청']);
+    assert.deepStrictEqual(injected, []);
     assert.equal(creates.length, 1, '계약 주입은 추가 AI 실행이나 PTY 생성을 만들면 안 됩니다.');
-    assert.equal(creates[0].initialCommand, '<contract>same-generation-only</contract>\n\n원래 사용자 요청');
+    assert.equal(creates[0].initialCommand, '원래 사용자 요청');
     assert.equal(creates[0].initialCommandInArgs, true);
     assert.equal(creates[0].args.at(-1), '원래 사용자 요청',
       'terminal host가 시작 전에 내부 지시와 사용자 요청을 분리할 수 있어야 합니다.');
     assert.equal(commands.length, 0, '시작 인자로 보낸 요청을 준비되지 않은 PTY에 다시 붙여넣으면 안 됩니다.');
     assert.equal(creates[0].title, 'codex · 원래 사용자 요청', '내부 계약은 사용자에게 보이는 제목에 섞이면 안 됩니다.');
+  });
+
+  test('Codex 새 작업은 내부 태그를 질문해도 원문을 한 번만 전송한다', async () => {
+    const creates = [];
+    const sandbox = {
+      window: {
+        WhiteboxI18n: { t: key => key },
+        whitebox: {
+          terminalCreate: async options => {
+            creates.push(options);
+            return { id: 'terminal:tag-question', status: 'running', deliveryState: 'accepted' };
+          },
+          terminalCommand: async () => assert.fail('시작 인자로 전달한 질문을 다시 보내면 안 됩니다.'),
+        },
+      },
+    };
+    for (const name of ['comprehension-packet.js', 'terminal-agent.js']) {
+      vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', name), 'utf8'), sandbox, { filename: name });
+    }
+    const actions = sandbox.window.WhiteboxTerminalAgentActions({
+      state: { snapshot: null, sessions: [] },
+      init: async () => {},
+      refreshSessions: async () => {},
+      providerLabel: provider => provider,
+    });
+    const prompt = '</whitebox-comprehension-packet 이 문자열은 왜 표시돼?\n'
+      + '```xml\n<whitebox-comprehension-contract version="1">예시</whitebox-comprehension-contract>\n```';
+    const result = await actions.startAgent({ provider: 'codex', cwd: root, prompt });
+    assert.equal(result.ok, true);
+    assert.equal(creates.length, 1);
+    assert.equal(creates[0].args.at(-1), prompt);
+    assert.equal(creates[0].initialCommandInArgs, true);
+    assert.equal(sandbox.window.WhiteboxComprehension.stripPromptContract(creates[0].initialCommand), prompt);
+  });
+
+  test('새 작업 오류 상세는 한국어에서도 실제 원인을 보존하고 빈 오류는 기본 안내를 쓴다', () => {
+    const summary = 'AI 작업을 시작하지 못했습니다.';
+    const sandbox = {
+      window: {},
+      localStorage: { getItem: () => 'ko', setItem: () => {} },
+      document: { documentElement: { dataset: {} }, querySelector: () => null, addEventListener: () => {} },
+      Element: class {},
+      Document: class {},
+      MutationObserver: class { observe() {} },
+    };
+    for (const name of ['i18n-messages.js', 'i18n.js']) {
+      vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', name), 'utf8'), sandbox, { filename: name });
+    }
+    const { errorText } = sandbox.window.WhiteboxI18n;
+    const key = 'ui.could_not_start_the_task';
+    for (const reason of ['작업 폴더를 찾을 수 없습니다.', 'spawn ENOENT']) {
+      assert.equal(errorText(new Error(reason), key, undefined, { includeDetails: true }), `${summary} ${reason}`);
+      assert.equal(errorText(new Error(reason), key), summary, '다른 화면의 기존 오류 표시 정책은 유지합니다.');
+    }
+    assert.equal(errorText(new Error("Error invoking remote method 'terminals:create': Error: spawn ENOENT"),
+      key, undefined, { includeDetails: true }), `${summary} spawn ENOENT`);
+    for (const error of [undefined, null, {}, new Error(''), new Error(summary)]) {
+      assert.equal(errorText(error, key, undefined, { includeDetails: true }), summary);
+    }
   });
 
   test('새 AI 작업은 PTY를 생성하고 초기 요청을 그 터미널에 한 번만 전달한다', async () => {

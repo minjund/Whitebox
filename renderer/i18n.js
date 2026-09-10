@@ -109,9 +109,14 @@
     return interpolate(message[locale] ?? message.ko ?? key, params);
   }
 
-  /** Show a plain action-oriented message in Korean; technical details stay out of the main UI. */
-  function errorText(error, fallbackKey, params) {
-    const message = String(error?.message || error || '').trim();
+  /** Forms can include the failure reason alongside their translated summary. */
+  function errorText(error, fallbackKey, params, { includeDetails = false } = {}) {
+    const message = String(error?.message || (typeof error === 'string' ? error : '')).trim();
+    if (includeDetails && message) {
+      const summary = t(fallbackKey, params);
+      const detail = message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '').trim();
+      return !detail || detail === summary ? summary : `${summary} ${detail}`;
+    }
     if (locale === 'ko') return t(fallbackKey, params);
     if (message && !/[가-힣]/.test(message)) return message;
     return t(fallbackKey, params);
