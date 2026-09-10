@@ -56,11 +56,19 @@
     variant_title: "변형 문제 · {prompt}",
     retry_button: "재확인",
     initial_eyebrow: "이해 확인",
-    initial_title: "{count}문항을 한 번에 제출하세요",
+    initial_title: "요약을 읽고 {count}문항을 풀어보세요",
     no_questions_title: "평가할 문항이 없습니다.",
     no_questions_initial: "모든 문항이 문제 오류로 제외되어 점수와 이해 부채에 반영되지 않습니다.",
-    review_eyebrow: "오답 재확인",
-    review_title: "같은 카드가 해설과 변형 문제로 전환됐습니다",
+    review_eyebrow: "내 풀이 기록",
+    review_title: "답안을 확인하고 오답을 다시 풀어보세요",
+    completed_title: "풀었던 문제와 답을 확인하세요",
+    answer_label: "내 답",
+    correct_label: "정답",
+    status_correct: "정답",
+    status_variant_correct: "변형 문제 정답",
+    status_excluded: "문제 오류 · 평가 제외",
+    history_label: "풀었던 문제 목록",
+    summary_hint: "AI가 답한 핵심 내용입니다. 이 요약을 참고해 문제를 풀어보세요.",
     no_questions_review: "문제 오류로 제외된 문항은 점수 분모와 이해 부채에 포함되지 않습니다.",
     all_understood_title: "모든 문제를 이해했습니다.",
     explanation_reviewed_title: "해설 확인을 마쳤습니다.",
@@ -80,7 +88,7 @@
     badge_open_aria: "{status}. 이해 패킷 열기",
     missing_initial: "{count}개 문항에 답해주세요.",
     all_correct: "모든 문제를 맞혔습니다.",
-    wrong_only: "맞힌 문제를 치우고 오답 카드만 남겼습니다.",
+    wrong_only: "답안을 저장했습니다. 틀린 문제는 해설을 읽고 다시 풀어보세요.",
     variant_correct_notice: "정답입니다. 변형 문제 결과를 최종 점수에 반영했습니다.",
     variant_wrong_notice: "정답과 해설을 확인한 뒤 이해했음을 표시해주세요.",
     understood_notice: "이해 부채를 해소했습니다. 오답 점수는 변경되지 않습니다.",
@@ -93,7 +101,7 @@
     difficulty_aria: "난이도 {difficulty}",
     difficulty_label: "난이도 ",
     close_aria: "이해 패킷 닫기",
-    briefing_eyebrow: "작업 설명 · 오픈북",
+    briefing_eyebrow: "AI 답변 요약 · 오픈북",
     evidence_label: "실제 근거",
     evidence_mark: "근거",
     submit_answers: "답안 제출",
@@ -748,10 +756,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         "aria-describedby": errorId,
         "aria-errormessage": errorId,
       });
-      const legend = createElement("legend", "", { id: legendId, text: question.prompt });
+      const legend = createElement("legend", "comprehension-packet-sr-only", { text: question.prompt });
       append(card,
         legend,
         makeQuestionMeta(question, index),
+        createElement("p", "comprehension-packet-original-prompt", { id: legendId, text: question.prompt }),
         makeChoices(question, false, false, { labelId: legendId, errorId }),
         makeValidationError(errorId, translate("required_initial")));
       questionNodes.set(question.id, card);
@@ -760,6 +769,20 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
 
     function correctOptionLabel(question) {
       return question.variant.options.find(option => option.id === question.variant.answerId)?.label || question.variant.answerId;
+    }
+
+    function makeAnswerSummary(question, variant = false) {
+      const source = variant ? question.variant : question;
+      const selected = (variant ? progress.variantAnswers : progress.answers).get(question.id);
+      const answers = createElement("dl", "comprehension-packet-answer-summary");
+      for (const [key, id] of [["answer_label", selected], ["correct_label", source.answerId]]) {
+        const row = createElement("div", "");
+        append(row,
+          createElement("dt", "", { text: translate(key) }),
+          createElement("dd", "", { text: source.options.find(option => option.id === id)?.label || "—" }));
+        answers.append(row);
+      }
+      return answers;
     }
 
     function makeVariantResult(question) {
@@ -800,22 +823,30 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
 
     function makeReviewCard(question, index) {
       const outcome = progress.outcomes.get(question.id);
+      const initiallyCorrect = outcome === "correct";
       const variantWasSubmitted = progress.variantSubmitted.has(question.id);
       const resolved = progress.resolved.has(question.id);
-      const card = createElement("article", "comprehension-packet-question-card comprehension-packet-remediation-card", {
+      const card = createElement("article", `comprehension-packet-question-card ${initiallyCorrect ? "comprehension-packet-result-card" : "comprehension-packet-remediation-card"}`, {
         "data-comprehension-question": question.id,
         tabindex: "-1",
       });
       if (resolved) card.classList.add("is-resolved");
       const acknowledged = outcome === "final-wrong" && progress.understood.has(question.id);
       if (acknowledged) card.classList.add("is-acknowledged");
-      card.dataset.comprehensionStatus = translate(acknowledged
-        ? "status_explanation_reviewed"
-        : (resolved ? "status_confirmed" : "status_retry"));
+      card.dataset.comprehensionStatus = reviewStatus(question);
+      const meta = makeQuestionMeta(question, index, !initiallyCorrect);
+      const status = createElement("span", "comprehension-packet-result-status", { text: card.dataset.comprehensionStatus });
       const originalPrompt = createElement("p", "comprehension-packet-original-prompt", { text: question.prompt });
       const remediation = createElement("section", "comprehension-packet-remediation");
       const explanationTitle = createElement("h3", "", { text: translate("explanation_title") });
       const explanation = createElement("p", "", { text: question.explanation });
+      append(card, meta, status, originalPrompt, makeAnswerSummary(question));
+      append(remediation, explanationTitle, explanation, makeEvidenceChips(question));
+      if (initiallyCorrect) {
+        card.append(remediation);
+        questionNodes.set(question.id, card);
+        return card;
+      }
       const variantTitleId = `${instanceId}-variant-title-${index}`;
       const variantErrorId = `${instanceId}-variant-error-${index}`;
       const variantBox = createElement("div", "comprehension-packet-variant-box", {
@@ -831,7 +862,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         id: variantTitleId,
         text: translate("variant_title", { prompt: question.variant.prompt }),
       });
-      const variantChoices = makeChoices(question, true, variantWasSubmitted, {
+      const variantChoices = variantWasSubmitted ? makeAnswerSummary(question, true) : makeChoices(question, true, false, {
         labelId: variantTitleId,
         errorId: variantErrorId,
       });
@@ -848,8 +879,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         }));
         variantBox.append(actions);
       }
-      append(remediation, explanationTitle, explanation, makeEvidenceChips(question), variantBox, makeVariantResult(question));
-      append(card, makeQuestionMeta(question, index, true), originalPrompt, remediation);
+      if (variantWasSubmitted && outcome === "variant-correct") {
+        variantBox.append(createElement("p", "comprehension-packet-variant-explanation", { text: question.variant.explanation }));
+      }
+      append(remediation, variantBox, makeVariantResult(question));
+      card.append(remediation);
       questionNodes.set(question.id, card);
       return card;
     }
@@ -861,6 +895,31 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         createElement("strong", "", { text: title }),
         createElement("p", "", { text: detail }));
       return empty;
+    }
+
+    function reviewStatus(question) {
+      if (progress.excluded.has(question.id)) return translate("status_excluded");
+      const outcome = progress.outcomes.get(question.id);
+      return translate(outcome === "correct" ? "status_correct"
+        : outcome === "variant-correct" ? "status_variant_correct"
+          : progress.understood.has(question.id) ? "status_explanation_reviewed" : "status_retry");
+    }
+
+    function makeHistoryOverview() {
+      const overview = createElement("nav", "comprehension-packet-history", {
+        "aria-label": translate("history_label"),
+      });
+      currentPacket.questions.forEach((question, index) => {
+        const button = createElement("button", "comprehension-packet-history-item", {
+          type: "button",
+          "data-comprehension-review-target": question.id,
+        });
+        append(button,
+          createElement("span", "comprehension-packet-history-prompt", { text: `${index + 1}. ${question.prompt}` }),
+          createElement("span", "comprehension-packet-history-status", { text: reviewStatus(question) }));
+        overview.append(button);
+      });
+      return overview;
     }
 
     function renderInitial() {
@@ -888,28 +947,26 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       questionList.className = "comprehension-packet-question-list is-remediation";
       questionList.replaceChildren();
       const active = activeQuestions();
-      const unresolved = active.filter(question => {
-        const outcome = progress.outcomes.get(question.id);
-        return !progress.resolved.has(question.id) && (outcome === "wrong" || outcome === "final-wrong");
-      });
-      unresolved.forEach(question => {
-        questionList.append(makeReviewCard(question, questionIndex(question)));
-      });
-      if (!unresolved.length) {
-        if (!active.length) {
-          questionList.append(makeEmptyState(
-            translate("no_questions_title"),
-            translate("no_questions_review")));
+      questionList.append(makeHistoryOverview());
+      for (const question of currentPacket.questions) {
+        if (progress.excluded.has(question.id)) {
+          const excluded = createElement("article", "comprehension-packet-question-card is-excluded", {
+            "data-comprehension-excluded-question": question.id,
+            tabindex: "-1",
+          });
+          append(excluded,
+            createElement("span", "comprehension-packet-result-status", { text: translate("status_excluded") }),
+            createElement("p", "comprehension-packet-original-prompt", { text: `${questionIndex(question) + 1}. ${question.prompt}` }));
+          questionList.append(excluded);
+          questionNodes.set(question.id, excluded);
         } else {
-          const score = correctCount();
-          questionList.append(makeEmptyState(
-            score === active.length
-              ? translate("all_understood_title")
-              : translate("explanation_reviewed_title"),
-            score === active.length
-              ? translate("all_understood_detail")
-              : translate("debt_only_detail")));
+          questionList.append(makeReviewCard(question, questionIndex(question)));
         }
+      }
+      if (!active.length) {
+        questionList.prepend(makeEmptyState(
+          translate("no_questions_title"),
+          translate("no_questions_review")));
       }
       submitButton.hidden = true;
       updateSummary();
@@ -945,6 +1002,14 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         questionCount.textContent = translate("review_complete");
       }
       const resolved = isComplete();
+      if (progress.submitted) {
+        modeEyebrow.textContent = translate("review_eyebrow");
+        modeTitle.textContent = translate(resolved ? "completed_title" : "review_title");
+        for (const button of questionList.querySelectorAll("[data-comprehension-review-target]")) {
+          const question = findQuestion(button.dataset.comprehensionReviewTarget);
+          if (question) button.querySelector(".comprehension-packet-history-status").textContent = reviewStatus(question);
+        }
+      }
       badge.classList.toggle("is-resolved", resolved);
       badgeText.textContent = resolved
         ? translate("badge_complete", { score, total: denominator })
@@ -1087,6 +1152,13 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function onOverlayClick(event) {
+      const history = event.target.closest?.("[data-comprehension-review-target]");
+      if (history && overlay.contains(history)) {
+        const card = questionNodes.get(history.dataset.comprehensionReviewTarget);
+        card?.scrollIntoView({ block: "start" });
+        card?.focus({ preventScroll: true });
+        return;
+      }
       const close = event.target.closest?.("[data-comprehension-close]");
       if (close && overlay.contains(close)) {
         closePacket();
@@ -1385,25 +1457,12 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       append(briefing,
         createElement("p", "comprehension-packet-section-label", { text: translate("briefing_eyebrow") }),
         createElement("h2", "", { id: `${suffix}-briefing-title`, text: currentPacket.title }),
-        createElement("p", "comprehension-packet-summary", { id: summaryId, text: currentPacket.summary }),
-        createElement("p", "comprehension-packet-section-label", { text: translate("evidence_label") }));
-      const evidenceList = createElement("div", "comprehension-packet-evidence-list");
-      for (const evidence of currentPacket.evidence) {
-        const evidenceNode = createElement(
-          typeof context.onEvidence === "function" ? "button" : "article",
-          "comprehension-packet-evidence",
-          typeof context.onEvidence === "function"
-            ? { type: "button", "data-comprehension-evidence": evidence.id }
-            : {});
-        const mark = createElement("i", "", { text: translate("evidence_mark"), "aria-hidden": "true" });
-        const copy = createElement("span");
-        append(copy,
-          createElement("b", "", { text: evidence.label }),
-          createElement("small", "", { text: evidence.detail }));
-        append(evidenceNode, mark, copy);
-        evidenceList.append(evidenceNode);
+        createElement("p", "comprehension-packet-summary-hint", { id: summaryId, text: translate("summary_hint") }));
+      const summary = createElement("div", "comprehension-packet-summary");
+      for (const paragraph of currentPacket.summary.trim().split(/\n\s*\n/u)) {
+        summary.append(createElement("p", "", { text: paragraph }));
       }
-      briefing.append(evidenceList);
+      briefing.append(summary);
 
       const quizForm = createElement("form", "comprehension-packet-quiz", {
         id: `${suffix}-form`,
@@ -1472,10 +1531,8 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         ".comprehension-packet-briefing > .comprehension-packet-section-label",
       );
       if (briefingLabels[0]) briefingLabels[0].textContent = translate("briefing_eyebrow");
-      if (briefingLabels[1]) briefingLabels[1].textContent = translate("evidence_label");
-      for (const mark of overlay.querySelectorAll(".comprehension-packet-evidence > i")) {
-        mark.textContent = translate("evidence_mark");
-      }
+      const summaryHint = overlay.querySelector(".comprehension-packet-summary-hint");
+      if (summaryHint) summaryHint.textContent = translate("summary_hint");
       submitButton.textContent = translate("submit_answers");
     }
 

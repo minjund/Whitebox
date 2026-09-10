@@ -16,6 +16,8 @@ const root = path.resolve(__dirname, '..');
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-interaction-pty-'));
 const roundCount = Math.max(1, Math.min(3, Number(process.env.WHITEBOX_INTERACTION_ROUNDS || 3)));
 const focusOnly = process.env.WHITEBOX_INTERACTION_FOCUS_ONLY === '1';
+const comprehensionOnly = process.env.WHITEBOX_INTERACTION_COMPREHENSION_ONLY === '1';
+const comprehensionCaptureDir = String(process.env.WHITEBOX_COMPREHENSION_CAPTURE_DIR || '').trim();
 const removedSelectors = [
   '#ptyFocusChildModal',
   '#ptyFocusChildBody', '#mobileMoreBtn', '#mobileToolsMenu', '#advancedToolsNav',
@@ -39,6 +41,23 @@ function wait(milliseconds) {
 
 async function rendererValue(win, expression) {
   return win.webContents.executeJavaScript(expression);
+}
+
+async function captureComprehension(win, name, scrollSelector = '') {
+  if (!comprehensionCaptureDir) return;
+  fs.mkdirSync(comprehensionCaptureDir, { recursive: true });
+  await rendererValue(win, 'document.fonts.ready.then(() => { for (const animation of document.getAnimations()) { if (Number.isFinite(animation.effect?.getComputedTiming().endTime)) animation.finish(); } return true; })');
+  const [width, height] = win.getContentSize();
+  win.setContentSize(width + 1, height);
+  await wait(100);
+  win.setContentSize(width, height);
+  win.webContents.invalidate();
+  await wait(250);
+  if (scrollSelector) {
+    await rendererValue(win, `document.querySelector(${JSON.stringify(scrollSelector)}).scrollIntoView({block:'start'})`);
+    await wait(100);
+  }
+  fs.writeFileSync(path.join(comprehensionCaptureDir, `${name}.png`), (await win.webContents.capturePage()).toPNG());
 }
 
 async function waitFor(win, expression, message, timeoutMs = 15000) {
@@ -363,7 +382,7 @@ async function exerciseKeyboardAndRunModal(win) {
       + "&&document.activeElement?.id==='quickPaletteInput'",
     'Ctrl+K 빠른 이동 검색을 열지 못했습니다.');
   await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
-    + "input.value='settings';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+    + "input.value=window.WhiteboxI18n.t('app.nav.settings');input.dispatchEvent(new Event('input',{bubbles:true}));})()");
   await waitFor(win, "document.querySelectorAll('[data-quick-command]:not([hidden])').length>=1",
     '빠른 이동 검색 결과가 표시되지 않았습니다.');
   const quickKeyboard = await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
@@ -415,7 +434,9 @@ async function exerciseKeyboardAndRunModal(win) {
         + "['terminalCreate','runAgent'].includes(call.name)).length===0",
     '새 작업 form이 공백 요청을 거부하거나 오류 입력으로 초점을 옮기지 못했습니다.');
 
+  const runErrorLocale = await rendererValue(win, "window.WhiteboxI18n.getLocale()");
   await rendererValue(win, "(()=>{window.interactionTest.clearCalls();"
+    + "window.WhiteboxI18n.setLocale('ko');"
     + "window.interactionTest.configure({failures:{terminalCreate:2}});"
     + "document.querySelector('[data-run-provider=\"codex\"]')?.click();"
     + "const prompt=document.querySelector('#runPrompt');prompt.value='실패해도 보존할 새 작업 요청';"
@@ -426,6 +447,8 @@ async function exerciseKeyboardAndRunModal(win) {
     "window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===2"
       + "&&!document.querySelector('#runError')?.classList.contains('hidden')"
       + "&&document.activeElement?.id==='runError'"
+      + "&&document.querySelector('#runError')?.textContent.includes('terminalCreate fixture failure')"
+      + "&&document.querySelector('#runError')?.textContent.includes('AI 작업을 시작하지 못했습니다.')"
       + "&&!document.querySelector('#runModal')?.classList.contains('hidden')"
       + "&&document.querySelector('#runPrompt')?.value==='실패해도 보존할 새 작업 요청'"
       + "&&document.querySelector('#runCwd')?.value==='D:\\\\fixture'"
@@ -434,10 +457,11 @@ async function exerciseKeyboardAndRunModal(win) {
   const failureCalls = await rendererValue(win,
     "window.interactionTest.getCalls().filter(call=>call.name==='runAgent').length");
   assert(failureCalls === 0, '직접 새 작업 실패가 legacy runAgent 경로를 호출했습니다.');
+  await rendererValue(win, `window.WhiteboxI18n.setLocale(${JSON.stringify(runErrorLocale)})`);
 
   await rendererValue(win, "(()=>{window.interactionTest.clearControls();"
     + "window.interactionTest.restoreTerminals();window.interactionTest.clearCalls();"
-    + "const prompt=document.querySelector('#runPrompt');prompt.value='실제 DOM submit PTY 집중 모드 검증';"
+    + "const prompt=document.querySelector('#runPrompt');prompt.value='이 </whitebox-comprehension-packet 태그를 설명해줘';"
     + "prompt.dispatchEvent(new Event('input',{bubbles:true}));"
     + "document.querySelector('#runModel').value='gpt-fixture';"
     + "const writes=document.querySelector('#allowWrites');"
@@ -454,11 +478,11 @@ async function exerciseKeyboardAndRunModal(win) {
     && submitted.payload.type === 'agent' && submitted.payload.provider === 'codex'
     && submitted.payload.cwd === 'D:\\fixture'
     && submitted.payload.initialCommand.startsWith('<whitebox-comprehension-contract version="1">')
-    && submitted.payload.initialCommand.endsWith('\n\n실제 DOM submit PTY 집중 모드 검증')
+    && submitted.payload.initialCommand.endsWith('\n\n이 </whitebox-comprehension-packet 태그를 설명해줘')
     && submitted.payload.initialCommandInArgs === true
-    && submitted.payload.title === 'GPT · 실제 DOM submit PTY 집중 모드 검증'
+    && submitted.payload.title === 'GPT · 이 </whitebox-comprehension-packet 태그를 설명해줘'
     && submitted.payload.args.includes('gpt-fixture')
-    && submitted.payload.args.filter(arg => arg === '실제 DOM submit PTY 집중 모드 검증').length === 1
+    && submitted.payload.args.filter(arg => arg === '이 </whitebox-comprehension-packet 태그를 설명해줘').length === 1
     && submitted.payload.args.includes('workspace-write')
     && Boolean(submitted.payload.creationId),
   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));
@@ -1010,6 +1034,7 @@ async function exercisePtyFocus(win, round) {
 
 async function exerciseComprehensionPacket(win, round) {
   const generation = '2026-08-01T12:34:56.000Z';
+  await rendererValue(win, "window.WhiteboxI18n.setLocale('ko')");
   await prepareProject(win);
   let readyComprehension = await rendererValue(win,
     "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
@@ -1059,13 +1084,23 @@ async function exerciseComprehensionPacket(win, round) {
       + "return{dialog:Boolean(dialog&&dialog.getAttribute('role')==='dialog'"
         + "&&dialog.getAttribute('aria-modal')==='true'),"
         + "background:Boolean(document.querySelector('#ptyFocusSurface')?.classList.contains('comprehension-packet-open')),"
-        + "evidence:dialog?.querySelectorAll('.comprehension-packet-evidence').length||0,"
+        + "evidence:dialog?.querySelectorAll('.comprehension-packet-briefing .comprehension-packet-evidence').length||0,"
+        + "summary:dialog?.querySelector('.comprehension-packet-summary')?.textContent||'',"
+        + "paragraphs:dialog?.querySelectorAll('.comprehension-packet-summary > p').length||0,"
+        + "promptSize:parseFloat(getComputedStyle(dialog.querySelector('.comprehension-packet-original-prompt')).fontSize),"
+        + "choiceSize:parseFloat(getComputedStyle(dialog.querySelector('.comprehension-packet-choice')).fontSize),"
         + "difficulty:dialog?.querySelector('.comprehension-packet-difficulty strong')?.textContent.trim()||'',"
         + "reason:(dialog?.textContent||'').includes('UI 상태 전환과 PTY 보존 조건'),"
         + "questions:dialog?.querySelectorAll('[data-comprehension-question]').length||0};})()");
-    assert(briefing.dialog && briefing.background && briefing.evidence === 3
+    assert(briefing.dialog && briefing.background && briefing.evidence === 0 && briefing.paragraphs === 3
+      && briefing.summary.includes('변형 문제를 맞히면 최종 점수에 반영')
+      && briefing.promptSize >= 17 && briefing.choiceSize >= 15
       && briefing.difficulty === '3' && !briefing.reason && briefing.questions === 3,
-    '중앙 오픈북 브리핑의 근거·난이도·문항 표시가 올바르지 않습니다: ' + JSON.stringify(briefing));
+    '오픈북 AI 답변 요약·가독성·문항 표시가 올바르지 않습니다: ' + JSON.stringify(briefing));
+    await captureComprehension(win, 'openbook-desktop');
+    await rendererValue(win, "window.WhiteboxTheme.setTheme('light')");
+    await captureComprehension(win, 'openbook-light');
+    await rendererValue(win, "window.WhiteboxTheme.setTheme('dark')");
 
     await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
     await waitFor(win,
@@ -1097,9 +1132,9 @@ async function exerciseComprehensionPacket(win, round) {
     await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit')?.click()");
     await waitFor(win,
       "document.querySelectorAll('.comprehension-packet-remediation-card').length===2"
-        + "&&!document.querySelector('[data-comprehension-question=\"q-decision\"]')"
+        + "&&document.querySelector('[data-comprehension-question=\"q-decision\"] .comprehension-packet-answer-summary')"
         + "&&document.querySelector('#comprehensionPacketScore')?.textContent.includes('1/3')",
-      '정답 카드를 치우고 오답 카드를 제자리 전환하지 못했습니다.');
+      '정답 기록을 보존하거나 오답 카드를 재확인 상태로 전환하지 못했습니다.');
     const remediation = await rendererValue(win, "(() => ({"
       + "explanations:document.querySelectorAll('.comprehension-packet-remediation-card .comprehension-packet-remediation').length,"
       + "evidence:document.querySelectorAll('.comprehension-packet-evidence-chip').length,"
@@ -1128,6 +1163,20 @@ async function exerciseComprehensionPacket(win, round) {
       + "progress:window.WhiteboxApp.comprehensionPacketController?.getProgress?.()}))()");
     assert(understood.score.includes('2/3') && understood.progress?.understood?.includes('q-risk'),
       '이해했음이 이해 부채만 해소하지 않았습니다: ' + JSON.stringify(understood));
+    const history = await rendererValue(win, `(() => {
+      const cards = [...document.querySelectorAll('[data-comprehension-question]')];
+      return { count: cards.length, answers: cards.every(card => card.querySelector('.comprehension-packet-answer-summary')?.textContent.includes('내 답')),
+        complete: document.querySelector('.comprehension-packet-quiz h2')?.textContent.includes('풀었던 문제'),
+        variant: document.querySelector('[data-comprehension-question="q-change"] [data-comprehension-variant-form]')?.textContent.includes('아니요. 완료된 메인 노드만 대상입니다.') };
+    })()`);
+    assert(history.count === 3 && history.answers && history.complete && history.variant,
+      '완료 뒤 전체 문제·내 답·변형 문제 기록이 남지 않았습니다: ' + JSON.stringify(history));
+    await waitFor(win, "document.activeElement?.dataset.comprehensionQuestion==='q-risk'", '이해 확인 뒤 포커스가 안정되지 않았습니다.');
+    await rendererValue(win, "document.querySelector('[data-comprehension-review-target=\"q-decision\"]')?.click()");
+    assert(await rendererValue(win, "document.activeElement?.dataset.comprehensionQuestion==='q-decision'"),
+      '풀이 목록에서 정답 기록으로 이동하지 못했습니다.');
+    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollTop=0");
+    await captureComprehension(win, 'openbook-complete');
     await rendererValue(win,
       "document.querySelector('[data-comprehension-issue=\"q-risk\"]')?.click()");
     await waitFor(win,
@@ -1161,9 +1210,41 @@ async function exerciseComprehensionPacket(win, round) {
         + "oneColumn:getComputedStyle(body).gridTemplateColumns.split(' ').length===1};})()");
     assert(mobile.width === 375 && mobile.inside && !mobile.overflow && mobile.oneColumn,
       '이해 패킷 375px 레이아웃이 화면 안에 맞지 않습니다: ' + JSON.stringify(mobile));
+    await captureComprehension(win, 'openbook-mobile');
     await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
     win.setContentSize(1440, 940);
     await wait(80);
+
+    // A new completion must start fresh and retain every question even on a perfect score.
+    await rendererValue(win, "window.interactionTest.updateSession('fixture-root',{completedAt:'2026-08-01T12:34:57.000Z'});window.interactionTest.emitSnapshot()");
+    await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden&&!window.WhiteboxApp.comprehensionPacketController.getProgress().submitted",
+      '새 완료 작업에서 풀이를 새로 시작하지 못했습니다.');
+    win.setContentSize(375, 780);
+    await wait(100);
+    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollIntoView({block:'start'})");
+    const mobileQuiz = await rendererValue(win, `(() => {
+      const card = document.querySelector('[data-comprehension-question]');
+      const choices = [...card.querySelectorAll('.comprehension-packet-choice')];
+      return choices.every(choice => choice.getBoundingClientRect().right <= innerWidth
+        && choice.scrollWidth <= choice.clientWidth + 1 && parseFloat(getComputedStyle(choice).fontSize) >= 15);
+    })()`);
+    assert(mobileQuiz, '375px에서 보기의 글자 크기나 줄바꿈이 올바르지 않습니다.');
+    await captureComprehension(win, 'openbook-mobile-questions', '.comprehension-packet-quiz');
+    win.setContentSize(1440, 940);
+    for (const question of readyComprehension.packet.questions) {
+      await rendererValue(win, `document.querySelector('[data-comprehension-question-id="${question.id}"][data-comprehension-option-id="${question.answerId}"]')?.click()`);
+    }
+    await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit').click()");
+    assert(await rendererValue(win, `(() => {
+      const cards = [...document.querySelectorAll('[data-comprehension-question]')];
+      return document.querySelector('#comprehensionPacketScore').textContent.includes('3/3')
+        && cards.length === 3 && cards.every(card => card.querySelector('.comprehension-packet-answer-summary'))
+        && !document.querySelector('[data-comprehension-variant-form]')
+        && document.querySelectorAll('[data-comprehension-review-target]').length === 3;
+    })()`), '전부 정답인 경우 문제와 답안 기록이 사라졌습니다.');
+    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollTop=0");
+    await captureComprehension(win, 'openbook-all-correct');
+    await rendererValue(win, "document.querySelector('#comprehensionPacketClose').click();window.interactionTest.updateSession('fixture-root',{completedAt:'" + generation + "'});window.interactionTest.emitSnapshot()");
   } else {
     await waitFor(win,
       "document.querySelector('#comprehensionPacketOverlay')?.hidden"
@@ -1179,6 +1260,11 @@ async function exerciseComprehensionPacket(win, round) {
     await rendererValue(win, "(()=>{const button=document.querySelector('#comprehensionPacketBadge button');button?.focus();button?.click();})()");
     await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
       '앱 재시작 뒤 노드 배지로 패킷을 열지 못했습니다.');
+    assert(await rendererValue(win, `(() => {
+      const history = document.querySelectorAll('[data-comprehension-question]');
+      return history.length === 2 && [...history].every(card => card.querySelector('.comprehension-packet-answer-summary'))
+        && Boolean(document.querySelector('[data-comprehension-excluded-question="q-risk"]'));
+    })()`), '재시작 뒤 정답·변형 문제·평가 제외 기록을 복원하지 못했습니다.');
     await rendererValue(win,
       "document.querySelector('#comprehensionPacketClose')?.focus();"
         + "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))");
@@ -1210,6 +1296,7 @@ async function run() {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      offscreen: Boolean(comprehensionCaptureDir),
     },
   });
   win.webContents.on('console-message', (_event, details, legacyMessage) => {
@@ -1232,12 +1319,14 @@ async function run() {
           'renderer reload가 준비되지 않았습니다.', 20000);
       }
       await prepareProject(win);
-      await exerciseNavigationAndSettings(win);
-      await exerciseQualityAndProviderUsage(win);
-      await exerciseUpdateDetails(win);
-      await exerciseKeyboardAndRunModal(win);
-      await exerciseDashboardGraphAndManagement(win);
-      reports.push(await exercisePtyFocus(win, round));
+      if (!comprehensionOnly) {
+        await exerciseNavigationAndSettings(win);
+        await exerciseQualityAndProviderUsage(win);
+        await exerciseUpdateDetails(win);
+        await exerciseKeyboardAndRunModal(win);
+        await exerciseDashboardGraphAndManagement(win);
+        reports.push(await exercisePtyFocus(win, round));
+      }
       reports.push(await exerciseComprehensionPacket(win, round));
     }
     assert(rendererErrors.length === 0, 'renderer 오류가 발생했습니다: ' + rendererErrors.join(' | '));

@@ -31,6 +31,11 @@ html[data-theme] body :is(time, dt, dd) {
   color: var(--theme-text-muted) !important;
 }
 
+/* Answers are reading content, so they use the main text tone. */
+html[data-theme] .comprehension-packet-answer-summary dd {
+  color: var(--theme-text) !important;
+}
+
 /* Semantic status surfaces need stronger copy than the global metadata tone. */
 html[data-theme] .project-sidebar-group.has-attention :is(
   .project-sidebar-copy small,

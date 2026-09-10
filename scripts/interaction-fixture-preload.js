@@ -88,7 +88,7 @@ const comprehensionPacket = {
   schemaVersion: 1,
   id: 'fixture-comprehension-v1',
   title: 'PTY 집중 모드 개선 작업 이해 브리핑',
-  summary: '완료된 메인 노드의 실제 PTY 문맥 안에서만 이해 패킷을 열고, 다음 지시를 더 정확히 만들 수 있도록 변경 내용과 판단 근거를 확인합니다.',
+  summary: '이해 패킷은 완료된 메인 노드의 PTY 집중 모드를 열 때 자동으로 나타납니다. 실행 중이거나 실패·취소된 작업, 서브에이전트는 대상에서 제외됩니다.\n\nAI 답변 요약을 읽으며 변경 내용과 선택 이유를 확인할 수 있습니다. 사용자가 작업 결과를 이해하고 다음 지시를 더 정확하게 내리도록 돕는 것이 목적입니다. 난이도는 숫자만 표시합니다.\n\n틀린 문제는 해설을 읽고 변형 문제로 다시 확인합니다. 변형 문제를 맞히면 최종 점수에 반영됩니다. 다시 틀린 뒤 이해했음을 누르면 이해 부채만 해소되고 오답 점수는 유지됩니다. 문제 오류로 표시한 문항은 원문과 변형 문제 모두 점수 분모와 이해 부채에서 제외됩니다.',
   difficulty: 3,
   difficultyReason: 'UI 상태 전환과 PTY 보존 조건을 함께 이해해야 합니다.',
   evidence: [
@@ -117,12 +117,12 @@ const comprehensionPacket = {
     },
     {
       id: 'q-decision', kind: '선택 이유', topics: ['decision'],
-      prompt: '왼쪽 작업 설명과 실제 근거를 먼저 보여주는 이유는 무엇인가요?',
+      prompt: '왼쪽에 AI 답변 요약을 보여주는 이유는 무엇인가요?',
       options: [
         { id: 'q-decision-a', label: '암기 시험이 아니라 다음 지시를 정확히 만들도록 돕기 위해서' },
         { id: 'q-decision-b', label: '문항 수를 숨기기 위해서' },
       ],
-      answerId: 'q-decision-a', explanation: '사용자는 오픈북 근거를 보며 AI의 작업 흐름과 판단을 이해해야 합니다.',
+      answerId: 'q-decision-a', explanation: '사용자는 AI 답변 요약을 참고하며 작업 결과와 판단 이유를 이해하고 다음 지시를 더 정확히 내릴 수 있습니다.',
       evidenceIds: ['e-main', 'e-subagent'],
       variant: {
         prompt: '난이도 선정 이유를 팝업에 길게 공개하는 것이 승인안에 맞나요?',
