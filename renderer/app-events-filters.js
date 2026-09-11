@@ -774,6 +774,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       const nextAvailability = await performUiAction(() => window.whitebox.probeProviders(), t("run.cli_check_failed"), $("#probeBtn"));
       if (!nextAvailability) return;
       state.availability = nextAvailability;
+      context.syncRunProviderAvailability();
       render();
       toast(window.WhiteboxI18n.t("ui.ai_cli_connections_were_checked_again"));
     });

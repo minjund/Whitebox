@@ -21,6 +21,7 @@ window.WhiteboxTerminalIme = {
       const originalStart = helper.compositionstart;
       const originalFinalize = helper._finalizeComposition;
       let pending = null;
+      let suffixLength = 0;
       const flush = () => {
         if (!pending) return;
         const commit = pending;
@@ -30,7 +31,7 @@ window.WhiteboxTerminalIme = {
         // Read after browser propagation, or immediately before the next
         // composition starts. compositionend.data can still contain the old
         // 받침 when the IME moves that consonant into the next syllable.
-        const input = textarea.value.slice(commit.start);
+        const input = textarea.value.slice(commit.start, textarea.value.length - commit.suffixLength);
         if (input) terminal.input(input, true);
       };
       const start = function () {
@@ -38,6 +39,11 @@ window.WhiteboxTerminalIme = {
         // it before xterm overwrites the start offset for the next syllable.
         flush();
         originalStart.call(this);
+        // In screen reader mode, navigation also moves the textarea selection.
+        // The next IME inserts there, not necessarily at value.length. Keep
+        // the existing suffix out of the commit, including replaced selections.
+        this._compositionPosition.start = textarea.selectionStart;
+        suffixLength = textarea.value.length - textarea.selectionEnd;
       };
       const finalize = function (waitForPropagation) {
         const wasComposing = this._isComposing;
@@ -49,6 +55,7 @@ window.WhiteboxTerminalIme = {
         if (!wasComposing) return;
         pending = {
           start: this._compositionPosition.start + this._dataAlreadySent.length,
+          suffixLength,
           timer: null,
         };
         this._isSendingComposition = true;

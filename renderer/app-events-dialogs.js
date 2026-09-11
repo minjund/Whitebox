@@ -7,7 +7,7 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
   const CONTEXT_WORKSPACE_MIN_WIDTH = 960;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
-    $, $$, state, providerInfo, visibleProviders = () => state.providers, renderProviderRail, providerPickerHtml, syncRunComposer, openRunModal, closeRunModal, toast, performUiAction,
+    $, $$, state, providerInfo, visibleProviders = () => state.providers, renderProviderRail, providerPickerHtml, syncRunComposer, syncRunProviderAvailability, openRunModal, closeRunModal, toast, performUiAction,
     handleRun, trapDialogFocus, currentDialog, selectView, selectViewFromUser = selectView, saveRunDraft = () => {}, safeBackdrop = null,
     closeDrawer = () => false, backToAgentFlow = () => closeDrawer(), renderDrawer = () => {}, render = () => {}, loadSessionDetail = async () => null,
     openDrawer = async () => false, openSubagentConversation = () => false, copyText = async () => false,
@@ -119,11 +119,9 @@ window.WhiteboxAppFactories.createDialogEventBindings = function createDialogEve
         const nextAvailability = await performUiAction(() => window.whitebox.probeProviders(), t("run.cli_check_failed"), recheck);
         if (!nextAvailability) return;
         state.availability = nextAvailability;
-        const installed = visibleProviders().find((provider) => state.availability[provider.id]);
-        if (installed) state.runProvider = installed.id;
-        $("#runProviderPicker").innerHTML = providerPickerHtml();
+        syncRunProviderAvailability();
+        const installed = visibleProviders().find((provider) => provider.id === state.runProvider && state.availability[provider.id]);
         renderProviderRail();
-        syncRunComposer();
         toast(installed ? t("run.cli_ready", { provider: installed.label }) : t("run.cli_not_found"));
       }
     });

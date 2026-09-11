@@ -306,6 +306,14 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     if (suggestions) suggestions.innerHTML = runWorkspaceSuggestionsHtml();
   }
 
+  function syncRunProviderAvailability() {
+    const installed = visibleProviders().find((provider) => state.availability[provider.id]);
+    if ((!isProviderVisible(state.runProvider) || !state.availability[state.runProvider]) && installed) state.runProvider = installed.id;
+    if (!isProviderVisible(state.runProvider)) state.runProvider = visibleProviders()[0]?.id || "";
+    $("#runProviderPicker").innerHTML = providerPickerHtml();
+    syncRunComposer();
+  }
+
   function setRunSubmitting(submitting) {
     const submit = $('#runForm button[type="submit"]');
     if (!submit) return;
@@ -340,13 +348,9 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     restoreRunDraft();
     normalizeRunSourceSelection();
     ensureRunSourcePicker();
-    const installed = visibleProviders().find((provider) => state.availability[provider.id]);
-    if ((!isProviderVisible(state.runProvider) || !state.availability[state.runProvider]) && installed) state.runProvider = installed.id;
-    if (!isProviderVisible(state.runProvider)) state.runProvider = visibleProviders()[0]?.id || "";
-    $("#runProviderPicker").innerHTML = providerPickerHtml();
     $("#runCwd").value = projectPath;
     $("#runError").classList.add("hidden");
-    syncRunComposer();
+    syncRunProviderAvailability();
     clearTimeout(motionState.modalTimer);
     clearTimeout(motionState.modalFocusTimer);
     setDialogOpenState($("#runModal"), true);
@@ -552,6 +556,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     runProviderHelpHtml,
     runWorkspaceSuggestionsHtml,
     syncRunComposer,
+    syncRunProviderAvailability,
     setRunSubmitting,
     openRunModal,
     closeRunModal,
