@@ -109,6 +109,11 @@
     loadProviderVisibility(bootstrap.providerVisibility);
     app.loadAttentionPopupSettings(bootstrap.attentionPopups);
     state.availability = bootstrap.availability || {};
+    // The window can bootstrap before runtime setup has probed the CLIs.
+    // Missing keys mean unchecked; an empty path is a confirmed absence.
+    if (state.providers.some((provider) => !Object.prototype.hasOwnProperty.call(state.availability, provider.id))) {
+      state.availability = await window.whitebox.probeProviders();
+    }
     state.sourcePlugins = bootstrap.sourcePlugins || [];
     state.sourcePluginSettings = bootstrap.sourcePluginSettings || state.sourcePluginSettings;
     state.workspaces = bootstrap.workspaces || [];
