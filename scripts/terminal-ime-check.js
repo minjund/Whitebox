@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const checkImeOwnership = require('./tests/terminal-ime-ownership');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-ime-'));
 const output = path.join(root, 'artifacts', 'terminal-ime');
@@ -24,7 +25,7 @@ app.whenReady().then(async () => {
   const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
   try {
     const files = ['node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
-      'renderer/terminal-ime.js', 'renderer/terminal-workbench.js'];
+      'renderer/terminal-ime.js', 'renderer/terminal-workbench.js', 'renderer/terminal-events.js'];
     const html = path.join(profile, 'fixture.html');
     fs.writeFileSync(html, '<!doctype html><meta charset="utf-8">'
       + `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'node_modules/@xterm/xterm/css/xterm.css')).href}">`
@@ -40,9 +41,11 @@ app.whenReady().then(async () => {
         terminalGet: async () => ({ replay: '', status: 'running' }),
         terminalResize: async () => {},
         terminalWrite: async (_id, data) => { writes.push(data); return { deliveryState: 'accepted' }; },
+        onTerminalData: handler => { window.receiveOutput = handler; },
+        onTerminalState() {}, onTerminalError() {},
       };
-      const session = { id: 'ime-test', type: 'agent', status: 'running' };
-      window.testState = { sessions: [session], terminals: new Map(), selectedId: session.id };
+      const session = { id: 'ime-test', type: 'agent', provider: 'codex', status: 'running' };
+      window.testState = { sessions: [session], terminals: new Map(), selectedId: session.id, platform: { id: 'win32' } };
       const options = { cols: 80, rows: 10, screenReaderMode: true, cursorStyle: 'bar',
         fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "D2Coding", monospace',
         fontSize: 15, lineHeight: 1.28, theme: { background: '#112233', foreground: '#ddeeff', cursor: '#ffcc00' } };
@@ -51,6 +54,8 @@ app.whenReady().then(async () => {
         notice: message => errors.push(message), xtermOptions: () => options,
       });
       window.entry = await workbench.ensureSessionTerminal(session);
+      WhiteboxTerminalEvents({ state: testState, currentSession: () => session,
+        fitEntry() {}, refreshSessions() {}, notice: message => errors.push(message) });
       window.term = entry.terminal;
       window.baseline = new Terminal(options);
       baseline.open(document.querySelector('#baseline'));
@@ -243,6 +248,28 @@ app.whenReady().then(async () => {
     checks.push('받침 transfer uses corrected textarea text and never sends the next uncommitted syllable');
     checks.push('cancellation, trailing digit, preedit deletion, immediate Enter and blur preserve exact input');
 
+    const midlineBurst = await evaluate(async () => {
+      await reset(term); writes.length = 0;
+      term.textarea.value = '가다😀끝';
+      term.textarea.setSelectionRange(1, 2);
+      start(term); update(term, '각', '가각😀끝');
+      end(term, '각');
+      // Replace the selection, then move 받침 into the next syllable before
+      // any commit timer runs. The unchanged suffix contains a surrogate pair.
+      term.textarea.value = '가가😀끝';
+      term.textarea.setSelectionRange(2, 2);
+      start(term); update(term, '나', '가가나😀끝');
+      term.textarea.setSelectionRange(3, 3);
+      term.textarea.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+      }));
+      end(term, '나');
+      await delay();
+      return { writes: writes.join(''), visible: snapshot().visible };
+    });
+    assert.deepEqual(midlineBurst, { writes: '가나\r', visible: false });
+    checks.push('midline replacement, rapid 받침 transfer and immediate Enter exclude the existing Unicode suffix');
+
     // Chromium generates the browser composition events here. This exercises
     // xterm + the workbench input queue without hand-editing the helper value.
     await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
@@ -263,9 +290,59 @@ app.whenReady().then(async () => {
     const cancelled = await evaluate(async () => { await delay(); return { writes, visible: snapshot().visible }; });
     assert.deepEqual(cancelled.writes, []);
     assert.equal(cancelled.visible, false);
+
+    const cdpKey = async (key, code) => {
+      for (const type of ['keyDown', 'keyUp']) {
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type, key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code,
+        });
+      }
+    };
+    const cdpCommit = async text => {
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', {
+        text, selectionStart: text.length, selectionEnd: text.length,
+      });
+      await win.webContents.debugger.sendCommand('Input.insertText', { text });
+      await evaluate(async () => { await delay(); });
+    };
+    const cdpMidline = [];
+    for (const scenario of [
+      { text: '가다끝', leftCount: 1, caret: 2 },
+      { text: '가다끝', leftCount: 2, caret: 1 },
+      { text: '가다끝', leftCount: 3, caret: 0 },
+      { text: '가다😀끝', leftCount: 2, caret: 2 },
+    ]) {
+      const { text, leftCount, caret } = scenario;
+      await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
+      await cdpCommit(text);
+      for (let i = 0; i < leftCount; i += 1) await cdpKey('ArrowLeft', 37);
+      const before = await evaluate(async (text, leftCount) => {
+        await delay();
+        // Model the TUI echo and cursor position after its left-arrow input.
+        await outputTo(term, text + '\x1b[2D'.repeat(leftCount));
+        return { value: term.textarea.value, caret: term.textarea.selectionStart, writes: writes.join('') };
+      }, text, leftCount);
+      assert.deepEqual(before, { value: text, caret, writes: text + '\x1b[D'.repeat(leftCount) });
+      await cdpCommit('나');
+      const after = await evaluate(() => ({ value: term.textarea.value, writes: writes.join(''), visible: snapshot().visible }));
+      assert.equal(after.value, text.slice(0, caret) + '나' + text.slice(caret));
+      assert.equal(after.writes, before.writes + '나', 'Midline IME must send the new syllable, not the old final syllable');
+      assert.equal(after.visible, false);
+      await cdpCommit('라');
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '취소', selectionStart: 2, selectionEnd: 2 });
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+      const resumed = await evaluate(async () => { await delay(); return { value: term.textarea.value, writes: writes.join('') }; });
+      assert.equal(resumed.value, text.slice(0, caret) + '나라' + text.slice(caret));
+      assert.equal(resumed.writes, before.writes + '나라', 'Repeated midline input and cancellation must not resend the suffix');
+      cdpMidline.push({ scenario, before, after, resumed });
+    }
+    checks.push('Chromium arrow navigation, repeated Korean insertion and cancellation preserve CJK/emoji suffixes at midline and line start');
     win.webContents.debugger.detach();
     checks.push('Chromium CDP ㅎ→한 composition emits no preedit and exactly one 한 commit through terminalWrite');
     checks.push('Chromium composition cancellation emits no text and clears overlay');
+
+    const ownership = await checkImeOwnership(evaluate);
+    checks.push('IME native input owns commits once, preserves midline edits, modifiers and composing Backspace, and uses terminal cell widths');
 
     const enter = await evaluate(async () => {
       await reset(term); writes.length = 0;
@@ -276,6 +353,47 @@ app.whenReady().then(async () => {
     });
     assert.equal(enter, '한\r');
     checks.push('committed Korean followed by Enter reaches terminalWrite in order, exactly once');
+
+    const outputBurst = await evaluate(async () => {
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+      for (const target of [baseline, term]) {
+        await reset(target);
+        // A real full-screen TUI initializes xterm's visible cursor this way.
+        await outputTo(target, '\x1b[?1049h\x1b[5;4H\x1b[?25h');
+      }
+      await delay();
+      const positions = { baseline: [], patched: [] };
+      const subscriptions = [baseline, term].map((target, index) => target.onRender(() => {
+        if (target.element.querySelector('.xterm-cursor')) {
+          positions[index ? 'patched' : 'baseline'].push([target.buffer.active.cursorX, target.buffer.active.cursorY]);
+        }
+      }));
+      writes.length = 0;
+      start(term); update(term, '한');
+      for (let index = 0; index < 6; index += 1) {
+        // Codex/ConPTY can close the synchronized frame at a drawing cursor,
+        // then restore the input cursor in another fragment ~16ms later.
+        const draw = `\x1b[?2026h\x1b[?25l\x1b[2;20Hframe ${index}\x1b[?25h\x1b[0 q\x1b[?2026l`;
+        baseline.write(draw); receiveOutput({ id: entry.host.dataset.terminalScreen, data: draw });
+        await wait(index === 3 ? 216 : 16);
+        const restore = '\x1b[?25l\x1b[2;20Hdrawn  \x1b[5;4H\x1b[?25h';
+        baseline.write(restore); receiveOutput({ id: entry.host.dataset.terminalScreen, data: restore });
+        await wait(80);
+      }
+      const preedit = snapshot();
+      end(term, '한'); await delay();
+      subscriptions.forEach(subscription => subscription.dispose());
+      return { positions, preeditVisible: preedit.visible, input: writes.join(''),
+        baselineLine: baseline.buffer.active.getLine(1).translateToString(true),
+        patchedLine: term.buffer.active.getLine(1).translateToString(true) };
+    });
+    assert(outputBurst.positions.baseline.some(([x, y]) => x !== 3 || y !== 4), 'Control did not reproduce the transient drawing cursor');
+    assert(outputBurst.positions.patched.length > 0, 'Patched terminal did not paint a visible cursor');
+    assert(outputBurst.positions.patched.every(([x, y]) => x === 3 && y === 4), 'A drawing cursor was painted before the delayed input-cursor restore');
+    assert.equal(outputBurst.patchedLine, outputBurst.baselineLine);
+    assert.equal(outputBurst.preeditVisible, true);
+    assert.equal(outputBurst.input, '한');
+    checks.push('Windows Codex redraw and delayed cursor restore paint together while Korean composition commits exactly once');
 
     const lifecycle = await evaluate(async () => {
       await reset(term); start(term); update(term, '가'); await delay();
@@ -291,7 +409,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.nativeVisibility, '');
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, cdp, nativeWindowsImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());

@@ -5,6 +5,16 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.16 - 2026-09-11
+
+- Preserve Korean IME input at the terminal cursor and reconcile native input
+  events without duplicate characters or unintended deletion.
+- Keep Korean preedit text and the caret aligned with terminal cells, and
+  coalesce Windows Codex redraws until the input cursor is restored.
+- Check provider availability before opening task controls and keep the selected
+  provider consistent after checking installed CLIs again.
+- Use the connected WB box icon throughout the app and desktop packages.
+
 ## 1.8.15 - 2026-09-10
 
 - Generate comprehension quizzes in background requests while keeping the

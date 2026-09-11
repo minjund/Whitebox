@@ -77,6 +77,8 @@ const providers = [
   },
 ];
 
+const availabilityMode = additionalArgument('whitebox-availability');
+let providerAvailability = Object.fromEntries(providers.map(provider => [provider.id, availabilityMode === 'missing' ? '' : true]));
 const usage = { input: 1200, output: 540, cachedInput: 100, cacheWrite: 0, reasoning: 80, total: 1920 };
 const context = { used: 5200, window: 128000, percent: 4.1, source: 'session' };
 const messages = [
@@ -623,7 +625,8 @@ const api = {
       updateStateListeners.forEach(listener => listener(clone(update)));
     }
     return {
-      providers: clone(providers), availability: Object.fromEntries(providers.map(provider => [provider.id, true])),
+      providers: clone(providers), availability: availabilityMode === 'unchecked' ? {}
+        : availabilityMode === 'partial' ? { claude: true } : clone(providerAvailability),
       workspaces: realTerminalFixture ? [
         { name: '실제 PTY 통합 검증', path: realTerminalFixture.cwd },
       ] : [
@@ -690,7 +693,7 @@ const api = {
   resumeAgentRun: runId => controlled('resumeAgentRun', [runId], { ok: true, status: 'running' }),
   retryAgent: runId => controlled('retryAgent', [runId], { ok: true, runId: 'fixture-retry-run', retriedFrom: runId }),
   activeRuns: async () => [],
-  probeProviders: async () => controlled('probeProviders', [], Object.fromEntries(providers.map(provider => [provider.id, true]))),
+  probeProviders: async () => controlled('probeProviders', [], providerAvailability),
   providerUsage: options => controlled('providerUsage', [options], {
     generatedAt: new Date().toISOString(),
     providers: {
@@ -942,6 +945,7 @@ if (realTerminalFixture) {
 }
 
 const testApi = {
+  setProviderAvailability: value => { providerAvailability = clone(value); return true; },
   getCalls: () => clone(calls),
   getSnapshot: () => clone(snapshot),
   connectionSignatureForSession: session => connectionSignatureForSession(session),

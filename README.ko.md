@@ -211,6 +211,8 @@ git push origin HEAD --follow-tags
 
 Whitebox는 [MIT 라이선스](LICENSE)로 제공됩니다.
 
+앱에는 WB 연결형 박스 아이콘을 사용합니다. 보존된 Lucide 창 모양 시안과 ISC 라이선스 고지는 [아이콘 출처 문서](docs/ICON-LICENSE.md)에 정리되어 있습니다.
+
 ---
 
 <div align="center">

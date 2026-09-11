@@ -12,8 +12,8 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
     schedulePendingPromptRefresh = () => {},
   } = context;
 
-  const writeTerminalOutput = (entry, data) => {
-    if (!entry || !data) return;
+  const writeOutputNow = (entry, data) => {
+    if (!entry || !data || entry.inputClosed) return;
     const buffer = entry.terminal.buffer.active;
     if (entry.outputWritePending === 0) {
       entry.outputRestoreGeneration += 1;
@@ -24,7 +24,7 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
     entry.outputWritePending += 1;
     entry.terminal.write(data, () => {
       entry.outputWritePending = Math.max(0, entry.outputWritePending - 1);
-      if (entry.outputWritePending > 0) return;
+      if (entry.inputClosed || entry.outputWritePending > 0) return;
       // Xterm's DOM renderer can occasionally retain the parsed buffer without
       // painting the final rows after a short PTY burst. Refresh only after the
       // burst drains so the visible screen cannot lag behind accepted output.
@@ -34,7 +34,8 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
       const restoreGeneration = entry.outputRestoreGeneration;
       const restoreViewport = () => {
         if (
-          entry.outputShouldFollow
+          entry.inputClosed
+          || entry.outputShouldFollow
           || entry.outputWritePending > 0
           || restoreGeneration !== entry.outputRestoreGeneration
           || entry.outputUserScrollRevision !== entry.userScrollRevision
@@ -45,6 +46,51 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
       restoreViewport();
       requestAnimationFrame(() => requestAnimationFrame(restoreViewport));
     });
+  };
+
+  const outputBatches = new WeakMap();
+  const writeTerminalOutput = (entry, data) => {
+    if (!entry || !data || entry.inputClosed) return;
+    if (!entry.coalesceOutput) { writeOutputNow(entry, data); return; }
+    // Windows Codex redraws can end DEC 2026 at the drawing cursor. ConPTY's
+    // following repaint restores the input cursor about one frame later. Keep
+    // adjacent fragments in one xterm write so that interim cursor is not
+    // painted. Preserve every byte, including split escape sequences/Unicode.
+    let batch = outputBatches.get(entry);
+    if (!batch) {
+      batch = { chunks: [], chars: 0, tail: '', cursorDeadline: false, idleTimer: null, maxTimer: null };
+      const cancel = () => {
+        clearTimeout(batch.idleTimer);
+        clearTimeout(batch.maxTimer);
+        outputBatches.delete(entry);
+        entry.cancelOutputWrite = null;
+      };
+      batch.flush = () => {
+        cancel();
+        writeOutputNow(entry, batch.chunks.join(''));
+      };
+      outputBatches.set(entry, batch);
+      entry.cancelOutputWrite = cancel;
+      // Neither continuous output nor a background window waiting for a paint
+      // may strand the tail. The size limit also bounds the queued memory.
+      batch.maxTimer = setTimeout(batch.flush, 64);
+    }
+    batch.chunks.push(data);
+    batch.chars += data.length;
+    batch.tail = (batch.tail + data).slice(-32);
+    clearTimeout(batch.idleTimer);
+    if (batch.chars >= 128 * 1024) batch.flush();
+    else if (batch.tail.endsWith('\x1b[?25h\x1b[0 q\x1b[?2026l')) {
+      // Native Windows Codex's show/reset-style/end-sync handoff can precede
+      // ConPTY's cursor restore by >200ms under load. Wait for that following
+      // output, with a one-shot deadline if no repaint arrives. Do not extend
+      // this deadline repeatedly for a continuous stream of redraws.
+      if (!batch.cursorDeadline) {
+        batch.cursorDeadline = true;
+        clearTimeout(batch.maxTimer);
+        batch.maxTimer = setTimeout(batch.flush, 256);
+      }
+    } else batch.idleTimer = setTimeout(batch.flush, 24);
   };
   // Output released after an authority refresh must use the same viewport-aware
   // writer as live PTY events so reading position and xterm repaint semantics

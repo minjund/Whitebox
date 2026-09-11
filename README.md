@@ -197,6 +197,8 @@ git push origin HEAD --follow-tags
 
 Whitebox is available under the [MIT License](LICENSE).
 
+The application uses the connected WB box icon. The retained Lucide window design and its ISC notices are documented in [icon provenance](docs/ICON-LICENSE.md).
+
 ---
 
 <div align="center">

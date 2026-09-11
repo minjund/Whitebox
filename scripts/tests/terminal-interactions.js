@@ -217,6 +217,7 @@ function createWorkbench(root, options = {}) {
     setTimeout: options.setTimeout || setTimeout,
     clearTimeout: options.clearTimeout || clearTimeout,
     window: {
+      addEventListener() {},
       cancelAnimationFrame: options.cancelAnimationFrame || (() => {}),
       WhiteboxI18n: { t: key => key },
       WheelEvent: FixtureWheelEvent,
@@ -314,6 +315,8 @@ function createWorkbench(root, options = {}) {
       },
       FitAddon: { FitAddon: class FixtureFitAddon { fit() {} } },
       whitebox: {
+        onTerminalData: handler => { sandbox.receiveOutput = handler; },
+        onTerminalState() {}, onTerminalError() {},
         terminalList: options.terminalList || (async () => []),
         terminalGet: options.terminalGet || (async () => ({ replay: '', outputSequence: 0 })),
         terminalWrite: async (id, data, deliveryOptions) => {
@@ -364,7 +367,7 @@ function createWorkbench(root, options = {}) {
     sessionOrder: [],
     sessionRenderKey: '',
     active: options.active === true,
-    platform: { label: 'Test computer' },
+    platform: { id: options.platform, label: 'Test computer' },
   };
   const workbench = sandbox.window.WhiteboxTerminalWorkbench({
     $: element,
@@ -393,8 +396,14 @@ function createWorkbench(root, options = {}) {
     tmuxRows: () => options.tmuxRows || [],
     updateSnapshot() {},
   });
+  if (options.bindEvents) {
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'terminal-events.js'), 'utf8'), sandbox, { filename: 'terminal-events.js' });
+    sandbox.window.WhiteboxTerminalEvents({ state, currentSession: () => session,
+      fitEntry: workbench.fitEntry, refreshSessions: workbench.refreshSessions, notice() {} });
+  }
   return {
     state,
+    receiveOutput: payload => sandbox.receiveOutput(payload),
     workbench,
     terminalCalls,
     rawWrites,
@@ -434,6 +443,117 @@ function loadPreloadApi(root, invoke) {
 
 function registerTerminalInteractionTests(context) {
   const { test, root } = context;
+
+  function outputFixture(overrides = {}) {
+    let now = 0;
+    let nextId = 0;
+    const timers = new Map();
+    const session = { id: 'terminal:output', type: 'agent', provider: 'codex', status: 'running', ...overrides.session };
+    const fixture = createWorkbench(root, { platform: 'win32', bindEvents: true, ...overrides, session,
+      setTimeout(callback, ms) { const id = ++nextId; timers.set(id, { at: now + ms, callback }); return id; },
+      clearTimeout(id) { timers.delete(id); } });
+    const advance = ms => {
+      const target = now + ms;
+      while (true) {
+        const next = [...timers].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) break;
+        now = next[1].at; timers.delete(next[0]); next[1].callback();
+      }
+      now = target;
+    };
+    return { ...fixture, session, advance, timers,
+      send: (data, outputSequence) => fixture.receiveOutput({ id: session.id, data, outputSequence }) };
+  }
+
+  test('Windows Codex output coalesces redraw/restore and split Unicode exactly once', async () => {
+    const fixture = outputFixture();
+    const entry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    fixture.send('\x1b[?202', 1);
+    fixture.send('6h한\ud83d', 2);
+    fixture.advance(16);
+    fixture.send('\ude00\x1b[?2026l\x1b[5;4H', 3);
+    fixture.send('duplicate', 3);
+    fixture.advance(23);
+    assert.deepStrictEqual(entry.terminal.writes, []);
+    fixture.advance(1);
+    assert.deepStrictEqual(entry.terminal.writes, ['\x1b[?2026h한😀\x1b[?2026l\x1b[5;4H']);
+    assert.equal(fixture.timers.size, 0);
+    assert.equal(entry.outputWritePending, 0);
+  });
+
+  test('macOS/Linux and other providers keep immediate terminal output', async () => {
+    for (const [platform, provider] of [['darwin', 'codex'], ['linux', 'codex'], ['win32', 'claude'], ['win32', '']]) {
+      const fixture = outputFixture({ platform, session: { provider } });
+      const entry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+      fixture.send('한영 English');
+      assert.deepStrictEqual(entry.terminal.writes, ['한영 English']);
+      assert.equal(fixture.timers.size, 0);
+    }
+  });
+
+  test('continuous and large Codex output flush within time and memory bounds without animation frames', async () => {
+    const fixture = outputFixture({ requestAnimationFrame: () => 1 });
+    const entry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    for (let i = 0; i < 7; i += 1) { fixture.send(String(i)); fixture.advance(9); }
+    assert.deepStrictEqual(entry.terminal.writes, []);
+    fixture.advance(1);
+    assert.deepStrictEqual(entry.terminal.writes, ['0123456']);
+    fixture.send('tail'); fixture.advance(24);
+    assert.deepStrictEqual(entry.terminal.writes, ['0123456', 'tail']);
+    fixture.send('x'.repeat(128 * 1024));
+    assert.equal(entry.terminal.writes[2].length, 128 * 1024);
+    assert.equal(fixture.timers.size, 0);
+  });
+
+  test('terminal reconnect cancels the old output batch before disposing its xterm', async () => {
+    const fixture = outputFixture();
+    const oldEntry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    fixture.send('stale');
+    assert.equal(fixture.timers.size, 2);
+    await fixture.workbench.refreshSessions({ change: 'reconnected', sessions: [fixture.session] });
+    assert.equal(fixture.timers.size, 0);
+    const newEntry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    assert.notStrictEqual(newEntry, oldEntry);
+    fixture.send('fresh'); fixture.advance(100);
+    assert.deepStrictEqual(oldEntry.terminal.writes, []);
+    assert.deepStrictEqual(newEntry.terminal.writes, ['fresh']);
+  });
+
+  test('native Codex cursor handoff waits for delayed restore with a bounded standalone-frame fallback', async () => {
+    const fixture = outputFixture();
+    const entry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    const redraw = '\x1b[?2026hdraw\x1b[?25h\x1b[0 q\x1b[?2026l';
+    fixture.send(redraw.slice(0, -3)); fixture.send(redraw.slice(-3));
+    fixture.advance(216);
+    assert.deepStrictEqual(entry.terminal.writes, []);
+    const restore = '\x1b[5;4H\x1b[?25h';
+    fixture.send(restore); fixture.advance(24);
+    assert.deepStrictEqual(entry.terminal.writes, [redraw + restore]);
+    fixture.send(redraw); fixture.advance(250);
+    fixture.send(redraw); fixture.advance(6);
+    assert.deepStrictEqual(entry.terminal.writes, [redraw + restore, redraw + redraw]);
+    assert.equal(fixture.timers.size, 0);
+    const wsl = outputFixture({ session: { shell: 'wsl', distro: 'Ubuntu' } });
+    const wslEntry = await wsl.workbench.ensureSessionTerminal(wsl.session);
+    wsl.send(redraw);
+    assert.deepStrictEqual(wslEntry.terminal.writes, [redraw]);
+    assert.equal(wsl.timers.size, 0);
+  });
+
+  test('batched output preserves the current scroll anchor and respects subsequent user scrolling', async () => {
+    const frames = [];
+    const fixture = outputFixture({ remoteWriteBaseY: 100, requestAnimationFrame: callback => { frames.push(callback); return frames.length; } });
+    const entry = await fixture.workbench.ensureSessionTerminal(fixture.session);
+    Object.assign(entry.terminal.buffer.active, { baseY: 100, viewportY: 5 });
+    fixture.send('output');
+    entry.terminal.buffer.active.viewportY = 7; entry.userScrollRevision += 1;
+    fixture.advance(24);
+    assert.deepStrictEqual(entry.terminal.scrollToLineCalls, [7]);
+    entry.terminal.buffer.active.viewportY = 9; entry.userScrollRevision += 1;
+    while (frames.length) frames.shift()();
+    assert.deepStrictEqual(entry.terminal.scrollToLineCalls, [7]);
+    assert.equal(entry.terminal.buffer.active.viewportY, 9);
+  });
 
   function terminalWriteHandler(write) {
     const handlers = new Map();
