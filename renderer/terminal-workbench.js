@@ -61,6 +61,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   function closeRawInputEntry(entry) {
     if (!entry) return;
     entry.inputClosed = true;
+    entry.cancelOutputWrite?.();
     entry.inputPumpHalted = true;
     clearRawInputQueue(entry);
     entry.inputPumpScheduleGeneration += 1;
@@ -328,6 +329,8 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const entry = {
       terminal, fit, host, readOnly, inputDisabled, fixedGrid, userScrollRevision: 0, outputWritePending: 0,
       outputRestoreGeneration: 0, wheelLineRemainder: 0,
+      coalesceOutput: !readOnly && state.platform?.id === 'win32' && session?.provider === 'codex'
+        && session?.shell !== 'wsl' && !session?.distro,
       writeQueue: Promise.resolve(), pendingResize: null, resizePromise: null,
       inputQueue: [], inputQueueChars: 0, inputPump: null, inputPumpFrame: 0, inputPumpTimer: 0,
       inputPumpScheduled: false, inputPumpScheduleGeneration: 0, inputPumpFlush: null,
