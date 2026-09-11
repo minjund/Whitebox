@@ -1,0 +1,3 @@
+# Preserve the exact pinned upstream bytes on every platform.
+src/assets/lucide/LICENSE -text
+src/assets/lucide/square-menu.svg -text

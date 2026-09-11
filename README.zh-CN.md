@@ -190,6 +190,8 @@ git push origin HEAD --follow-tags
 
 Whitebox 采用 [MIT 许可证](LICENSE)发布。
 
+应用图标基于 ISC 许可证下的 Lucide 图标修改而成。请参阅[图标来源与许可证](docs/ICON-LICENSE.md)。
+
 ---
 
 <div align="center">

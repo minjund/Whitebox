@@ -59,6 +59,10 @@ const packageFileSet = new Set(packageFiles);
 const requiredRuntimeFiles = [
   'build/icon.ico',
   'build/icon.png',
+  'src/assets/whitebox-icon.svg',
+  'src/assets/lucide/LICENSE',
+  'src/assets/lucide/square-menu.svg',
+  'src/assets/lucide/source.json',
   'brand-profile-recovery-preload.js',
   'renderer/brand-profile-recovery.html',
   'src/interimProfileGuard.js',
