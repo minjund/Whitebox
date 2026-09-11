@@ -9,6 +9,10 @@ const path = require('path');
 const { app, BrowserWindow, nativeImage } = require('electron');
 
 const root = path.resolve(__dirname, '..');
+// This retained Lucide window design is an alternative to the active WB icon.
+// Regeneration must never overwrite the selected application artwork.
+const output = path.join(root, 'artifacts', 'lucide-window-icons');
+fs.mkdirSync(output, { recursive: true });
 const vendor = path.join(root, 'src/assets/lucide');
 const provenance = JSON.parse(fs.readFileSync(path.join(vendor, 'source.json'), 'utf8'));
 for (const [name, metadata] of Object.entries(provenance.files)) {
@@ -45,7 +49,7 @@ async function run() {
     const images = rendered.map(data => Buffer.from(data, 'base64'));
     const master = images.pop();
     assert.deepEqual(nativeImage.createFromBuffer(master).getSize(), { width: 1024, height: 1024 });
-    fs.writeFileSync(path.join(root, 'build/icon.png'), master);
+    fs.writeFileSync(path.join(output, 'icon.png'), master);
 
     const directory = Buffer.alloc(6 + 16 * sizes.length);
     directory.writeUInt16LE(1, 2);
@@ -61,10 +65,10 @@ async function run() {
       directory.writeUInt32LE(offset, entry + 12);
       offset += images[index].length;
     });
-    const iconPath = path.join(root, 'build/icon.ico');
+    const iconPath = path.join(output, 'icon.ico');
     fs.writeFileSync(iconPath, Buffer.concat([directory, ...images]));
     assert.equal(nativeImage.createFromPath(iconPath).isEmpty(), false);
-    console.log(`Generated licensed Whitebox icon: PNG 1024; ICO ${sizes.join(', ')}.`);
+    console.log(`Generated retained Lucide window icon in ${output}: PNG 1024; ICO ${sizes.join(', ')}.`);
   } finally {
     window.destroy();
   }
