@@ -1,0 +1,22 @@
+{
+  "project": "Lucide",
+  "icon": "square-menu",
+  "repository": "https://github.com/lucide-icons/lucide",
+  "commit": "5d592a96aaeb4a3a09ffd8134f8f5ed878c9a0c5",
+  "license": "ISC",
+  "copyright": "Copyright (c) 2026 Lucide Icons and Contributors",
+  "files": {
+    "square-menu.svg": {
+      "url": "https://raw.githubusercontent.com/lucide-icons/lucide/5d592a96aaeb4a3a09ffd8134f8f5ed878c9a0c5/icons/square-menu.svg",
+      "sha256": "2ea929fcdde6b8bbd073702cf77b6606fd11a19a86675adec54e679c00c0253f"
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/lucide-icons/lucide/5d592a96aaeb4a3a09ffd8134f8f5ed878c9a0c5/LICENSE",
+      "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    }
+  },
+  "adaptation": "../whitebox-icon.svg",
+  "changes": "Keep the rounded window frame; replace three menu strokes with two work-item strokes at y=10 and y=14, shorten the second stroke, set a charcoal stroke, and add an off-white rounded background and padding.",
+  "outputs": ["build/icon.png", "build/icon.ico"],
+  "generator": "scripts/generate-brand-icons.js"
+}

@@ -197,6 +197,8 @@ git push origin HEAD --follow-tags
 
 Whitebox is available under the [MIT License](LICENSE).
 
+The application icon is adapted from Lucide under the ISC License. See [icon attribution and license](docs/ICON-LICENSE.md).
+
 ---
 
 <div align="center">

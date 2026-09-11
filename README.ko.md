@@ -211,6 +211,8 @@ git push origin HEAD --follow-tags
 
 Whitebox는 [MIT 라이선스](LICENSE)로 제공됩니다.
 
+앱 아이콘은 ISC 라이선스의 Lucide 아이콘을 수정해 사용합니다. [아이콘 출처와 라이선스](docs/ICON-LICENSE.md)를 확인하세요.
+
 ---
 
 <div align="center">
