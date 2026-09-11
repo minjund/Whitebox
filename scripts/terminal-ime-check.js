@@ -243,6 +243,28 @@ app.whenReady().then(async () => {
     checks.push('받침 transfer uses corrected textarea text and never sends the next uncommitted syllable');
     checks.push('cancellation, trailing digit, preedit deletion, immediate Enter and blur preserve exact input');
 
+    const midlineBurst = await evaluate(async () => {
+      await reset(term); writes.length = 0;
+      term.textarea.value = '가다😀끝';
+      term.textarea.setSelectionRange(1, 2);
+      start(term); update(term, '각', '가각😀끝');
+      end(term, '각');
+      // Replace the selection, then move 받침 into the next syllable before
+      // any commit timer runs. The unchanged suffix contains a surrogate pair.
+      term.textarea.value = '가가😀끝';
+      term.textarea.setSelectionRange(2, 2);
+      start(term); update(term, '나', '가가나😀끝');
+      term.textarea.setSelectionRange(3, 3);
+      term.textarea.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+      }));
+      end(term, '나');
+      await delay();
+      return { writes: writes.join(''), visible: snapshot().visible };
+    });
+    assert.deepEqual(midlineBurst, { writes: '가나\r', visible: false });
+    checks.push('midline replacement, rapid 받침 transfer and immediate Enter exclude the existing Unicode suffix');
+
     // Chromium generates the browser composition events here. This exercises
     // xterm + the workbench input queue without hand-editing the helper value.
     await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
@@ -263,6 +285,53 @@ app.whenReady().then(async () => {
     const cancelled = await evaluate(async () => { await delay(); return { writes, visible: snapshot().visible }; });
     assert.deepEqual(cancelled.writes, []);
     assert.equal(cancelled.visible, false);
+
+    const cdpKey = async (key, code) => {
+      for (const type of ['keyDown', 'keyUp']) {
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type, key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code,
+        });
+      }
+    };
+    const cdpCommit = async text => {
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', {
+        text, selectionStart: text.length, selectionEnd: text.length,
+      });
+      await win.webContents.debugger.sendCommand('Input.insertText', { text });
+      await evaluate(async () => { await delay(); });
+    };
+    const cdpMidline = [];
+    for (const scenario of [
+      { text: '가다끝', leftCount: 1, caret: 2 },
+      { text: '가다끝', leftCount: 2, caret: 1 },
+      { text: '가다끝', leftCount: 3, caret: 0 },
+      { text: '가다😀끝', leftCount: 2, caret: 2 },
+    ]) {
+      const { text, leftCount, caret } = scenario;
+      await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
+      await cdpCommit(text);
+      for (let i = 0; i < leftCount; i += 1) await cdpKey('ArrowLeft', 37);
+      const before = await evaluate(async (text, leftCount) => {
+        await delay();
+        // Model the TUI echo and cursor position after its left-arrow input.
+        await outputTo(term, text + '\x1b[2D'.repeat(leftCount));
+        return { value: term.textarea.value, caret: term.textarea.selectionStart, writes: writes.join('') };
+      }, text, leftCount);
+      assert.deepEqual(before, { value: text, caret, writes: text + '\x1b[D'.repeat(leftCount) });
+      await cdpCommit('나');
+      const after = await evaluate(() => ({ value: term.textarea.value, writes: writes.join(''), visible: snapshot().visible }));
+      assert.equal(after.value, text.slice(0, caret) + '나' + text.slice(caret));
+      assert.equal(after.writes, before.writes + '나', 'Midline IME must send the new syllable, not the old final syllable');
+      assert.equal(after.visible, false);
+      await cdpCommit('라');
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '취소', selectionStart: 2, selectionEnd: 2 });
+      await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+      const resumed = await evaluate(async () => { await delay(); return { value: term.textarea.value, writes: writes.join('') }; });
+      assert.equal(resumed.value, text.slice(0, caret) + '나라' + text.slice(caret));
+      assert.equal(resumed.writes, before.writes + '나라', 'Repeated midline input and cancellation must not resend the suffix');
+      cdpMidline.push({ scenario, before, after, resumed });
+    }
+    checks.push('Chromium arrow navigation, repeated Korean insertion and cancellation preserve CJK/emoji suffixes at midline and line start');
     win.webContents.debugger.detach();
     checks.push('Chromium CDP ㅎ→한 composition emits no preedit and exactly one 한 commit through terminalWrite');
     checks.push('Chromium composition cancellation emits no text and clears overlay');
@@ -291,7 +360,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.nativeVisibility, '');
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, cdp, nativeWindowsImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, nativeWindowsImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());
