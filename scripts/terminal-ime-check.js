@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const checkImeOwnership = require('./tests/terminal-ime-ownership');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-ime-'));
 const output = path.join(root, 'artifacts', 'terminal-ime');
@@ -340,6 +341,9 @@ app.whenReady().then(async () => {
     checks.push('Chromium CDP ㅎ→한 composition emits no preedit and exactly one 한 commit through terminalWrite');
     checks.push('Chromium composition cancellation emits no text and clears overlay');
 
+    const ownership = await checkImeOwnership(evaluate);
+    checks.push('IME native input owns commits once, preserves midline edits, modifiers and composing Backspace, and uses terminal cell widths');
+
     const enter = await evaluate(async () => {
       await reset(term); writes.length = 0;
       start(term); update(term, '한'); await delay(); end(term, '한'); await delay();
@@ -405,7 +409,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.nativeVisibility, '');
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, nativeWindowsImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());

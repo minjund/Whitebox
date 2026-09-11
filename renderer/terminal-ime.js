@@ -1,8 +1,11 @@
 'use strict';
 
 // Preserve xterm's input path and paint the preedit together with the row it
-// covers. The commit guard below works around xterm 6.0's shared send timer;
-// committed text still travels through terminal.input -> onData, never the PTY
+// covers. The commit guard below works around xterm 6.0's shared send timer
+// and textarea-diff input path, following Orca's composition ownership fixes:
+// https://github.com/stablyai/orca/pull/12278
+// https://github.com/stablyai/orca/pull/12560
+// Committed text still travels through terminal.input -> onData, never the PTY
 // directly. No synthetic DOM events or changes to the textarea value.
 window.WhiteboxTerminalIme = {
   createAddon() {
@@ -11,17 +14,28 @@ window.WhiteboxTerminalIme = {
       // Keep this private-API workaround isolated and covered by the real
       // bundled-xterm tests. Remove/revisit when upgrading xterm's helper:
       // https://github.com/xtermjs/xterm.js/issues/6089
-      const helper = terminal._core?._compositionHelper;
+      const core = terminal._core;
+      const helper = core?._compositionHelper;
       if (!helper || typeof helper.compositionstart !== 'function'
         || typeof helper._finalizeComposition !== 'function'
+        || typeof helper.keydown !== 'function'
+        || typeof core._inputEvent !== 'function'
         || typeof helper._compositionPosition?.start !== 'number'
         || typeof helper._dataAlreadySent !== 'string'
         || typeof helper._isComposing !== 'boolean'
         || typeof terminal.input !== 'function') return () => {};
       const originalStart = helper.compositionstart;
       const originalFinalize = helper._finalizeComposition;
+      const originalKeydown = helper.keydown;
+      const originalInput = core._inputEvent;
       let pending = null;
       let suffixLength = 0;
+      let nativeInputExpected = false;
+      let reconciliation = null;
+      const clearReconciliation = () => {
+        if (reconciliation) clearTimeout(reconciliation.timer);
+        reconciliation = null;
+      };
       const flush = () => {
         if (!pending) return;
         const commit = pending;
@@ -32,12 +46,23 @@ window.WhiteboxTerminalIme = {
         // composition starts. compositionend.data can still contain the old
         // 받침 when the IME moves that consonant into the next syllable.
         const input = textarea.value.slice(commit.start, textarea.value.length - commit.suffixLength);
+        clearReconciliation();
+        // Some IMEs emit insertText a task after compositionend. Give that
+        // native commit one turn to reconcile with this deferred send, without
+        // suppressing a new key or new text (including an identical syllable).
+        const sent = { value: textarea.value, timer: null };
+        reconciliation = sent;
+        sent.timer = setTimeout(() => {
+          if (reconciliation === sent) reconciliation = null;
+        }, 0);
         if (input) terminal.input(input, true);
       };
       const start = function () {
         // The textarea still contains the previous committed value here. Drain
         // it before xterm overwrites the start offset for the next syllable.
         flush();
+        clearReconciliation();
+        nativeInputExpected = false;
         originalStart.call(this);
         // In screen reader mode, navigation also moves the textarea selection.
         // The next IME inserts there, not necessarily at value.length. Keep
@@ -62,18 +87,74 @@ window.WhiteboxTerminalIme = {
         if (waitForPropagation) pending.timer = setTimeout(flush, 0);
         else flush();
       };
+      const keydown = function (event) {
+        clearReconciliation();
+        nativeInputExpected = false;
+        // Chromium's Process key is not Enter. Never run xterm 6.0's
+        // _handleAnyTextareaChanges timer: it can outlive a whole composition,
+        // resend its text, or interpret preedit cancellation as a PTY deletion.
+        if (event.keyCode === 229 || event.isComposing) {
+          // Any subsequent keypress belongs to this key, not the preceding
+          // Latin key. Its native input must not send that character twice.
+          core._keyPressHandled = false;
+          nativeInputExpected = !this._isComposing && !pending;
+          return false;
+        }
+        // A lone Command/Meta key must not commit or hide an active preedit.
+        if ((this._isComposing || pending) && [91, 93, 224].includes(event.keyCode)) return false;
+        return originalKeydown.call(this, event);
+      };
+      const inputEvent = function (event) {
+        // The browser owns preedit edits, including deletions. Only a finished
+        // composition or a native, non-composition input may reach onData.
+        if (helper._isComposing || event.isComposing) return false;
+        if (pending) {
+          flush();
+          nativeInputExpected = false;
+          return true;
+        }
+        if (event.inputType === 'insertText' && event.data) {
+          if (reconciliation) {
+            // Matching text alone is insufficient: another native insertion
+            // may legitimately repeat the same syllable without a keydown.
+            const duplicate = textarea.value === reconciliation.value;
+            clearReconciliation();
+            if (duplicate) return true;
+          } else if (!nativeInputExpected) {
+            return originalInput.call(this, event);
+          }
+          const handledByKeypress = nativeInputExpected && this._keyPressHandled;
+          nativeInputExpected = false;
+          if (handledByKeypress) return true;
+          this._unprocessedDeadKey = false;
+          terminal.input(event.data, true);
+          return true;
+        }
+        if (nativeInputExpected && ['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)) {
+          nativeInputExpected = false;
+          terminal.input(event.inputType === 'deleteContentBackward' ? '\x7f' : '\x1b[3~', true);
+          return true;
+        }
+        return originalInput.call(this, event);
+      };
       helper.compositionstart = start;
       helper._finalizeComposition = finalize;
+      helper.keydown = keydown;
+      core._inputEvent = inputEvent;
       // xterm clears its textarea on blur. Commit a finished composition
       // before that listener runs, without submitting an active preedit.
-      textarea.addEventListener('blur', flush, true);
+      const blur = () => { flush(); clearReconciliation(); nativeInputExpected = false; };
+      textarea.addEventListener('blur', blur, true);
       return () => {
         if (pending) clearTimeout(pending.timer);
         pending = null;
+        clearReconciliation();
         helper._isSendingComposition = false;
-        textarea.removeEventListener('blur', flush, true);
+        textarea.removeEventListener('blur', blur, true);
         if (helper.compositionstart === start) helper.compositionstart = originalStart;
         if (helper._finalizeComposition === finalize) helper._finalizeComposition = originalFinalize;
+        if (helper.keydown === keydown) helper.keydown = originalKeydown;
+        if (core._inputEvent === inputEvent) core._inputEvent = originalInput;
       };
     }
     return {
@@ -106,6 +187,8 @@ window.WhiteboxTerminalIme = {
         let text = '';
         let disposed = false;
         let timer = null;
+        let gridKey = '';
+        let gridSpacing = '';
         const ansiNames = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
           'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
         const ansiDefaults = ['#2e3436', '#cc0000', '#4e9a06', '#c4a000', '#3465a4', '#75507b', '#06989a', '#d3d7cf',
@@ -159,6 +242,22 @@ window.WhiteboxTerminalIme = {
             color: theme.foreground || '#ffffff', background: theme.background || '#000000',
           });
           preedit.textContent = text;
+          // Match the cell advance xterm will use after commit. Browser font
+          // fallback often makes Hangul preedit narrower than its two cells,
+          // shifting the caret/tail when the syllable is finally echoed.
+          const unicode = terminal._core?.unicodeService;
+          const scale = screen.getBoundingClientRect().width / screen.clientWidth || 1;
+          if (typeof unicode?.getStringCellWidth === 'function' && typeof unicode.wcwidth === 'function') {
+            const key = JSON.stringify([text, cellWidth, options.fontFamily, options.fontSize, options.fontWeight]);
+            if (key !== gridKey) {
+              preedit.style.letterSpacing = '0px';
+              const naturalWidth = preedit.getBoundingClientRect().width / scale;
+              const advancing = Array.from(text).filter(character => unicode.wcwidth(character.codePointAt(0)) > 0).length;
+              gridSpacing = advancing ? `${(unicode.getStringCellWidth(text) * cellWidth - naturalWidth) / advancing}px` : '0px';
+              gridKey = key;
+            }
+            preedit.style.letterSpacing = gridSpacing;
+          }
           const caretWidth = Math.max(1, options.cursorWidth || 1);
           Object.assign(caret.style, {
             flex: `0 0 ${caretWidth}px`, width: `${caretWidth}px`,
@@ -190,7 +289,7 @@ window.WhiteboxTerminalIme = {
             fragment.appendChild(span);
           }
           tail.replaceChildren(fragment);
-          const preeditWidth = preedit.getBoundingClientRect().width;
+          const preeditWidth = preedit.getBoundingClientRect().width / scale;
           const overflow = preeditWidth > available;
           const anchorLeft = Math.max(0, Math.min(left, screen.clientWidth - preeditWidth));
           // A wide final syllable must stay whole even if only one cell remains.
