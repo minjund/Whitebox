@@ -86,13 +86,15 @@ async function stopOwned(pid) {
     // Replacing app.asar while that daemon is alive races the candidate's
     // startup against its incompatible protocol; that is not the injected
     // shutdown failure whose retry behavior this scenario is meant to test.
+    await waitFor(()=>driver.evaluate(`process.mainModule.require('fs').existsSync(process.mainModule.require('path').join(process.mainModule.require('electron').app.getPath('userData'),'terminal-host.json'))`),'official macOS 1.7.3 host discovery');
     const oldHost = await driver.evaluate(`(async () => {
       const req=process.mainModule.require.bind(process.mainModule);
-      const w=req('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
-      const sessions=await w.webContents.executeJavaScript('window.whitebox.terminalList()');
-      if(sessions.some(s=>['running','starting','reconnecting'].includes(s.status))) throw new Error('Official manual replacement still has active PTYs');
       const profilePath=req('fs').realpathSync(req('electron').app.getPath('userData'));
-      return {profile:profilePath,executable:req('./src/terminalHost').resolveTerminalHostExecutable({isPackaged:true}),discovery:JSON.parse(req('fs').readFileSync(req('path').join(profilePath,'terminal-host.json'),'utf8'))};
+      const discovery=JSON.parse(req('fs').readFileSync(req('path').join(profilePath,'terminal-host.json'),'utf8'));
+      const host=req('./src/terminalHost');
+      const verified=await host.verifyHostDiscovery(discovery);
+      if(!Array.isArray(verified.sessions)||verified.sessions.length) throw new Error('Official manual replacement requires an authenticated empty host');
+      return {profile:profilePath,executable:host.resolveTerminalHostExecutable({isPackaged:true}),discovery};
     })()`);
     assert.equal(oldHost.profile, fs.realpathSync(profile));
     assert(Number.isSafeInteger(oldHost.discovery.pid) && oldHost.discovery.pid > 0);
