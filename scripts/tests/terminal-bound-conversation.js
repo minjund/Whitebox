@@ -695,8 +695,9 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
         assert.equal(args[0], '--append-system-prompt');
         assert.equal(args[1], require('../../src/comprehensionPacket').COMPREHENSION_INSTRUCTIONS.replace(/\s+/gu, ' '));
       } else {
-        assert.equal(args[0], '-c');
-        assert.equal(JSON.parse(args[1].slice('developer_instructions='.length)), require('../../src/comprehensionPacket').COMPREHENSION_INSTRUCTIONS);
+        assert.deepStrictEqual(args.slice(0, 2), ['-c', 'check_for_update_on_startup=false']);
+        assert.equal(args[2], '-c');
+        assert.equal(JSON.parse(args[3].slice('developer_instructions='.length)), require('../../src/comprehensionPacket').COMPREHENSION_INSTRUCTIONS);
       }
       native.manager.create(request);
       assert.equal(native.spawns.length, 1, '동일 생성 재시도는 최초 요청을 재실행하면 안 됩니다.');
@@ -1170,7 +1171,7 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     assert.equal(forked.agentLinkedSessionId, '');
     assert.equal(forked.agentForkSourceSessionId, forkRequest.agentForkSourceSessionId);
     assert.equal(forked.agentForkSourceSignature, forkRequest.agentForkSourceSignature);
-    assert.deepStrictEqual(forkFixture.spawns, [{ file: 'codex', args: ['fork', '019f-desktop-source'] }]);
+    assert.deepStrictEqual(forkFixture.spawns, [{ file: 'codex', args: ['-c', 'check_for_update_on_startup=false', 'fork', '019f-desktop-source'] }]);
     assert.equal(forkFixture.manager.sessions.get(forked.id).agentBinding, null);
     assert.deepStrictEqual(forkFixture.manager.sessions.get(forked.id).options.args, ['fork', '019f-desktop-source']);
 
@@ -1406,14 +1407,14 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
         pid: proofBridge.pid + 1,
         parentPid: proofBridge.pid,
         name: 'node',
-        commandLine: `node /usr/local/lib/node_modules/@openai/codex/bin/codex.js fork ${proofSourceExternalId}`,
+        commandLine: `node /usr/local/lib/node_modules/@openai/codex/bin/codex.js -c check_for_update_on_startup=false fork ${proofSourceExternalId}`,
         startedAt: proofProcessStartedAt,
       },
       {
         pid: proofBridge.pid + 2,
         parentPid: proofBridge.pid + 1,
         name: 'codex',
-        commandLine: `codex fork ${proofSourceExternalId}`,
+        commandLine: `codex -c check_for_update_on_startup=false fork ${proofSourceExternalId}`,
         startedAt: proofProcessStartedAt,
       },
     ], { providerResolver: providerFromPosixProcess, environment: 'macos' });

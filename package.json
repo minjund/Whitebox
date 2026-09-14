@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "1.8.16",
+  "version": "1.8.17",
   "description": "A local-first desktop control room for seeing and steering Claude, Codex, Gemini, and Grok at work.",
   "main": "main.js",
   "author": "wincube AX",
@@ -63,7 +63,8 @@
     "test": "node scripts/regression-test.js && node scripts/execution-activity-test.js && node scripts/conversation-layout-test.js && node scripts/update-restart-regression.js && node scripts/electron-asar-cleanup-check.js",
     "test:accuracy": "node scripts/accuracy-evaluation.js",
     "test:performance": "node --expose-gc scripts/performance-monitor-check.js && electron scripts/performance-renderer-check.js",
-    "test:terminal": "electron scripts/terminal-integration-test.js",
+    "test:terminal": "electron scripts/terminal-integration-test.js && electron scripts/ghostty-terminal-check.js",
+    "test:terminal:engine": "electron scripts/ghostty-terminal-check.js",
     "test:terminal:ime": "electron scripts/terminal-ime-check.js",
     "test:terminal:startup": "electron scripts/comprehension-startup-pty-check.js",
     "test:terminal:tmux-pane": "electron scripts/exact-tmux-pane-integration.js",
@@ -115,14 +116,14 @@
     "provenance": true
   },
   "dependencies": {
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
+    "@crunchloop/ghostty-web": "0.4.6",
     "node-pty": "1.2.0-beta.14"
   },
   "peerDependencies": {
     "electron": "^43.2.0"
   },
   "devDependencies": {
+    "@xterm/xterm": "^6.0.0",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3"
   },
@@ -151,16 +152,7 @@
       "renderer/**/*",
       "LICENSE",
       "package.json",
-      "!node_modules/@xterm/xterm/src/**/*",
-      "!node_modules/@xterm/xterm/typings/**/*",
-      "!node_modules/@xterm/xterm/lib/**/*.map",
-      "!node_modules/@xterm/xterm/lib/**/*.mjs",
-      "!node_modules/@xterm/xterm/README.md",
-      "!node_modules/@xterm/addon-fit/src/**/*",
-      "!node_modules/@xterm/addon-fit/typings/**/*",
-      "!node_modules/@xterm/addon-fit/lib/**/*.map",
-      "!node_modules/@xterm/addon-fit/lib/**/*.mjs",
-      "!node_modules/@xterm/addon-fit/README.md"
+      "!node_modules/@crunchloop/ghostty-web/dist/*.d.ts"
     ],
     "asarUnpack": [
       "bin/**/*",
@@ -170,7 +162,12 @@
     "afterPack": "scripts/after-pack.js",
     "beforePack": "scripts/before-pack.js",
     "win": {
-      "extraResources": [{ "from": "build/generated/whitebox-signature-check.exe", "to": "whitebox-signature-check.exe" }],
+      "extraResources": [
+        {
+          "from": "build/generated/whitebox-signature-check.exe",
+          "to": "whitebox-signature-check.exe"
+        }
+      ],
       "icon": "build/icon.ico",
       "target": [
         {

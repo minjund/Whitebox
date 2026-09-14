@@ -5,6 +5,16 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.17 - 2026-09-14
+
+- Embed the Ghostty WASM terminal engine with local rendering, Korean input,
+  scrollback, themes, and accessible text output.
+- Preserve printed spaces when copying terminal selections, including wrapped
+  Korean text and wide Unicode characters.
+- Recover connections to compatible terminal hosts and keep Codex startup
+  updates from interrupting new tasks or resumed conversations.
+- Support mouse back buttons and keyboard back navigation across app views.
+
 ## 1.8.16 - 2026-09-11
 
 - Preserve Korean IME input at the terminal cursor and reconcile native input

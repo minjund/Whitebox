@@ -68,7 +68,14 @@ const DEFAULT_TMUX_SOCKET = 'whitebox';
 const WINDOWS_CMD_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
 const AGENT_PROVIDERS = Object.freeze({
   claude: { command: 'claude', label: 'Claude' },
-  codex: { command: 'codex', label: 'GPT · Codex' },
+  codex: {
+    command: 'codex',
+    label: 'GPT · Codex',
+    // The embedded PTY must reach the requested conversation. Codex's startup
+    // updater consumes that launch and exits with "Please restart Codex".
+    // Scope this override to Whitebox launches, leaving the user's config alone.
+    args: Object.freeze(['-c', 'check_for_update_on_startup=false']),
+  },
   gemini: { command: 'gemini', label: 'Gemini' },
   grok: { command: 'grok', label: 'Grok' },
 });

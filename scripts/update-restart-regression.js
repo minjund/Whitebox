@@ -101,7 +101,7 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
     return nodes.get(selector);
   };
   const state={update:{status:'available',asset:{},error:''}};
-  const context={window:{WhiteboxAppFactories:{},WhiteboxI18n:{t:x=>x,errorText:e=>e.message},whitebox:{
+  const context={document:{addEventListener(){}},window:{WhiteboxAppFactories:{},WhiteboxI18n:{t:x=>x,errorText:e=>e.message},whitebox:{
     installDownloadedUpdate:()=>{calls++;return new Promise((resolve,reject)=>{resolveInstall={resolve,reject};});}
   }}};
   vm.createContext(context);

@@ -720,8 +720,8 @@ const QUALITY_201_300_I18N_CONTRACTS = [
 ];
 
 const TERMINAL_RUNTIME_CONTRACTS = [
-  'window.Terminal',
-  'FitAddon.FitAddon',
+  'window.WhiteboxTerminalEngine',
+  'engine.FitAddon',
   'wslDistros',
   'terminalWrite',
   'terminalResize',
@@ -1554,7 +1554,8 @@ function registerUiContractTests(context) {
       contract => `${contract} 렌더러 IPC 계약이 없습니다.`,
     );
     assert.ok(html.includes('Content-Security-Policy'));
-    assert.ok(html.includes('@xterm/xterm/lib/xterm.js'));
+    assert.ok(html.includes('terminal-engine.js'));
+    assert.ok(!html.includes('@xterm/'));
     assert.ok(
       html.indexOf('class="topbar"') < html.indexOf('id="beginnerGuide"')
         && html.indexOf('id="beginnerGuide"') < html.indexOf('id="providerOverview"'),
@@ -1591,18 +1592,12 @@ function registerUiContractTests(context) {
       '소스 브리지에서 데스크톱 앱을 열 때 Electron 실행 파일과 앱 경로를 함께 전달해야 합니다.',
     );
     assert.ok(pkg.dependencies['node-pty']);
-    assert.ok(pkg.dependencies['@xterm/xterm']);
-    assert.ok(pkg.dependencies['@xterm/addon-fit']);
+    assert.equal(pkg.dependencies['@crunchloop/ghostty-web'], '0.4.6');
+    assert.ok(!pkg.dependencies['@xterm/xterm']);
+    assert.ok(!pkg.dependencies['@xterm/addon-fit']);
     assert.deepStrictEqual(pkg.build.electronLanguages, ['en-US', 'ko', 'zh-CN', 'zh_CN']);
     for (const pattern of [
-      '!node_modules/@xterm/xterm/src/**/*',
-      '!node_modules/@xterm/xterm/typings/**/*',
-      '!node_modules/@xterm/xterm/lib/**/*.map',
-      '!node_modules/@xterm/xterm/lib/**/*.mjs',
-      '!node_modules/@xterm/addon-fit/src/**/*',
-      '!node_modules/@xterm/addon-fit/typings/**/*',
-      '!node_modules/@xterm/addon-fit/lib/**/*.map',
-      '!node_modules/@xterm/addon-fit/lib/**/*.mjs',
+      '!node_modules/@crunchloop/ghostty-web/dist/*.d.ts',
     ]) {
       assert.ok(pkg.build.files.includes(pattern), `패키징 제외 규칙이 없습니다: ${pattern}`);
     }

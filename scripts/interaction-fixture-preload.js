@@ -893,6 +893,11 @@ const api = {
   onTerminalError: callback => { terminalErrorListeners.add(callback); return () => terminalErrorListeners.delete(callback); },
   onTerminalConnection: callback => { terminalConnectionListeners.add(callback); return () => terminalConnectionListeners.delete(callback); },
   onSnapshot: callback => { snapshotListeners.add(callback); return () => snapshotListeners.delete(callback); },
+  onNavigateBack: callback => {
+    const handler = () => callback();
+    ipcRenderer.on('app:navigate-back', handler);
+    return () => ipcRenderer.removeListener('app:navigate-back', handler);
+  },
   onAttentionRequested: callback => { attentionListeners.add(callback); return () => attentionListeners.delete(callback); },
   onTerminalPromptResolved: callback => { terminalPromptResolutionListeners.add(callback); return () => terminalPromptResolutionListeners.delete(callback); },
   onUpdateState: callback => { updateStateListeners.add(callback); return () => updateStateListeners.delete(callback); },

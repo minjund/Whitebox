@@ -258,7 +258,8 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   }
 
   function createXtermHost(key, readOnly = false, session = null) {
-    if (!window.Terminal || !window.FitAddon || !window.FitAddon.FitAddon) throw new Error(t('terminal.error.screen_unavailable'));
+    const engine = window.WhiteboxTerminalEngine;
+    if (!engine?.Terminal || !engine?.FitAddon) throw new Error(t('terminal.error.screen_unavailable'));
     const host = document.createElement('div');
     host.className = 'terminal-screen hidden';
     host.dataset.terminalScreen = key;
@@ -270,11 +271,11 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       rows: Number(session.rows) || 32,
     } : null;
     const inputDisabled = readOnly;
-    const terminal = new window.Terminal({
+    const terminal = new engine.Terminal({
       ...xtermOptions(inputDisabled),
       ...(fixedGrid || {}),
     });
-    const fit = new window.FitAddon.FitAddon();
+    const fit = new engine.FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
     if (!readOnly) terminal.loadAddon(window.WhiteboxTerminalIme.createAddon());
@@ -408,6 +409,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       const rememberUserScroll = () => { entry.userScrollRevision += 1; };
       host.addEventListener('wheel', event => {
         const deltaY = Number(event.deltaY) || 0;
+        if (!event.shiftKey && terminal.wasmTerm?.hasMouseTracking()) return;
         const activeBuffer = terminal.buffer.active;
         if (!deltaY || Number(activeBuffer.baseY || 0) <= 0) return;
         const lineDelta = event.deltaMode === 1
@@ -525,6 +527,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   }
 
   async function ensureSessionTerminal(session) {
+    if (!window.WhiteboxTerminalEngine.initialized) await window.WhiteboxTerminalEngine.ready();
     let entry = state.terminals.get(session.id);
     const inputDisabled = false;
     if (entry && entry.inputDisabled !== inputDisabled) {
@@ -583,7 +586,8 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return entry.ready ? await entry.ready : entry;
   }
 
-  function ensureRemoteTerminal() {
+  async function ensureRemoteTerminal() {
+    if (!window.WhiteboxTerminalEngine.initialized) await window.WhiteboxTerminalEngine.ready();
     if (!state.remoteTerminal) state.remoteTerminal = createXtermHost('__tmux_remote__', true);
     return state.remoteTerminal;
   }
@@ -647,7 +651,8 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       stopCapture();
     } else if (remote) {
       if (!selectionIsCurrent()) return false;
-      const entry = ensureRemoteTerminal();
+      const entry = await ensureRemoteTerminal();
+      if (!selectionIsCurrent()) return false;
       for (const other of state.terminals.values()) other.host.classList.add('hidden');
       entry.host.classList.remove('hidden');
       if (!keepVisible || entry !== visibleEntry) fitEntry(entry);
@@ -843,8 +848,11 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
       state.remoteCaptureRetryTimer = null;
       const firstCapture = !state.remoteCapture;
+      const entry = await ensureRemoteTerminal();
+      const readyTarget = currentTmux();
+      if (!state.active || captureGeneration !== state.captureGeneration || state.selectedId
+        || !readyTarget || `${readyTarget.distro.name}:${readyTarget.pane.nativeId}` !== captureKey) return;
       state.remoteCapture = result.output;
-      const entry = ensureRemoteTerminal();
       appliedEntry = entry;
       const buffer = entry.terminal.buffer.active;
       const previousViewport = state.remoteViewportAnchor == null

@@ -1,6 +1,6 @@
 'use strict';
 
-// Real Electron clipboard + xterm integration, with an isolated profile and
+// Real Electron clipboard + embedded Ghostty, with an isolated profile and
 // a captured terminalWrite boundary (no commands reach a user's live shell).
 const { app, BrowserWindow, clipboard } = require('electron');
 const assert = require('node:assert/strict');
@@ -26,10 +26,10 @@ app.whenReady().then(async () => {
     return result.value;
   };
   try {
-    const files = ['node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
+    const files = ['renderer/terminal-engine.js',
       'renderer/comprehension-output-filter.js', 'renderer/terminal-ime.js', 'renderer/terminal-workbench.js'];
     const html = path.join(profile, 'fixture.html');
-    fs.writeFileSync(html, '<div id="terminalRuntimeMount"></div>' + files.map(file =>
+    fs.writeFileSync(html, `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'renderer/styles-terminal-engine.css')).href}"><div id="terminalRuntimeMount"></div>` + files.map(file =>
       `<script src="${pathToFileURL(path.join(root, file)).href}"></script>`).join(''));
     await win.loadFile(html);
     // Chromium clipboard access requires the same focused document as a real
@@ -38,6 +38,9 @@ app.whenReady().then(async () => {
     win.focus();
     win.webContents.focus();
     await new Promise(resolve => setTimeout(resolve, 200));
+    clipboard.writeText('whitebox-native-clipboard-probe');
+    assert.equal(clipboard.readText(), 'whitebox-native-clipboard-probe',
+      'Host clipboard unavailable: direct Electron write/read failed before terminal creation');
     await evaluate(`(async () => {
       window.writes = []; window.errors = [];
       window.WhiteboxI18n = { t: key => key };
@@ -76,11 +79,12 @@ app.whenReady().then(async () => {
     };
     const copied = await evaluate('expectedCopy');
     await waitFor('errors.length === 0');
-    assert(copied.length > 8000);
-    for (let attempt = 0; attempt < 100 && clipboard.readText() !== copied; attempt += 1) {
+    assert(copied.length > 8000, JSON.stringify(await evaluate('({length: expectedCopy.length, base: term.buffer.active.baseY, rows: term.rows, bufferLength: term.buffer.active.length, selected: term.backend.getSelectionPosition()})')));
+    const clipboardMatches = () => clipboard.readText().replace(/\r\n/g, '\n') === copied.replace(/\r\n/g, '\n');
+    for (let attempt = 0; attempt < 100 && !clipboardMatches(); attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    assert(clipboard.readText() === copied, 'Selection was truncated or not copied; ' + JSON.stringify({expectedLength: copied.length, actualLength: clipboard.readText().length, formats: clipboard.availableFormats(), renderer: await evaluate('({errors, focused: document.hasFocus(), selected: term.hasSelection()})')}));
+    assert(clipboardMatches(), 'Selection was truncated or not copied; ' + JSON.stringify({expectedLength: copied.length, actualLength: clipboard.readText().length, formats: clipboard.availableFormats(), renderer: await evaluate('({errors, focused: document.hasFocus(), selected: term.hasSelection()})')}));
     clipboard.writeText('첫 줄😀\n둘째 줄');
     await evaluate(`(async () => {
       term.clearSelection();
@@ -94,7 +98,7 @@ app.whenReady().then(async () => {
     await evaluate(`key('Insert', { ctrlKey: false, shiftKey: true })`);
     await waitFor('writes.length === 3');
     assert.equal((await evaluate('writes')).every(value => value === '\x1b[200~첫 줄😀\r둘째 줄\x1b[201~'), true);
-    await evaluate(`key('c', { keyCode: 67, which: 67 })`);
+    await evaluate(`key('c', { code: 'KeyC', keyCode: 67, which: 67 })`);
     await waitFor('writes.length === 4');
     assert.equal((await evaluate('writes'))[3], '\x03');
     const display = await evaluate(`(async () => {
@@ -106,7 +110,7 @@ app.whenReady().then(async () => {
     assert(display.includes('BEFOREAFTER'));
     assert(!display.includes('whitebox-comprehension-packet'));
     assert.deepEqual(await evaluate('errors'), []);
-    process.stdout.write('PASS: real Electron/xterm full selection, Ctrl+V, Ctrl+Shift+V, Shift+Insert, bracketed multiline paste, Ctrl+C interrupt, owned packet display.\n');
+    process.stdout.write('PASS: real Electron/Ghostty full selection, Ctrl+V, Ctrl+Shift+V, Shift+Insert, bracketed multiline paste, Ctrl+C interrupt, owned packet display.\n');
   } finally {
     win.destroy();
     clipboard.clear();

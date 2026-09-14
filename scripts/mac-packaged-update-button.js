@@ -19,7 +19,10 @@ const installer = path.resolve('release', `Whitebox-${version}-${process.arch}.d
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 let driver;
 let relaunchedPid = 0;
-function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+function alive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+}
 async function waitFor(predicate, label, timeout = 120000) {
   const deadline = Date.now() + timeout;
   while (!await predicate()) { if (Date.now() >= deadline) throw new Error('Timed out: ' + label); await pause(200); }
@@ -79,8 +82,31 @@ async function stopOwned(pid) {
     return w ? await w.webContents.executeJavaScript(${JSON.stringify(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(sourceVersion)}`)}) : false;
   })()`),'official macOS '+sourceVersion+' renderer');
   if (sourceVersion === '1.7.3') {
+    // A manual replacement must wait for the official app's idle daemon too.
+    // Replacing app.asar while that daemon is alive races the candidate's
+    // startup against its incompatible protocol; that is not the injected
+    // shutdown failure whose retry behavior this scenario is meant to test.
+    await waitFor(()=>driver.evaluate(`process.mainModule.require('fs').existsSync(process.mainModule.require('path').join(process.mainModule.require('electron').app.getPath('userData'),'terminal-host.json'))`),'official macOS 1.7.3 host discovery');
+    const oldHost = await driver.evaluate(`(async () => {
+      const req=process.mainModule.require.bind(process.mainModule);
+      const profilePath=req('fs').realpathSync(req('electron').app.getPath('userData'));
+      const discovery=JSON.parse(req('fs').readFileSync(req('path').join(profilePath,'terminal-host.json'),'utf8'));
+      const host=req('./src/terminalHost');
+      const verified=await host.verifyHostDiscovery(discovery);
+      if(!Array.isArray(verified.sessions)||verified.sessions.length) throw new Error('Official manual replacement requires an authenticated empty host');
+      return {profile:profilePath,executable:host.resolveTerminalHostExecutable({isPackaged:true}),discovery};
+    })()`);
+    assert.equal(oldHost.profile, fs.realpathSync(profile));
+    assert(Number.isSafeInteger(oldHost.discovery.pid) && oldHost.discovery.pid > 0);
+    assert.equal(oldHost.discovery.platform, 'darwin');
+    assert.equal(oldHost.executable,path.join(app,'Contents','Frameworks','Whitebox Helper.app','Contents','MacOS','Whitebox Helper'));
+    const oldHostMapping=execFileSync('/usr/sbin/lsof',['-a','-p',String(oldHost.discovery.pid),'-d','txt','-Fn'],{encoding:'utf8'});
+    assert(oldHostMapping.split('\n').includes('n'+oldHost.executable), 'Official daemon must belong to the isolated app');
     await driver.evaluate(`setTimeout(()=>process.mainModule.require('electron').app.quit(),100);true`);
     driver.close();await waitFor(()=>!alive(driver.child.pid),'official macOS 1.7.3 shutdown');
+    await waitFor(()=>!alive(oldHost.discovery.pid),'official macOS 1.7.3 idle daemon shutdown',30000);
+    assert.equal(fs.existsSync(path.join(profile,'terminal-host.json')),false,'Official daemon must remove its discovery before manual replacement');
+    console.log('PASS official macOS 1.7.3 app and authenticated idle daemon exited before manual replacement');
     fs.rmSync(app,{recursive:true,force:true});
     execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
     driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);

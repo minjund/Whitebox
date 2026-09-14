@@ -13,6 +13,7 @@ const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const { AgentRunner, probeProviders } = require('./src/agentRunner');
 const { BackgroundQuestionnaire } = require('./src/backgroundQuestionnaire');
+const { bindWindowNavigation } = require('./src/windowNavigation');
 const { snapshotWithoutSessions } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
 const { collectProviderUsage } = require('./src/providerUsage');
@@ -580,6 +581,7 @@ function createWindow() {
     },
   });
   mainWindow.setMenuBarVisibility(false);
+  bindWindowNavigation(mainWindow);
   mainWindow.webContents.on('did-start-loading', () => {
     rendererBootstrapped = false;
     attentionActivationCoordinator?.rendererUnavailable();

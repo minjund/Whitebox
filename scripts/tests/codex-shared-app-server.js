@@ -312,6 +312,15 @@ function registerCodexSharedAppServerTests(context) {
 
   test('프로세스 감시는 Codex remote 전송 인자를 제외하고 resume ID를 찾는다', () => {
     assert.equal(processSessionExternalId({
+      argv: ['codex', '-c', 'check_for_update_on_startup=false', '--remote', 'ws://127.0.0.1:45123', 'resume', '--', 'session-with-update-override'],
+    }, 'codex'), 'session-with-update-override');
+    assert.equal(processSessionExternalId({
+      argv: ['codex', '-c', 'unrecognized=true', 'resume', 'must-fail-closed'],
+    }, 'codex'), '');
+    assert.equal(processSessionExternalId({
+      argv: ['codex', '--', '-c', 'check_for_update_on_startup=false', 'resume', 'prompt-is-not-identity'],
+    }, 'codex'), '');
+    assert.equal(processSessionExternalId({
       argv: ['codex', '--remote', 'ws://127.0.0.1:45123', 'resume', '--', 'session-one'],
     }, 'codex'), 'session-one');
     assert.equal(processSessionExternalId({
@@ -388,7 +397,7 @@ function registerCodexSharedAppServerTests(context) {
     }, 'linux');
     const linuxProviders = sharedCodexAgentProviders(appServer, 'linux');
     assert.equal(linuxManaged.sessionBackend, 'managed-tmux');
-    assert.deepStrictEqual(linuxProviders.codex.argsFor(linuxManaged), []);
+    assert.deepStrictEqual(linuxProviders.codex.argsFor(linuxManaged), ['-c', 'check_for_update_on_startup=false']);
 
     const manager = {
       sessions: new Map([
@@ -417,13 +426,15 @@ function registerCodexSharedAppServerTests(context) {
       sessionBackend: 'managed-tmux', bridgeId: 'codex:bound', agentConnectionSignature: 'signed-binding',
     }], 'linux');
     assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex' }), [
+      '-c', 'check_for_update_on_startup=false',
       '--remote', 'ws://127.0.0.1:45123',
     ]);
-    assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex', distro: 'Ubuntu' }), []);
+    assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex', distro: 'Ubuntu' }), ['-c', 'check_for_update_on_startup=false']);
     await prepareCodexOperation(manager, appServer, 'restart', ['terminal:codex'], 'win32');
     await prepareCodexOperation(manager, appServer, 'restart', ['terminal:managed'], 'linux');
     await prepareCodexOperation(manager, appServer, 'restart', ['terminal:claude'], 'win32');
     assert.deepStrictEqual(linuxProviders.codex.argsFor(linuxDirect), [
+      '-c', 'check_for_update_on_startup=false',
       '--remote', 'ws://127.0.0.1:45123',
     ]);
     assert.deepStrictEqual(calls, ['ensure', 'ensure', 'ensure', 'ensure']);

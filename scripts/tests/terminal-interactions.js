@@ -332,7 +332,11 @@ function createWorkbench(root, options = {}) {
       },
     },
   };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'terminal-ime.js'), 'utf8'), sandbox, { filename: 'terminal-ime.js' });
+  sandbox.window.WhiteboxTerminalEngine = {
+    initialized: true, ready: async () => {}, Terminal: sandbox.window.Terminal, FitAddon: sandbox.window.FitAddon.FitAddon,
+  };
+  // IME DOM/Canvas behavior is covered in terminal-ime-check, not this queue fixture.
+  sandbox.window.WhiteboxTerminalIme = { createAddon: () => ({ activate() {}, dispose() {} }) };
   vm.runInNewContext(source, sandbox, { filename: 'terminal-workbench.js' });
   const state = {
     sessions: session ? [session] : [],

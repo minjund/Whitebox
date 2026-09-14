@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title data-i18n="app.document.title">Whitebox · AI 작업 도우미</title>
   <script src="brand-storage-migration.js"></script>
   <script src="theme.js"></script>
@@ -485,8 +485,7 @@
       <dl class="shortcut-help-list"><div><dt><kbd>⌘/Ctrl</kbd><kbd>K</kbd></dt><dd data-i18n="quality.shortcuts.quick">빠른 이동 열기</dd></div><div><dt><kbd>⌘/Ctrl</kbd><kbd>1–7</kbd></dt><dd data-i18n="quality.shortcuts.views">주요 화면 이동</dd></div><div><dt><kbd>/</kbd></dt><dd data-i18n="quality.shortcuts.search">작업 검색</dd></div><div><dt><kbd>⌘/Ctrl</kbd><kbd>N</kbd></dt><dd data-i18n="quality.shortcuts.new_task">새 AI 작업</dd></div><div><dt><kbd>?</kbd></dt><dd data-i18n="quality.shortcuts.help">이 도움말 열기</dd></div><div><dt><kbd>Esc(닫기)</kbd></dt><dd data-i18n="quality.shortcuts.close_action">열린 창 닫기</dd></div></dl>
     </section>
   </div>
-  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
-  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="terminal-engine.js"></script>
   <script src="i18n-messages.js"></script>
   <script src="conversation-delivery.js"></script>
   <script src="i18n.js"></script>

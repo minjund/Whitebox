@@ -1,7 +1,7 @@
 @layer theme-critical, vendor, foundation, components, cards, overlays, features, product, management, quality, responsive, readability, control-room, philosophical, novice, rhythm, studio, polish, theme;
 
 @import url("styles-theme-critical.css") layer(theme-critical);
-@import url("../node_modules/@xterm/xterm/css/xterm.css") layer(vendor);
+@import url("styles-terminal-engine.css") layer(vendor);
 @import url("styles.css") layer(foundation);
 @import url("styles-components.css") layer(components);
 @import url("styles-cards.css") layer(cards);

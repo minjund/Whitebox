@@ -1,6 +1,7 @@
 'use strict';
 
-// Real Chromium/xterm DOM and CDP composition tests, with the app's input queue
+// Real Chromium/Ghostty DOM and CDP composition tests, with the app's input queue.
+// Stock xterm is a dev-only reference for comparative input/render traces.
 // captured at terminalWrite. This is not a native Windows IME keyboard test.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -24,13 +25,14 @@ app.whenReady().then(async () => {
     webPreferences: { offscreen: true, backgroundThrottling: false, contextIsolation: true, nodeIntegration: false } });
   const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
   try {
-    const files = ['node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
+    const files = ['node_modules/@xterm/xterm/lib/xterm.js', 'renderer/terminal-engine.js',
       'renderer/terminal-ime.js', 'renderer/terminal-workbench.js', 'renderer/terminal-events.js'];
     const html = path.join(profile, 'fixture.html');
     fs.writeFileSync(html, '<!doctype html><meta charset="utf-8">'
       + `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'node_modules/@xterm/xterm/css/xterm.css')).href}">`
       + '<style>body{background:#202126;color:#fff;font:15px sans-serif;margin:24px}.terminal-screen,#baseline{width:900px;height:225px}.xterm{padding:8px}.xterm-screen{background:#112233}</style>'
-      + '<p>Default xterm</p><div id="baseline"></div><p>Whitebox IME overlay</p><div id="terminalRuntimeMount"></div>'
+      + `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'renderer/styles-terminal-engine.css')).href}">`
+      + '<p>Default xterm (test reference)</p><div id="baseline"></div><p>Whitebox Ghostty IME</p><div id="terminalRuntimeMount"></div>'
       + files.map(file => `<script src="${pathToFileURL(path.join(root, file)).href}"></script>`).join(''));
     await win.loadFile(html);
     await evaluate(async () => {
@@ -85,7 +87,7 @@ app.whenReady().then(async () => {
         return { visible: overlay.style.display !== 'none', text: preedit.textContent, tail: tail.textContent,
           overlay: bounds(overlay), preedit: bounds(preedit), tailBounds: bounds(tail), screen: bounds(screen),
           input: bounds(term.textarea), color: getComputedStyle(overlay).color, background: getComputedStyle(overlay).backgroundColor,
-          tailDisplay: tail.style.display, nativeVisibility: getComputedStyle(term.element.querySelector('.composition-view')).visibility,
+          tailDisplay: tail.style.display,
           buffer: term.buffer.active.getLine(term.buffer.active.baseY + term.buffer.active.cursorY).translateToString(true) };
       };
       await delay();
@@ -105,7 +107,6 @@ app.whenReady().then(async () => {
     assert(midline.tailBounds.left >= midline.preedit.right - 1, 'Existing row overlaps preedit');
     assert.equal(midline.buffer, '가다  END', 'Uncommitted input mutated terminal buffer');
     assert.equal(midline.background, 'rgb(17, 34, 51)');
-    assert.equal(midline.nativeVisibility, 'hidden');
     assert.deepEqual(await evaluate(() => writes), []);
     await new Promise(resolve => setTimeout(resolve, 100));
     fs.writeFileSync(path.join(output, 'midline.png'), (await win.webContents.capturePage()).toPNG());
@@ -174,7 +175,7 @@ app.whenReady().then(async () => {
     assert.equal(commits.baseline, '가나다라');
     assert.equal(commits.patched, commits.baseline);
     assert.equal(commits.visible, false);
-    checks.push('rapid adjacent Hangul composition commits exactly 가나다라, same as stock xterm');
+    checks.push('rapid adjacent Hangul composition commits exactly 가나다라, matching the stock xterm reference');
 
     // A busy renderer can deliver several syllables and Enter before xterm's
     // zero-delay composition timers run. Do not yield between these events.
@@ -192,10 +193,10 @@ app.whenReady().then(async () => {
           end(target, syllable);
         }
         target.textarea.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
         }));
         target.textarea.dispatchEvent(new KeyboardEvent('keyup', {
-          key: 'Enter', keyCode: 13, which: 13, bubbles: true,
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true,
         }));
         await delay();
         result[target === baseline ? 'baseline' : 'patched'] = captured.join('');
@@ -230,7 +231,7 @@ app.whenReady().then(async () => {
       await reset(term); writes.length = 0;
       start(term); update(term, '한'); update(term, '하');
       term.textarea.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
       }));
       end(term, '하');
       await delay();
@@ -261,7 +262,7 @@ app.whenReady().then(async () => {
       start(term); update(term, '나', '가가나😀끝');
       term.textarea.setSelectionRange(3, 3);
       term.textarea.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
       }));
       end(term, '나');
       await delay();
@@ -347,8 +348,8 @@ app.whenReady().then(async () => {
     const enter = await evaluate(async () => {
       await reset(term); writes.length = 0;
       start(term); update(term, '한'); await delay(); end(term, '한'); await delay();
-      term.textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      term.textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      term.textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      term.textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
       await delay(); return writes.join('');
     });
     assert.equal(enter, '한\r');
@@ -364,7 +365,7 @@ app.whenReady().then(async () => {
       await delay();
       const positions = { baseline: [], patched: [] };
       const subscriptions = [baseline, term].map((target, index) => target.onRender(() => {
-        if (target.element.querySelector('.xterm-cursor')) {
+        if (target === term ? target.wasmTerm.getCursor().visible : target.element.querySelector('.xterm-cursor')) {
           positions[index ? 'patched' : 'baseline'].push([target.buffer.active.cursorX, target.buffer.active.cursorY]);
         }
       }));
@@ -400,13 +401,11 @@ app.whenReady().then(async () => {
       term.blur(); await delay(); const blurred = snapshot().visible;
       end(term, '가'); await delay();
       term.focus(); start(term); update(term, '나');
-      const native = term.element.querySelector('.composition-view');
       term.dispose(); await delay();
-      return { blurred, overlays: document.querySelectorAll('.whitebox-ime-view').length, nativeVisibility: native.style.visibility, errors };
+      return { blurred, overlays: document.querySelectorAll('.whitebox-ime-view').length, errors };
     });
     assert.equal(lifecycle.blurred, false);
     assert.equal(lifecycle.overlays, 0);
-    assert.equal(lifecycle.nativeVisibility, '');
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));

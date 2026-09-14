@@ -1,70 +1,58 @@
 # Terminal IME maintenance
 
-Whitebox uses xterm 6.0.0. `renderer/terminal-ime.js` adapts its composition
-helper; committed input continues through `terminal.input` → `onData` → the
-workbench input queue. The display overlay never changes the textarea value or
-sends text to the PTY.
+Whitebox embeds Ghostty through `@crunchloop/ghostty-web` 0.4.6. The browser
+textarea owns preedit editing. `renderer/terminal-ime.js` intercepts composition
+before it reaches the library's input handler; completed text travels through
+`terminal.input` → `onData` → the acknowledged workbench queue. The overlay
+never sends bytes directly to a PTY and no xterm private helper is patched.
 
-## Orca references
+## Composition contract
 
-- [PR #12278](https://github.com/stablyai/orca/pull/12278): flush a pending Hangul
-  syllable before the next composition starts.
-- [PR #12560](https://github.com/stablyai/orca/pull/12560): return composition
-  ownership to xterm, replace the delayed textarea-diff path with native input
-  reconciliation, preserve lone Meta keys, and align preedit to terminal cells.
-  The source patch inspected for this change is pinned at
-  `1254e6536d1956a7ff75ad1f176f70e58d1fb56b` in
-  `config/patches/xterm-src/@xterm__xterm@6.1.0-beta.287.src.patch`.
-- [PR #13168](https://github.com/stablyai/orca/pull/13168): recorded Windows
-  Korean event ordering and exactly-once regression coverage. Whitebox's test
-  replays the Windows sequence from commit
-  `f7719ad37e7b3dd3b83b56af156ecfaed741951b`.
+- Preedit never reaches the PTY. A deferred commit reads the final textarea
+  value, excluding the unchanged suffix and any replaced selection.
+- Flush that commit before the next composition or ordinary control key. This
+  preserves Korean 받침 transfer when compositionend.data still has the old
+  syllable and Chromium updates the textarea before the next compositionstart.
+- Reconcile a native insertText event with the previous deferred commit using
+  the textarea state, not text equality alone. Identical new syllables remain
+  valid input.
+- Process/229, composing Backspace and lone modifiers do not finalize preedit.
+  Cancellation sends no deletion. Enter submits completed text in order.
+- Navigation moves the textarea's shadow caret along grapheme boundaries while
+  Ghostty encodes the corresponding PTY key. Enter clears completed shadow text.
+- Place the overlay and native candidate anchor at the actual Canvas cursor.
+  Ghostty itself measures preedit cell widths. Preserve the existing row tail,
+  wide characters, colors and right-edge clipping while composing.
+- Blur flushes only already-finished input; disposal cancels pending commits,
+  removes listeners/subscriptions and destroys the overlay.
 
-This is an adaptation to Whitebox's installed xterm and accessibility mode,
-not a replacement of its dependency with Orca's patched beta package.
+## References
 
-## Defects reproduced before the change
-
-The new Chromium/xterm tests observed these exact failures at `terminalWrite`:
-
-| Input | Before | Required |
-| --- | --- | --- |
-| Process/229, then compose `한` before timers run | `한한` | `한` |
-| Insert `2` inside `가다😀끝` through the IME | `가2다😀끝` | `2` only |
-| Cancel a composition replacing a selection | DEL byte | No bytes |
-| Native commit after compositionend | `한한` or `한한한` | `한` |
-| Press Meta during `ㅎ`, then finish `한` | `ㅎ`, hidden preedit | `한` when committed |
-| Backspace with `isComposing`, changing `한` to `하` | `한` + DEL | `하` when committed |
-
-The helper now waits for native input after Process/229 instead of scheduling
-`_handleAnyTextareaChanges`. Pending commits flush before the next composition
-or ordinary control key. A native commit can reconcile with a deferred send for
-one event-loop turn. Deduplication uses the textarea state, so a new insertion
-of the same text is retained. A keypress already handled by xterm is not sent a
-second time by the native input event.
-
-The existing midline suffix protection and row-tail display remain in place.
-Preedit spacing uses xterm's Unicode cell widths so the caret and following
-text stay aligned when Hangul changes from preedit to committed output.
+The regression cases retain lessons from Orca's
+[commit ownership fixes](https://github.com/stablyai/orca/pull/12278),
+[native-input reconciliation](https://github.com/stablyai/orca/pull/12560), and
+[recorded Windows sequence](https://github.com/stablyai/orca/pull/13168).
+The recorded-trace fixture is pinned to
+`f7719ad37e7b3dd3b83b56af156ecfaed741951b`. These are behavior references;
+Whitebox's implementation uses Ghostty and browser events.
 
 ## Verification and limits
 
-- `npm run test:terminal:ime`: actual Electron/Chromium and installed xterm,
-  DOM event sequences, Chromium CDP composition and arrow navigation, CJK/emoji
-  midline insertion, cancellation, Enter ordering, late native commits in both
-  accessibility modes, Orca's recorded Windows sequence, and addon disposal.
-- `npm run test:terminal`: real Windows ConPTY lifecycle and input/output smoke
-  tests. This does not drive the OS Korean input method.
-- `npm run check:source`: JavaScript syntax checks.
+`npm run test:terminal:ime` exercises the real Electron renderer and bundled
+Ghostty with synthetic DOM traces and Chromium CDP composition. Coverage
+includes rapid `알겠습니다`, `각` → `가나`, midline CJK/emoji replacement,
+cancellation, native commit ordering, modifiers, Backspace, Enter, blur,
+addon disposal and Codex's delayed cursor restoration. Stock xterm is retained
+only as a dev-only comparison in this test. Results are written to
+`artifacts/terminal-ime/results.json`.
 
-Results are written to `artifacts/terminal-ime/results.json`. The DOM sequences
-and recorded-trace replay are automated reproductions, not a fresh physical
-keyboard capture. Native Windows/Microsoft Korean and macOS/two-set Korean
-keyboard validation remain unexecuted on this change. Before claiming native
-platform coverage, exercise continuous `알겠습니다`, 받침 transfer (`각` →
-`가나`), shifted consonants, composing Backspace, Space/Enter, and repeated
-insertion/cancellation inside `가다😀끝` on each OS, in a shell and agent TUI.
+`npm run test:terminal` also exercises a real Windows PowerShell/ConPTY process,
+Ghostty parsing and rendering of computed output, resize and confirmed exit.
+The clipboard test is `electron scripts/terminal-clipboard-check.js`.
 
-The private xterm hooks are capability checked and restored when the addon is
-disposed. Re-run the IME suite whenever changing xterm; an upgrade can invalidate
-these hooks even when ordinary terminal typing still works.
+These checks are automated browser traces, not fresh physical keyboard captures.
+Native Windows/Microsoft Korean and macOS/two-set Korean validation remains
+unexecuted. Before claiming that coverage, exercise continuous Korean typing,
+shifted consonants, composing Backspace, Space/Enter and repeated midline
+insertion/cancellation in a shell and agent TUI on each OS. Rerun all terminal
+checks whenever upgrading the embedded engine.

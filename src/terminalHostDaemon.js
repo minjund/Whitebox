@@ -55,9 +55,10 @@ function sharedCodexAgentProviders(codexAppServer, platform = process.platform) 
     ...AGENT_PROVIDERS,
     codex: {
       ...AGENT_PROVIDERS.codex,
-      argsFor: options => usesSharedCodexAppServer(options, platform)
-        ? codexAppServer.remoteArguments()
-        : [],
+      argsFor: options => [
+        ...AGENT_PROVIDERS.codex.args,
+        ...(usesSharedCodexAppServer(options, platform) ? codexAppServer.remoteArguments() : []),
+      ],
     },
   };
 }
