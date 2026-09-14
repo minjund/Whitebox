@@ -4311,7 +4311,7 @@ function registerTerminalLifecycleTests(context) {
     assert.equal(closeCalls, 2, 'OS lock close 실패 뒤에는 release를 다시 시도할 수 있어야 합니다.');
   });
 
-  test('PTY 런타임이 바뀌면 idle 구버전 호스트의 자연 종료 뒤 새 런타임으로 교체한다', async () => {
+  test('같은 protocol의 idle PTY 런타임은 재사용하고 자연 종료 뒤 새 런타임으로 교체한다', async () => {
     class EmptyManager extends EventEmitter {
       constructor() {
         super();
@@ -4341,9 +4341,8 @@ function registerTerminalLifecycleTests(context) {
       },
     });
     await oldServer.start();
-    // Prevent startup's idle timer from winning the test. The verifier's
-    // disconnect must be what gives the now-idle legacy daemon permission to
-    // shut itself down.
+    // Prevent startup's idle timer from winning the test. An authenticated
+    // client must keep the compatible idle host usable until it disconnects.
     manager.sessions = [];
     let replacementServer = null;
     let terminateCalls = 0;
@@ -4363,13 +4362,15 @@ function registerTerminalLifecycleTests(context) {
         await replacementServer.start();
       },
     });
-    await assert.rejects(
-      client.connect(),
-      error => error.code === 'TERMINAL_HOST_REPLACEMENT_DEFERRED_LIVE_HOST'
-        && error.retryable === true,
-    );
-    assert.equal(await waitUntil(() => client.connected, 4_000), true,
-      'idle legacy runtime이 자연 종료되면 background retry가 새 runtime을 시작해야 합니다.');
+    await client.connect();
+    assert.equal(client.connected, true);
+    assert.equal(client.discovery.runtime, 'node-pty-1.1.0');
+    assert.equal(replacementServer, null);
+    assert.equal(legacyExitedNaturally, false);
+    client.dispose();
+    assert.equal(await waitUntil(() => legacyExitedNaturally, 4_000), true,
+      '마지막 client가 닫히면 idle legacy runtime은 자연 종료해야 합니다.');
+    await client.connect();
 
     assert.equal(legacyExitedNaturally, true);
     assert.equal(terminateCalls, 0, '인증된 live legacy runtime을 tree-kill하면 안 됩니다.');
@@ -5951,7 +5952,7 @@ function registerTerminalFailureTests(context) {
     assert.deepStrictEqual(manager.recoverPersistedSessions().map(session => session.id), ['terminal:wsl-agent']);
     assert.equal(spawns.length, 1);
     assert.equal(spawns[0].file, 'wsl.exe');
-    assert.deepStrictEqual(spawns[0].args, ['-d', 'Ubuntu', '--', 'codex', 'resume', 'wsl-session-123']);
+    assert.deepStrictEqual(spawns[0].args, ['-d', 'Ubuntu', '--', 'codex', '-c', 'check_for_update_on_startup=false', 'resume', 'wsl-session-123']);
     assert.equal(manager.list()[0].cwd, '');
     assert.equal(manager.get('terminal:tmux-pane'), null, 'process identity 없는 legacy external tmux record는 복구하면 안 됩니다.');
     assert.equal(exactProxySpawns.length, 0);

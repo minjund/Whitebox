@@ -132,7 +132,7 @@ function activeLegacyHostError(discovery, sessions) {
   const active = (Array.isArray(sessions) ? sessions : [])
     .filter(isActiveTerminalSession)
     .map(session => ({ ...session }));
-  const error = new Error(`이전 명령창에서 실행 중인 작업 ${active.length}개가 있어 안전한 자동 교체를 미뤘습니다. 작업이 끝나면 자동으로 다시 시도합니다.`);
+  const error = new Error(`이전 버전의 명령창 ${active.length}개가 열려 있어 연결 프로그램을 교체하지 못했습니다. 이전 Whitebox에서 작업을 저장하고 해당 명령창을 종료해 주세요. AI 응답이 끝나도 명령창은 열려 있을 수 있습니다. 명령창이 모두 종료되면 연결을 자동으로 복구합니다.`);
   error.code = 'TERMINAL_HOST_REPLACEMENT_DEFERRED_ACTIVE_SESSIONS';
   error.retryable = true;
   error.discovery = discovery;
@@ -995,6 +995,26 @@ class TerminalHostClient extends EventEmitter {
           }
           if (verified) {
             const legacySessions = Array.isArray(verification?.sessions) ? verification.sessions : [];
+            // node-pty runs entirely inside the daemon; its native version
+            // is not the JSON wire protocol. Both interactive PTYs and an
+            // idle app connection can keep a compatible host alive forever.
+            // A protocol mismatch still requires replacement: old hosts must
+            // never receive unsupported fork/writer operations.
+            const nodePtyRuntime = /^node-pty-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/;
+            if (error.discovery?.protocol === TERMINAL_HOST_PROTOCOL
+              && nodePtyRuntime.test(error.discovery.runtime)
+              && nodePtyRuntime.test(this.expectedRuntime)) {
+              await this.connectExisting(error.discovery.runtime);
+              if (this.disposed || generation !== this.connectGeneration) {
+                this.resetSocket();
+                throw new Error('명령창 다시 연결이 취소되었습니다.');
+              }
+              if (!this.connected || this.socket?.destroyed) {
+                throw new Error('명령창 연결이 준비 직후 닫혔습니다.');
+              }
+              this.hostLaunch = null;
+              return this;
+            }
             if (legacySessions.some(isActiveTerminalSession)) {
               throw activeLegacyHostError(error.discovery, legacySessions);
             }
@@ -1035,10 +1055,10 @@ class TerminalHostClient extends EventEmitter {
     throw new Error(`명령창에 연결하지 못했습니다: ${lastError?.message || '시간 초과'}`);
   }
 
-  connectExisting() {
+  connectExisting(expectedRuntime = this.expectedRuntime) {
     this.discovery = null;
     this.capabilities = {};
-    const discovery = readHostDiscovery(this.discoveryFile, fs, this.expectedRuntime);
+    const discovery = readHostDiscovery(this.discoveryFile, fs, expectedRuntime);
     this.discovery = discovery;
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(discovery.endpoint);

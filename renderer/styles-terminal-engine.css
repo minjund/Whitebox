@@ -1,0 +1,6 @@
+/* Layout for the embedded Ghostty Canvas renderer and its native IME input. */
+.ghostty-terminal { position: relative; height: 100%; width: 100%; overflow: hidden; outline: none; }
+.ghostty-terminal .ghostty-screen { display: block; position: relative; cursor: text; }
+.ghostty-input { font-family: inherit; outline: none; }
+.ghostty-accessibility { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: pre; }
+.ghostty-terminal .whitebox-ime-view { position: absolute; z-index: 2; pointer-events: none; white-space: pre; overflow: hidden; }

@@ -9,7 +9,48 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
     filteredSessions, renderSessions, openRunModal, openDrawer, toast, performUiAction, markGuideStep = () => {},
   } = context;
 
+  function navigateBack() {
+    // Reuse the visible surface's own close/back action so drafts, terminal
+    // sessions, scroll position and focus are restored exactly as for a click.
+    const selectors = [
+      "[data-comprehension-close]", "#closeQuickPaletteBtn", "#closeShortcutHelpBtn",
+      "#cancelTmuxCreateBtn", "#cancelRunBtn", "#closeDrawerBtn",
+      "#ptyFocusBackBtn",
+    ];
+    const button = selectors.map(selector => $(selector)).find(element => (
+      element && !element.disabled
+      && !element.closest("[inert], [hidden], [aria-hidden='true']")
+      && element.getClientRects().length > 0
+      && getComputedStyle(element).visibility === "visible"
+    ));
+    if (button) {
+      button.click();
+      return true;
+    }
+    // The page's back button is hidden in some responsive layouts.
+    if (state.view !== "all" && !context.currentDialog?.()) {
+      selectViewFromUser("all", { focusMain: true });
+      return true;
+    }
+    return false;
+  }
+
   function bindNavigationAndUpdateEvents() {
+    window.whitebox?.onNavigateBack?.(navigateBack);
+    // Capture before the terminal/editor consumes navigation shortcuts.
+    document.addEventListener("keydown", (event) => {
+      if (event.isComposing || event.keyCode === 229) return;
+      const backKey = event.key === "BrowserBack"
+        && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      const altLeft = event.key === "ArrowLeft"
+        && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      const commandBracket = state.platform === "darwin" && event.key === "["
+        && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      if (!backKey && !altLeft && !commandBracket) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!event.repeat) navigateBack();
+    }, true);
     const viewNavigation = $(".view-nav");
     viewNavigation?.addEventListener("click", (event) => {
       const button = event.target.closest(".nav-item");

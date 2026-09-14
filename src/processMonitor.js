@@ -313,13 +313,21 @@ function canonicalIdentityOption(args, name) {
   return { found, value: unique.length === 1 ? unique[0] : '' };
 }
 
-function codexArgumentsWithoutRemoteTransport(args) {
+function codexArgumentsWithoutLaunchOverrides(args) {
   const filtered = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = String(args[index] || '');
     if (argument === '--') {
       filtered.push(...args.slice(index).map(value => String(value || '')));
       break;
+    }
+    // Whitebox supplies this exact global override before resume/fork. It is
+    // launch policy, not part of the provider conversation identity. Do not
+    // strip arbitrary config values or prompt text after a subcommand.
+    if (!filtered.length && (argument === '-c' || argument === '--config')
+      && args[index + 1] === 'check_for_update_on_startup=false') {
+      index += 1;
+      continue;
     }
     if (argument === '--remote' || argument === '--remote-auth-token-env') {
       if (!String(args[index + 1] || '').trim()) return [];
@@ -348,7 +356,7 @@ function processSessionExternalId(processInfo = {}, provider = '') {
     return canonicalIdentityOption(args, '--resume').value;
   }
   if (provider === 'codex') {
-    const identityArgs = codexArgumentsWithoutRemoteTransport(args);
+    const identityArgs = codexArgumentsWithoutLaunchOverrides(args);
     if (identityArgs[0] !== 'resume' || identityArgs[1] === '--last') return '';
     const sessionIndex = identityArgs[1] === '--' ? 2 : 1;
     return canonicalSessionId(identityArgs[sessionIndex]);
@@ -360,7 +368,7 @@ function processSessionExternalId(processInfo = {}, provider = '') {
 }
 
 function exactCodexForkArguments(processInfo = {}) {
-  const args = codexArgumentsWithoutRemoteTransport(providerInvocationArguments(processInfo, 'codex'));
+  const args = codexArgumentsWithoutLaunchOverrides(providerInvocationArguments(processInfo, 'codex'));
   if (args.length !== 2 || args[0] !== 'fork') return [];
   const sourceExternalId = canonicalSessionId(args[1]);
   return sourceExternalId && sourceExternalId === args[1]

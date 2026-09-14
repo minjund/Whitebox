@@ -112,25 +112,22 @@ module.exports = async function checkImeOwnership(evaluate) {
     start(term); update(term, '한글'); await delay();
     const state = snapshot();
     result.preeditWidth = state.preedit.width;
-    result.gridWidth = term._core.unicodeService.getStringCellWidth('한글')
+    result.gridWidth = term.measureTextCells('한글')
       * term.element.querySelector('.xterm-screen').clientWidth / term.cols;
     end(term, '한글'); await delay();
 
-    // Disposing the add-on alone must restore xterm, not leave a native-input
+    // Disposing the add-on alone must restore Ghostty, not leave a native-input
     // interceptor or a deferred send attached to an otherwise live terminal.
     const host = document.createElement('div'); document.body.appendChild(host);
-    const disposable = new Terminal({ cols: 80, rows: 10 }); disposable.open(host);
-    const helper = disposable._core._compositionHelper;
-    const originals = [helper.compositionstart, helper._finalizeComposition, helper.keydown, disposable._core._inputEvent];
+    const disposable = new WhiteboxTerminalEngine.Terminal({ cols: 80, rows: 10 }); disposable.open(host);
     const addon = WhiteboxTerminalIme.createAddon(); disposable.loadAddon(addon);
     const disposedWrites = []; disposable.onData(data => disposedWrites.push(data));
     start(disposable); update(disposable, '취소'); end(disposable, '취소');
     addon.dispose(); await delay();
-    result.disposal = {
-      restored: [helper.compositionstart, helper._finalizeComposition, helper.keydown, disposable._core._inputEvent]
-        .every((method, index) => method === originals[index]),
-      writes: disposedWrites.join(''), overlays: host.querySelectorAll('.whitebox-ime-view').length,
-    };
+    const beforeKey = disposedWrites.join('');
+    disposable.textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true }));
+    result.disposal = { restored: disposedWrites.join('') === 'a',
+      writes: beforeKey, overlays: host.querySelectorAll('.whitebox-ime-view').length };
     disposable.dispose(); host.remove(); term.focus();
     return result;
   });

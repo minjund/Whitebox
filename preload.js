@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('whitebox', {
   rendererReady: () => ipcRenderer.invoke('app:renderer-ready'),
   backgroundState: () => ipcRenderer.invoke('app:background-state'),
   showApp: () => ipcRenderer.invoke('app:show'),
+  onNavigateBack: callback => {
+    const handler = () => callback();
+    ipcRenderer.on('app:navigate-back', handler);
+    return () => ipcRenderer.removeListener('app:navigate-back', handler);
+  },
   setLocale: locale => ipcRenderer.invoke('app:set-locale', locale),
   setThemeAppearance: theme => ipcRenderer.invoke('app:set-theme-appearance', theme),
   setProviderVisibility: preference => ipcRenderer.invoke('app:set-provider-visibility', preference),
