@@ -120,11 +120,11 @@
     "node-pty": "1.2.0-beta.14"
   },
   "peerDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^44.3.0"
   },
   "devDependencies": {
     "@xterm/xterm": "^6.0.0",
-    "electron": "^43.2.0",
+    "electron": "^44.3.0",
     "electron-builder": "^26.15.3"
   },
   "build": {
