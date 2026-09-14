@@ -19,7 +19,10 @@ const installer = path.resolve('release', `Whitebox-${version}-${process.arch}.d
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 let driver;
 let relaunchedPid = 0;
-function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+function alive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+}
 async function waitFor(predicate, label, timeout = 120000) {
   const deadline = Date.now() + timeout;
   while (!await predicate()) { if (Date.now() >= deadline) throw new Error('Timed out: ' + label); await pause(200); }
