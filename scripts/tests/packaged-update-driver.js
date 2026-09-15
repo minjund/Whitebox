@@ -47,6 +47,24 @@ function registerPackagedUpdateDriverTests({ test }) {
   test('both Windows drivers await owned PID exit before strict path verification and propagate cleanup failures', async () => {
     for (const filename of ['windows-v173-update-integration.js', 'windows-legacy-update-bridge-integration.js']) {
       const source = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8');
+      const aliveDefinition = source.match(/function processAlive\(pid\) \{[\s\S]*?\n\}/)[0];
+      const lookupFailure = new Error('Parent process query failed');
+      const aliveContext = { powershell: 'powershell.exe', probeWindowsProcessIds: () => { throw lookupFailure; } };
+      const alive = vm.runInNewContext('(' + aliveDefinition + ')', aliveContext);
+      assert.throws(() => alive(908), error => error === lookupFailure);
+      aliveContext.probeWindowsProcessIds = () => [908];
+      assert.equal(alive(908), true);
+      aliveContext.probeWindowsProcessIds = () => [];
+      assert.equal(alive(908), false);
+      const waitDefinition = source.match(/async function waitForProcessExit\([^)]*\) \{[\s\S]*?\n\}/)[0];
+      const wait = vm.runInNewContext('(' + waitDefinition + ')', {
+        powershell: 'powershell.exe', probeWindowsProcessIds,
+        waitForOwnedProcessIdsExit: async pids => {
+          assert.deepEqual(Array.from(pids), [908]);
+          throw lookupFailure;
+        },
+      });
+      await assert.rejects(wait(908), error => error === lookupFailure);
       const start = source.indexOf('async function stopProcessesUnderDirectory(');
       assert(start >= 0, filename);
       const definition = source.slice(start, source.indexOf('\nfunction perUserUninstallRegistryEntries', start));

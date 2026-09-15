@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { Readable } = require('stream');
-const { waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
+const { probeWindowsProcessIds, waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const bridgeConfig = require('./legacy-update-bridge.config');
@@ -666,18 +666,7 @@ function executableVersion(file) {
 
 function processAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  const result = spawnSync(powershell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    'if (Get-Process -Id $env:WHITEBOX_INTEGRATION_PID -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }',
-  ], {
-    encoding: 'utf8',
-    env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(pid) },
-    windowsHide: true,
-    timeout: 30_000,
-  });
-  return result.status === 0;
+  return probeWindowsProcessIds([pid], { powershell }).includes(pid);
 }
 
 function exactMainWindowHandle(pid) {
@@ -709,12 +698,9 @@ async function waitForPositiveMainWindowHandle(pid, timeoutMs = 30_000) {
 }
 
 async function waitForProcessExit(pid, timeoutMs = 30_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (!processAlive(pid)) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for process ${pid} to exit.`);
+  await waitForOwnedProcessIdsExit([pid], {
+    timeoutMs, probe: pids => probeWindowsProcessIds(pids, { powershell }),
+  });
 }
 
 function closeInstalledAppGracefully(pid) {
