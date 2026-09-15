@@ -189,9 +189,18 @@ tag-to-workflow change outside its explicit verification-file allowlist.
 Every checkout and build uses the original tag SHA. Only after the unchanged
 candidate has been built may the reviewed
 `scripts/packaged-update-button.js` replace its test-side counterpart; this
-driver is excluded from the product package and also drives both macOS checks.
-Record both source SHAs and the
-driver hash. All packaged source attempts, candidate self-reinstallation,
+driver also drives both macOS checks. Windows recovery additionally replaces
+`scripts/windows-v173-update-integration.js`,
+`scripts/windows-legacy-update-bridge-integration.js`, and
+`scripts/windows-process-exit-check.js`. All four are excluded from the product
+package. Record both source SHAs and every driver hash.
+
+After terminating processes authenticated by their installed executable paths,
+the Windows test drivers require two successful CIM queries reporting that all
+captured PIDs are absent before repeating the strict executable-path scan.
+An exiting process with a temporarily unavailable path is never treated as
+absent. Query errors, malformed results, timeouts, and an unknown or ambiguous
+process in the subsequent path scan remain failures. All packaged source attempts, candidate self-reinstallation,
 cleanup, macOS checks, draft byte validation and public-channel checks still
 run on fresh state. A failed original run remains failed and is not evidence
 of success; publication requires a complete successful run after the fix.

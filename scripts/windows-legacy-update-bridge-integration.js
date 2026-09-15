@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { Readable } = require('stream');
+const { waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const bridgeConfig = require('./legacy-update-bridge.config');
@@ -922,8 +923,10 @@ async function assertImmutableV163AuthenticatedProcessTree(
   return { records, mainRecord, currentWindowHandle };
 }
 
-function stopProcessesUnderDirectory(directory, label) {
-  for (const processRecord of runningProcessesUnderDirectory(directory)) stopProcessTree(processRecord.pid);
+async function stopProcessesUnderDirectory(directory, label) {
+  const ownedProcesses = runningProcessesUnderDirectory(directory);
+  for (const processRecord of ownedProcesses) stopProcessTree(processRecord.pid);
+  await waitForOwnedProcessIdsExit(ownedProcesses.map(record => record.pid));
   const remaining = runningProcessesUnderDirectory(directory);
   if (remaining.length) {
     throw new Error(`${label} processes remained after cleanup: ${remaining.map(record => `${record.pid} (${record.executablePath})`).join(', ')}`);

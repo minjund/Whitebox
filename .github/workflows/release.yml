@@ -48,7 +48,7 @@ jobs:
             git diff --name-only --no-renames "$tag_commit" "$GITHUB_SHA" > "$RUNNER_TEMP/validation-changes.txt"
             while IFS= read -r file; do
               case "$file" in
-                .github/workflows/release.yml|scripts/packaged-update-button.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
+                .github/workflows/release.yml|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
                 *) echo "Recovery changes a file outside the verification allowlist: $file"; exit 1 ;;
               esac
             done < "$RUNNER_TEMP/validation-changes.txt"
@@ -231,10 +231,21 @@ jobs:
           const cp = require('child_process');
           const sha = process.env.VALIDATION_SOURCE_SHA;
           if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
-          fs.writeFileSync('scripts/packaged-update-button.js', cp.execFileSync('git', ['show', sha + ':scripts/packaged-update-button.js']));
-          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
-          if (changed && changed !== 'scripts/packaged-update-button.js') throw new Error('Recovery changed more than the test driver: ' + changed);
-          console.log('Reviewed test driver ' + sha + '; file SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync('scripts/packaged-update-button.js')).digest('hex'));
+          const drivers = ['scripts/packaged-update-button.js'];
+          if (process.platform === 'win32') drivers.push(
+            'scripts/windows-process-exit-check.js',
+            'scripts/windows-v173-update-integration.js',
+            'scripts/windows-legacy-update-bridge-integration.js',
+          );
+          for (const file of drivers) {
+            fs.writeFileSync(file, cp.execFileSync('git', ['show', sha + ':' + file]));
+            console.log('Reviewed test driver ' + sha + '; ' + file + ' SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+          }
+          const changed = [
+            cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }),
+            cp.execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' }),
+          ].join('\n').split(/\r?\n/).filter(Boolean);
+          if (changed.some(file => !drivers.includes(file))) throw new Error('Recovery changed more than the test drivers: ' + changed.join(', '));
           NODE
       - name: Download and verify the official legacy update inputs
         if: runner.os == 'Windows'
