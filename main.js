@@ -13,6 +13,7 @@ const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const { AgentRunner, probeProviders } = require('./src/agentRunner');
 const { BackgroundQuestionnaire } = require('./src/backgroundQuestionnaire');
+const { QuestionnairePreferenceStore } = require('./src/questionnairePreferenceStore');
 const { bindWindowNavigation } = require('./src/windowNavigation');
 const { snapshotWithoutSessions } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
@@ -55,6 +56,7 @@ const { acquireInterimProfileGuard } = require('./src/interimProfileGuard');
 const { AttentionNotifier } = require('./src/attentionNotifier');
 const { ProviderVisibilityStore } = require('./src/providerVisibilityStore');
 const { AttentionPopupManager } = require('./src/attentionPopupManager');
+const { attentionProject } = require('./src/attentionProject');
 const { AttentionPopupPreferenceStore } = require('./src/attentionPopupPreferenceStore');
 const { AttentionHookServer } = require('./src/attentionHookServer');
 const { AttentionHookInstaller } = require('./src/attentionHookInstaller');
@@ -124,6 +126,7 @@ let monitorWorkerRestartTimer = null;
 let monitorWorkerRestartAttempts = 0;
 let runner = null;
 let backgroundQuestionnaire = null;
+let questionnairePreferenceStore = null;
 let terminalManager = null;
 let bridgeLauncher = null;
 let backgroundTray = null;
@@ -160,6 +163,7 @@ let sourcePluginRefreshTimer = null;
 let sourcePluginSettingsUpdateQueue = Promise.resolve();
 let pendingAttentionSessionId = '';
 let pendingAttentionEvent = 'attention';
+let pendingAttentionTarget = {};
 let rendererBootstrapped = false;
 let wslDistroCache = { checkedAt: 0, values: [], pending: null };
 const tmuxController = new TmuxController({
@@ -901,6 +905,22 @@ function startMonitorWorker() {
   return worker;
 }
 
+function questionnairePreferences() {
+  if (!questionnairePreferenceStore) {
+    questionnairePreferenceStore = new QuestionnairePreferenceStore(userFile('questionnaire-preference.json'), {
+      onError: error => reportRecoverableError('questionnaire-preference', error),
+    });
+    questionnairePreferenceStore.load();
+  }
+  return questionnairePreferenceStore;
+}
+
+function saveQuestionnairePreference(value) {
+  const saved = questionnairePreferences().save(value);
+  backgroundQuestionnaire?.setEnabled(saved.enabled);
+  return saved;
+}
+
 function loadAttentionPopupPreference() {
   attentionPopupPreferenceStore = new AttentionPopupPreferenceStore(
     userFile('attention-popup.json'),
@@ -949,21 +969,49 @@ function sessionForAttention(sessionId, provider = '', agentId = '') {
   return fallbackMatches.length === 1 ? fallbackMatches[0] : null;
 }
 
-function popupSessionCopy(session, provider = '') {
+function popupOwnerSession(session) {
+  const visited = new Set();
+  while (session?.parentId && !visited.has(session.id)) {
+    visited.add(session.id);
+    const parent = (lastSnapshot.sessions || []).find(item => item.id === session.parentId);
+    if (!parent) break;
+    session = parent;
+  }
+  return session;
+}
+
+function popupTerminalSession(session) {
+  const owner = popupOwnerSession(session);
+  if (!owner) return null;
+  const runtimeIds = new Set((owner.runtimePresence || [])
+    .filter(item => item.kind === 'bridge').map(item => item.terminalId).filter(Boolean));
+  const matches = (terminalManager?.list?.() || []).filter(terminal => (
+    terminal.type === 'agent' && terminal.status === 'running'
+    && terminal.provider === owner.provider
+    && (terminal.bridgeId === owner.id || runtimeIds.has(terminal.id))
+  ));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function popupSessionCopy(session, provider = '', requestCwd = '') {
+  const owner = popupOwnerSession(session);
+  const projectSession = session?.workspaceRoots?.length ? session : owner || session;
   return {
     provider: popupProviderLabel(session?.provider || provider),
-    project: popupText(session?.workspace || session?.title || '', 180),
+    ...attentionProject(projectSession, {
+      requestCwd,
+      terminalCwd: popupTerminalSession(session)?.cwd || '',
+      workspaces: listWorkspaces(),
+    }),
   };
 }
 
 function popupSessionMeta(session, fallbackId = '') {
-  const workspace = popupText(session?.workspace || session?.title || '', 180);
-  const project = workspace ? path.basename(workspace.replace(/[\\/]+$/u, '')) : '';
   const identity = popupText(session?.externalId || fallbackId, 512)
     .replace(/^[^:]+:/u, '')
     .replace(/[^\p{L}\p{N}]+/gu, '');
   const tag = identity ? `#${identity.slice(-6)}` : '';
-  return [project, tag].filter(Boolean).join(' · ');
+  return tag;
 }
 
 function popupAlwaysAllowLabel(scope = '') {
@@ -985,7 +1033,7 @@ function hookPopupRequest(request) {
     title: popupText(request.title, 180),
     detail: popupText(request.detail, 8_000),
     meta: popupSessionMeta(session, request.agentId || request.sessionId),
-    ...popupSessionCopy(session, request.provider),
+    ...popupSessionCopy(session, request.provider, request.cwd),
     context: {
       kind: 'hook', hookKey: request.key, sessionId: displaySessionId,
       rawSessionId: request.sessionId, agentId: request.agentId || '', provider: request.provider,
@@ -1116,7 +1164,7 @@ function snapshotPopupRequests() {
   for (const session of lastSnapshot.sessions || []) {
     if (session.parentId || !isProviderVisible(session.provider)) continue;
     const attention = session.attention || {};
-    if (!attention.required || !['input-tool', 'execution-approval'].includes(attention.source)) continue;
+    if (!attention.required || attention.source !== 'input-tool') continue;
     const semanticKind = attention.source === 'input-tool' ? 'input' : 'approval';
     if (hookSessions.has(`${session.provider}:${String(session.id || '')}:${semanticKind}`)
       || hookSessions.has(`${session.provider}:${String(session.externalId || '')}:${semanticKind}`)) continue;
@@ -1151,20 +1199,6 @@ function snapshotPopupRequests() {
       }
       continue;
     }
-    requests.push({
-      id: `${session.id}:approval:${attention.requestId || 'current'}`,
-      type: 'input',
-      locale: appLocale,
-      sessionId: session.id,
-      requestId: attention.requestId || '',
-      title: appLocale === 'ko' ? '권한 확인이 필요합니다' : appLocale === 'zh-CN' ? '需要确认权限' : 'Permission needs confirmation',
-      body: popupText(attention.summary || session.statusDetail, 1_000),
-      openMain: true,
-      openMainLabel: appLocale === 'ko' ? 'Whitebox에서 확인' : appLocale === 'zh-CN' ? '在 Whitebox 中确认' : 'Review in Whitebox',
-      createdAt: attention.requestedAt,
-      ...popupSessionCopy(session),
-      context: { kind: 'snapshot', sessionId: session.id, attentionSource: 'execution-approval' },
-    });
   }
   return requests;
 }
@@ -1343,7 +1377,10 @@ function handleAttentionPopupOpenMain(_request, callback = {}) {
     context.provider,
     context.agentId,
   );
-  if (session) openAttentionSession(session, context.kind === 'hook' ? 'terminal' : 'attention');
+  if (session) {
+    const terminalId = context.terminalId || popupTerminalSession(session)?.id || '';
+    openAttentionSession(session, 'terminal', { terminalId, targetId: context.targetId || terminalId });
+  }
   else showMainWindow();
   return { ok: true };
 }
@@ -1419,10 +1456,14 @@ function stopMonitorWorkerGracefully(worker, timeoutMs = 1_500) {
   });
 }
 
-function openAttentionSession(session, event = 'attention') {
+function openAttentionSession(session, event = 'attention', target = {}) {
   if (!isProviderVisible(session && session.provider)) return;
   pendingAttentionSessionId = String(session && session.id || '');
   pendingAttentionEvent = event === 'completed' ? 'completed' : event === 'terminal' ? 'terminal' : 'attention';
+  pendingAttentionTarget = {
+    terminalId: popupText(target.terminalId, 512),
+    targetId: popupText(target.targetId || target.terminalId, 512),
+  };
   showMainWindow();
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.flashFrame(false);
@@ -1431,9 +1472,11 @@ function openAttentionSession(session, event = 'attention') {
     mainWindow.webContents.send('agents:attention-requested', {
       sessionId: pendingAttentionSessionId,
       event: pendingAttentionEvent,
+      ...pendingAttentionTarget,
     });
     pendingAttentionSessionId = '';
     pendingAttentionEvent = 'attention';
+    pendingAttentionTarget = {};
   } catch (error) {
     reportRecoverableError('ipc-send:agents:attention-requested', error);
   }
@@ -1489,9 +1532,10 @@ async function markRendererReady() {
     const sessionId = pendingAttentionSessionId;
     const event = pendingAttentionEvent;
     try {
-      mainWindow.webContents.send('agents:attention-requested', { sessionId, event });
+      mainWindow.webContents.send('agents:attention-requested', { sessionId, event, ...pendingAttentionTarget });
       pendingAttentionSessionId = '';
       pendingAttentionEvent = 'attention';
+      pendingAttentionTarget = {};
     } catch (error) {
       reportRecoverableError('ipc-send:agents:attention-requested', error);
     }
@@ -1507,6 +1551,7 @@ async function markRendererReady() {
 function createAttentionNotifier() {
   return new AttentionNotifier({
     enabled: DESKTOP_NOTIFICATIONS_ENABLED,
+    completionOnly: true,
     Notification,
     isSupported: () => Notification.isSupported(),
     copy: (session, event, detail) => {
@@ -1903,6 +1948,7 @@ async function setupRuntime() {
   if (!demoCapture) {
     backgroundQuestionnaire = new BackgroundQuestionnaire({
       file: userFile('questionnaires.json'), runner, requestDetail: requestAgentDetail,
+      enabled: questionnairePreferences().snapshot().enabled,
     });
     backgroundQuestionnaire.on('changed', () => sendSnapshot(visibleSnapshotSessions(lastSnapshot)));
   }
@@ -2111,6 +2157,7 @@ function projectTerminalBridgePresence(sessions, platform = process.platform) {
         bridgeId: session.bridgeId || '',
         linkedSessionId: session.bridgeId || '',
         terminalId: session.id,
+        title: session.title || '',
         provider: session.provider,
         pid: session.pid,
         cwd: session.cwd,
@@ -2162,6 +2209,7 @@ function bootstrapState() {
     update: updateManager ? updateManager.getState() : null,
     providerVisibility: providerVisibilityStore ? providerVisibilityStore.snapshot() : { hidden: [] },
     attentionPopups: attentionPopupPreferenceSnapshot(),
+    questionnaire: questionnairePreferences().snapshot(),
     sourcePlugins: sourcePluginControlHost ? sourcePluginControlHost.listSources() : [],
     sourcePluginSettings: sourcePluginSettingsStore
       ? sourcePluginSettingsStore.snapshot()
@@ -2234,6 +2282,7 @@ function registerIpcHandlers() {
     setThemeAppearance: setAppearanceTheme,
     setProviderVisibility: saveProviderVisibility,
     setAttentionPopups: saveAttentionPopupPreference,
+    setQuestionnairePreference: saveQuestionnairePreference,
     ackAttentionActivation: acknowledgeAttentionActivation,
     syncAttentionPrompts: syncTerminalAttentionPrompts,
     notifyAttentionPrompt: notifyTerminalPrompt,

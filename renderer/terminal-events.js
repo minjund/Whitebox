@@ -25,12 +25,8 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
     entry.terminal.write(data, () => {
       entry.outputWritePending = Math.max(0, entry.outputWritePending - 1);
       if (entry.inputClosed || entry.outputWritePending > 0) return;
-      // Xterm's DOM renderer can occasionally retain the parsed buffer without
-      // painting the final rows after a short PTY burst. Refresh only after the
-      // burst drains so the visible screen cannot lag behind accepted output.
-      if (entry.host.isConnected && typeof entry.terminal.refresh === 'function') {
-        entry.terminal.refresh(0, Math.max(0, Number(entry.terminal.rows || 1) - 1));
-      }
+      // Ghostty schedules its own dirty-row paint when output is parsed.
+      // A full refresh here would repaint the entire screen on every echo.
       const restoreGeneration = entry.outputRestoreGeneration;
       const restoreViewport = () => {
         if (

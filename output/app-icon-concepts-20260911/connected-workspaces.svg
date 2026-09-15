@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 32 32">
+  <!-- Adapted from Lucide columns-3. Copyright (c) 2026 Lucide Icons and Contributors. See LICENSE.txt. -->
+  <rect width="32" height="32" rx="7" fill="#f3f1e9" />
+  <rect x="5" y="6" width="22" height="20" rx="4" fill="#202522" />
+  <path d="M12 6v13M20 6v13" fill="none" stroke="#f3f1e9" stroke-width="2" stroke-linecap="round" />
+  <path d="M14 6h4v10a2 2 0 0 1-4 0Z" fill="#289771" />
+</svg>

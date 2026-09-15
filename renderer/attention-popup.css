@@ -89,18 +89,18 @@ label {
   min-width: 0;
   margin-bottom: 4px;
   color: var(--accent-strong);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.popup-provider,
+.popup-provider {
+  flex-shrink: 0;
+}
+
 .popup-project {
-  overflow: hidden;
-  max-width: 150px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
 }
 
 .popup-project::before {

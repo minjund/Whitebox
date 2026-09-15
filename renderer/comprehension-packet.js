@@ -14,7 +14,17 @@
     });
     root.WhiteboxAppFactories = root.WhiteboxAppFactories || {};
     root.WhiteboxAppFactories.createComprehensionPacketMode = function createComprehensionPacketMode(context = {}) {
-      const controller = api.createComprehensionPacket({ ...context, autoObserve: true });
+      const controller = api.createComprehensionPacket({
+        ...context,
+        autoObserve: true,
+        getBackgroundElements: surface => surface === root.document.body
+          ? [root.document.querySelector("#appShell")].filter(Boolean) : [...surface.children],
+        restorePtyFocus: () => {
+          if (context.isPtyFocusActive?.()) root.WhiteboxTerminal?.focusEmbedded?.();
+          else root.document.querySelector("#mainContent")?.focus({ preventScroll: true });
+        },
+        onClose: () => root.dispatchEvent(new CustomEvent("whitebox:questionnaire-closed")),
+      });
       return {
         comprehensionPacketController: controller,
         syncComprehensionPacket: controller.syncFromSurface,
@@ -340,6 +350,8 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     let openState = false;
     let destroyed = false;
     let noticeTimer = null;
+    let celebration = null;
+    let celebrationTimer = null;
     let surfaceObserver = null;
     let observerSyncQueued = false;
     const questionNodes = new Map();
@@ -406,6 +418,9 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     function syncFromSurface() {
       if (destroyed) return false;
       const surface = resolveSurface();
+      // A questionnaire opened over the control room owns its presentation
+      // until it closes; PTY snapshot refreshes must not dismiss or replace it.
+      if (openState && currentSurface && currentSurface !== surface) return true;
       if (!surface || !surfaceIsOpen(surface)) {
         if (currentSession) unmount();
         return false;
@@ -622,6 +637,56 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     function isComplete() {
       const active = activeQuestions();
       return active.length === 0 || (progress.submitted && active.every(question => progress.resolved.has(question.id)));
+    }
+
+    function clearCelebration() {
+      if (celebrationTimer) {
+        clearTimeout(celebrationTimer);
+        timers.delete(celebrationTimer);
+        celebrationTimer = null;
+      }
+      celebration?.getAnimations({ subtree: true }).forEach(animation => animation.cancel());
+      celebration?.remove();
+      celebration = null;
+    }
+
+    function celebratePerfectScore() {
+      const total = activeQuestions().length;
+      if (!openState || !progress.submitted || !total || correctCount() !== total
+        || doc.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+      clearCelebration();
+      celebration = createElement("div", "comprehension-packet-celebration", { "aria-hidden": "true" });
+      overlay.append(celebration);
+      const colors = ["#6ee7b7", "#7dd3fc", "#fcd34d", "#f9a8d4", "#c4b5fd"];
+      for (const side of ["left", "right"]) {
+        const direction = side === "left" ? 1 : -1;
+        for (let index = 0; index < 28; index += 1) {
+          const particle = createElement("i", "comprehension-packet-confetti", { "data-side": side });
+          const distance = direction * (14 + Math.random() * 25);
+          const lift = 65 + Math.random() * 40;
+          const fall = lift + 15 + Math.random() * 20;
+          const spin = direction * (180 + Math.random() * 540);
+          particle.style.backgroundColor = colors[index % colors.length];
+          particle.style.borderRadius = index % 3 === 0 ? "50%" : "2px";
+          celebration.append(particle);
+          // Sample a falling arc so each burst travels inward from the window edge.
+          const frames = Array.from({ length: 17 }, (_, frame) => {
+            const time = frame / 16;
+            return {
+              transform: `translate3d(${distance * time}vw, ${-lift * time + fall * time * time}vh, 0) rotate(${spin * time}deg)`,
+              opacity: frame === 0 ? 0 : Math.min(1, (1 - time) * 4),
+            };
+          });
+          particle.animate(frames, {
+            duration: 1_450 + Math.random() * 450,
+            delay: Math.random() * 140,
+            easing: "linear",
+            fill: "both",
+          });
+        }
+      }
+      celebrationTimer = setTimeout(clearCelebration, 2_100);
+      timers.add(celebrationTimer);
     }
 
     function showNotice(message, tone = "info") {
@@ -1050,6 +1115,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       showNotice(allCorrect
         ? translate("all_correct")
         : translate("wrong_only"), allCorrect ? "success" : "info");
+      celebratePerfectScore();
     }
 
     function findQuestion(id) {
@@ -1102,6 +1168,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       if (progress.outcomes.get(question.id) === "variant-correct") {
         focusTransitionTarget(question.id);
         showNotice(translate("variant_correct_notice"), "success");
+        celebratePerfectScore();
       } else {
         focusTransitionTarget(question.id, "[data-comprehension-understood]");
         showNotice(translate("variant_wrong_notice"), "warning");
@@ -1216,6 +1283,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
 
     function onDocumentKeydown(event) {
       if (!openState || !dialog) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        event.stopImmediatePropagation?.();
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation?.();
@@ -1292,7 +1364,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     function makeBackgroundInactive(inactive) {
       if (!currentSurface) return;
       if (inactive) {
-        backgroundState = [...currentSurface.children]
+        backgroundState = [...(context.getBackgroundElements?.(currentSurface) || currentSurface.children)]
           .filter(node => node !== overlay && node !== badge)
           .map(node => ({
             node,
@@ -1350,6 +1422,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function closePacket(options = {}) {
+      clearCelebration();
       if (!overlay || !progress) return false;
       if (!openState) {
         overlay.hidden = true;
@@ -1603,6 +1676,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function clearMountedDom() {
+      clearCelebration();
       if (openState) closePacket({ restoreFocus: false, announce: false, reason: "unmount" });
       else makeBackgroundInactive(false);
       overlay?.removeEventListener("click", onOverlayClick);
@@ -1659,7 +1733,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       if (!destroyed && doc && hasBackgroundOrigin(session) && session.status === "completed"
         && session.completionObserved === true && !session.parentId && !Number(session.depth || 0)
         && ["queued", "generating", "failed"].includes(generationStatus)) {
-        const surface = resolveSurface();
+        const surface = options.surface || resolveSurface();
         if (!surface) return false;
         const statusKey = generationStatus === "failed" ? "generation_failed" : "generating";
         if (currentSession?.id === session.id && currentSurface === surface && !currentPacket && badge
@@ -1699,7 +1773,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         if (currentSession) unmount();
         return false;
       }
-      const surface = resolveSurface();
+      const surface = options.surface || resolveSurface();
       if (!surface) return false;
       const packet = session.comprehension.packet;
       const packetFingerprint = packetContentFingerprint(packet);
@@ -1769,6 +1843,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       isOpen: () => openState,
       getProgress: () => serializableProgress(),
       getSessionId: () => currentSession ? String(currentSession.id) : "",
+      getSurface: () => currentSurface,
     };
   }
 

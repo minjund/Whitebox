@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const { workspaceRootsFromEnvironment } = require('../attentionProject');
 const { finalizedActivityState, observeActivity, activityAfterToolResult } = require('./activityState');
 const { createCodexCollaboration } = require('./codexCollaboration');
 const { createExecutionTracker, reconcileExecutionActivities } = require('./executionActivity');
@@ -329,6 +330,8 @@ function createCodexParser(dependencies) {
       recordSubagentActivity(session, state, payload, row, timing);
     } else if (payload.type === 'user_message') {
       const rawUser = rawContentText(payload.message || payload.text_elements);
+      const workspaceRoots = workspaceRootsFromEnvironment(rawUser);
+      if (workspaceRoots) session.workspaceRoots = workspaceRoots;
       const text = visibleUserText(state, rawUser);
       if (!text) return;
       if (/<codex_internal_context(?:\s|>)/i.test(rawUser)) {
@@ -609,6 +612,10 @@ function createCodexParser(dependencies) {
     if (payload.role !== 'assistant' && payload.role !== 'user') return;
     const role = payload.role;
     const rawText = rawContentText(payload.content);
+    if (role === 'user') {
+      const workspaceRoots = workspaceRootsFromEnvironment(rawText);
+      if (workspaceRoots) session.workspaceRoots = workspaceRoots;
+    }
     const text = role === 'user' ? visibleUserText(state, rawText) : rawText;
     if (!text) return;
     if (role === 'user' && /<codex_internal_context(?:\s|>)/i.test(rawText)) {

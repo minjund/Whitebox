@@ -575,6 +575,8 @@ const currentUpdate = {
 let terminals = clone(initialTerminals);
 let update = clone(availableUpdate);
 let attentionPopups = { enabled: true, hookStatus: 'installed', hookDetail: '' };
+const questionnaireSetupTest = process.env.WHITEBOX_QUESTIONNAIRE_SETUP_TEST === '1';
+let questionnaire = { configured: true, enabled: false };
 let calls = [];
 let failures = new Map();
 let delays = new Map();
@@ -645,6 +647,7 @@ const api = {
         nativeTmux: process.platform !== 'win32',
       } : { id: 'win32', label: 'Windows', computerName: '작업용-PC', localShell: 'powershell', localShellLabel: '작업용-PC에서 실행하는 작업', nativeTmux: false },
       attentionPopups: clone(attentionPopups),
+      questionnaire: questionnaireSetupTest ? await ipcRenderer.invoke('fixture:questionnaire-preference') : clone(questionnaire),
       versions: { app: currentUpdate.currentVersion, electron: '31.0.0', node: '20.0.0' }, update: bootstrapUpdate,
     };
   },
@@ -715,6 +718,13 @@ const api = {
     await controlled('setAttentionPopups', [preference]);
     attentionPopups = { ...attentionPopups, enabled: preference?.enabled === true };
     return clone(attentionPopups);
+  },
+  setQuestionnairePreference: async preference => {
+    await controlled('setQuestionnairePreference', [preference]);
+    questionnaire = questionnaireSetupTest
+      ? await ipcRenderer.invoke('fixture:set-questionnaire-preference', preference)
+      : { configured: true, enabled: preference?.enabled === true };
+    return clone(questionnaire);
   },
   setProviderVisibility: preference => controlled('setProviderVisibility', [preference]),
   syncAttentionPrompts: prompts => controlled('syncAttentionPrompts', [prompts], { ok: true, count: Array.isArray(prompts) ? prompts.length : 0 }),

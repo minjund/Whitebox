@@ -59,7 +59,7 @@ function createHierarchyAttacher(dependencies) {
       ? compactText(record.assignment, 180)
       : (record.taskName || '도움 AI 작업');
     child.sharedGoal = record.sharedGoal || parent.title;
-    child.status = record.status === 'completed' ? 'completed' : (record.status === 'running' ? 'running' : 'idle');
+    child.status = ['completed', 'failed', 'cancelled', 'running'].includes(record.status) ? record.status : 'idle';
     child.statusDetail = child.status === 'completed'
       ? '작업 완료 기록'
       : (child.status === 'running' ? '실행 시작 관측' : '상태 기록만 확인됨');
@@ -114,12 +114,37 @@ function createHierarchyAttacher(dependencies) {
     record.taskName = record.taskName || child.taskName || collaborationTaskName(child.agentPath);
     record.agentName = child.agentName || record.agentName;
     record.result = record.result || child.result || '';
+    // Claude can report teardown only in the parent transcript. A stopped
+    // child's last tool call must not resurrect it during hierarchy merging.
+    const terminalAt = Date.parse(record.completedAt || '');
+    const childUpdatedAt = Date.parse(child.updatedAt || '');
+    if (parent.provider === 'claude'
+      && ['completed', 'failed', 'cancelled'].includes(record.status)
+      && Number.isFinite(terminalAt)
+      && (!Number.isFinite(childUpdatedAt) || terminalAt >= childUpdatedAt)) {
+      child.status = record.status;
+      child.statusDetail = record.status === 'cancelled' ? '작업 중단'
+        : (record.status === 'failed' ? '실행 실패' : '작업 완료');
+      child.activityState = record.status === 'completed' ? 'attention'
+        : (record.status === 'failed' ? 'error' : 'idle');
+      child.statusObserved = true;
+      child.completionObserved = record.status === 'completed';
+      child.completedAt = record.completedAt;
+      child.updatedAt = record.completedAt;
+      child.executions = (child.executions || []).map(execution => execution.status === 'running'
+        ? { ...execution, status: record.status === 'completed' ? 'unverified' : record.status, completedAt: record.completedAt }
+        : execution);
+      child.lifecycle = (child.lifecycle || []).map(event => event.status === 'running'
+        ? { ...event, status: record.status === 'completed' ? 'done' : record.status }
+        : event);
+    }
     const lastSentAt = Date.parse(record.lastSentAt || 0);
     const childCompletedAt = Date.parse(child.completedAt || 0);
     const followupStillNewer = record.status === 'running'
       && Number.isFinite(lastSentAt)
       && (!Number.isFinite(childCompletedAt) || lastSentAt > childCompletedAt);
     if (child.status === 'running' || child.status === 'starting' || followupStillNewer) record.status = 'running';
+    else if (['cancelled', 'failed'].includes(child.status)) record.status = child.status;
     else if (child.status === 'completed' || child.completionObserved || record.result) record.status = 'completed';
     if (!record.completedAt && child.completedAt && !followupStillNewer) record.completedAt = child.completedAt;
 

@@ -12,7 +12,7 @@ const {
   parseCodexAppServerEndpoint,
   terminateCodexAppServerChild,
 } = require('../../src/codexAppServer');
-const { processSessionExternalId } = require('../../src/processMonitor');
+const { processSessionExternalId, selectAgentProcesses } = require('../../src/processMonitor');
 const { AGENT_PROVIDERS, launchSpec, normalizeLaunchOptions } = require('../../src/terminalManager');
 const {
   codexCreatePreparationOptions,
@@ -48,6 +48,35 @@ function terminatingFake(child, calls) {
 
 function registerCodexSharedAppServerTests(context) {
   const { test } = context;
+
+  test('Codex 새 작업 준비는 여러 줄 본문을 보존하고 잘못된 실행 인자는 준비 전에 거절한다', async () => {
+    for (const platform of ['win32', 'darwin', 'linux']) {
+      const prompt = '첫 줄 "인용" & <내용> $값 `리터럴`\r\n둘째 줄\n\n' + '긴'.repeat(7_500);
+      const request = {
+        type: 'agent', provider: 'codex', cwd: process.cwd(), sessionBackend: 'direct',
+        args: ['--sandbox', 'read-only', prompt], initialCommand: prompt, initialCommandInArgs: true,
+      };
+      const before = JSON.parse(JSON.stringify(request));
+      let preparations = 0;
+      const server = { async ensureReady() { preparations += 1; } };
+      const prepared = codexCreatePreparationOptions({}, request, platform);
+      assert.deepStrictEqual(prepared.args, request.args);
+      await prepareCodexOperation({}, server, 'create', [request], platform);
+      assert.equal(preparations, 1);
+      assert.deepStrictEqual(request, before, '준비 단계에서 원본 요청을 변경하면 안 됩니다.');
+      for (const invalid of [
+        { ...request, args: ['--model', 'bad\noption', prompt] },
+        { ...request, args: [prompt + 'mismatch'] },
+        { ...request, args: [prompt + '\u0000'], initialCommand: prompt + '\u0000' },
+        { ...request, args: ['resume', 'valid-session', prompt] },
+        { ...request, args: ['fork', 'valid-session', prompt] },
+        { ...request, bridgeId: 'codex:bound', agentConnectionSignature: 'signed-binding' },
+      ]) {
+        await assert.rejects(prepareCodexOperation({}, server, 'create', [invalid], platform));
+        assert.equal(preparations, 1, '거절된 요청으로 app-server를 시작하면 안 됩니다.');
+      }
+    }
+  });
 
   test('Codex app-server의 청크 출력을 조립하고 localhost 준비 주소만 허용한다', () => {
     const parser = new CodexAppServerOutputParser();
@@ -262,6 +291,28 @@ function registerCodexSharedAppServerTests(context) {
     }, 'linux');
     const forkSpec = launchSpec(forkOptions, 'linux', providers);
     assert.deepStrictEqual(forkSpec.args, ['--remote', endpoint, 'fork', forkExternalId]);
+
+    for (const platform of ['win32', 'darwin', 'linux']) {
+      const sharedProviders = sharedCodexAgentProviders({ remoteArguments: () => ['--remote', endpoint] }, platform);
+      // One shared server serves multiple projects. Each new/resumed/forked
+      // conversation must receive its own root, even with spaces and Unicode.
+      for (const cwd of platform === 'win32'
+        ? ['D:\\winCudeProject\\mediagw', 'D:\\winCudeProject\\미디어 프로젝트']
+        : ['/projects/mediagw', '/projects/미디어 프로젝트']) {
+        for (const args of [[], options.args, forkOptions.args]) {
+          const candidate = { ...options, cwd, args };
+          const before = JSON.parse(JSON.stringify(candidate));
+          const projectSpec = launchSpec(candidate, platform, sharedProviders);
+          assert.equal(projectSpec.cwd, cwd);
+          const cwdIndex = projectSpec.args.indexOf('--cd');
+          assert.ok(cwdIndex >= 0, `${platform}: explicit project cwd is required for remote Codex`);
+          assert.equal(projectSpec.args[cwdIndex + 1], cwd);
+          assert.equal(projectSpec.args.filter(argument => argument === '--cd').length, 1);
+          assert.deepStrictEqual(projectSpec.args.slice(cwdIndex + 2), args);
+          assert.deepStrictEqual(candidate, before, 'launch injection must not alter stored identity');
+        }
+      }
+    }
   });
 
   test('Windows WSL Codex는 native app-server remote를 주입하지 않는다', () => {
@@ -311,6 +362,31 @@ function registerCodexSharedAppServerTests(context) {
   });
 
   test('프로세스 감시는 Codex remote 전송 인자를 제외하고 resume ID를 찾는다', () => {
+    for (const cwdArgs of [
+      ['--cd', 'D:\\winCudeProject\\미디어 프로젝트'],
+      ['-C', '/projects/mediagw'],
+      ['--cd=/projects/mediagw'],
+      ['-C=/projects/mediagw'],
+    ]) {
+      const launchArgs = ['-c', 'check_for_update_on_startup=false', '--remote', 'ws://127.0.0.1:45123', ...cwdArgs];
+      assert.equal(processSessionExternalId({
+        argv: ['codex', ...launchArgs, 'resume', '--', 'project-session'],
+      }, 'codex'), 'project-session');
+      const fork = selectAgentProcesses([{
+        pid: 1234, parentPid: 1, name: 'codex.exe',
+        argv: ['codex', ...launchArgs, 'fork', 'project-fork-source'],
+      }], { providerResolver: () => 'codex' });
+      assert.deepStrictEqual(fork[0].forkArguments, ['fork', 'project-fork-source']);
+      assert.equal(fork[0].externalId, '', 'fork source must not become the current session');
+    }
+    for (const args of [
+      ['--cd', '', 'resume', 'invalid'],
+      ['--cd=', 'resume', 'invalid'],
+      ['--', '--cd', '/projects', 'resume', 'prompt-is-not-identity'],
+      ['a prompt', '--cd', '/projects', 'resume', 'prompt-is-not-identity'],
+    ]) {
+      assert.equal(processSessionExternalId({ argv: ['codex', ...args] }, 'codex'), '');
+    }
     assert.equal(processSessionExternalId({
       argv: ['codex', '-c', 'check_for_update_on_startup=false', '--remote', 'ws://127.0.0.1:45123', 'resume', '--', 'session-with-update-override'],
     }, 'codex'), 'session-with-update-override');
@@ -425,9 +501,10 @@ function registerCodexSharedAppServerTests(context) {
       type: 'agent', provider: 'codex', cwd: process.cwd(), args: ['resume', 'bound-session'],
       sessionBackend: 'managed-tmux', bridgeId: 'codex:bound', agentConnectionSignature: 'signed-binding',
     }], 'linux');
-    assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex' }), [
+    assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex', cwd: process.cwd() }), [
       '-c', 'check_for_update_on_startup=false',
       '--remote', 'ws://127.0.0.1:45123',
+      '--cd', process.cwd(),
     ]);
     assert.deepStrictEqual(providers.codex.argsFor({ type: 'agent', provider: 'codex', distro: 'Ubuntu' }), ['-c', 'check_for_update_on_startup=false']);
     await prepareCodexOperation(manager, appServer, 'restart', ['terminal:codex'], 'win32');
@@ -436,6 +513,7 @@ function registerCodexSharedAppServerTests(context) {
     assert.deepStrictEqual(linuxProviders.codex.argsFor(linuxDirect), [
       '-c', 'check_for_update_on_startup=false',
       '--remote', 'ws://127.0.0.1:45123',
+      '--cd', linuxDirect.cwd,
     ]);
     assert.deepStrictEqual(calls, ['ensure', 'ensure', 'ensure', 'ensure']);
 

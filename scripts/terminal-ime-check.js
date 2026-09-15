@@ -10,6 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const checkImeOwnership = require('./tests/terminal-ime-ownership');
+const checkImePerformance = require('./tests/terminal-ime-performance');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-ime-'));
 const output = path.join(root, 'artifacts', 'terminal-ime');
@@ -396,6 +397,12 @@ app.whenReady().then(async () => {
     assert.equal(outputBurst.input, '한');
     checks.push('Windows Codex redraw and delayed cursor restore paint together while Korean composition commits exactly once');
 
+    const performance = await checkImePerformance(evaluate, result => {
+      fs.writeFileSync(path.join(output, 'performance.json'), JSON.stringify(result, null, 2));
+      process.stdout.write(`IME performance: ${JSON.stringify(result)}\n`);
+    });
+    checks.push('composition bursts coalesce, unchanged tail cells are reused, and output avoids per-fragment full paints');
+
     const lifecycle = await evaluate(async () => {
       await reset(term); start(term); update(term, '가'); await delay();
       term.blur(); await delay(); const blurred = snapshot().visible;
@@ -408,7 +415,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.overlays, 0);
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, performance, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());

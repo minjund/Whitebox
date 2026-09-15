@@ -48,6 +48,26 @@
   animation: comprehension-packet-rise-in .2s ease both;
 }
 
+.comprehension-packet-celebration {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.comprehension-packet-confetti {
+  position: absolute;
+  top: 72%;
+  width: 7px;
+  height: 11px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.comprehension-packet-confetti[data-side="left"] { left: 0; }
+.comprehension-packet-confetti[data-side="right"] { right: 0; }
+
 .comprehension-packet-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -904,6 +924,10 @@ button.comprehension-packet-evidence:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .comprehension-packet-celebration {
+    display: none;
+  }
+
   .comprehension-packet-overlay,
   .comprehension-packet-dialog,
   .comprehension-packet-question-card,

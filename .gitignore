@@ -9,3 +9,8 @@ artifacts/
 .claude/*.local.md
 .understand-anything/.trash-*/
 build/generated/
+
+# Disposable browser profiles generated while rendering design artifacts.
+output/**/.render-profile/
+# Historical Git worktree; its commits are already integrated on main.
+output/comprehension-openbook/publish/

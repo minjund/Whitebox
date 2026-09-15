@@ -1449,6 +1449,28 @@ function normalizeLaunchOptions(options = {}, platform = process.platform) {
   };
 }
 
+function normalizeCreateLaunchOptions(rawOptions = {}, platform = process.platform) {
+  const requestedPrompt = String(rawOptions.initialCommand || '').trim();
+  const separateStartupPrompt = rawOptions.initialCommandInArgs === true
+    && rawOptions.type === 'agent'
+    && rawOptions.sessionBackend === 'direct'
+    && !rawOptions.bridgeId && !rawOptions.agentForkSourceSessionId
+    && !agentResumeSessionId(rawOptions)
+    && ['claude', 'codex', 'gemini'].includes(rawOptions.provider)
+    && Array.isArray(rawOptions.args)
+    && rawOptions.args.at(-1) === stripComprehensionContract(requestedPrompt);
+  // Validate command options normally, while keeping the exact user prompt
+  // out of option normalization (which rejects newlines and clips strings).
+  const launchOptions = normalizeLaunchOptions(separateStartupPrompt
+    ? { ...rawOptions, args: rawOptions.args.slice(0, -1) } : rawOptions, platform);
+  if (separateStartupPrompt) {
+    const prompt = stripComprehensionContract(requestedPrompt);
+    if (prompt.includes('\u0000')) throw new Error('AI 요청에 NUL 문자를 사용할 수 없습니다.');
+    launchOptions.args.push(prompt);
+  }
+  return { launchOptions, separateStartupPrompt };
+}
+
 function launchSpec(options, platform = process.platform, agentProviders = AGENT_PROVIDERS, runtime = {}) {
   if (options.type === 'powershell') {
     const file = powershellExecutable();
@@ -3023,24 +3045,7 @@ class TerminalManager extends EventEmitter {
 
   create(rawOptions = {}) {
     const includeReplay = rawOptions.includeReplay !== false;
-    const requestedPrompt = String(rawOptions.initialCommand || '').trim();
-    const separateStartupPrompt = rawOptions.initialCommandInArgs === true
-      && rawOptions.type === 'agent'
-      && rawOptions.sessionBackend === 'direct'
-      && !rawOptions.bridgeId && !rawOptions.agentForkSourceSessionId
-      && !agentResumeSessionId(rawOptions)
-      && ['claude', 'codex', 'gemini'].includes(rawOptions.provider)
-      && Array.isArray(rawOptions.args)
-      && rawOptions.args.at(-1) === stripComprehensionContract(requestedPrompt);
-    // Validate command options normally, while keeping the exact user prompt
-    // out of option normalization (which rejects newlines and clips strings).
-    const launchOptions = normalizeLaunchOptions(separateStartupPrompt
-      ? { ...rawOptions, args: rawOptions.args.slice(0, -1) } : rawOptions, this.platform);
-    if (separateStartupPrompt) {
-      const prompt = stripComprehensionContract(requestedPrompt);
-      if (prompt.includes('\u0000')) throw new Error('AI 요청에 NUL 문자를 사용할 수 없습니다.');
-      launchOptions.args.push(prompt);
-    }
+    const { launchOptions, separateStartupPrompt } = normalizeCreateLaunchOptions(rawOptions, this.platform);
     if (launchOptions.type === 'agent'
       && launchOptions.sessionBackend === 'managed-tmux'
       && typeof this.managedTmuxRuntime?.available === 'function'
@@ -4820,6 +4825,7 @@ class TerminalManager extends EventEmitter {
 module.exports = {
   TerminalManager,
   normalizeLaunchOptions,
+  normalizeCreateLaunchOptions,
   launchSpec,
   shellQuote,
   numericDimension,

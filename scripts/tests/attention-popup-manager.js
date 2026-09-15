@@ -766,7 +766,7 @@ test('main, preload, settings, and terminal prompt sources wire the interactive 
   assert.match(main, /attentionHookServer\?\.resolve\(context\.hookKey, \{ action: 'none' \}\)/);
   assert.match(main, /openMainLabel: appLocale === 'ko' \? '터미널로 이동'/);
   assert.match(main, /canDeny: true/);
-  assert.match(main, /openAttentionSession\(session, context\.kind === 'hook' \? 'terminal' : 'attention'\)/);
+  assert.match(main, /openAttentionSession\(session, 'terminal', \{ terminalId, targetId: context\.targetId \|\| terminalId \}\)/);
   assert.match(preload, /setAttentionPopups: preference => ipcRenderer\.invoke\('app:set-attention-popups'/);
   assert.match(preload, /ackAttentionActivation: result => ipcRenderer\.invoke\('app:ack-attention-activation'/);
   assert.match(preload, /syncAttentionPrompts: prompts => ipcRenderer\.invoke\('app:sync-attention-prompts'/);

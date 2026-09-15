@@ -161,6 +161,7 @@ function completionCandidateFingerprint(session, context) {
 class AttentionNotifier {
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
+    this.completionOnly = options.completionOnly === true;
     this.Notification = options.Notification;
     this.isSupported = options.isSupported || (() => Boolean(this.Notification));
     this.copy = options.copy || ((_session, event) => ({
@@ -256,7 +257,7 @@ class AttentionNotifier {
     for (const session of sessions) {
       if (!session.id) continue;
       const id = String(session.id);
-      const fingerprints = explicitAttentionFingerprints(session);
+      const fingerprints = this.completionOnly ? [] : explicitAttentionFingerprints(session);
       if (fingerprints.length) nextAttention.set(id, new Set(fingerprints));
       nextStatuses.set(id, String(session.status || ''));
       nextSessions.set(id, session);
@@ -279,7 +280,7 @@ class AttentionNotifier {
       }
       const recoveredIds = [];
       for (const session of sessions) {
-        if (!session.id || !isStartupRecoveryCandidate(session, snapshotAt)) continue;
+        if (this.completionOnly || !session.id || !isStartupRecoveryCandidate(session, snapshotAt)) continue;
         this.notify(session, 'attention');
         recoveredIds.push(String(session.id));
       }
@@ -321,7 +322,7 @@ class AttentionNotifier {
   }
 
   notifyExplicitPrompt(session, prompt = {}) {
-    if (!this.enabled || !session || !session.id) return null;
+    if (!this.enabled || this.completionOnly || !session || !session.id) return null;
     const kind = String(prompt.kind || '');
     if (!/(?:approval|permission)/i.test(kind)) return null;
     const fingerprint = `${session.id}:${String(prompt.fingerprint || kind)}`;
@@ -339,7 +340,7 @@ class AttentionNotifier {
   }
 
   notify(session, event = 'attention') {
-    if (!this.enabled) return null;
+    if (!this.enabled || (this.completionOnly && event !== 'completed')) return null;
     let supported = false;
     try {
       supported = Boolean(this.Notification && this.isSupported());

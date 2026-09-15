@@ -66,6 +66,7 @@
       this.backend.onScroll(() => {
         if (!this.writing) this.emitScroll();
       });
+      this.backend.onRender(() => this.emitRender());
     }
 
     get cols() { return this.backend.cols; }
@@ -195,7 +196,8 @@
         if (!following && this.buffer.active.type === 'normal') this.scrollToLine(anchor);
       } finally { this.writing = false; }
       this.emitScroll();
-      this.refresh();
+      // backend.write already schedules a dirty-row paint. A forced full
+      // refresh here repaints every row for every small PTY echo/fragment.
       // ghostty-web ties write callbacks to RAF, which stalls hidden sessions.
       // Parsing is synchronous; a task yields between replay chunks everywhere.
       if (callback) {
@@ -218,6 +220,10 @@
       if (!this.renderer || this.disposed) return;
       if (this.wasmTerm.getMode(2026)) return;
       this.renderer.render(this.wasmTerm, true, this.backend.getViewportY(), this.backend);
+      this.emitRender();
+    }
+    emitRender() {
+      if (this.disposed) return;
       this.scheduleAccessibleRows();
       for (const listener of this.renderListeners) listener({ start: 0, end: this.rows - 1 });
     }

@@ -26,6 +26,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     controlRoomStatus = session => session?.status,
     pendingConversationDelivery = () => null,
     sessionRetentionDeadline = () => 0,
+    canArchiveSession = () => false,
     subagentWorkState,
     subagentWorkLabel,
     latestWorkCopy,
@@ -104,7 +105,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
     const usage = session.usage || {};
     const percent = Math.max(0, Math.min(100, Number(context.percent || 0)));
     const delivery = pendingConversationDelivery(session);
-    const retained = isControlRoomSession(session) && !running && !delivery;
+    const archivable = canArchiveSession(session);
     const childCount = (session.childIds || []).length;
     const childMetrics = session.collaboration && session.collaboration.metrics;
     const cumulativeChildren = childMetrics ? childMetrics.cumulativeCreated : childCount;
@@ -179,7 +180,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
         <span>${session.parentId
           ? (cumulativeChildren ? t("graph.subagents_created", { count: cumulativeChildren }) : t("graph.helper_ai"))
           : t("project.origin_named", { name: sessionWorkspaceLabel(session) })}</span>
-        ${retained ? `<button type="button" data-session-archive="${esc(session.id)}">${esc(t("control.move_to_history"))}</button>` : ""}
+        ${archivable ? `<button type="button" data-session-archive="${esc(session.id)}">${esc(t("control.move_to_history"))}</button>` : ""}
         <button type="button" data-workflow-detail-scroll="summary">${esc(t("control.open_project_progress_short"))} <b>↓</b>
         </button>
         </footer>
@@ -581,10 +582,11 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
   function controlRoomAgentGoal(session, maxCharacters = 64) {
     const delegation = session.delegation || {};
     const messages = session.messages || [];
-    const userGoal = [...messages].reverse().find(message => message.role === "user" && message.text && !/^\s*\/[\w-]+(?:\s|$)/.test(message.text));
+    const userGoal = [...messages].reverse().find(message => message?.role === "user" && String(message.text || "").trim());
     const title = String(session.title || "");
-    const source = delegation.assignment || session.sharedGoal || title
-      || userGoal?.text || delegation.taskName || session.taskName || latestWorkCopy(session);
+    // A runtime connection title can outlive discovery of the actual request.
+    const source = delegation.assignment || session.sharedGoal || userGoal?.text
+      || title || delegation.taskName || session.taskName || latestWorkCopy(session);
     return controlRoomSummary(source, maxCharacters);
   }
 
@@ -764,7 +766,7 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
         : (waiting ? "control.waiting_session" : (retained ? "control.recently_completed" : "control.live_session"));
     const retentionTime = retained ? clockTime(sessionRetentionDeadline(root)) : "";
     const retention = retentionTime ? `<small class="control-session-retention">${esc(t("control.auto_history_after_time", { time: retentionTime }))}</small>` : "";
-    const archive = retained ? `<button type="button" class="control-session-archive" data-session-archive="${esc(root.id)}">${esc(t("control.move_to_history"))}</button>` : "";
+    const archive = canArchiveSession(root) ? `<button type="button" class="control-session-archive" data-session-archive="${esc(root.id)}">${esc(t("control.move_to_history"))}</button>` : "";
     const review = terminalReviewSources.length
       ? controlRoomTerminalPromptHtml(terminalReviewSources[0].session, terminalReviewSources[0].prompt, Math.max(0, attentionCount - 1))
       : reviewSources.length

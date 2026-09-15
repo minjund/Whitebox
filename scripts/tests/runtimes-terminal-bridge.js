@@ -398,6 +398,61 @@ function registerTmuxAndProcessTests(context) {
     assert.equal(bound.runtimePresence[0].linkScore, 'explicit');
     assert.equal(active.find(item => item.id === 'claude:recent').status, 'idle');
     assert.equal(active.some(item => item.id.startsWith('bridge:')), false);
+
+    // Exercise the real terminal -> monitor -> control-room title path before
+    // transcript discovery, then verify that subsequent requests replace it.
+    const vm = require('vm');
+    const mainSource = fs.readFileSync(path.join(context.root, 'main.js'), 'utf8');
+    const projectionStart = mainSource.indexOf('function terminalComprehensionOwnershipVerified(session)');
+    const projectionEnd = mainSource.indexOf('function bridgePresence()', projectionStart);
+    assert.ok(projectionStart >= 0 && projectionEnd > projectionStart);
+    const sandbox = {
+      process: { platform: 'win32' },
+      isInternalTerminalProjectionSessionId: () => false,
+      window: { WhiteboxI18n: { t: key => key }, WhiteboxRendererUtils: {} },
+    };
+    vm.runInNewContext(mainSource.slice(projectionStart, projectionEnd), sandbox);
+    vm.runInNewContext(fs.readFileSync(path.join(context.root, 'renderer', 'app-graph-view.js'), 'utf8'), sandbox);
+    const view = sandbox.window.WhiteboxAppFactories.createGraphView({
+      readablePreview: text => ({ text, full: text }),
+      latestWorkCopy: () => '',
+    });
+    const launchTitle = 'GPT · 최근 입력한 요청을 표시해줘';
+    const terminal = {
+      id: 'terminal:request-title', type: 'agent', provider: 'codex',
+      status: 'running', title: launchTitle, cwd: 'D:\\repo',
+      createdAt: '2026-07-14T03:01:00Z',
+    };
+    const projected = sandbox.projectTerminalBridgePresence([terminal])[0];
+    assert.equal(projected.title, launchTitle, '관제용 연결 정보에 저장된 요청 제목이 유지되어야 합니다.');
+    const provisional = applyRuntimePresence([], {}, { processes: [] },
+      Date.parse('2026-07-14T03:01:10Z'), [projected])[0];
+    assert.equal(provisional.title, launchTitle);
+    assert.equal(view.controlRoomAgentGoal(provisional).text, launchTitle);
+    assert.deepStrictEqual(inferredBridgeBindings([provisional]), [],
+      '요청 제목 표시는 대화 연결 권한을 만들면 안 됩니다.');
+
+    for (const latestRequest of ['마지막으로 입력한 내용', '/help', '두 줄로\n입력한 내용']) {
+      const withHistory = {
+        ...provisional,
+        title: 'GPT · Codex 외부 연결',
+        messages: [
+          { role: 'user', text: '처음 입력한 내용' },
+          { role: 'assistant', text: '이전 응답' },
+          { role: 'user', text: latestRequest },
+          { role: 'user', text: '   ' },
+          { role: 'assistant', text: '지금 처리 중인 내용' },
+        ],
+      };
+      assert.equal(view.controlRoomAgentGoal(withHistory).text, latestRequest.replace(/\s+/g, ' '));
+      assert.equal(view.controlRoomAgentGoal({
+        ...withHistory, parentId: 'codex:parent', delegation: { assignment: '맡겨진 하위 작업' },
+      }).text, '맡겨진 하위 작업');
+    }
+    const missingTitle = applyRuntimePresence([], {}, { processes: [] },
+      Date.parse('2026-07-14T03:01:10Z'), [{ ...projected, title: '   ' }])[0];
+    assert.equal(missingTitle.title, 'GPT · Codex 외부 연결',
+      '요청이 아직 없는 외부 연결은 기존 안내를 유지해야 합니다.');
   });
 
 }

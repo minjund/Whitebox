@@ -1647,6 +1647,23 @@ function registerUiContractTests(context) {
     const responseAt = new Date(now - 5 * 60 * 1000).toISOString();
     const ended = { id: 'ended', status: 'completed', messages: [{ role: 'assistant', timestamp: responseAt }] };
     assert.equal(core.isControlRoomSession(ended, now), false);
+    assert.equal(core.canArchiveSession(ended), true, '관제에서 실행을 관측하지 못해도 완료된 작업은 이동할 수 있어야 합니다.');
+    assert.equal(core.canArchiveSession({ id: 'no-response', status: 'completed', updatedAt: responseAt }), true,
+      '응답 메시지가 없는 완료 상태도 완료 관측 시각으로 이동할 수 있어야 합니다.');
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8'), sandbox);
+    const graph = sandbox.window.WhiteboxAppFactories.createGraphView({
+      ...core,
+      readablePreview: value => ({ text: String(value || ''), full: String(value || ''), truncated: false }),
+      providerInfo: () => ({ mark: 'C', label: 'Claude' }), providerStyle: () => '',
+      currentActivity: () => ({ title: '작업 완료', type: 'message' }),
+      compact: value => String(value || 0), timeAgo: () => '',
+      agentRoleLabel: () => 'AI', executionModeBadge: () => '', sessionWorkspaceLabel: () => 'project',
+      statusIcon: () => '', graphChildren: () => [], sortGraphNodes: sessions => sessions,
+    });
+    const archiveButton = 'data-session-archive="ended"';
+    assert.ok(graph.graphNode(ended).includes(archiveButton), '완료된 상세 노드에 지난 기록 이동 버튼이 표시되어야 합니다.');
+    const overview = graph.runtimeSeparatedOverview([ended], { byId: new Map([[ended.id, ended]]) }, [ended], []);
+    assert.ok(overview.includes(archiveButton), '완료된 관제 카드에도 지난 기록 이동 버튼이 표시되어야 합니다.');
     const transientActivities = ['thinking', 'working', 'juggling', 'notification'];
     for (const activityState of transientActivities) {
       const transient = {
@@ -1686,6 +1703,8 @@ function registerUiContractTests(context) {
     assert.equal(graphViewSource.includes('control.auto_history_in_minutes'), false);
     assert.match(messageSource, /"control\.auto_history_after_time": \{"ko":"\{time\} 이후 지난 기록으로 이동"/);
     assert.equal(core.archiveSession(ended), true);
+    assert.equal(core.canArchiveSession(ended), false);
+    assert.equal(graph.graphNode(ended).includes(archiveButton), false);
     assert.equal(core.isControlRoomSession(ended, now), false);
     const resumed = {
       ...ended,
@@ -1695,6 +1714,7 @@ function registerUiContractTests(context) {
     const expired = { ...ended, id: 'expired', messages: [{ role: 'assistant', timestamp: new Date(now - 31 * 60 * 1000).toISOString() }] };
     assert.equal(core.isControlRoomSession({ ...expired, status: 'running' }, now), true);
     assert.equal(core.isControlRoomSession(expired, now), false);
+    assert.equal(core.canArchiveSession(expired), true, '30분이 지난 완료 작업도 수동으로 이동할 수 있어야 합니다.');
     const child = { ...ended, id: 'child', parentId: 'root', childIds: ['grandchild'] };
     const grandchild = { ...ended, id: 'grandchild', parentId: 'child', status: 'running', activityState: 'working', childIds: [] };
     const rootSession = { ...ended, id: 'root', childIds: ['child'] };
@@ -1709,6 +1729,7 @@ function registerUiContractTests(context) {
       '하위 작업이 남아 있는 메인 AI의 결과를 완료 확인 대상으로 먼저 노출하면 안 됩니다.');
     assert.equal(core.archiveSession(rootSession), false,
       '하위 작업이 남아 있는 메인 AI를 지난 기록으로 이동하면 안 됩니다.');
+    assert.equal(core.canArchiveSession(rootSession), false);
     grandchild.status = 'completed';
     grandchild.activityState = 'attention';
     core.state.snapshot = { sessions: [rootSession, child, grandchild] };
@@ -2266,6 +2287,10 @@ function registerUiContractTests(context) {
       loadProviderVisibility() {},
       loadAttentionPopupSettings() {},
       bindAttentionPopupSettings() {},
+      loadQuestionnaireSettings() {},
+      bindQuestionnaireSettings() {},
+      showQuestionnaireSetup() {},
+      renderQuestionnaireSettings() {},
       projectVisibleSnapshot: snapshot => snapshot,
       visibleSnapshot: () => state.snapshot,
       isProviderVisible: () => true,
@@ -2289,11 +2314,11 @@ function registerUiContractTests(context) {
       refreshProviderUsage: async () => null,
     };
     const factoryNames = [
-      'createCore', 'createProviderVisibility', 'createAttentionPopupSettings', 'createDashboard',
+      'createCore', 'createProviderVisibility', 'createAttentionPopupSettings', 'createQuestionnaireSettings', 'createDashboard',
       'createGraphModel', 'createGraphView', 'createGraphLayout', 'createGraphOrchestration',
       'createAgentActions', 'createManagement', 'createSessionRenderer',
       'createDrawerData', 'createDrawerContent', 'createPtyFocusMode',
-      'createComprehensionPacketMode', 'createDrawer',
+      'createComprehensionPacketMode', 'createQuestionnaireInbox', 'createDrawer',
       'createRunModal', 'createQualityEnhancements',
       'createNavigationEventBindings', 'createSessionEventBindings', 'createFilterEventBindings',
       'createDialogEventBindings', 'createEventBindings',

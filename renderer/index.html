@@ -69,6 +69,12 @@
         </div>
       </header>
 
+      <section id="questionnaireInbox" class="questionnaire-inbox hidden" aria-labelledby="questionnaireInboxTitle">
+        <header><div><h2 id="questionnaireInboxTitle" data-i18n="questionnaire.settings_title">AI 질문지</h2><p data-i18n="questionnaire.inbox_description">완료된 작업의 요약과 질문을 관제 화면에서 바로 확인하세요.</p></div><b id="questionnaireInboxCount"></b></header>
+        <p id="questionnaireInboxStatus" role="status"></p>
+        <div id="questionnaireInboxList" class="questionnaire-inbox-list"></div>
+      </section>
+
       <section id="projectSelectionPrompt" class="project-selection-prompt hidden" aria-live="polite">
         <div class="project-selection-content">
           <span class="project-selection-direction" aria-hidden="true"><i>←</i><b data-i18n="studio.project_selection_direction">왼쪽 프로젝트 목록</b></span>
@@ -178,6 +184,17 @@
             <p data-i18n="settings.providers.description">목록에 보일 AI를 선택하세요. 변경 내용은 즉시 저장됩니다.</p>
           </div>
           <div id="providerVisibilityList" class="provider-visibility-list"></div>
+        </section>
+
+        <section id="questionnaireSettingsCard" class="questionnaire-settings-card" aria-labelledby="questionnaireSettingsTitle">
+          <div>
+            <h3 id="questionnaireSettingsTitle" data-i18n="questionnaire.settings_title">AI 질문지</h3>
+            <p data-i18n="questionnaire.settings_description">Claude·Codex 작업이 끝나면 요약과 질문지를 만들어, 변경 내용과 선택 이유를 이해하도록 돕습니다.</p>
+            <p class="questionnaire-cost-note" data-i18n="questionnaire.cost">질문지를 만들 때마다 AI 토큰이 추가로 사용되며, 연결한 AI 서비스의 사용량 한도 또는 요금에 반영됩니다. 사용량은 작업 분량과 AI 모델에 따라 달라집니다.</p>
+            <p id="questionnaireStatus" role="status"></p>
+            <small data-i18n="questionnaire.stop_note">끄면 새 질문지 생성을 멈춥니다. 이미 진행 중인 생성은 완료될 수 있으며, 만들어진 질문지는 유지됩니다.</small>
+          </div>
+          <label class="questionnaire-switch" for="questionnaireEnabled"><input id="questionnaireEnabled" type="checkbox" role="switch" aria-describedby="questionnaireStatus" /><span data-i18n="questionnaire.toggle">자동 생성</span></label>
         </section>
 
         <section id="attentionPopupSettingsCard" class="attention-popup-settings-card" data-enabled="true" aria-labelledby="attentionPopupSettingsTitle">
@@ -468,6 +485,28 @@
     </form>
   </div>
 
+  <div id="questionnaireSetupModal" class="modal-backdrop questionnaire-setup hidden" role="dialog" aria-modal="true" aria-labelledby="questionnaireSetupTitle" aria-describedby="questionnaireSetupDescription questionnaireSetupCost" aria-hidden="true" inert>
+    <section class="questionnaire-setup-panel">
+      <span class="questionnaire-eyebrow" data-i18n="questionnaire.optional">선택 기능 · AI 질문지</span>
+      <h2 id="questionnaireSetupTitle" tabindex="-1" data-i18n="questionnaire.setup_title">AI가 끝낸 작업, 이해하고 넘어가세요</h2>
+      <p id="questionnaireSetupDescription" data-i18n="questionnaire.settings_description">Claude·Codex 작업이 끝나면 요약과 질문지를 만들어, 변경 내용과 선택 이유를 이해하도록 돕습니다.</p>
+      <div class="questionnaire-benefit">
+        <h3 data-i18n="questionnaire.benefit_title">결과를 이해하는 데 막히는 시간을 줄여요</h3>
+        <p data-i18n="questionnaire.benefit">무엇이 바뀌었는지, 왜 그렇게 만들었는지, 주의할 점은 무엇인지 짧은 요약과 질문으로 확인합니다. AI의 작업 속도를 따라가기 어려울 때, 이해의 병목을 해소하는 데 도움이 됩니다.</p>
+      </div>
+      <div class="questionnaire-cost">
+        <h3 data-i18n="questionnaire.cost_title">추가 AI 토큰을 사용합니다</h3>
+        <p id="questionnaireSetupCost" data-i18n="questionnaire.cost">질문지를 만들 때마다 AI 토큰이 추가로 사용되며, 연결한 AI 서비스의 사용량 한도 또는 요금에 반영됩니다. 사용량은 작업 분량과 AI 모델에 따라 달라집니다.</p>
+      </div>
+      <p class="questionnaire-optional-note" data-i18n="questionnaire.optional_note">질문지 없이도 모든 기본 기능을 사용할 수 있습니다. 설정 → AI 질문지에서 언제든 변경할 수 있습니다.</p>
+      <p id="questionnaireSetupError" class="questionnaire-error hidden" role="alert"></p>
+      <div class="questionnaire-actions">
+        <button id="questionnaireSkipBtn" type="button" data-i18n="questionnaire.skip">사용 안 함</button>
+        <button id="questionnaireEnableBtn" type="button" data-i18n="questionnaire.enable">추가 토큰 사용에 동의하고 켜기</button>
+      </div>
+    </section>
+  </div>
+
   <div id="globalStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="quickPaletteModal" class="modal-backdrop quality-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="quickPaletteTitle" aria-describedby="quickPaletteDescription" aria-hidden="true" inert>
@@ -505,6 +544,7 @@
   <script src="app-drawer-content.js"></script>
   <script src="app-pty-focus.js"></script>
   <script src="comprehension-packet.js"></script>
+  <script src="app-questionnaire-inbox.js"></script>
   <script src="comprehension-output-filter.js"></script>
   <script src="app-drawer.js"></script>
   <script src="app-run-modal.js"></script>
@@ -516,6 +556,7 @@
   <script src="app-events.js"></script>
   <script src="attention-activation.js"></script>
   <script src="app-attention-popup-settings.js"></script>
+  <script src="app-questionnaire-settings.js"></script>
   <script src="app-bootstrap.js"></script>
   <script src="terminal-ime.js"></script>
   <script src="terminal-workbench.js"></script>

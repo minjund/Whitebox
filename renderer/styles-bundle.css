@@ -21,6 +21,7 @@
 @import url("styles-management.css") layer(management);
 @import url("styles-onboarding.css") layer(product);
 @import url("styles-settings.css") layer(product);
+@import url("styles-questionnaire-settings.css") layer(product);
 @import url("styles-quality.css") layer(quality);
 @import url("styles-responsive-shell.css") layer(responsive);
 @import url("styles-responsive-workflows.css") layer(responsive);

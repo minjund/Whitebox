@@ -118,19 +118,21 @@
     const heading = element('div', 'popup-heading');
     const title = element('h1', 'popup-title', request.title);
     title.id = 'popupTitle';
-    const requestMeta = request.meta || (request.toolLabel ? request.project : '');
+    const eyebrow = element('div', 'popup-eyebrow');
+    if (request.provider) eyebrow.append(element('span', 'popup-provider', request.provider));
+    if (request.project) {
+      const project = element('span', 'popup-project', request.project);
+      project.title = request.projectPath || request.project;
+      eyebrow.append(project);
+    }
+    if (eyebrow.childNodes.length) heading.append(eyebrow);
+    heading.append(title);
+    const requestMeta = request.meta;
     if (request.toolLabel || requestMeta) {
-      heading.append(title);
       const context = element('div', 'popup-request-context');
       if (request.toolLabel) context.append(element('span', 'popup-tool-pill', request.toolLabel));
       if (requestMeta) context.append(element('span', 'popup-meta', requestMeta));
       heading.append(context);
-    } else {
-      const eyebrow = element('div', 'popup-eyebrow');
-      if (request.provider) eyebrow.append(element('span', 'popup-provider', request.provider));
-      if (request.project) eyebrow.append(element('span', 'popup-project', request.project));
-      if (eyebrow.childNodes.length) heading.append(eyebrow);
-      heading.append(title);
     }
     header.append(heading);
     if (request.dismissible) {
