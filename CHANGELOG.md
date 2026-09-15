@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.18 - 2026-09-15
+
+- Update the Electron desktop runtime to 44.3.0.
+- Update CodeQL security analysis to 4.38.0.
+- Verify packaged updates from the official 1.8.17 installer alongside the
+  retained frozen and legacy compatibility cohorts.
+
 ## 1.8.17 - 2026-09-14
 
 - Embed the Ghostty WASM terminal engine with local rendering, Korean input,

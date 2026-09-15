@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "1.8.17",
+  "version": "1.8.18",
   "description": "A local-first desktop control room for seeing and steering Claude, Codex, Gemini, and Grok at work.",
   "main": "main.js",
   "author": "wincube AX",
@@ -120,11 +120,11 @@
     "node-pty": "1.2.0-beta.14"
   },
   "peerDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^44.3.0"
   },
   "devDependencies": {
     "@xterm/xterm": "^6.0.0",
-    "electron": "^43.2.0",
+    "electron": "^44.3.0",
     "electron-builder": "^26.15.3"
   },
   "build": {
