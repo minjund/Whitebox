@@ -8,6 +8,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { Readable } = require('stream');
 const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-button');
+const { waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
@@ -442,8 +443,12 @@ function runningProcessesUnderDirectory(directory) {
   }).filter(record => pathIsWithin(canonicalDirectory, canonicalExistingPath(record.executablePath))) : [];
 }
 
-function stopProcessesUnderDirectory(directory, label) {
-  for (const processRecord of runningProcessesUnderDirectory(directory)) stopProcessTree(processRecord.pid);
+async function stopProcessesUnderDirectory(directory, label) {
+  const ownedProcesses = runningProcessesUnderDirectory(directory);
+  for (const processRecord of ownedProcesses) stopProcessTree(processRecord.pid);
+  // taskkill can return while CIM still lists an exiting process without its
+  // executable path. Require observed PID absence before the strict path scan.
+  await waitForOwnedProcessIdsExit(ownedProcesses.map(record => record.pid));
   const remaining = runningProcessesUnderDirectory(directory);
   if (remaining.length) {
     throw new Error(`${label} processes remained after cleanup: ${remaining.map(record => `${record.pid} (${record.executablePath})`).join(', ')}`);
@@ -1274,7 +1279,7 @@ main().catch(error => {
     });
   }
   await captureCleanup('stop installed-path processes', async () => {
-    stopProcessesUnderDirectory(installDir, 'Installed-path');
+    await stopProcessesUnderDirectory(installDir, 'Installed-path');
   });
 
   asar.uncacheAll();
