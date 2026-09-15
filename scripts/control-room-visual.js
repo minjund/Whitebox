@@ -30,6 +30,66 @@ async function capture(win, outputDir, name) {
   return output;
 }
 
+async function verifyDesktopProjectFlow(win, outputDir) {
+  // Reproduce desktop GPT sessions whose shell cwd is app data, while the
+  // declared workspace is the project the user selected in the client.
+  win.setSize(1440, 980);
+  await win.webContents.executeJavaScript(`(() => {
+    const control = window.WhiteboxApp;
+    const template = control.state.snapshot.sessions.find(session => session.id === 'fixture-root');
+    const now = new Date().toISOString();
+    const project = 'D:/codex-flow-project';
+    control.state.sourcePluginSettings = { enabledPluginIds: ['builtin.codex-desktop', 'builtin.claude-desktop'] };
+    window.interactionTest.addSession({
+      ...JSON.parse(JSON.stringify(template)),
+      id: 'fixture-desktop-project-flow', externalId: 'desktop-project-flow',
+      provider: 'codex', clientKind: 'codex-desktop', model: 'gpt-6-astra',
+      title: 'GPT 프로젝트 흐름도 복구', shortTitle: 'GPT 프로젝트 흐름도 복구', displayName: 'GPT 프로젝트 흐름도 복구',
+      statusDetail: '프로젝트 실행 작업 확인 중', cwd: 'C:/Users/test/AppData/Roaming/loadtoagent',
+      originCwd: 'C:/Users/test/AppData/Roaming/loadtoagent', workspace: 'loadtoagent',
+      workspaceRoots: [project], parentId: null, childIds: [], status: 'running',
+      updatedAt: now, startedAt: now, completedAt: null, completionObserved: false,
+      attention: null, comprehension: null, result: '',
+      messages: [{ role: 'user', text: 'GPT 프로젝트 흐름도 복구', timestamp: now }],
+      executions: template.executions.map(item => ({ ...item, id: 'desktop-' + item.id, updatedAt: now, startedAt: now })),
+    });
+    window.interactionTest.emitSnapshot();
+  })()`);
+  await waitFor(win, `Boolean(document.querySelector('#projectSidebarList .project-sidebar-item[data-workspace="D:/codex-flow-project"]'))`,
+    'GPT의 실제 프로젝트가 탐색 목록에 표시되지 않았습니다.');
+  await win.webContents.executeJavaScript(`(() => {
+    const selector = '#projectSidebarList .project-sidebar-item[data-workspace="D:/codex-flow-project"]';
+    if (document.querySelector(selector).getAttribute('aria-expanded') === 'true') document.querySelector(selector).click();
+    document.querySelector(selector).click();
+  })()`);
+  await waitFor(win, `Boolean(document.querySelector('[data-control-session="fixture-desktop-project-flow"] .control-room-main')?.getBoundingClientRect().height)`,
+    '프로젝트를 선택해도 GPT 관제 흐름도가 보이지 않습니다.');
+  const desktopProjectFlowMetrics = await win.webContents.executeJavaScript(`(() => {
+    const root = document.querySelector('[data-control-session="fixture-desktop-project-flow"]');
+    const flow = root.querySelector('.control-room-flow');
+    const bounds = flow.getBoundingClientRect();
+    return {
+      workspace: window.WhiteboxApp.state.workspace,
+      visible: getComputedStyle(flow).display !== 'none' && bounds.width > 0 && bounds.height > 0,
+      runningExecutions: root.querySelectorAll('.activity-column .execution-node').length,
+      completedExecutions: root.querySelectorAll('.completed-column .execution-node').length,
+      connections: root.querySelectorAll('.control-flow-link').length,
+      noOverflow: flow.scrollWidth <= flow.clientWidth + 2,
+      cwd: window.WhiteboxApp.state.snapshot.sessions.find(session => session.id === 'fixture-desktop-project-flow').cwd,
+    };
+  })()`);
+  if (desktopProjectFlowMetrics.workspace !== 'D:/codex-flow-project'
+    || !desktopProjectFlowMetrics.visible || !desktopProjectFlowMetrics.noOverflow
+    || desktopProjectFlowMetrics.runningExecutions !== 2 || desktopProjectFlowMetrics.completedExecutions !== 1
+    || desktopProjectFlowMetrics.connections !== 2
+    || desktopProjectFlowMetrics.cwd !== 'C:/Users/test/AppData/Roaming/loadtoagent') {
+    throw new Error(`GPT 프로젝트 관제 흐름도 검증 실패: ${JSON.stringify(desktopProjectFlowMetrics)}`);
+  }
+  const desktopProjectFlowOutput = await capture(win, outputDir, 'whitebox-control-room-codex-project.png');
+  process.stdout.write(`GPT 프로젝트 흐름도 검증 통과 ${JSON.stringify(desktopProjectFlowMetrics)}\n${desktopProjectFlowOutput}\n`);
+
+}
+
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
     width: 1666,
@@ -56,6 +116,12 @@ app.whenReady().then(async () => {
         && document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length >= 2)`,
       '프로젝트 선택 홈이 준비되지 않았습니다.',
     );
+    if (process.argv.includes('--codex-project-only')) {
+      const outputDir = path.join(__dirname, '..', 'output', 'control-room-codex-project');
+      fs.mkdirSync(outputDir, { recursive: true });
+      await verifyDesktopProjectFlow(win, outputDir);
+      return;
+    }
     const initialSelectionMetrics = await win.webContents.executeJavaScript(`(() => ({
       workspace: window.WhiteboxApp.state.workspace,
       prompt: document.querySelector('#projectSelectionPrompt h2')?.textContent.trim() || '',
@@ -926,6 +992,8 @@ app.whenReady().then(async () => {
       throw new Error(`모바일 세션 관제 검증 실패: ${JSON.stringify(mobileMetrics)}`);
     }
     const mobileOutput = await capture(win, outputDir, 'whitebox-control-room-mobile.png');
+
+    await verifyDesktopProjectFlow(win, outputDir);
 
     process.stdout.write(`세션 관제 시각·상호작용 검증 통과\n${JSON.stringify({ initialSelectionMetrics, overviewMetrics, projectContextMetrics, removedSurfaceMetrics, usageDetailMetrics, subagentPtyMetrics, executionPtyMetrics, desktop1224Metrics, constrainedFlowMetrics, mobileMetrics }, null, 2)}\n${overviewOutput}\n${projectContextOutput}\n${projectHistoryOutput}\n${subagentPtyOutput}\n${executionPtyOutput}\n${desktop1224Output}\n${constrainedFlowOutput}\n${mobileOutput}\n`);
   } catch (error) {

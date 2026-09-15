@@ -16,6 +16,7 @@
     "createCore",
     "createProviderVisibility",
     "createAttentionPopupSettings",
+    "createQuestionnaireSettings",
     "createDashboard",
     "createGraphModel",
     "createGraphView",
@@ -28,6 +29,7 @@
     "createDrawerContent",
     "createPtyFocusMode",
     "createComprehensionPacketMode",
+    "createQuestionnaireInbox",
     "createDrawer",
     "createRunModal",
     "createQualityEnhancements",
@@ -108,6 +110,7 @@
     state.providerMap = new Map(state.providers.map((provider) => [provider.id, provider]));
     loadProviderVisibility(bootstrap.providerVisibility);
     app.loadAttentionPopupSettings(bootstrap.attentionPopups);
+    app.loadQuestionnaireSettings(bootstrap.questionnaire);
     state.availability = bootstrap.availability || {};
     // The window can bootstrap before runtime setup has probed the CLIs.
     // Missing keys mean unchecked; an empty path is a confirmed absence.
@@ -179,11 +182,14 @@
       }
       const generation = ++passiveFocusGeneration;
       const isCurrent = () => generation === passiveFocusGeneration;
+      if (event === 'terminal') attentionActivation?.userNavigated();
       try {
         // Old/native notifications do not carry a delivery token or a target
         // identity. They may reuse the sole existing PTY, but must never guess
         // among terminals or create/fork a new one as a side effect of opening.
         const outcome = await openPtyFocusVerified?.(session.id, {
+          targetId: payload?.targetId,
+          terminalId: payload?.terminalId,
           focus: true,
           attentionActivation: true,
           isCurrent,
@@ -192,7 +198,16 @@
       } catch (error) {
         window.WhiteboxRendererUtils.reportRecoverableError("legacy-attention-open-pty", error);
       }
-      if (!isCurrent() || isPtyFocusActive?.()) return;
+      if (!isCurrent()) return;
+      // A popup click explicitly selects this task. External desktop sessions
+      // may have no attachable PTY; still open their own focus view instead of
+      // returning the user to the control room or creating another conversation.
+      if (event === 'terminal') {
+        const root = ownerRootSession?.(session);
+        if (app.canOpenResponsibleFocus?.(root)
+          && app.openResponsibleFocus?.(root.id, { focus: true, attentionActivation: true })) return;
+      }
+      if (isPtyFocusActive?.()) return;
       showAttentionSession(session);
       if (event === 'completed') selectView('active');
       toast(t("agent.open_terminal_failed"));
@@ -225,6 +240,7 @@
       toast(detail);
     });
     app.bindAttentionPopupSettings();
+    app.bindQuestionnaireSettings();
     bindEvents();
     render();
     syncPendingPtyFocus();
@@ -240,6 +256,7 @@
     $("#appConnectionState")?.classList.remove("connection-error");
     $("#appErrorBanner").classList.add("hidden");
     app.initialized = true;
+    app.showQuestionnaireSetup();
     setConnectedAt(state.snapshot && state.snapshot.generatedAt);
     let snapshotRenderFrame = 0;
     let terminalInventoryRenderFrame = 0;
@@ -311,6 +328,7 @@
       return;
     }
     render("locale");
+    app.renderQuestionnaireSettings();
     setConnectedAt(state.snapshot.generatedAt);
   });
 

@@ -35,6 +35,9 @@ window.WhiteboxTerminalIme = {
         let pending = null;
         let reconciliation = null;
         let frame = 0;
+        let measuredText = null;
+        let measuredCells = 0;
+        let tailSignature = null;
         const listeners = [];
         const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
         const listen = (type, listener) => {
@@ -68,49 +71,68 @@ window.WhiteboxTerminalIme = {
           const options = terminal.options;
           const theme = options.theme;
           const column = Math.min(buffer.cursorX, terminal.cols - 1);
+          // Read layout before changing styles or replacing any row content.
+          const screenLeft = screen.offsetLeft;
+          const screenTop = screen.offsetTop;
+          const screenWidth = screen.clientWidth;
           if (!composing || !text || doc.activeElement !== textarea) {
             hide();
-            Object.assign(textarea.style, { position: 'absolute', left: `${screen.offsetLeft + column * cellWidth}px`,
-              top: `${screen.offsetTop + row * cellHeight}px`, width: `${cellWidth}px`, height: `${cellHeight}px` });
+            Object.assign(textarea.style, { position: 'absolute', left: `${screenLeft + column * cellWidth}px`,
+              top: `${screenTop + row * cellHeight}px`, width: `${cellWidth}px`, height: `${cellHeight}px` });
             return;
           }
-          const cells = terminal.measureTextCells(text);
-          const preeditWidth = Math.max(1, cells) * cellWidth;
+          if (text !== measuredText) {
+            measuredCells = terminal.measureTextCells(text);
+            measuredText = text;
+          }
+          const preeditWidth = Math.max(1, measuredCells) * cellWidth;
           const available = (terminal.cols - column) * cellWidth;
-          const anchorLeft = Math.max(0, Math.min(column * cellWidth, screen.clientWidth - preeditWidth));
-          Object.assign(view.style, { display: 'flex', left: `${screen.offsetLeft + anchorLeft}px`,
-            top: `${screen.offsetTop + row * cellHeight}px`, width: `${Math.max(available, preeditWidth)}px`,
+          const anchorLeft = Math.max(0, Math.min(column * cellWidth, screenWidth - preeditWidth));
+          Object.assign(view.style, { display: 'flex', left: `${screenLeft + anchorLeft}px`,
+            top: `${screenTop + row * cellHeight}px`, width: `${Math.max(available, preeditWidth)}px`,
             height: `${cellHeight}px`, lineHeight: `${cellHeight}px`, fontFamily: options.fontFamily,
             fontSize: `${options.fontSize}px`, fontWeight: 'normal', color: theme.foreground || '#ffffff',
             background: theme.background || '#000000' });
-          preedit.textContent = text;
+          if (preedit.textContent !== text) preedit.textContent = text;
           preedit.style.width = `${preeditWidth}px`;
           Object.assign(caret.style, { flex: '0 0 1px', width: '1px', marginLeft: '-1px', height: `${cellHeight}px`,
             background: theme.cursor || theme.foreground || '#ffffff' });
           const line = buffer.getLine(buffer.baseY + buffer.cursorY);
-          const fragment = doc.createDocumentFragment();
+          const tailCells = [];
           for (let index = column; index < terminal.cols; index += 1) {
             const cell = line?.getCell(index);
             if (!cell || cell.getWidth() === 0) continue;
-            const span = doc.createElement('span');
             const fg = `#${cell.getFgColor().toString(16).padStart(6, '0')}`;
             const bg = `#${cell.getBgColor().toString(16).padStart(6, '0')}`;
-            span.textContent = cell.isInvisible() ? ' ' : cell.getChars() || ' ';
-            Object.assign(span.style, { display: 'inline-block', width: `${cell.getWidth() * cellWidth}px`,
+            tailCells.push({ text: cell.isInvisible() ? ' ' : cell.getChars() || ' ',
+              width: `${cell.getWidth() * cellWidth}px`,
               color: cell.isInverse() ? bg : fg, background: cell.isInverse() ? fg : bg,
               fontWeight: cell.isBold() ? 'bold' : 'normal', fontStyle: cell.isItalic() ? 'italic' : 'normal' });
-            fragment.appendChild(span);
           }
-          tail.replaceChildren(fragment);
+          // Most composition updates only change the preedit. Keep the row's
+          // DOM intact unless output, cursor movement or cell metrics changed.
+          const signature = JSON.stringify(tailCells);
+          if (signature !== tailSignature) {
+            const fragment = doc.createDocumentFragment();
+            for (const { text: cellText, ...style } of tailCells) {
+              const span = doc.createElement('span');
+              span.textContent = cellText;
+              Object.assign(span.style, { display: 'inline-block', ...style });
+              fragment.appendChild(span);
+            }
+            tail.replaceChildren(fragment);
+            tailSignature = signature;
+          }
           tail.style.display = preeditWidth > available ? 'none' : '';
           // Anchor native candidate windows to the painted cursor.
-          Object.assign(textarea.style, { left: `${screen.offsetLeft + anchorLeft}px`,
-            top: `${screen.offsetTop + row * cellHeight}px`, width: `${preeditWidth}px`, height: `${cellHeight}px`,
+          Object.assign(textarea.style, { left: `${screenLeft + anchorLeft}px`,
+            top: `${screenTop + row * cellHeight}px`, width: `${preeditWidth}px`, height: `${cellHeight}px`,
             fontFamily: options.fontFamily, fontSize: `${options.fontSize}px` });
         };
         const scheduleRender = () => {
-          render();
-          if (frame) cancelAnimationFrame(frame);
+          // Composition, scroll and output can all arrive in the same frame.
+          // Paint the latest state once, without blocking native IME events.
+          if (disposed || frame) return;
           frame = requestAnimationFrame(() => { frame = 0; render(); });
         };
         listen('beforeinput', event => {
@@ -130,6 +152,7 @@ window.WhiteboxTerminalIme = {
         listen('compositionupdate', event => {
           event.stopPropagation();
           text = event.data || '';
+          if (!text) hide();
           scheduleRender();
         });
         listen('compositionend', event => {

@@ -5,6 +5,17 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.19 - 2026-09-15
+
+- Allow multiline task requests through Codex startup preparation while preserving
+  the complete prompt and validation of command options and conversation identity.
+- Start shared Codex conversations in the selected project directory.
+- Add questionnaire preferences, an inbox, and readable open-book answer history.
+- Improve project-scoped attention, Claude termination detection, and Korean IME
+  input responsiveness in the embedded terminal.
+- Retain local design artifacts and verify updates from the official 1.8.18
+  installer alongside every retained frozen, recent, and legacy cohort.
+
 ## 1.8.18 - 2026-09-15
 
 - Update the Electron desktop runtime to 44.3.0.

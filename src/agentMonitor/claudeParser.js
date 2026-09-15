@@ -71,24 +71,29 @@ function createClaudeParser(dependencies) {
       const match = text.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, 'i'));
       return match ? match[1].trim() : '';
     };
-    const taskId = field('task-id');
+    const taskIds = [...text.matchAll(/<task-id>([\s\S]*?)<\/task-id>/gi)]
+      .map(match => match[1].trim()).filter(Boolean);
+    const taskId = taskIds[0] || '';
     const toolUseId = field('tool-use-id');
-    const status = field('status').toLowerCase();
+    const rawStatus = field('status').toLowerCase();
+    const status = rawStatus === 'stopped' ? 'cancelled' : rawStatus;
     if (!taskId && !toolUseId) return null;
-    return { taskId, toolUseId, status, text };
+    return { taskId, taskIds: [...new Set(taskIds)], toolUseId, status, text };
   }
 
   function recordTaskNotification(state, value, at) {
     const notification = taskNotification(value);
     if (!notification || !/^(?:completed|failed|error|cancelled)$/.test(notification.status)) return null;
-    state.executionTracker.recordOutput({
-      name: 'bash',
-      callId: notification.toolUseId,
-      args: { task_id: notification.taskId },
-      output: notification.text,
-      at,
-      isError: /^(?:failed|error)$/.test(notification.status),
-    });
+    for (const taskId of notification.taskIds.length ? notification.taskIds : ['']) {
+      state.executionTracker.recordOutput({
+        name: 'bash',
+        callId: notification.toolUseId,
+        args: { task_id: taskId },
+        output: notification.text,
+        at,
+        isError: /^(?:failed|error)$/.test(notification.status),
+      });
+    }
     observeActivity(state, 'working', at);
     return notification;
   }
@@ -231,6 +236,8 @@ function createClaudeParser(dependencies) {
   function updateClaudeSpawn(session, callId, details = {}) {
     const record = findClaudeSpawn(session, callId, details.childExternalId);
     if (!record) return;
+    if (details.completedAt && record.lastSentAt
+      && Date.parse(details.completedAt) < Date.parse(record.lastSentAt)) return;
     const childExternalId = compactText(details.childExternalId, 180);
     if (childExternalId) {
       record.childId = claudeChildId(childExternalId);
@@ -323,6 +330,21 @@ function createClaudeParser(dependencies) {
   function recordClaudeAgentToolResult(session, state, item, at) {
     const call = state.toolCalls.get(String(item.tool_use_id || ''));
     if (!call) return;
+    if (/^TaskStop$/i.test(call.name)) {
+      const target = String(call.args.task_id || call.args.shell_id || '');
+      const record = target && findClaudeSpawn(session, '', target);
+      if (!record || ['completed', 'failed', 'cancelled'].includes(record.status)) return;
+      const output = rawText(item.content).trim();
+      const missing = output.match(/^(?:<tool_use_error>)?No task found with ID:\s*([A-Za-z0-9_-]+)(?:<\/tool_use_error>)?$/i);
+      if ((missing && missing[1] === target)
+        || (item.is_error !== true && /^Successfully stopped task\b/i.test(output))) {
+        updateClaudeSpawn(session, '', {
+          childExternalId: target, status: 'cancelled', completedAt: at,
+          resultCallId: item.tool_use_id,
+        });
+      }
+      return;
+    }
     if (isClaudeMessageTool(call.name)) {
       recordClaudeMessageToolResult(session, state, item, at);
       return;
@@ -344,13 +366,15 @@ function createClaudeParser(dependencies) {
     if (!notification) return;
     const resultMatch = notification.text.match(/<result>([\s\S]*?)<\/result>/i);
     const messageCall = state.claudeMessageCalls.get(String(notification.toolUseId || ''));
-    updateClaudeSpawn(session, notification.toolUseId, {
-      childExternalId: notification.taskId,
-      status: notification.status === 'completed' ? 'completed' : notification.status,
-      completedAt: at,
-      result: resultMatch ? resultMatch[1].trim() : '',
-      resultCallId: messageCall ? notification.toolUseId : undefined,
-    });
+    for (const taskId of notification.taskIds.length ? notification.taskIds : ['']) {
+      updateClaudeSpawn(session, notification.taskIds.length > 1 ? '' : notification.toolUseId, {
+        childExternalId: taskId,
+        status: notification.status === 'error' ? 'failed' : notification.status,
+        completedAt: at,
+        result: resultMatch ? resultMatch[1].trim() : '',
+        resultCallId: messageCall ? notification.toolUseId : undefined,
+      });
+    }
   }
 
   function recordContent(session, state, row, item, index) {

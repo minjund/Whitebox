@@ -135,6 +135,9 @@ app.whenReady().then(async () => {
       compose('compositionstart', '');
       term.textarea.value = '한'; compose('compositionupdate', '한');
       const preeditSent = writes.join('');
+      // Composition painting is coalesced to the next frame; input ownership
+      // above stays synchronous and must still emit no uncommitted text.
+      await new Promise(resolve => requestAnimationFrame(resolve));
       const visible = term.element.querySelector('.whitebox-ime-view').style.display !== 'none';
       compose('compositionend', '한');
       term.textarea.dispatchEvent(new InputEvent('input', { data: '한', inputType: 'insertText', bubbles: true }));

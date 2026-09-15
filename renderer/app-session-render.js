@@ -285,6 +285,7 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     renderUpdateSettings();
     if (settingsView) {
       context.renderAttentionPopupSettings?.();
+      context.renderQuestionnaireSettings?.();
       $("#liveSection").classList.add("hidden");
       renderSourcePluginSettings();
       renderProviderVisibilitySettings();
@@ -349,7 +350,9 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
       );
       context.rememberDisclosureStates?.(document);
       try {
-        return renderSessionsContent(motionKind, deferMotion);
+        const result = renderSessionsContent(motionKind, deferMotion);
+        context.syncQuestionnaireInbox?.();
+        return result;
       } finally {
         context.restoreDisclosureStates?.(document);
         restoreScroll();

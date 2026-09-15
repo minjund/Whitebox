@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { TerminalManager, AGENT_PROVIDERS, normalizeLaunchOptions } = require('./terminalManager');
+const { TerminalManager, AGENT_PROVIDERS, normalizeCreateLaunchOptions } = require('./terminalManager');
 const { BridgeServer } = require('./bridgeServer');
 const { TerminalHostServer, acquireTerminalHostProcessLock } = require('./terminalHost');
 const { CodexAppServer } = require('./codexAppServer');
@@ -35,7 +35,9 @@ function usesSharedCodexAppServer(value = {}, platform = process.platform) {
 
 function codexCreatePreparationOptions(manager, value = {}, platform = process.platform) {
   if (!isNativeCodexLaunch(value, platform)) return value;
-  const normalized = normalizeLaunchOptions(value, platform);
+  // Use the same prompt-aware validation as the actual PTY creation.
+  // Startup request text can contain newlines; CLI options still cannot.
+  const { launchOptions: normalized } = normalizeCreateLaunchOptions(value, platform);
   if (normalized.sessionBackend !== 'managed-tmux'
     || typeof manager?.managedTmuxRuntime?.available !== 'function'
     || manager.managedTmuxRuntime.available(normalized)) return normalized;
@@ -57,7 +59,12 @@ function sharedCodexAgentProviders(codexAppServer, platform = process.platform) 
       ...AGENT_PROVIDERS.codex,
       argsFor: options => [
         ...AGENT_PROVIDERS.codex.args,
-        ...(usesSharedCodexAppServer(options, platform) ? codexAppServer.remoteArguments() : []),
+        // A remote TUI otherwise inherits the app-server's working directory,
+        // not the PTY's cwd. Send the selected project for every launch,
+        // including resume/fork, without changing persisted conversation args.
+        ...(usesSharedCodexAppServer(options, platform)
+          ? [...codexAppServer.remoteArguments(), '--cd', options.cwd]
+          : []),
       ],
     },
   };

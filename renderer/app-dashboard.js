@@ -98,6 +98,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   }
 
   function isProjectlessSession(session) {
+    if (explicitProjectPaths(session).length) return false;
     const cwd = session && (session.originCwd || session.cwd);
     if (!cwd) return true;
     if (typeof session.projectless === "boolean") return session.projectless;
@@ -105,8 +106,23 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return session.provider === "codex" && session.clientKind === "codex-desktop" && /(?:^|\/)Documents\/Codex\/\d{4}-\d{2}-\d{2}\/new-chat$/i.test(normalized);
   }
 
+  function explicitProjectPaths(session) {
+    const roots = Array.isArray(session?.workspaceRoots) ? session.workspaceRoots : [];
+    return roots.filter(value => typeof value === "string")
+      .map(value => value.trim())
+      .filter(value => /^(?:[a-z]:[\\/]|\/|\\\\)/iu.test(value));
+  }
+
+  function sessionProjectPaths(session) {
+    const roots = explicitProjectPaths(session);
+    // Desktop clients can share an app-data cwd across unrelated projects.
+    // Use their declared project roots for display, preserving cwd for execution.
+    return roots.length ? roots : [String(session && (session.originCwd || session.cwd) || "").trim()].filter(Boolean);
+  }
+
   function sessionOriginPath(session) {
-    return String(session && (session.originCwd || session.cwd) || "").trim();
+    const paths = sessionProjectPaths(session);
+    return paths.find(path => projectContainsPath(state.workspace, path)) || paths[0] || "";
   }
 
   const normalizedPaths = new Map();
@@ -179,30 +195,33 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       liveCount: 0,
     }));
     sessions.filter((session) => !session.parentId && !isProjectlessSession(session)).forEach((session) => {
-      const originPath = sessionOriginPath(session);
-      if (!originPath) return;
-      const owner = saved
-        .filter((item) => projectContainsPath(item.path, originPath))
-        .sort((a, b) => b.key.length - a.key.length)[0];
-      const path = owner ? owner.path : originPath;
-      const key = normalizedProjectPath(path);
-      const dismissed = !owner && [...(state.dismissedProjects || [])]
-        .some((dismissedPath) => key === dismissedPath || key.startsWith(`${dismissedPath}/`));
-      if (dismissed) return;
-      const project = projects.get(key) || {
-        path,
-        name: projectName(path),
-        saved: false,
-        order: Number.MAX_SAFE_INTEGER,
-        count: 0,
-        liveCount: 0,
-      };
-      project.count += 1;
-      if (isControlRoomSession(session)) project.liveCount += 1;
-      project.lastActivityAt = !project.lastActivityAt || Date.parse(session.updatedAt || 0) > Date.parse(project.lastActivityAt || 0)
-        ? session.updatedAt
-        : project.lastActivityAt;
-      projects.set(key, project);
+      const counted = new Set();
+      for (const originPath of sessionProjectPaths(session)) {
+        const owner = saved
+          .filter((item) => projectContainsPath(item.path, originPath))
+          .sort((a, b) => b.key.length - a.key.length)[0];
+        const path = owner ? owner.path : originPath;
+        const key = normalizedProjectPath(path);
+        if (counted.has(key)) continue;
+        counted.add(key);
+        const dismissed = !owner && [...(state.dismissedProjects || [])]
+          .some((dismissedPath) => key === dismissedPath || key.startsWith(`${dismissedPath}/`));
+        if (dismissed) continue;
+        const project = projects.get(key) || {
+          path,
+          name: projectName(path),
+          saved: false,
+          order: Number.MAX_SAFE_INTEGER,
+          count: 0,
+          liveCount: 0,
+        };
+        project.count += 1;
+        if (isControlRoomSession(session)) project.liveCount += 1;
+        project.lastActivityAt = !project.lastActivityAt || Date.parse(session.updatedAt || 0) > Date.parse(project.lastActivityAt || 0)
+          ? session.updatedAt
+          : project.lastActivityAt;
+        projects.set(key, project);
+      }
     });
     const items = [...projects.values()];
     const duplicateNames = new Map();
@@ -223,12 +242,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const owner = state.workspaces
       .filter((item) => projectContainsPath(item.path, originPath))
       .sort((a, b) => normalizedProjectPath(b.path).length - normalizedProjectPath(a.path).length)[0];
-    return owner?.name || (session && session.workspace) || projectName(originPath);
+    return owner?.name || (explicitProjectPaths(session).length ? projectName(originPath) : session?.workspace) || projectName(originPath);
   }
 
-  function controlRoomProject(session) {
+  function controlRoomProject(session, originPath = sessionOriginPath(session)) {
     if (isProjectlessSession(session)) return { key: PROJECTLESS_WORKSPACE, path: PROJECTLESS_WORKSPACE, label: t("control.other_projects") };
-    const originPath = sessionOriginPath(session);
     const owner = state.workspaces
       .filter((item) => projectContainsPath(item.path, originPath))
       .sort((a, b) => normalizedProjectPath(b.path).length - normalizedProjectPath(a.path).length)[0];
@@ -236,8 +254,14 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return {
       key: normalizedProjectPath(path) || String(session?.workspace || session?.id || "unknown").toLocaleLowerCase(),
       path,
-      label: owner?.name || (session && session.workspace) || projectName(originPath) || t("control.other_projects"),
+      label: owner?.name || (explicitProjectPaths(session).length ? projectName(originPath) : session?.workspace) || projectName(originPath) || t("control.other_projects"),
     };
+  }
+
+  function matchesControlRoomProject(session, projectPath) {
+    if (isProjectlessSession(session)) return projectPath === PROJECTLESS_WORKSPACE;
+    return sessionProjectPaths(session).some(path =>
+      normalizedProjectPath(controlRoomProject(session, path).path) === normalizedProjectPath(projectPath));
   }
 
   function workspaceRootSession(session) {
@@ -260,7 +284,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (requestedSource !== "all" && sessionProjectSource(workspaceOwner) !== requestedSource) return false;
     if (state.workspace === PROJECTLESS_WORKSPACE) return isProjectlessSession(workspaceOwner);
     return !isProjectlessSession(workspaceOwner)
-      && projectContainsPath(state.workspace, sessionOriginPath(workspaceOwner));
+      && sessionProjectPaths(workspaceOwner).some(path => projectContainsPath(state.workspace, path));
   }
 
   function unlinkedLiveTmuxSessions() {
@@ -346,7 +370,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       return actors;
     };
     const ownerMatches = (root, projectPath, sourceId = "all") => (
-      normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(projectPath)
+      matchesControlRoomProject(root, projectPath)
       && (sourceId === "all" || sessionProjectSource(root) === sourceId)
     );
     const resultEntries = (root) => {
@@ -539,7 +563,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         && (projectless
           ? isProjectlessSession(root)
           : !isProjectlessSession(root)
-            && normalizedProjectPath(controlRoomProject(root).path) === normalizedProjectPath(item.path));
+            && matchesControlRoomProject(root, item.path));
       const relatedSessions = allVisibleSessions.filter((session) => rootMatches(rootSessionFor(session)));
       const live = uniqueRootSessions(relatedSessions.filter(isControlRoomSession));
       // Match the control room, including parents whose child is still active.

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 32 32" role="img" aria-labelledby="title">
+  <title id="title">Whitebox — exposed AI circuitry</title>
+  <!-- Brain and circuit motif adapted from Lucide brain-circuit.
+       Copyright (c) 2026 Lucide Icons and Contributors.
+       ISC License: retain the accompanying LICENSE.txt when redistributing. -->
+  <rect width="32" height="32" rx="7" fill="#202522"/>
+  <path d="M24 5.8H8a2.2 2.2 0 0 0-2.2 2.2v16A2.2 2.2 0 0 0 8 26.2h16a2.2 2.2 0 0 0 2.2-2.2v-3" fill="none" stroke="#f6f4ee" stroke-width="2" stroke-linecap="round"/>
+  <g transform="translate(7.25 7.2) scale(.7)">
+    <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" fill="#f6f4ee"/>
+    <g fill="none" stroke="#202522" stroke-width="1.6" stroke-linecap="round">
+      <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+      <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+      <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+    </g>
+  </g>
+  <g fill="none" stroke="#f6f4ee" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15.65 12.8H26.2"/>
+    <path d="M18.5 12.8v-2.3a1 1 0 0 1 1-1H21"/>
+    <path d="M15.65 16.3H21"/>
+    <path d="M15.65 19.8h3.8a1.5 1.5 0 0 1 1.5 1.5v.7"/>
+  </g>
+  <g fill="#f6f4ee">
+    <circle cx="21" cy="9.5" r="1.15"/>
+    <circle cx="21" cy="16.3" r="1.15"/>
+    <circle cx="20.95" cy="22" r="1.15"/>
+  </g>
+  <circle cx="26.2" cy="12.8" r="1.8" fill="#6ddbb2"/>
+</svg>

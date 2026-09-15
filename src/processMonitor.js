@@ -329,6 +329,17 @@ function codexArgumentsWithoutLaunchOverrides(args) {
       index += 1;
       continue;
     }
+    // The project root is also launch policy. Only consume leading cwd flags
+    // so prompt text after resume/fork cannot become a conversation identity.
+    if (!filtered.length && (argument === '--cd' || argument === '-C')) {
+      if (!String(args[index + 1] || '').trim()) return [];
+      index += 1;
+      continue;
+    }
+    if (!filtered.length && (argument.startsWith('--cd=') || argument.startsWith('-C='))) {
+      if (!argument.slice(argument.indexOf('=') + 1).trim()) return [];
+      continue;
+    }
     if (argument === '--remote' || argument === '--remote-auth-token-env') {
       if (!String(args[index + 1] || '').trim()) return [];
       index += 1;
@@ -814,7 +825,8 @@ function syntheticBridgeSession(bridge, now = Date.now()) {
   const session = syntheticRuntimeSession({ ...bridge, id: `bridge:${bridge.id}` }, now);
   session.id = `bridge:${bridge.id}`;
   session.externalId = bridge.id;
-  session.title = `${bridge.provider === 'codex' ? 'GPT · Codex' : bridge.provider} 외부 연결`;
+  session.title = String(bridge.title || '').trim()
+    || `${bridge.provider === 'codex' ? 'GPT · Codex' : bridge.provider} 외부 연결`;
   session.cwd = bridge.cwd || '';
   session.workspace = session.cwd ? session.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() : '작업 폴더 확인 중';
   session.source = 'whitebox-bridge';

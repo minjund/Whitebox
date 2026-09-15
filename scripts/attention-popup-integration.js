@@ -58,13 +58,13 @@ async function run() {
 
   manager.reconcile('e2e', [
     {
-      id: 'permission', type: 'permission', provider: 'Codex', project: 'Whitebox',
+      id: 'permission', type: 'permission', provider: 'Codex', project: 'project-alpha', projectPath: 'D:\\winCudeProject\\oneForAll\\project-alpha',
       title: '권한 요청', body: '', detail: 'npm test -- --runInBand', toolLabel: 'Bash',
-      meta: 'Whitebox · #Tzi', openMain: true, openMainLabel: '터미널로 이동', dismissible: false,
+      meta: '#Tzi', openMain: true, openMainLabel: '터미널로 이동', dismissible: false,
       permissionSuggestions: [{ id: 'always-npm-test', label: '항상 허용 `npm test`', description: '이 명령 패턴에 다시 묻지 않습니다.' }],
     },
     {
-      id: 'question', type: 'question', provider: 'Claude', project: 'Whitebox',
+      id: 'question', type: 'question', provider: 'Claude', project: 'mediagw',
       title: '실행 환경 선택', body: '작업을 계속하려면 답변이 필요합니다.', canDeny: true,
       denyLabel: '거부', openMain: true, openMainLabel: '터미널로 이동',
       questions: [{
@@ -103,6 +103,8 @@ async function run() {
       title: document.querySelector('.popup-title')?.textContent,
       tool: document.querySelector('.popup-tool-pill')?.textContent,
       meta: document.querySelector('.popup-meta')?.textContent,
+      project: document.querySelector('.popup-project')?.textContent,
+      projectPath: document.querySelector('.popup-project')?.title,
       command: document.querySelector('.popup-command')?.textContent,
       groupRole: group?.getAttribute('role'),
       groupLabel: group?.getAttribute('aria-label'),
@@ -117,7 +119,9 @@ async function run() {
     describedBy: 'popupCommand',
     title: '권한 요청',
     tool: 'Bash',
-    meta: 'Whitebox · #Tzi',
+    meta: '#Tzi',
+    project: 'project-alpha',
+    projectPath: 'D:\\winCudeProject\\oneForAll\\project-alpha',
     command: 'npm test -- --runInBand',
     groupRole: 'group',
     groupLabel: '권한 선택',

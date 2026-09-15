@@ -1,0 +1,1229 @@
+diff --git a/renderer/comprehension-packet.js b/renderer/comprehension-packet.js
+index e064f0b..035b05f 100644
+--- a/renderer/comprehension-packet.js
++++ b/renderer/comprehension-packet.js
+@@ -56,11 +55,19 @@
+     variant_title: "변형 문제 · {prompt}",
+     retry_button: "재확인",
+     initial_eyebrow: "이해 확인",
+-    initial_title: "{count}문항을 한 번에 제출하세요",
++    initial_title: "요약을 읽고 {count}문항을 풀어보세요",
+     no_questions_title: "평가할 문항이 없습니다.",
+     no_questions_initial: "모든 문항이 문제 오류로 제외되어 점수와 이해 부채에 반영되지 않습니다.",
+-    review_eyebrow: "오답 재확인",
+-    review_title: "같은 카드가 해설과 변형 문제로 전환됐습니다",
++    review_eyebrow: "내 풀이 기록",
++    review_title: "답안을 확인하고 오답을 다시 풀어보세요",
++    completed_title: "풀었던 문제와 답을 확인하세요",
++    answer_label: "내 답",
++    correct_label: "정답",
++    status_correct: "정답",
++    status_variant_correct: "변형 문제 정답",
++    status_excluded: "문제 오류 · 평가 제외",
++    history_label: "풀었던 문제 목록",
++    summary_hint: "AI가 답한 핵심 내용입니다. 이 요약을 참고해 문제를 풀어보세요.",
+     no_questions_review: "문제 오류로 제외된 문항은 점수 분모와 이해 부채에 포함되지 않습니다.",
+     all_understood_title: "모든 문제를 이해했습니다.",
+     explanation_reviewed_title: "해설 확인을 마쳤습니다.",
+@@ -80,7 +87,7 @@
+     badge_open_aria: "{status}. 이해 패킷 열기",
+     missing_initial: "{count}개 문항에 답해주세요.",
+     all_correct: "모든 문제를 맞혔습니다.",
+-    wrong_only: "맞힌 문제를 치우고 오답 카드만 남겼습니다.",
++    wrong_only: "답안을 저장했습니다. 틀린 문제는 해설을 읽고 다시 풀어보세요.",
+     variant_correct_notice: "정답입니다. 변형 문제 결과를 최종 점수에 반영했습니다.",
+     variant_wrong_notice: "정답과 해설을 확인한 뒤 이해했음을 표시해주세요.",
+     understood_notice: "이해 부채를 해소했습니다. 오답 점수는 변경되지 않습니다.",
+@@ -93,7 +100,7 @@
+     difficulty_aria: "난이도 {difficulty}",
+     difficulty_label: "난이도 ",
+     close_aria: "이해 패킷 닫기",
+-    briefing_eyebrow: "작업 설명 · 오픈북",
++    briefing_eyebrow: "AI 답변 요약 · 오픈북",
+     evidence_label: "실제 근거",
+     evidence_mark: "근거",
+     submit_answers: "답안 제출",
+@@ -748,10 +752,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+         "aria-describedby": errorId,
+         "aria-errormessage": errorId,
+       });
+-      const legend = createElement("legend", "", { id: legendId, text: question.prompt });
++      const legend = createElement("legend", "comprehension-packet-sr-only", { text: question.prompt });
+       append(card,
+         legend,
+         makeQuestionMeta(question, index),
++        createElement("p", "comprehension-packet-original-prompt", { id: legendId, text: question.prompt }),
+         makeChoices(question, false, false, { labelId: legendId, errorId }),
+         makeValidationError(errorId, translate("required_initial")));
+       questionNodes.set(question.id, card);
+@@ -762,6 +767,20 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+       return question.variant.options.find(option => option.id === question.variant.answerId)?.label || question.variant.answerId;
+     }
+ 
++    function makeAnswerSummary(question, variant = false) {
++      const source = variant ? question.variant : question;
++      const selected = (variant ? progress.variantAnswers : progress.answers).get(question.id);
++      const answers = createElement("dl", "comprehension-packet-answer-summary");
++      for (const [key, id] of [["answer_label", selected], ["correct_label", source.answerId]]) {
++        const row = createElement("div", "");
++        append(row,
++          createElement("dt", "", { text: translate(key) }),
++          createElement("dd", "", { text: source.options.find(option => option.id === id)?.label || "—" }));
++        answers.append(row);
++      }
++      return answers;
++    }
++
+     function makeVariantResult(question) {
+       const outcome = progress.outcomes.get(question.id);
+       const result = createElement("div", "comprehension-packet-variant-result", {
+@@ -800,22 +819,30 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+ 
+     function makeReviewCard(question, index) {
+       const outcome = progress.outcomes.get(question.id);
++      const initiallyCorrect = outcome === "correct";
+       const variantWasSubmitted = progress.variantSubmitted.has(question.id);
+       const resolved = progress.resolved.has(question.id);
+-      const card = createElement("article", "comprehension-packet-question-card comprehension-packet-remediation-card", {
++      const card = createElement("article", `comprehension-packet-question-card ${initiallyCorrect ? "comprehension-packet-result-card" : "comprehension-packet-remediation-card"}`, {
+         "data-comprehension-question": question.id,
+         tabindex: "-1",
+       });
+       if (resolved) card.classList.add("is-resolved");
+       const acknowledged = outcome === "final-wrong" && progress.understood.has(question.id);
+       if (acknowledged) card.classList.add("is-acknowledged");
+-      card.dataset.comprehensionStatus = translate(acknowledged
+-        ? "status_explanation_reviewed"
+-        : (resolved ? "status_confirmed" : "status_retry"));
++      card.dataset.comprehensionStatus = reviewStatus(question);
++      const meta = makeQuestionMeta(question, index, !initiallyCorrect);
++      const status = createElement("span", "comprehension-packet-result-status", { text: card.dataset.comprehensionStatus });
+       const originalPrompt = createElement("p", "comprehension-packet-original-prompt", { text: question.prompt });
+       const remediation = createElement("section", "comprehension-packet-remediation");
+       const explanationTitle = createElement("h3", "", { text: translate("explanation_title") });
+       const explanation = createElement("p", "", { text: question.explanation });
++      append(card, meta, status, originalPrompt, makeAnswerSummary(question));
++      append(remediation, explanationTitle, explanation, makeEvidenceChips(question));
++      if (initiallyCorrect) {
++        card.append(remediation);
++        questionNodes.set(question.id, card);
++        return card;
++      }
+       const variantTitleId = `${instanceId}-variant-title-${index}`;
+       const variantErrorId = `${instanceId}-variant-error-${index}`;
+       const variantBox = createElement("div", "comprehension-packet-variant-box", {
+@@ -831,7 +858,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+         id: variantTitleId,
+         text: translate("variant_title", { prompt: question.variant.prompt }),
+       });
+-      const variantChoices = makeChoices(question, true, variantWasSubmitted, {
++      const variantChoices = variantWasSubmitted ? makeAnswerSummary(question, true) : makeChoices(question, true, false, {
+         labelId: variantTitleId,
+         errorId: variantErrorId,
+       });
+@@ -848,8 +875,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+         }));
+         variantBox.append(actions);
+       }
+-      append(remediation, explanationTitle, explanation, makeEvidenceChips(question), variantBox, makeVariantResult(question));
+-      append(card, makeQuestionMeta(question, index, true), originalPrompt, remediation);
++      if (variantWasSubmitted && outcome === "variant-correct") {
++        variantBox.append(createElement("p", "comprehension-packet-variant-explanation", { text: question.variant.explanation }));
++      }
++      append(remediation, variantBox, makeVariantResult(question));
++      card.append(remediation);
+       questionNodes.set(question.id, card);
+       return card;
+     }
+@@ -863,6 +893,31 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+       return empty;
+     }
+ 
++    function reviewStatus(question) {
++      if (progress.excluded.has(question.id)) return translate("status_excluded");
++      const outcome = progress.outcomes.get(question.id);
++      return translate(outcome === "correct" ? "status_correct"
++        : outcome === "variant-correct" ? "status_variant_correct"
++          : progress.understood.has(question.id) ? "status_explanation_reviewed" : "status_retry");
++    }
++
++    function makeHistoryOverview() {
++      const overview = createElement("nav", "comprehension-packet-history", {
++        "aria-label": translate("history_label"),
++      });
++      currentPacket.questions.forEach((question, index) => {
++        const button = createElement("button", "comprehension-packet-history-item", {
++          type: "button",
++          "data-comprehension-review-target": question.id,
++        });
++        append(button,
++          createElement("span", "comprehension-packet-history-prompt", { text: `${index + 1}. ${question.prompt}` }),
++          createElement("span", "comprehension-packet-history-status", { text: reviewStatus(question) }));
++        overview.append(button);
++      });
++      return overview;
++    }
++
+     function renderInitial() {
+       questionNodes.clear();
+       modeEyebrow.textContent = translate("initial_eyebrow");
+@@ -888,29 +943,27 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+       questionList.className = "comprehension-packet-question-list is-remediation";
+       questionList.replaceChildren();
+       const active = activeQuestions();
+-      const unresolved = active.filter(question => {
+-        const outcome = progress.outcomes.get(question.id);
+-        return !progress.resolved.has(question.id) && (outcome === "wrong" || outcome === "final-wrong");
+-      });
+-      unresolved.forEach(question => {
+-        questionList.append(makeReviewCard(question, questionIndex(question)));
+-      });
+-      if (!unresolved.length) {
+-        if (!active.length) {
+-          questionList.append(makeEmptyState(
+-            translate("no_questions_title"),
+-            translate("no_questions_review")));
++      questionList.append(makeHistoryOverview());
++      for (const question of currentPacket.questions) {
++        if (progress.excluded.has(question.id)) {
++          const excluded = createElement("article", "comprehension-packet-question-card is-excluded", {
++            "data-comprehension-excluded-question": question.id,
++            tabindex: "-1",
++          });
++          append(excluded,
++            createElement("span", "comprehension-packet-result-status", { text: translate("status_excluded") }),
++            createElement("p", "comprehension-packet-original-prompt", { text: `${questionIndex(question) + 1}. ${question.prompt}` }));
++          questionList.append(excluded);
++          questionNodes.set(question.id, excluded);
+         } else {
+-          const score = correctCount();
+-          questionList.append(makeEmptyState(
+-            score === active.length
+-              ? translate("all_understood_title")
+-              : translate("explanation_reviewed_title"),
+-            score === active.length
+-              ? translate("all_understood_detail")
+-              : translate("debt_only_detail")));
++          questionList.append(makeReviewCard(question, questionIndex(question)));
+         }
+       }
++      if (!active.length) {
++        questionList.prepend(makeEmptyState(
++          translate("no_questions_title"),
++          translate("no_questions_review")));
++      }
+       submitButton.hidden = true;
+       updateSummary();
+       if (options.focusReview) {
+@@ -945,6 +998,14 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+         questionCount.textContent = translate("review_complete");
+       }
+       const resolved = isComplete();
++      if (progress.submitted) {
++        modeEyebrow.textContent = translate("review_eyebrow");
++        modeTitle.textContent = translate(resolved ? "completed_title" : "review_title");
++        for (const button of questionList.querySelectorAll("[data-comprehension-review-target]")) {
++          const question = findQuestion(button.dataset.comprehensionReviewTarget);
++          if (question) button.querySelector(".comprehension-packet-history-status").textContent = reviewStatus(question);
++        }
++      }
+       badge.classList.toggle("is-resolved", resolved);
+       badgeText.textContent = resolved
+         ? translate("badge_complete", { score, total: denominator })
+@@ -1087,6 +1148,13 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+     }
+ 
+     function onOverlayClick(event) {
++      const history = event.target.closest?.("[data-comprehension-review-target]");
++      if (history && overlay.contains(history)) {
++        const card = questionNodes.get(history.dataset.comprehensionReviewTarget);
++        card?.scrollIntoView({ block: "start" });
++        card?.focus({ preventScroll: true });
++        return;
++      }
+       const close = event.target.closest?.("[data-comprehension-close]");
+       if (close && overlay.contains(close)) {
+         closePacket();
+@@ -1385,25 +1453,12 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+       append(briefing,
+         createElement("p", "comprehension-packet-section-label", { text: translate("briefing_eyebrow") }),
+         createElement("h2", "", { id: `${suffix}-briefing-title`, text: currentPacket.title }),
+-        createElement("p", "comprehension-packet-summary", { id: summaryId, text: currentPacket.summary }),
+-        createElement("p", "comprehension-packet-section-label", { text: translate("evidence_label") }));
+-      const evidenceList = createElement("div", "comprehension-packet-evidence-list");
+-      for (const evidence of currentPacket.evidence) {
+-        const evidenceNode = createElement(
+-          typeof context.onEvidence === "function" ? "button" : "article",
+-          "comprehension-packet-evidence",
+-          typeof context.onEvidence === "function"
+-            ? { type: "button", "data-comprehension-evidence": evidence.id }
+-            : {});
+-        const mark = createElement("i", "", { text: translate("evidence_mark"), "aria-hidden": "true" });
+-        const copy = createElement("span");
+-        append(copy,
+-          createElement("b", "", { text: evidence.label }),
+-          createElement("small", "", { text: evidence.detail }));
+-        append(evidenceNode, mark, copy);
+-        evidenceList.append(evidenceNode);
++        createElement("p", "comprehension-packet-summary-hint", { id: summaryId, text: translate("summary_hint") }));
++      const summary = createElement("div", "comprehension-packet-summary");
++      for (const paragraph of currentPacket.summary.trim().split(/\n\s*\n/u)) {
++        summary.append(createElement("p", "", { text: paragraph }));
+       }
+-      briefing.append(evidenceList);
++      briefing.append(summary);
+ 
+       const quizForm = createElement("form", "comprehension-packet-quiz", {
+         id: `${suffix}-form`,
+@@ -1472,10 +1527,8 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
+         ".comprehension-packet-briefing > .comprehension-packet-section-label",
+       );
+       if (briefingLabels[0]) briefingLabels[0].textContent = translate("briefing_eyebrow");
+-      if (briefingLabels[1]) briefingLabels[1].textContent = translate("evidence_label");
+-      for (const mark of overlay.querySelectorAll(".comprehension-packet-evidence > i")) {
+-        mark.textContent = translate("evidence_mark");
+-      }
++      const summaryHint = overlay.querySelector(".comprehension-packet-summary-hint");
++      if (summaryHint) summaryHint.textContent = translate("summary_hint");
+       submitButton.textContent = translate("submit_answers");
+     }
+ 
+diff --git a/renderer/i18n-messages.js b/renderer/i18n-messages.js
+index 40095bf..fa3191d 100644
+--- a/renderer/i18n-messages.js
++++ b/renderer/i18n-messages.js
+@@ -2048,11 +2048,19 @@
+     "comprehension.variant_title": {"ko":"변형 문제 · {prompt}","en":"Follow-up question · {prompt}","zh-CN":"变式题 · {prompt}"},
+     "comprehension.retry_button": {"ko":"재확인","en":"Check again","zh-CN":"重新确认"},
+     "comprehension.initial_eyebrow": {"ko":"이해 확인","en":"Comprehension check","zh-CN":"理解检查"},
+-    "comprehension.initial_title": {"ko":"{count}문항을 한 번에 제출하세요","en":"Submit all {count} answers together","zh-CN":"请一次提交全部 {count} 道题"},
++    "comprehension.initial_title": {"ko":"요약을 읽고 {count}문항을 풀어보세요","en":"Read the summary and answer {count} questions","zh-CN":"阅读摘要并回答 {count} 道题"},
+     "comprehension.no_questions_title": {"ko":"평가할 문항이 없습니다.","en":"There are no questions to assess.","zh-CN":"没有需要评估的题目。"},
+     "comprehension.no_questions_initial": {"ko":"모든 문항이 문제 오류로 제외되어 점수와 이해 부채에 반영되지 않습니다.","en":"All questions were excluded as invalid, so they do not affect the score or comprehension debt.","zh-CN":"所有题目均因有误而被排除，不计入分数或理解欠账。"},
+-    "comprehension.review_eyebrow": {"ko":"오답 재확인","en":"Review incorrect answers","zh-CN":"复查错题"},
+-    "comprehension.review_title": {"ko":"같은 카드가 해설과 변형 문제로 전환됐습니다","en":"The same cards now show explanations and follow-up questions","zh-CN":"这些卡片现已显示解析和变式题"},
++    "comprehension.review_eyebrow": {"ko":"내 풀이 기록","en":"Your answer history","zh-CN":"我的答题记录"},
++    "comprehension.review_title": {"ko":"답안을 확인하고 오답을 다시 풀어보세요","en":"Review your answers and retry incorrect questions","zh-CN":"查看答案并重做错题"},
++    "comprehension.completed_title": {"ko":"풀었던 문제와 답을 확인하세요","en":"Review the questions you answered","zh-CN":"回顾已答题目和答案"},
++    "comprehension.answer_label": {"ko":"내 답","en":"Your answer","zh-CN":"我的答案"},
++    "comprehension.correct_label": {"ko":"정답","en":"Correct answer","zh-CN":"正确答案"},
++    "comprehension.status_correct": {"ko":"정답","en":"Correct","zh-CN":"答对"},
++    "comprehension.status_variant_correct": {"ko":"변형 문제 정답","en":"Follow-up correct","zh-CN":"变式题答对"},
++    "comprehension.status_excluded": {"ko":"문제 오류 · 평가 제외","en":"Question issue · excluded","zh-CN":"题目有误 · 不计分"},
++    "comprehension.history_label": {"ko":"풀었던 문제 목록","en":"Questions answered","zh-CN":"已答题目列表"},
++    "comprehension.summary_hint": {"ko":"AI가 답한 핵심 내용입니다. 이 요약을 참고해 문제를 풀어보세요.","en":"These are the key points from the AI's answer. Use this summary as you answer the questions.","zh-CN":"这是 AI 回答的要点。请参考此摘要答题。"},
+     "comprehension.no_questions_review": {"ko":"문제 오류로 제외된 문항은 점수 분모와 이해 부채에 포함되지 않습니다.","en":"Questions excluded as invalid are not included in the score denominator or comprehension debt.","zh-CN":"因有误而排除的题目不计入分数分母或理解欠账。"},
+     "comprehension.all_understood_title": {"ko":"모든 문제를 이해했습니다.","en":"You understood every question.","zh-CN":"你已理解所有题目。"},
+     "comprehension.explanation_reviewed_title": {"ko":"해설 확인을 마쳤습니다.","en":"Explanation review is complete.","zh-CN":"解析复查已完成。"},
+@@ -2072,7 +2080,7 @@
+     "comprehension.badge_open_aria": {"ko":"{status}. 이해 패킷 열기","en":"{status}. Open comprehension packet","zh-CN":"{status}。打开理解包"},
+     "comprehension.missing_initial": {"ko":"{count}개 문항에 답해주세요.","en":"Answer all {count} unanswered questions.","zh-CN":"请回答其余 {count} 道题。"},
+     "comprehension.all_correct": {"ko":"모든 문제를 맞혔습니다.","en":"Every answer is correct.","zh-CN":"所有题目均回答正确。"},
+-    "comprehension.wrong_only": {"ko":"맞힌 문제를 치우고 오답 카드만 남겼습니다.","en":"Correct cards were cleared; only incorrect cards remain.","zh-CN":"已移除答对的卡片，仅保留错题卡片。"},
++    "comprehension.wrong_only": {"ko":"답안을 저장했습니다. 틀린 문제는 해설을 읽고 다시 풀어보세요.","en":"Answers saved. Read the explanations and retry incorrect questions.","zh-CN":"答案已保存。请阅读解析并重做错题。"},
+     "comprehension.variant_correct_notice": {"ko":"정답입니다. 변형 문제 결과를 최종 점수에 반영했습니다.","en":"Correct. The follow-up result is included in the final score.","zh-CN":"回答正确。变式题结果已计入最终分数。"},
+     "comprehension.variant_wrong_notice": {"ko":"정답과 해설을 확인한 뒤 이해했음을 표시해주세요.","en":"Review the correct answer and explanation, then confirm that you understand.","zh-CN":"请查看正确答案和解析，然后确认你已理解。"},
+     "comprehension.understood_notice": {"ko":"이해 부채를 해소했습니다. 오답 점수는 변경되지 않습니다.","en":"The comprehension debt is resolved. The incorrect score does not change.","zh-CN":"理解欠账已解决，错题分数不会改变。"},
+@@ -2085,7 +2093,7 @@
+     "comprehension.difficulty_aria": {"ko":"난이도 {difficulty}","en":"Difficulty {difficulty}","zh-CN":"难度 {difficulty}"},
+     "comprehension.difficulty_label": {"ko":"난이도 ","en":"Difficulty ","zh-CN":"难度 "},
+     "comprehension.close_aria": {"ko":"이해 패킷 닫기","en":"Close comprehension packet","zh-CN":"关闭理解包"},
+-    "comprehension.briefing_eyebrow": {"ko":"작업 설명 · 오픈북","en":"Work briefing · open book","zh-CN":"任务说明 · 开卷"},
++    "comprehension.briefing_eyebrow": {"ko":"AI 답변 요약 · 오픈북","en":"AI answer summary · open book","zh-CN":"AI 回答摘要 · 开卷"},
+     "comprehension.evidence_label": {"ko":"실제 근거","en":"Actual evidence","zh-CN":"实际依据"},
+     "comprehension.evidence_mark": {"ko":"근거","en":"Evidence","zh-CN":"依据"},
+     "comprehension.submit_answers": {"ko":"답안 제출","en":"Submit answers","zh-CN":"提交答案"},
+diff --git a/renderer/styles-comprehension-packet.css b/renderer/styles-comprehension-packet.css
+index 1c42974..46237e2 100644
+--- a/renderer/styles-comprehension-packet.css
++++ b/renderer/styles-comprehension-packet.css
+@@ -30,15 +30,20 @@
+ .comprehension-packet-dialog {
+   display: grid;
+   grid-template-rows: auto minmax(0, 1fr) auto;
+-  width: min(1080px, 100%);
+-  max-height: min(780px, calc(100vh - 105px));
++  width: min(1240px, 100%);
++  height: min(860px, calc(100% - 8px));
++  max-height: 100%;
+   min-width: 0;
+   min-height: 0;
+   overflow: hidden;
+   border: 1px solid color-mix(in srgb, var(--theme-accent, var(--green)) 34%, var(--theme-border, var(--line)));
+   border-radius: 18px;
+-  background: color-mix(in srgb, var(--theme-surface, var(--panel)) 98%, transparent);
++  background: var(--theme-surface, var(--panel));
+   color: var(--theme-text, var(--text));
++  font-family: var(--font-ui, system-ui, sans-serif);
++  line-height: 1.65;
++  word-break: keep-all;
++  overflow-wrap: anywhere;
+   box-shadow: 0 34px 110px rgba(0, 0, 0, .58);
+   animation: comprehension-packet-rise-in .2s ease both;
+ }
+@@ -50,7 +55,7 @@
+   gap: 12px;
+   min-width: 0;
+   min-height: 62px;
+-  padding: 10px 14px 10px 18px;
++  padding: 16px 20px 16px 26px;
+   border-bottom: 1px solid var(--theme-border-soft, var(--line-soft));
+ }
+ 
+@@ -62,7 +67,7 @@
+   display: block;
+   overflow: hidden;
+   color: var(--theme-accent, var(--green));
+-  font-size: 10px;
++  font-size: 12px;
+   font-weight: 800;
+   letter-spacing: .08em;
+   text-overflow: ellipsis;
+@@ -74,7 +79,7 @@
+   margin: 3px 0 0;
+   overflow: hidden;
+   color: var(--theme-text, var(--text));
+-  font-size: 17px;
++  font-size: 20px;
+   line-height: 1.3;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+@@ -143,7 +148,7 @@
+ 
+ .comprehension-packet-body {
+   display: grid;
+-  grid-template-columns: minmax(280px, .82fr) minmax(360px, 1.18fr);
++  grid-template-columns: minmax(300px, .9fr) minmax(390px, 1.2fr);
+   min-width: 0;
+   min-height: 0;
+   overflow: hidden;
+@@ -154,24 +159,26 @@
+   min-width: 0;
+   min-height: 0;
+   overflow: auto;
++  overscroll-behavior: contain;
++  scrollbar-gutter: stable;
+   scrollbar-width: thin;
+   scrollbar-color: var(--theme-border-strong, var(--line)) transparent;
+ }
+ 
+ .comprehension-packet-briefing {
+-  padding: 20px;
++  padding: 28px;
+   border-right: 1px solid var(--theme-border-soft, var(--line-soft));
+   background: linear-gradient(135deg, color-mix(in srgb, var(--theme-accent, var(--green)) 5%, transparent), transparent 55%);
+ }
+ 
+ .comprehension-packet-quiz {
+-  padding: 20px;
++  padding: 28px;
+ }
+ 
+ .comprehension-packet-section-label {
+   margin: 0 0 8px;
+   color: var(--theme-accent, var(--green));
+-  font-size: 10px;
++  font-size: 12px;
+   font-weight: 800;
+   letter-spacing: .08em;
+   text-transform: uppercase;
+@@ -181,19 +188,34 @@
+ .comprehension-packet-quiz h2 {
+   margin: 0;
+   color: var(--theme-text, var(--text));
+-  font-size: 16px;
+-  line-height: 1.35;
++  font-size: 20px;
++  line-height: 1.5;
+ }
+ 
+ .comprehension-packet-summary {
+-  margin: 8px 0 18px;
+-  color: var(--theme-text-secondary, var(--muted));
+-  font-size: 12px;
+-  line-height: 1.65;
++  margin: 24px 0 0;
++  color: var(--theme-text, var(--text));
++  font-size: 16px;
++  line-height: 1.9;
+   overflow-wrap: anywhere;
+   white-space: pre-wrap;
+ }
+ 
++.comprehension-packet-summary > p {
++  margin: 0 0 22px;
++  font-size: 16px;
++  line-height: 1.9 !important;
++}
++
++.comprehension-packet-summary-hint {
++  margin: 12px 0 0;
++  padding-bottom: 20px;
++  border-bottom: 1px solid var(--theme-border, var(--line));
++  color: var(--theme-text-secondary, var(--muted));
++  font-size: 14px;
++  line-height: 1.75;
++}
++
+ .comprehension-packet-evidence-list {
+   display: grid;
+   gap: 8px;
+@@ -260,10 +282,10 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-quiz-heading {
+   display: flex;
+-  align-items: end;
++  align-items: start;
+   justify-content: space-between;
+   gap: 12px;
+-  margin-bottom: 12px;
++  margin-bottom: 24px;
+ }
+ 
+ .comprehension-packet-quiz-heading > div {
+@@ -272,14 +294,14 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-question-count {
+   flex: 0 0 auto;
+-  color: var(--theme-text-muted, var(--dim));
+-  font: 700 10px/1.3 var(--font-mono, ui-monospace, monospace);
++  color: var(--theme-text-secondary, var(--muted));
++  font: 700 12px/1.6 var(--font-ui, system-ui, sans-serif);
+   white-space: nowrap;
+ }
+ 
+ .comprehension-packet-question-list {
+   display: grid;
+-  gap: 11px;
++  gap: 24px;
+   min-width: 0;
+   outline: none;
+ }
+@@ -288,13 +310,48 @@ button.comprehension-packet-evidence:focus-visible {
+   position: relative;
+   min-width: 0;
+   margin: 0;
+-  padding: 13px;
++  padding: 22px;
+   overflow: hidden;
+-  border: 1px solid var(--theme-border-soft, var(--line-soft));
++  border: 1px solid var(--theme-border, var(--line));
+   border-radius: 12px;
+-  background: color-mix(in srgb, var(--theme-surface-raised, var(--panel-2)) 92%, transparent);
++  background: var(--theme-surface-raised, var(--panel-2));
+   color: var(--theme-text, var(--text));
+   transition: border-color .16s ease, background .16s ease, opacity .16s ease, transform .16s ease;
++  scroll-margin-top: 18px;
++}
++
++.comprehension-packet-history {
++  display: grid;
++  gap: 8px;
++}
++
++.comprehension-packet-history-item {
++  display: grid;
++  gap: 6px;
++  width: 100%;
++  padding: 12px 14px;
++  border: 1px solid var(--theme-border, var(--line));
++  border-radius: 8px;
++  background: var(--theme-surface-raised, var(--panel-2));
++  color: var(--theme-text, var(--text));
++  text-align: left;
++  font: inherit;
++  cursor: pointer;
++}
++
++.comprehension-packet-history-item:hover,
++.comprehension-packet-history-item:focus-visible {
++  border-color: var(--theme-accent, var(--green));
++}
++
++.comprehension-packet-history-prompt {
++  font-size: 15px !important;
++  line-height: 1.75 !important;
++  overflow-wrap: anywhere;
++}
++
++.comprehension-packet-history-status {
++  color: var(--theme-text-secondary, var(--muted));
+ }
+ 
+ .comprehension-packet-question-card.is-unanswered,
+@@ -309,18 +366,15 @@ button.comprehension-packet-evidence:focus-visible {
+   animation: comprehension-packet-card-morph .2s ease both;
+ }
+ 
+-.comprehension-packet-remediation-card::after {
+-  content: attr(data-comprehension-status);
+-  position: absolute;
+-  top: 12px;
+-  right: -24px;
+-  width: 86px;
+-  padding: 3px 0;
+-  background: var(--theme-danger, var(--red));
+-  color: var(--theme-on-accent, #18090c);
+-  font: 800 8px/1 var(--font-mono, ui-monospace, monospace);
+-  text-align: center;
+-  transform: rotate(35deg);
++.comprehension-packet-result-status {
++  display: inline-flex;
++  margin: 0 0 12px;
++  padding: 3px 9px;
++  border: 1px solid currentColor;
++  border-radius: 6px;
++  color: var(--theme-danger, var(--red));
++  font-size: 12px;
++  font-weight: 700;
+ }
+ 
+ .comprehension-packet-remediation-card.is-resolved {
+@@ -328,41 +382,40 @@ button.comprehension-packet-evidence:focus-visible {
+   background: color-mix(in srgb, var(--theme-success-soft, var(--panel-2)) 42%, var(--theme-surface-raised, var(--panel-2)));
+ }
+ 
+-.comprehension-packet-remediation-card.is-resolved::after {
+-  background: var(--theme-success, var(--green));
+-  color: var(--theme-on-success-action, #071811);
++.is-resolved > .comprehension-packet-result-status {
++  color: var(--theme-success, var(--green));
+ }
+ 
+-.comprehension-packet-remediation-card.is-acknowledged::after {
+-  font-size: 7px;
++.is-excluded > .comprehension-packet-result-status {
++  color: var(--theme-text-secondary, var(--muted));
+ }
+ 
+ .comprehension-packet-question-meta {
+   display: flex;
+   align-items: center;
++  flex-wrap: wrap;
+   gap: 7px;
+   min-width: 0;
+-  margin-bottom: 8px;
+-  padding-right: 26px;
++  margin-bottom: 16px;
+ }
+ 
+ .comprehension-packet-question-meta strong {
+   display: grid;
+   flex: 0 0 auto;
+   place-items: center;
+-  width: 22px;
+-  height: 22px;
++  width: 28px;
++  height: 28px;
+   border-radius: 7px;
+   background: color-mix(in srgb, var(--theme-info, var(--cyan)) 14%, transparent);
+   color: var(--theme-info, var(--cyan));
+-  font: 800 10px/1 var(--font-mono, ui-monospace, monospace);
++  font: 800 13px/1 var(--font-mono, ui-monospace, monospace);
+ }
+ 
+ .comprehension-packet-question-meta > span,
+ .comprehension-packet-question-meta > small {
+   overflow: hidden;
+-  color: var(--theme-text-muted, var(--dim));
+-  font-size: 9px;
++  color: var(--theme-text-secondary, var(--muted));
++  font-size: 12px;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+ }
+@@ -374,9 +427,9 @@ button.comprehension-packet-evidence:focus-visible {
+ .comprehension-packet-issue {
+   flex: 0 0 auto;
+   margin-left: auto;
+-  padding: 4px 7px;
+-  color: var(--theme-text-muted, var(--dim));
+-  font-size: 9px;
++  padding: 6px 9px;
++  color: var(--theme-text-secondary, var(--muted));
++  font-size: 12px;
+ }
+ 
+ .comprehension-packet-question-card legend,
+@@ -385,29 +438,80 @@ button.comprehension-packet-evidence:focus-visible {
+   margin: 0;
+   padding: 0;
+   color: var(--theme-text, var(--text));
+-  font-size: 12px;
++  font-size: 17px;
+   font-weight: 750;
+-  line-height: 1.5;
++  line-height: 1.75 !important;
+   overflow-wrap: anywhere;
+ }
+ 
+ .comprehension-packet-choices {
+   display: grid;
+-  gap: 6px;
+-  margin-top: 10px;
++  gap: 10px;
++  margin-top: 18px;
++}
++
++.comprehension-packet-question-card legend.comprehension-packet-sr-only {
++  position: absolute;
++  width: 1px;
++  height: 1px;
++  padding: 0;
++  overflow: hidden;
++  clip-path: inset(50%);
++  white-space: nowrap;
++}
++
++.comprehension-packet-answer-summary {
++  display: grid;
++  gap: 10px;
++  margin: 18px 0 0;
++  padding: 14px;
++  border-radius: 8px;
++  background: var(--theme-surface, var(--panel));
++  font-size: 15px;
++  line-height: 1.75;
++}
++
++.comprehension-packet-answer-summary > div {
++  display: grid;
++  grid-template-columns: minmax(48px, auto) minmax(0, 1fr);
++  align-items: baseline;
++  gap: 12px;
++}
++
++.comprehension-packet-answer-summary dt {
++  color: var(--theme-text-secondary, var(--muted));
++  font-size: 12px;
++  font-weight: 700;
++  line-height: 1.75 !important;
++}
++
++.comprehension-packet-answer-summary dd {
++  margin: 0;
++  color: var(--theme-text, var(--text)) !important;
++  font-size: 15px !important;
++  line-height: 1.75 !important;
++}
++
++.comprehension-packet-variant-explanation {
++  margin: 14px 0 0;
++  font-size: 15px;
++  line-height: 1.85;
+ }
+ 
+ .comprehension-packet-choice {
+   display: grid;
+-  grid-template-columns: 16px minmax(0, 1fr);
++  grid-template-columns: 18px minmax(0, 1fr);
+   align-items: start;
+-  gap: 7px;
+-  padding: 7px 8px;
+-  border: 1px solid transparent;
++  gap: 12px;
++  min-height: 48px;
++  padding: 13px 14px;
++  border: 1px solid var(--theme-border, var(--line));
+   border-radius: 8px;
+-  color: var(--theme-text-secondary, var(--muted));
+-  font-size: 10px;
+-  line-height: 1.45;
++  color: var(--theme-text, var(--text));
++  background: var(--theme-surface, var(--panel));
++  /* The global label floor is !important; reading choices need a larger size. */
++  font-size: 15px !important;
++  line-height: 1.75 !important;
+   cursor: pointer;
+ }
+ 
+@@ -425,18 +529,20 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-choice:has(input:disabled) {
+   cursor: default;
+-  opacity: .78;
++  opacity: 1;
+ }
+ 
+ .comprehension-packet-choice input {
+-  margin: 1px 0 0;
++  width: 18px;
++  height: 18px;
++  margin: 4px 0 0;
+   accent-color: var(--theme-accent, var(--green));
+ }
+ 
+ .comprehension-packet-field-error {
+   margin: 7px 0 0;
+   color: var(--theme-warning, var(--amber));
+-  font-size: 10px;
++  font-size: 14px;
+   font-weight: 700;
+   line-height: 1.4;
+ }
+@@ -446,22 +552,22 @@ button.comprehension-packet-evidence:focus-visible {
+ }
+ 
+ .comprehension-packet-remediation {
+-  margin-top: 11px;
+-  padding-top: 11px;
++  margin-top: 20px;
++  padding-top: 20px;
+   border-top: 1px solid var(--theme-border-soft, var(--line-soft));
+ }
+ 
+ .comprehension-packet-remediation h3 {
+   margin: 0 0 5px;
+-  color: var(--theme-danger, var(--red));
+-  font-size: 11px;
++  color: var(--theme-text, var(--text));
++  font-size: 15px;
+ }
+ 
+ .comprehension-packet-remediation > p {
+   margin: 0 0 8px;
+-  color: var(--theme-text-secondary, var(--muted));
+-  font-size: 10px;
+-  line-height: 1.55;
++  color: var(--theme-text, var(--text));
++  font-size: 15px;
++  line-height: 1.85 !important;
+   overflow-wrap: anywhere;
+ }
+ 
+@@ -469,7 +575,7 @@ button.comprehension-packet-evidence:focus-visible {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 5px;
+-  margin-bottom: 9px;
++  margin-bottom: 18px;
+ }
+ 
+ .comprehension-packet-evidence-chip {
+@@ -480,13 +586,13 @@ button.comprehension-packet-evidence:focus-visible {
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--theme-accent, var(--green)) 9%, transparent);
+   color: var(--theme-accent, var(--green));
+-  font: 700 9px/1.3 var(--font-mono, ui-monospace, monospace);
++  font: 600 12px/1.5 var(--font-ui, system-ui, sans-serif);
+   text-overflow: ellipsis;
+   white-space: nowrap;
+ }
+ 
+ .comprehension-packet-variant-box {
+-  padding: 10px;
++  padding: 18px;
+   border: 1px dashed color-mix(in srgb, var(--theme-accent, var(--green)) 38%, var(--theme-border-soft, var(--line-soft)));
+   border-radius: 9px;
+   background: color-mix(in srgb, var(--theme-surface, var(--panel)) 36%, transparent);
+@@ -494,9 +600,8 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-variant-box > b {
+   display: block;
+-  padding-right: 22px;
+-  font-size: 10px;
+-  line-height: 1.5;
++  font-size: 16px;
++  line-height: 1.75;
+   overflow-wrap: anywhere;
+ }
+ 
+@@ -508,9 +613,9 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-primary,
+ .comprehension-packet-quiet {
+-  min-height: 36px;
+-  padding: 0 12px;
+-  font-size: 11px;
++  min-height: 44px;
++  padding: 8px 16px;
++  font-size: 14px !important;
+   font-weight: 750;
+ }
+ 
+@@ -535,12 +640,12 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+ .comprehension-packet-variant-result {
+   margin-top: 8px;
+-  padding: 9px;
++  padding: 14px;
+   border-radius: 8px;
+   background: var(--theme-danger-soft, color-mix(in srgb, var(--theme-danger, var(--red)) 8%, transparent));
+   color: var(--theme-text-secondary, var(--muted));
+-  font-size: 10px;
+-  line-height: 1.5;
++  font-size: 14px;
++  line-height: 1.8;
+ }
+ 
+ .comprehension-packet-variant-result[hidden] {
+@@ -586,8 +691,8 @@ button.comprehension-packet-evidence:focus-visible {
+ .comprehension-packet-empty-state p {
+   margin: 7px 0 0;
+   color: var(--theme-text-secondary, var(--muted));
+-  font-size: 10px;
+-  line-height: 1.5;
++  font-size: 14px;
++  line-height: 1.75;
+ }
+ 
+ .comprehension-packet-actions {
+@@ -596,7 +701,7 @@ button.comprehension-packet-evidence:focus-visible {
+   gap: 9px;
+   min-width: 0;
+   min-height: 58px;
+-  padding: 9px 14px;
++  padding: 14px 26px;
+   border-top: 1px solid var(--theme-border-soft, var(--line-soft));
+   background: color-mix(in srgb, var(--theme-surface, var(--panel)) 98%, transparent);
+ }
+@@ -604,12 +709,12 @@ button.comprehension-packet-evidence:focus-visible {
+ .comprehension-packet-score {
+   min-width: 0;
+   color: var(--theme-text-secondary, var(--muted));
+-  font-size: 11px;
++  font-size: 14px;
+ }
+ 
+ .comprehension-packet-score b {
+   color: var(--theme-text, var(--text));
+-  font: 800 12px/1.3 var(--font-mono, ui-monospace, monospace);
++  font: 800 15px/1.5 var(--font-mono, ui-monospace, monospace);
+ }
+ 
+ .comprehension-packet-notice {
+@@ -688,7 +793,7 @@ button.comprehension-packet-evidence:focus-visible {
+   to { opacity: 1; transform: translateY(0); }
+ }
+ 
+-@media (max-width: 760px) {
++@media (max-width: 800px) {
+   .comprehension-packet-overlay {
+     align-items: stretch;
+     justify-content: stretch;
+@@ -711,11 +816,12 @@ button.comprehension-packet-evidence:focus-visible {
+   }
+ 
+   .comprehension-packet-heading small {
+-    font-size: 9px;
++    font-size: 11px;
+   }
+ 
+   .comprehension-packet-heading h1 {
+     font-size: 15px;
++    white-space: normal;
+   }
+ 
+   .comprehension-packet-difficulty {
+@@ -760,7 +866,7 @@ button.comprehension-packet-evidence:focus-visible {
+ 
+   .comprehension-packet-score {
+     max-width: 58%;
+-    font-size: 10px;
++    font-size: 13px;
+   }
+ 
+   .comprehension-packet-badge {
+diff --git a/renderer/styles-theme-critical.css b/renderer/styles-theme-critical.css
+index c5dec74..9ccec7e 100644
+--- a/renderer/styles-theme-critical.css
++++ b/renderer/styles-theme-critical.css
+@@ -31,6 +31,11 @@ html[data-theme] body :is(time, dt, dd) {
+   color: var(--theme-text-muted) !important;
+ }
+ 
++/* Answers are reading content, so they use the main text tone. */
++html[data-theme] .comprehension-packet-answer-summary dd {
++  color: var(--theme-text) !important;
++}
++
+ /* Semantic status surfaces need stronger copy than the global metadata tone. */
+ html[data-theme] .project-sidebar-group.has-attention :is(
+   .project-sidebar-copy small,
+diff --git a/scripts/interaction-check.js b/scripts/interaction-check.js
+index 0de5b7b..655b198 100644
+--- a/scripts/interaction-check.js
++++ b/scripts/interaction-check.js
+@@ -16,6 +16,8 @@ const root = path.resolve(__dirname, '..');
+ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-interaction-pty-'));
+ const roundCount = Math.max(1, Math.min(3, Number(process.env.WHITEBOX_INTERACTION_ROUNDS || 3)));
+ const focusOnly = process.env.WHITEBOX_INTERACTION_FOCUS_ONLY === '1';
++const comprehensionOnly = process.env.WHITEBOX_INTERACTION_COMPREHENSION_ONLY === '1';
++const comprehensionCaptureDir = String(process.env.WHITEBOX_COMPREHENSION_CAPTURE_DIR || '').trim();
+ const removedSelectors = [
+   '#ptyFocusChildModal',
+   '#ptyFocusChildBody', '#mobileMoreBtn', '#mobileToolsMenu', '#advancedToolsNav',
+@@ -41,6 +43,23 @@ async function rendererValue(win, expression) {
+   return win.webContents.executeJavaScript(expression);
+ }
+ 
++async function captureComprehension(win, name, scrollSelector = '') {
++  if (!comprehensionCaptureDir) return;
++  fs.mkdirSync(comprehensionCaptureDir, { recursive: true });
++  await rendererValue(win, 'document.fonts.ready.then(() => { for (const animation of document.getAnimations()) { if (Number.isFinite(animation.effect?.getComputedTiming().endTime)) animation.finish(); } return true; })');
++  const [width, height] = win.getContentSize();
++  win.setContentSize(width + 1, height);
++  await wait(100);
++  win.setContentSize(width, height);
++  win.webContents.invalidate();
++  await wait(250);
++  if (scrollSelector) {
++    await rendererValue(win, `document.querySelector(${JSON.stringify(scrollSelector)}).scrollIntoView({block:'start'})`);
++    await wait(100);
++  }
++  fs.writeFileSync(path.join(comprehensionCaptureDir, `${name}.png`), (await win.webContents.capturePage()).toPNG());
++}
++
+ async function waitFor(win, expression, message, timeoutMs = 15000) {
+   const deadline = Date.now() + timeoutMs;
+   let lastError = null;
+@@ -363,7 +382,7 @@ async function exerciseKeyboardAndRunModal(win) {
+       + "&&document.activeElement?.id==='quickPaletteInput'",
+     'Ctrl+K 빠른 이동 검색을 열지 못했습니다.');
+   await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
+-    + "input.value='settings';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
++    + "input.value=window.WhiteboxI18n.t('app.nav.settings');input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+   await waitFor(win, "document.querySelectorAll('[data-quick-command]:not([hidden])').length>=1",
+     '빠른 이동 검색 결과가 표시되지 않았습니다.');
+   const quickKeyboard = await rendererValue(win, "(()=>{const input=document.querySelector('#quickPaletteInput');"
+@@ -415,7 +434,9 @@ async function exerciseKeyboardAndRunModal(win) {
+         + "['terminalCreate','runAgent'].includes(call.name)).length===0",
+     '새 작업 form이 공백 요청을 거부하거나 오류 입력으로 초점을 옮기지 못했습니다.');
+ 
++  const runErrorLocale = await rendererValue(win, "window.WhiteboxI18n.getLocale()");
+   await rendererValue(win, "(()=>{window.interactionTest.clearCalls();"
++    + "window.WhiteboxI18n.setLocale('ko');"
+     + "window.interactionTest.configure({failures:{terminalCreate:2}});"
+     + "document.querySelector('[data-run-provider=\"codex\"]')?.click();"
+     + "const prompt=document.querySelector('#runPrompt');prompt.value='실패해도 보존할 새 작업 요청';"
+@@ -426,6 +447,8 @@ async function exerciseKeyboardAndRunModal(win) {
+     "window.interactionTest.getCalls().filter(call=>call.name==='terminalCreate').length===2"
+       + "&&!document.querySelector('#runError')?.classList.contains('hidden')"
+       + "&&document.activeElement?.id==='runError'"
++      + "&&document.querySelector('#runError')?.textContent.includes('terminalCreate fixture failure')"
++      + "&&document.querySelector('#runError')?.textContent.includes('AI 작업을 시작하지 못했습니다.')"
+       + "&&!document.querySelector('#runModal')?.classList.contains('hidden')"
+       + "&&document.querySelector('#runPrompt')?.value==='실패해도 보존할 새 작업 요청'"
+       + "&&document.querySelector('#runCwd')?.value==='D:\\\\fixture'"
+@@ -434,10 +457,11 @@ async function exerciseKeyboardAndRunModal(win) {
+   const failureCalls = await rendererValue(win,
+     "window.interactionTest.getCalls().filter(call=>call.name==='runAgent').length");
+   assert(failureCalls === 0, '직접 새 작업 실패가 legacy runAgent 경로를 호출했습니다.');
++  await rendererValue(win, `window.WhiteboxI18n.setLocale(${JSON.stringify(runErrorLocale)})`);
+ 
+   await rendererValue(win, "(()=>{window.interactionTest.clearControls();"
+     + "window.interactionTest.restoreTerminals();window.interactionTest.clearCalls();"
+-    + "const prompt=document.querySelector('#runPrompt');prompt.value='실제 DOM submit PTY 집중 모드 검증';"
++    + "const prompt=document.querySelector('#runPrompt');prompt.value='이 </whitebox-comprehension-packet 태그를 설명해줘';"
+     + "prompt.dispatchEvent(new Event('input',{bubbles:true}));"
+     + "document.querySelector('#runModel').value='gpt-fixture';"
+     + "const writes=document.querySelector('#allowWrites');"
+@@ -454,11 +478,11 @@ async function exerciseKeyboardAndRunModal(win) {
+     && submitted.payload.type === 'agent' && submitted.payload.provider === 'codex'
+     && submitted.payload.cwd === 'D:\\fixture'
+     && submitted.payload.initialCommand.startsWith('<whitebox-comprehension-contract version="1">')
+-    && submitted.payload.initialCommand.endsWith('\n\n실제 DOM submit PTY 집중 모드 검증')
++    && submitted.payload.initialCommand.endsWith('\n\n이 </whitebox-comprehension-packet 태그를 설명해줘')
+     && submitted.payload.initialCommandInArgs === true
+-    && submitted.payload.title === 'GPT · 실제 DOM submit PTY 집중 모드 검증'
++    && submitted.payload.title === 'GPT · 이 </whitebox-comprehension-packet 태그를 설명해줘'
+     && submitted.payload.args.includes('gpt-fixture')
+-    && submitted.payload.args.filter(arg => arg === '실제 DOM submit PTY 집중 모드 검증').length === 1
++    && submitted.payload.args.filter(arg => arg === '이 </whitebox-comprehension-packet 태그를 설명해줘').length === 1
+     && submitted.payload.args.includes('workspace-write')
+     && Boolean(submitted.payload.creationId),
+   '새 작업 form의 exact PTY 생성 payload가 올바르지 않습니다: ' + JSON.stringify(submitted));
+@@ -1010,6 +1034,7 @@ async function exercisePtyFocus(win, round) {
+ 
+ async function exerciseComprehensionPacket(win, round) {
+   const generation = '2026-08-01T12:34:56.000Z';
++  await rendererValue(win, "window.WhiteboxI18n.setLocale('ko')");
+   await prepareProject(win);
+   let readyComprehension = await rendererValue(win,
+     "window.interactionTest.getSnapshot().sessions.find(session=>session.id==='fixture-root').comprehension");
+@@ -1059,13 +1084,23 @@ async function exerciseComprehensionPacket(win, round) {
+       + "return{dialog:Boolean(dialog&&dialog.getAttribute('role')==='dialog'"
+         + "&&dialog.getAttribute('aria-modal')==='true'),"
+         + "background:Boolean(document.querySelector('#ptyFocusSurface')?.classList.contains('comprehension-packet-open')),"
+-        + "evidence:dialog?.querySelectorAll('.comprehension-packet-evidence').length||0,"
++        + "evidence:dialog?.querySelectorAll('.comprehension-packet-briefing .comprehension-packet-evidence').length||0,"
++        + "summary:dialog?.querySelector('.comprehension-packet-summary')?.textContent||'',"
++        + "paragraphs:dialog?.querySelectorAll('.comprehension-packet-summary > p').length||0,"
++        + "promptSize:parseFloat(getComputedStyle(dialog.querySelector('.comprehension-packet-original-prompt')).fontSize),"
++        + "choiceSize:parseFloat(getComputedStyle(dialog.querySelector('.comprehension-packet-choice')).fontSize),"
+         + "difficulty:dialog?.querySelector('.comprehension-packet-difficulty strong')?.textContent.trim()||'',"
+         + "reason:(dialog?.textContent||'').includes('UI 상태 전환과 PTY 보존 조건'),"
+         + "questions:dialog?.querySelectorAll('[data-comprehension-question]').length||0};})()");
+-    assert(briefing.dialog && briefing.background && briefing.evidence === 3
++    assert(briefing.dialog && briefing.background && briefing.evidence === 0 && briefing.paragraphs === 3
++      && briefing.summary.includes('변형 문제를 맞히면 최종 점수에 반영')
++      && briefing.promptSize >= 17 && briefing.choiceSize >= 15
+       && briefing.difficulty === '3' && !briefing.reason && briefing.questions === 3,
+-    '중앙 오픈북 브리핑의 근거·난이도·문항 표시가 올바르지 않습니다: ' + JSON.stringify(briefing));
++    '오픈북 AI 답변 요약·가독성·문항 표시가 올바르지 않습니다: ' + JSON.stringify(briefing));
++    await captureComprehension(win, 'openbook-desktop');
++    await rendererValue(win, "window.WhiteboxTheme.setTheme('light')");
++    await captureComprehension(win, 'openbook-light');
++    await rendererValue(win, "window.WhiteboxTheme.setTheme('dark')");
+ 
+     await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
+     await waitFor(win,
+@@ -1097,9 +1132,9 @@ async function exerciseComprehensionPacket(win, round) {
+     await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit')?.click()");
+     await waitFor(win,
+       "document.querySelectorAll('.comprehension-packet-remediation-card').length===2"
+-        + "&&!document.querySelector('[data-comprehension-question=\"q-decision\"]')"
++        + "&&document.querySelector('[data-comprehension-question=\"q-decision\"] .comprehension-packet-answer-summary')"
+         + "&&document.querySelector('#comprehensionPacketScore')?.textContent.includes('1/3')",
+-      '정답 카드를 치우고 오답 카드를 제자리 전환하지 못했습니다.');
++      '정답 기록을 보존하거나 오답 카드를 재확인 상태로 전환하지 못했습니다.');
+     const remediation = await rendererValue(win, "(() => ({"
+       + "explanations:document.querySelectorAll('.comprehension-packet-remediation-card .comprehension-packet-remediation').length,"
+       + "evidence:document.querySelectorAll('.comprehension-packet-evidence-chip').length,"
+@@ -1128,6 +1163,20 @@ async function exerciseComprehensionPacket(win, round) {
+       + "progress:window.WhiteboxApp.comprehensionPacketController?.getProgress?.()}))()");
+     assert(understood.score.includes('2/3') && understood.progress?.understood?.includes('q-risk'),
+       '이해했음이 이해 부채만 해소하지 않았습니다: ' + JSON.stringify(understood));
++    const history = await rendererValue(win, `(() => {
++      const cards = [...document.querySelectorAll('[data-comprehension-question]')];
++      return { count: cards.length, answers: cards.every(card => card.querySelector('.comprehension-packet-answer-summary')?.textContent.includes('내 답')),
++        complete: document.querySelector('.comprehension-packet-quiz h2')?.textContent.includes('풀었던 문제'),
++        variant: document.querySelector('[data-comprehension-question="q-change"] [data-comprehension-variant-form]')?.textContent.includes('아니요. 완료된 메인 노드만 대상입니다.') };
++    })()`);
++    assert(history.count === 3 && history.answers && history.complete && history.variant,
++      '완료 뒤 전체 문제·내 답·변형 문제 기록이 남지 않았습니다: ' + JSON.stringify(history));
++    await waitFor(win, "document.activeElement?.dataset.comprehensionQuestion==='q-risk'", '이해 확인 뒤 포커스가 안정되지 않았습니다.');
++    await rendererValue(win, "document.querySelector('[data-comprehension-review-target=\"q-decision\"]')?.click()");
++    assert(await rendererValue(win, "document.activeElement?.dataset.comprehensionQuestion==='q-decision'"),
++      '풀이 목록에서 정답 기록으로 이동하지 못했습니다.');
++    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollTop=0");
++    await captureComprehension(win, 'openbook-complete');
+     await rendererValue(win,
+       "document.querySelector('[data-comprehension-issue=\"q-risk\"]')?.click()");
+     await waitFor(win,
+@@ -1161,9 +1210,41 @@ async function exerciseComprehensionPacket(win, round) {
+         + "oneColumn:getComputedStyle(body).gridTemplateColumns.split(' ').length===1};})()");
+     assert(mobile.width === 375 && mobile.inside && !mobile.overflow && mobile.oneColumn,
+       '이해 패킷 375px 레이아웃이 화면 안에 맞지 않습니다: ' + JSON.stringify(mobile));
++    await captureComprehension(win, 'openbook-mobile');
+     await rendererValue(win, "document.querySelector('#comprehensionPacketClose')?.click()");
+     win.setContentSize(1440, 940);
+     await wait(80);
++
++    // A new completion must start fresh and retain every question even on a perfect score.
++    await rendererValue(win, "window.interactionTest.updateSession('fixture-root',{completedAt:'2026-08-01T12:34:57.000Z'});window.interactionTest.emitSnapshot()");
++    await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden&&!window.WhiteboxApp.comprehensionPacketController.getProgress().submitted",
++      '새 완료 작업에서 풀이를 새로 시작하지 못했습니다.');
++    win.setContentSize(375, 780);
++    await wait(100);
++    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollIntoView({block:'start'})");
++    const mobileQuiz = await rendererValue(win, `(() => {
++      const card = document.querySelector('[data-comprehension-question]');
++      const choices = [...card.querySelectorAll('.comprehension-packet-choice')];
++      return choices.every(choice => choice.getBoundingClientRect().right <= innerWidth
++        && choice.scrollWidth <= choice.clientWidth + 1 && parseFloat(getComputedStyle(choice).fontSize) >= 15);
++    })()`);
++    assert(mobileQuiz, '375px에서 보기의 글자 크기나 줄바꿈이 올바르지 않습니다.');
++    await captureComprehension(win, 'openbook-mobile-questions', '.comprehension-packet-quiz');
++    win.setContentSize(1440, 940);
++    for (const question of readyComprehension.packet.questions) {
++      await rendererValue(win, `document.querySelector('[data-comprehension-question-id="${question.id}"][data-comprehension-option-id="${question.answerId}"]')?.click()`);
++    }
++    await rendererValue(win, "document.querySelector('#comprehensionPacketSubmit').click()");
++    assert(await rendererValue(win, `(() => {
++      const cards = [...document.querySelectorAll('[data-comprehension-question]')];
++      return document.querySelector('#comprehensionPacketScore').textContent.includes('3/3')
++        && cards.length === 3 && cards.every(card => card.querySelector('.comprehension-packet-answer-summary'))
++        && !document.querySelector('[data-comprehension-variant-form]')
++        && document.querySelectorAll('[data-comprehension-review-target]').length === 3;
++    })()`), '전부 정답인 경우 문제와 답안 기록이 사라졌습니다.');
++    await rendererValue(win, "document.querySelector('.comprehension-packet-quiz').scrollTop=0");
++    await captureComprehension(win, 'openbook-all-correct');
++    await rendererValue(win, "document.querySelector('#comprehensionPacketClose').click();window.interactionTest.updateSession('fixture-root',{completedAt:'" + generation + "'});window.interactionTest.emitSnapshot()");
+   } else {
+     await waitFor(win,
+       "document.querySelector('#comprehensionPacketOverlay')?.hidden"
+@@ -1179,6 +1260,11 @@ async function exerciseComprehensionPacket(win, round) {
+     await rendererValue(win, "(()=>{const button=document.querySelector('#comprehensionPacketBadge button');button?.focus();button?.click();})()");
+     await waitFor(win, "!document.querySelector('#comprehensionPacketOverlay')?.hidden",
+       '앱 재시작 뒤 노드 배지로 패킷을 열지 못했습니다.');
++    assert(await rendererValue(win, `(() => {
++      const history = document.querySelectorAll('[data-comprehension-question]');
++      return history.length === 2 && [...history].every(card => card.querySelector('.comprehension-packet-answer-summary'))
++        && Boolean(document.querySelector('[data-comprehension-excluded-question="q-risk"]'));
++    })()`), '재시작 뒤 정답·변형 문제·평가 제외 기록을 복원하지 못했습니다.');
+     await rendererValue(win,
+       "document.querySelector('#comprehensionPacketClose')?.focus();"
+         + "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))");
+@@ -1210,6 +1296,7 @@ async function run() {
+       nodeIntegration: false,
+       sandbox: false,
+       backgroundThrottling: false,
++      offscreen: Boolean(comprehensionCaptureDir),
+     },
+   });
+   win.webContents.on('console-message', (_event, details, legacyMessage) => {
+@@ -1232,12 +1319,14 @@ async function run() {
+           'renderer reload가 준비되지 않았습니다.', 20000);
+       }
+       await prepareProject(win);
+-      await exerciseNavigationAndSettings(win);
+-      await exerciseQualityAndProviderUsage(win);
+-      await exerciseUpdateDetails(win);
+-      await exerciseKeyboardAndRunModal(win);
+-      await exerciseDashboardGraphAndManagement(win);
+-      reports.push(await exercisePtyFocus(win, round));
++      if (!comprehensionOnly) {
++        await exerciseNavigationAndSettings(win);
++        await exerciseQualityAndProviderUsage(win);
++        await exerciseUpdateDetails(win);
++        await exerciseKeyboardAndRunModal(win);
++        await exerciseDashboardGraphAndManagement(win);
++        reports.push(await exercisePtyFocus(win, round));
++      }
+       reports.push(await exerciseComprehensionPacket(win, round));
+     }
+     assert(rendererErrors.length === 0, 'renderer 오류가 발생했습니다: ' + rendererErrors.join(' | '));
+diff --git a/scripts/interaction-fixture-preload.js b/scripts/interaction-fixture-preload.js
+index b731eb0..d82b7f5 100644
+--- a/scripts/interaction-fixture-preload.js
++++ b/scripts/interaction-fixture-preload.js
+@@ -88,7 +88,7 @@ const comprehensionPacket = {
+   schemaVersion: 1,
+   id: 'fixture-comprehension-v1',
+   title: 'PTY 집중 모드 개선 작업 이해 브리핑',
+-  summary: '완료된 메인 노드의 실제 PTY 문맥 안에서만 이해 패킷을 열고, 다음 지시를 더 정확히 만들 수 있도록 변경 내용과 판단 근거를 확인합니다.',
++  summary: '이해 패킷은 완료된 메인 노드의 PTY 집중 모드를 열 때 자동으로 나타납니다. 실행 중이거나 실패·취소된 작업, 서브에이전트는 대상에서 제외됩니다.\n\nAI 답변 요약을 읽으며 변경 내용과 선택 이유를 확인할 수 있습니다. 사용자가 작업 결과를 이해하고 다음 지시를 더 정확하게 내리도록 돕는 것이 목적입니다. 난이도는 숫자만 표시합니다.\n\n틀린 문제는 해설을 읽고 변형 문제로 다시 확인합니다. 변형 문제를 맞히면 최종 점수에 반영됩니다. 다시 틀린 뒤 이해했음을 누르면 이해 부채만 해소되고 오답 점수는 유지됩니다. 문제 오류로 표시한 문항은 원문과 변형 문제 모두 점수 분모와 이해 부채에서 제외됩니다.',
+   difficulty: 3,
+   difficultyReason: 'UI 상태 전환과 PTY 보존 조건을 함께 이해해야 합니다.',
+   evidence: [
+@@ -117,12 +117,12 @@ const comprehensionPacket = {
+     },
+     {
+       id: 'q-decision', kind: '선택 이유', topics: ['decision'],
+-      prompt: '왼쪽 작업 설명과 실제 근거를 먼저 보여주는 이유는 무엇인가요?',
++      prompt: '왼쪽에 AI 답변 요약을 보여주는 이유는 무엇인가요?',
+       options: [
+         { id: 'q-decision-a', label: '암기 시험이 아니라 다음 지시를 정확히 만들도록 돕기 위해서' },
+         { id: 'q-decision-b', label: '문항 수를 숨기기 위해서' },
+       ],
+-      answerId: 'q-decision-a', explanation: '사용자는 오픈북 근거를 보며 AI의 작업 흐름과 판단을 이해해야 합니다.',
++      answerId: 'q-decision-a', explanation: '사용자는 AI 답변 요약을 참고하며 작업 결과와 판단 이유를 이해하고 다음 지시를 더 정확히 내릴 수 있습니다.',
+       evidenceIds: ['e-main', 'e-subagent'],
+       variant: {
+         prompt: '난이도 선정 이유를 팝업에 길게 공개하는 것이 승인안에 맞나요?',
+diff --git a/src/comprehensionPacket.js b/src/comprehensionPacket.js
+index 9ef0787..5919b59 100644
+--- a/src/comprehensionPacket.js
++++ b/src/comprehensionPacket.js
+@@ -33,7 +33,9 @@ ${CONTRACT_CLOSE}`;
+ // the private provider instruction channel.
+ const COMPREHENSION_INSTRUCTIONS = `${COMPREHENSION_CONTRACT}
+ 
+-Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.`;
++Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.
++
++The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible AI answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Use a few short, readable paragraphs separated by blank lines, within 6000 characters. Make the summary self-contained so every initial question and variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
+ 
+ const PACKET_KEYS = Object.freeze([
+   'schemaVersion', 'id', 'title', 'summary', 'difficulty', 'difficultyReason', 'evidence', 'questions',

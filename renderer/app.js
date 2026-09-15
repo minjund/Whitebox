@@ -526,6 +526,10 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     return selectView(view, options);
   }
   function currentDialog() {
+    const questionnaire = $(".comprehension-packet-overlay:not([hidden]) .comprehension-packet-dialog");
+    if (questionnaire) return questionnaire;
+    const questionnaireSetup = $("#questionnaireSetupModal");
+    if (questionnaireSetup && !questionnaireSetup.classList.contains("hidden")) return questionnaireSetup;
     if (
       $("#detailDrawer")?.classList.contains("open")
       && $("#detailDrawer")?.dataset.presentation === "modal"
@@ -643,7 +647,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     }
     dialog.setAttribute("inert", "");
     dialog.setAttribute("aria-hidden", "true");
-    const anotherDialog = [$("#runModal"), $("#quickPaletteModal"), $("#shortcutHelpModal")]
+    const anotherDialog = [$("#runModal"), $("#quickPaletteModal"), $("#shortcutHelpModal"), $("#questionnaireSetupModal")]
       .some((item) => item !== dialog && isBlockingDialogSurface(item));
     if (!anotherDialog) {
       shell?.removeAttribute("inert");
@@ -987,7 +991,8 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
       .map((message) => message.timestamp ? Date.parse(message.timestamp) : Number.NaN)
       .filter(Number.isFinite));
     if (assistantAt) return assistantAt;
-    const completionTimestamp = session?.completedAt || session?.endedAt || "";
+    const completionTimestamp = session?.completedAt || session?.endedAt
+      || (["completed", "failed", "cancelled"].includes(session?.status) ? session.updatedAt : "") || "";
     const completedAt = completionTimestamp ? Date.parse(completionTimestamp) : Number.NaN;
     return Number.isFinite(completedAt) ? completedAt : 0;
   }
@@ -1408,11 +1413,15 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     const responseAt = sessionResponseTimestamp(session);
     return responseAt ? responseAt + SESSION_RETENTION_MS : 0;
   }
+  function canArchiveSession(session) {
+    return Boolean(session && !isWorkflowLive(session)
+      && !isSessionManuallyArchived(session) && sessionResponseTimestamp(session));
+  }
   function archiveSession(sessionOrId) {
     const session = typeof sessionOrId === "object"
       ? sessionOrId
       : (state.snapshot?.sessions || []).find((item) => item.id === String(sessionOrId || ""));
-    if (!session || isWorkflowLive(session)) return false;
+    if (!canArchiveSession(session)) return false;
     const responseAt = sessionResponseTimestamp(session);
     if (!responseAt) return false;
     const archivedAt = Date.now();
@@ -1593,6 +1602,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     isControlRoomSession,
     controlRoomStatus,
     sessionRetentionDeadline,
+    canArchiveSession,
     archiveSession,
     isRuntimeLoopSession,
     subagentWorkState,

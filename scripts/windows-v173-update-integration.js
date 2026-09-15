@@ -8,7 +8,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { Readable } = require('stream');
 const { openInspectedApp, clickPackagedUpdate } = require('./packaged-update-button');
-const { waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
+const { probeWindowsProcessIds, waitForOwnedProcessIdsExit } = require('./windows-process-exit-check');
 const asar = require('@electron/asar');
 const sourcePackageMetadata = require('../package.json');
 const { compareVersions } = require('../src/updateManager');
@@ -74,6 +74,7 @@ const updateInstallerPaths = new Set();
 const trackedUpdateProcesses = new Map();
 const installedProcessImageNames = new Set([path.basename(installedExecutable)]);
 let activeAppPid = 0;
+let buttonDriver = null;
 let installationStarted = false;
 let uninstallerAttemptCount = 0;
 let validUninstallerRunCount = 0;
@@ -319,27 +320,13 @@ function executableVersion(file) {
 
 function processAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  const result = spawnSync(powershell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    'if (Get-Process -Id $env:WHITEBOX_INTEGRATION_PID -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }',
-  ], {
-    encoding: 'utf8',
-    env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(pid) },
-    windowsHide: true,
-    timeout: 30_000,
-  });
-  return result.status === 0;
+  return probeWindowsProcessIds([pid], { powershell }).includes(pid);
 }
 
 async function waitForProcessExit(pid, timeoutMs = 30_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (!processAlive(pid)) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for process ${pid} to exit.`);
+  await waitForOwnedProcessIdsExit([pid], {
+    timeoutMs, probe: pids => probeWindowsProcessIds(pids, { powershell }),
+  });
 }
 
 function runningProcessIds(executable) {
@@ -583,7 +570,7 @@ function dumpUpdateLogs(directory) {
   for (const entry of entries) {
     const candidate = path.join(directory, entry.name);
     if (entry.isDirectory()) dumpUpdateLogs(candidate);
-    else if (entry.isFile() && entry.name === 'install-update.log') {
+    else if (entry.isFile() && ['install-update.log', 'install-attempts.jsonl'].includes(entry.name)) {
       console.error(`--- ${candidate} ---\n${readLog(candidate) || '(empty update log)'}`);
     }
   }
@@ -1211,6 +1198,7 @@ async function main() {
   await waitForProcessExit(activeAppPid);
   const buttonProfile = path.join(isolatedAppDataRoot, 'button-profile');
   const driver = await openInspectedApp(installedExecutable, [`--user-data-dir=${buttonProfile}`], process.env);
+  buttonDriver = driver;
   activeAppPid = driver.child.pid;
   const buttonParentPid = activeAppPid;
   let buttonTerminalPid = 0;
@@ -1251,6 +1239,27 @@ async function main() {
 main().catch(error => {
   console.error(error.stack || error);
   dumpUpdateLogs(testRoot);
+  if (buttonDriver) console.error('Packaged app diagnostics:', JSON.stringify({
+    pid: buttonDriver.child.pid, exitCode: buttonDriver.child.exitCode,
+    signalCode: buttonDriver.child.signalCode, stderr: buttonDriver.diagnostics(),
+  }));
+  try {
+    const diagnosticScript = [
+      "$ErrorActionPreference = 'Stop'",
+      '$records = @(Get-CimInstance Win32_Process -OperationTimeoutSec 10 -ErrorAction Stop | Where-Object {',
+      '  $_.CommandLine -and $_.CommandLine.IndexOf($env:WHITEBOX_DIAGNOSTIC_ROOT, [StringComparison]::OrdinalIgnoreCase) -ge 0',
+      '} | Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine, CreationDate)',
+      'ConvertTo-Json -InputObject $records -Depth 4 -Compress',
+      '$events = @(Get-WinEvent -FilterHashtable @{ LogName = "Application"; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 30 -ErrorAction Stop | Where-Object { $_.Id -in @(1000,1001,1026) } | Select-Object TimeCreated, Id, Message)',
+      'ConvertTo-Json -InputObject $events -Depth 4 -Compress',
+    ].join('\n');
+    const diagnosticResult = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', diagnosticScript], {
+      env: { ...process.env, WHITEBOX_DIAGNOSTIC_ROOT: testRoot },
+      encoding: 'utf8', windowsHide: true, timeout: 30_000,
+    });
+    console.error('Failure process/event snapshot:', JSON.stringify(diagnosticResult));
+  } catch (diagnosticError) { console.error('Failure diagnostics unavailable:', diagnosticError.stack); }
+
   process.exitCode = 1;
 }).finally(async () => {
   const cleanupFailures = [];

@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { app } = require('electron');
 const { TerminalManager } = require('../src/terminalManager');
+const { prepareCodexOperation } = require('../src/terminalHostDaemon');
 
 app.whenReady().then(async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-comprehension-start-'));
@@ -35,11 +36,15 @@ setTimeout(() => process.exit(0), 100);
         const prompt = '테스트해줘봐 "따옴표" & <내용> $값 `리터럴`\n두 번째 줄\n'
           + '</whitebox-comprehension-packet 이 문자열을 설명해줘.\n'
           + '```xml\n<whitebox-comprehension-packet version="1">예시</whitebox-comprehension-packet>\n```';
-        const session = manager.create({
+        const request = {
           type: 'agent', provider, cwd: temp, args: [prompt], sessionBackend: 'direct',
           initialCommand: prompt, initialCommandInArgs: true,
           creationId: `create:${provider}-${wrapper}`, deliveryId: `start:${provider}-${wrapper}`,
-        });
+        };
+        let prepared = false;
+        await prepareCodexOperation(manager, { async ensureReady() { prepared = true; } }, 'create', [request]);
+        assert.equal(prepared, provider === 'codex');
+        const session = manager.create(request);
         assert.equal(session.deliveryState, 'accepted');
         const deadline = Date.now() + 15000;
         while (manager.get(session.id)?.status === 'running' && Date.now() < deadline) {

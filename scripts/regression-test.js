@@ -42,6 +42,7 @@ require('./tests/packaged-update-driver').registerPackagedUpdateDriverTests(cont
 
 registerCoreUpdateWorkspaceTests(context);
 registerAttentionNotifierTests(context);
+require('./tests/attention-project').registerAttentionProjectTests(context);
 require('./tests/attention-popup-manager').registerAttentionPopupManagerTests(context);
 registerAutomationMonitorTests(context);
 registerSessionIntelligenceTests(context);
@@ -67,12 +68,15 @@ registerBrandMigrationTests(context);
 registerComprehensionPacketTests(context);
 registerComprehensionParserProjectionTests(context);
 require('./tests/background-questionnaire').registerBackgroundQuestionnaireTests(context);
+require('./tests/questionnaire-preference').registerQuestionnairePreferenceTests(context);
 registerAgentParserTests(context);
+require('./tests/claude-agent-termination').registerClaudeAgentTerminationTests(context);
 registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
+require('./tests/control-room-projects').registerControlRoomProjectTests(context);
 
-if (harness.count() !== 510) {
-  throw new Error(`회귀 테스트 등록 수가 510개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 529) {
+  throw new Error(`회귀 테스트 등록 수가 529개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

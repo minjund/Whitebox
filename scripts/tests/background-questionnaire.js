@@ -5,11 +5,16 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { spawnSync } = require('child_process');
-const { BackgroundQuestionnaire, AUTHORITY, explanationOnly, parseResult } = require('../../src/backgroundQuestionnaire');
+const { BackgroundQuestionnaire: QuestionnaireService, AUTHORITY, explanationOnly, parseResult } = require('../../src/backgroundQuestionnaire');
 const { questionnaireCommand, utf8PipeSpec } = require('../../src/questionnaireCommand');
 const { AgentRunner } = require('../../src/agentRunner');
 const { selectAgentProcesses } = require('../../src/processMonitor');
 const { isEligibleSession } = require('../../renderer/comprehension-packet');
+
+// These generation tests represent a user who has already opted in.
+class BackgroundQuestionnaire extends QuestionnaireService {
+  constructor(options) { super({ ...options, enabled: true }); }
+}
 
 function packet() {
   return { schemaVersion: 1, id: 'packet-1', title: '버튼 수정', summary: '버튼을 파란색으로 변경했다. 기존 테마와 통일하기 위해 선택했다. 색 대비 검사는 아직 하지 않았다.',

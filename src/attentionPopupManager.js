@@ -133,6 +133,7 @@ function normalizeRequest(raw, fallbackId = '') {
     detail: text(raw.detail || raw.description, '', MAX_TEXT_LENGTH),
     provider: text(raw.provider, '', 80),
     project: text(raw.project || raw.projectName, '', MAX_SHORT_TEXT_LENGTH),
+    projectPath: text(raw.projectPath, '', MAX_TEXT_LENGTH),
     meta: text(raw.meta || raw.sessionMeta, '', MAX_SHORT_TEXT_LENGTH),
     toolLabel: text(raw.toolLabel || raw.toolName, '', 100),
     sessionId: text(raw.sessionId, '', MAX_SHORT_TEXT_LENGTH),

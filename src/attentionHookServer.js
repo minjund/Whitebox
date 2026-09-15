@@ -235,6 +235,7 @@ function normalizeHookRequest(payload, options = {}) {
     provider,
     sessionId,
     agentId,
+    cwd: cleanString(payload.cwd, 4_096),
     requestId,
     requestIdExplicit: Boolean(explicitRequestId),
     kind,

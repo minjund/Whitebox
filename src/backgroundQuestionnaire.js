@@ -76,12 +76,14 @@ function parseResult(text) {
 }
 
 class BackgroundQuestionnaire extends EventEmitter {
-  constructor({ file, runner, requestDetail, now = Date.now }) {
+  constructor({ file, runner, requestDetail, enabled = false, now = Date.now }) {
     super();
     this.file = file;
     this.runner = runner;
     this.requestDetail = requestDetail;
     this.now = now;
+    this.enabled = enabled === true;
+    this.preferenceEpoch = 0;
     this.startedAt = now();
     this.observed = new Map();
     this.current = new Map();
@@ -124,13 +126,25 @@ class BackgroundQuestionnaire extends EventEmitter {
     this.emit('changed');
   }
 
+  setEnabled(enabled) {
+    const next = enabled === true;
+    if (this.enabled === next) return;
+    this.enabled = next;
+    this.preferenceEpoch += 1;
+    if (next) this.startedAt = this.now();
+    else {
+      // An already submitted request may finish, but no queued request may start.
+      for (const record of this.queue.splice(0)) this.set(record, { status: 'skipped' });
+    }
+  }
+
   observe(sessions) {
     this.current = new Map(sessions.map(session => [session.id, session]));
     for (const session of sessions) {
       const key = completedMain(session) ? generation(session) : '';
       const previous = this.observed.get(session.id);
       this.observed.set(session.id, key);
-      if (!this.initialized || !key || key === previous || this.records.has(key)) continue;
+      if (!this.enabled || !this.initialized || !key || key === previous || this.records.has(key)) continue;
       // Do not charge for old history discovered later by a slow source scan.
       const finished = Date.parse(session.completedAt || session.endedAt || '');
       if (previous === undefined && (!Number.isFinite(finished) || finished < this.startedAt)) continue;
@@ -144,6 +158,7 @@ class BackgroundQuestionnaire extends EventEmitter {
   }
 
   enqueue(session, key) {
+    if (!this.enabled) return null;
     const record = { sessionId: session.id, generation: key, status: 'queued', schemaVersion: 1 };
     // A card only contains a clipped prompt. It can suppress a premature
     // spinner, but only the full detail can decide to skip the request.
@@ -159,14 +174,16 @@ class BackgroundQuestionnaire extends EventEmitter {
   }
 
   async drain() {
-    if (this.busy || this.runner.disposing) return;
+    if (!this.enabled || this.busy || this.runner.disposing) return;
     this.busy = true;
     try {
-      while (this.queue.length && !this.runner.disposing) {
+      while (this.enabled && this.queue.length && !this.runner.disposing) {
         const record = this.queue.shift();
+        const preferenceEpoch = this.preferenceEpoch;
         if (!this.isCurrent(record)) { this.set(record, { status: 'skipped' }); continue; }
         try {
           const detail = await this.requestDetail(record.sessionId);
+          if (!this.enabled || preferenceEpoch !== this.preferenceEpoch) { this.set(record, { status: 'skipped' }); continue; }
           if (!detail || !completedMain(detail) || generation(detail) !== record.generation) throw new Error('완료된 작업 기록이 변경되었습니다.');
           const source = sourceFor(detail);
           if (explanationOnly(source.prompt)) { this.set(record, { status: 'skipped' }); continue; }
@@ -185,6 +202,7 @@ class BackgroundQuestionnaire extends EventEmitter {
   }
 
   retry(sessionId) {
+    if (!this.enabled) return { ok: false };
     const session = this.current.get(String(sessionId));
     const key = session && generation(session);
     const record = key && this.records.get(key);
