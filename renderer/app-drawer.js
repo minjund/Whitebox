@@ -160,7 +160,7 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     const isCurrent = () => generation === openGeneration;
     const selected = snapshotSession(id) || state.details.get(id);
     const root = ownerRoot(selected || id);
-    // Capture the exact review receipts before any async fork/mount work. A
+    // Capture the exact review receipts before any async resume/mount work. A
     // newer completion that arrives while the PTY is opening must remain
     // pending instead of being acknowledged by the older click.
     const expectedReviewTargets = options.resultReview === true
@@ -177,13 +177,13 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.selectedId = selected?.id || String(id || "");
 
     if (root && !exactTarget && options.attentionActivation !== true && window.WhiteboxTerminal) {
-      const canFork = window.WhiteboxRendererUtils?.canForkCodexDesktopSession?.(root) === true;
-      const launch = canFork
-        ? window.WhiteboxTerminal.forkForAgent
-        : window.WhiteboxTerminal.resumeForAgent;
+      const launch = window.WhiteboxTerminal.resumeForAgent;
       if (typeof launch === "function") {
         try {
-          const created = await launch.call(window.WhiteboxTerminal, root, "", false, { focus: false });
+          const created = await launch.call(window.WhiteboxTerminal, root, "", false, {
+            focus: false,
+            resumeOriginOwned: true,
+          });
           if (!isCurrent()) return false;
           const createdId = String(created?.terminalId || created?.id || "");
           if (createdId) exactTarget = { id: createdId, terminalId: createdId };
@@ -245,10 +245,6 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = options.tab === "summary" ? "summary" : "chat";
     state.drawerCreateTerminalIfMissing = options.createTerminalIfMissing !== false;
     state.drawerMountTerminal = options.mountTerminal !== false;
-    state.drawerForkCreationGesture = state.drawerTab === "chat"
-      && state.drawerCreateTerminalIfMissing
-      && state.drawerMountTerminal
-      && options.attentionActivation !== true;
     state.drawerForceLatest = state.drawerTab === "chat";
     const reviewed = options.resultReview === true ? markResultReviewComplete(selected || id) : 0;
     if (options.acknowledge !== false && acknowledgeSessionNotices(selected || id) > 0) {
@@ -294,7 +290,6 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = "chat";
     state.drawerCreateTerminalIfMissing = false;
     state.drawerMountTerminal = false;
-    state.drawerForkCreationGesture = false;
     state.agentCommandRoutes.delete(id);
     state.drawerForceLatest = true;
     const reviewed = options.resultReview === true ? markResultReviewComplete(child) : 0;
@@ -333,7 +328,6 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     state.drawerTab = "chat";
     state.drawerCreateTerminalIfMissing = true;
     state.drawerMountTerminal = true;
-    state.drawerForkCreationGesture = false;
     state.drawerForceLatest = false;
     openDrawerSurface("modal");
     renderDrawer();
@@ -346,7 +340,6 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
   function closeDrawer(restoreFocus = true) {
     if (!$("#detailDrawer").classList.contains("open")) return false;
     window.WhiteboxDrawerTerminal?.unmount?.({ resetAvailability: true, sessionId: state.selectedId });
-    state.drawerForkCreationGesture = false;
     const presentation = state.drawerPresentation;
     const focusToken = drawerFocusToken;
     $("#detailDrawer").classList.remove("open");
@@ -694,30 +687,22 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
         : terminalInterrupt ? "agent.terminal_interrupt" : "agent.stop_short");
     }
     const createTerminalIfMissing = state.drawerCreateTerminalIfMissing !== false;
-    const forkCreationGestureArmed = state.drawerForkCreationGesture === true;
-    state.drawerForkCreationGesture = false;
-    const forkCreationGesture = actualTerminalChat
-      && state.drawerMountTerminal !== false
-      && forkCreationGestureArmed;
     if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && terminalTarget) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: terminalTarget.id,
         createIfMissing: createTerminalIfMissing,
-        forkIfOriginOwned: true,
-        forkCreationGesture,
+        resumeOriginOwned: true,
       });
     } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat && attachableTerminalTargets.length === 0) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         createIfMissing: createTerminalIfMissing,
-        forkIfOriginOwned: true,
-        forkCreationGesture,
+        resumeOriginOwned: true,
       });
     } else if (!ptyFocusActive && state.drawerMountTerminal !== false && actualTerminalChat) {
       window.WhiteboxDrawerTerminal?.mount?.(session, {
         targetId: attachableTerminalTargets[0].id,
         createIfMissing: false,
-        forkIfOriginOwned: true,
-        forkCreationGesture,
+        resumeOriginOwned: true,
       });
     }
     restoreDisclosureStates(content);

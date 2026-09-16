@@ -1612,13 +1612,13 @@ function registerUiContractTests(context) {
     assert.ok(actualPtyRunner.includes('ownedTemporaryRoot(temporary, nonce)'));
     assert.ok(actualPtyRunner.includes('fs.rmSync(exactRoot'));
     assert.ok(actualPtyRunner.includes('process.exitCode = cleanupError'));
-    assert.ok(actualPtyIntegration.includes("const codexLaunchArgs = ['fork', codexForkExternalId]"));
+    assert.ok(actualPtyIntegration.includes("const codexLaunchArgs = ['resume', codexResumeExternalId]"));
     assert.ok(actualPtyIntegration.includes("status: 'running'"));
     assert.ok(actualPtyIntegration.includes("document.querySelector('.control-room-main[data-pty-focus-trigger="));
     assert.ok(actualPtyIntegration.includes('main.click()'));
-    assert.equal(actualPtyIntegration.includes('forkForAgent(source'), false,
-      '실제 PTY 통합 검증은 API로 fork를 미리 만들지 말고 실행 중 담당 노드 클릭부터 시작해야 합니다.');
-    assert.ok(actualPtyIntegration.includes('client.get(codexForkTerminalId, true)'));
+    assert.equal(actualPtyIntegration.includes('resumeForAgent(source'), false,
+      '실제 PTY 통합 검증은 API로 resume를 미리 만들지 말고 실행 중 담당 노드 클릭부터 시작해야 합니다.');
+    assert.ok(actualPtyIntegration.includes('client.get(codexResumeTerminalId, true)'));
     assert.ok(pkg.build.mac.target.some(item => item.arch.includes('arm64') && item.arch.includes('x64')));
   });
 

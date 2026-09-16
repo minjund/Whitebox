@@ -594,12 +594,9 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     }
     let targets;
     try {
-      // A Codex Desktop root owns its transcript writer, so agentTargets()
-      // intentionally never exposes that conversation as a writable target.
-      // Its user-created `codex fork` PTY is held under a separate, signed
-      // source association and must be verified through that exact path.
-      const forkTarget = terminal.forkTargetForAgent?.(root) || null;
-      targets = (forkTarget ? [forkTarget] : terminal.agentTargets(root))
+      // Verify the resumed conversation's signed target. A historical fork
+      // belongs to a different conversation and cannot replace this target.
+      targets = terminal.agentTargets(root)
         .filter(target => target?.kind === "terminal");
     } catch (error) {
       reportRecoverableError("pty-focus-targets", error);
