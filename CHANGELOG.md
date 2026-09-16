@@ -5,6 +5,16 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.20 - 2026-09-16
+
+- Open existing GPT/Codex conversations with `codex resume` using the same
+  session ID, including valid histories originally opened in Codex Desktop.
+- Reuse the connected Whitebox terminal and report active-writer conflicts
+  without silently creating a fork or submitting an earlier prompt.
+- Update session-opening labels and retain duplicate-open protection.
+- Verify updates from the official 1.8.19 installer while retaining the 1.8.18
+  installer and every existing frozen, recent, and legacy compatibility cohort.
+
 ## 1.8.19 - 2026-09-15
 
 - Allow multiline task requests through Codex startup preparation while preserving

@@ -195,7 +195,7 @@
       || String(agentSession?.clientKind || '').toLowerCase() === 'whitebox-bridge';
   }
 
-  function resumeSupport(agentSession) {
+  function resumeSupport(agentSession, options = {}) {
     if (!agentSession) return { supported: false, reason: t('terminal.resume.no_session_info') };
     if (agentSession.parentId) return { supported: false, parentControlled: true, reason: t('terminal.resume.parent_controlled') };
     // This card projects a PTY bridge that Whitebox already owns. Resuming its
@@ -211,12 +211,20 @@
     }
     if (String(agentSession.provider || '').toLowerCase() === 'codex'
       && String(agentSession.clientKind || '').toLowerCase() === 'codex-desktop') {
-      return {
-        supported: false,
-        originOwned: true,
-        code: 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED',
-        reason: t('terminal.resume.codex_desktop_live'),
-      };
+      // An explicit Whitebox PTY open may resume a valid Desktop history.
+      // The terminal host checks the actual writer lock; turn status is not
+      // evidence that another app has released the conversation.
+      if (options.resumeOriginOwned === true) {
+        const history = forkSupport(agentSession);
+        if (!history.supported) return history;
+      } else {
+        return {
+          supported: false,
+          originOwned: true,
+          code: 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED',
+          reason: t('terminal.resume.codex_desktop_live'),
+        };
+      }
     }
     const sessionId = String(agentSession.externalId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(sessionId)) {
@@ -439,6 +447,7 @@
     if (!target && options.createIfMissing) {
       target = await ensureForAgent(agentSession, {
         excludeTerminalIds: [...excludedTerminalIds],
+        resumeOriginOwned: options.resumeOriginOwned === true,
         forkIfOriginOwned,
         forkCreationGesture,
       });

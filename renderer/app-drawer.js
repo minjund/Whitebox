@@ -394,9 +394,8 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
     const subagentMode = state.drawerMode === "subagent" && Boolean(session.parentId);
     const executionMode = state.drawerMode === "execution" && Boolean(state.drawerExecutionId);
     // A main conversation is an actual terminal surface, not a terminal-styled
-    // transcript. Reuse its exact PTY when one exists. Desktop-owned Codex
-    // history is instead forked into a separate app-owned PTY so its writer is
-    // never attached from two apps; other providers use canonical resume.
+    // transcript. Reuse its exact PTY when one exists, otherwise resume the
+    // same provider history. The terminal host rejects an active Codex writer.
     // Parent-controlled subagents and execution details remain read-only.
     const conversationTab = state.drawerTab === "chat";
     // A top-level session's conversation is the PTY itself. The terminal

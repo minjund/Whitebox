@@ -2829,10 +2829,10 @@ function registerUiContractTests(context) {
       '별도 PTY 하위 팝업 구현이 다시 추가되면 안 됩니다.');
     assert.match(ptyFocus, /function openResponsibleFocus\(sessionId, options = \{\}\)[\s\S]*activeFocusMode = "transcript"[\s\S]*refreshTranscriptDetail\(root\)/u,
       '독립 PTY가 없는 담당 노드는 full-screen 읽기 전용 작업 기록으로 열려야 합니다.');
-    assert.match(ptyFocus, /const forkedCodexPty = writablePty[\s\S]*canForkCodexDesktopSession\?\.\(root\) === true[\s\S]*ptyFocusTerminalHelp"\)\.textContent = t\(forkedCodexPty[\s\S]*"agent\.codex_desktop_fork_help"[\s\S]*"pty_focus\.terminal_help"/u,
-      'Codex Desktop 집중 모드는 원본 terminal 재사용 안내 대신 별도 fork PTY 안내를 표시해야 합니다.');
-    assert.match(i18nSource, /"agent\.codex_desktop_fork_help":\s*\{"ko":"(?=[^"]*원래 Codex 대화)(?=[^"]*(?:별도|새) Codex 세션)(?=[^"]*PTY)[^"]+"/u,
-      '한국어 집중 모드 도움말은 원본 대화를 건드리지 않고 별도 Codex 세션을 PTY로 연다는 점을 밝혀야 합니다.');
+    assert.match(ptyFocus, /const desktopCodexPty = writablePty[\s\S]*canForkCodexDesktopSession\?\.\(root\) === true[\s\S]*ptyFocusTerminalHelp"\)\.textContent = t\(desktopCodexPty[\s\S]*"agent\.codex_desktop_resume_help"[\s\S]*"pty_focus\.terminal_help"/u,
+      'Codex Desktop 집중 모드는 같은 세션의 resume 안내를 표시해야 합니다.');
+    assert.match(i18nSource, /"agent\.codex_desktop_resume_help":\s*\{"ko":"(?=[^"]*같은 Codex 세션)(?=[^"]*이어)(?=[^"]*PTY)[^"]+"/u,
+      '한국어 집중 모드 도움말은 같은 Codex 세션을 PTY에서 이어 연다는 점을 밝혀야 합니다.');
     assert.match(ptyFocus, /function mergedTranscriptMessages\(detail, live\)[\s\S]*function refreshTranscriptDetail\(root\)[\s\S]*loadSessionDetail\(id, true, snapshotVersion\)[\s\S]*function syncPendingPtyFocus\(\)[\s\S]*activeFocusMode === "transcript"\) refreshTranscriptDetail\(root\)/u,
       '열린 읽기 전용 집중 화면은 최신 snapshot을 즉시 합치고 버전이 바뀐 전체 기록을 다시 읽어야 합니다.');
     assert.match(ptyFocus, /const previousText = String\(previous\?\.text \|\| ""\)[\s\S]*const liveText = String\(message\?\.text \|\| ""\)[\s\S]*previousText\.length > liveText\.length \? previousText : liveText/u,
