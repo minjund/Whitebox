@@ -86,8 +86,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         return true;
       };
       container.addEventListener("dragstart", (event) => {
-        // Only the six-dot drag handle starts a move; dragging the row body
-        // would swallow plain clicks meant to open or close the project.
+        // The folder icon starts a move; the name remains a selection target.
         const handle = event.target.closest(".project-sidebar-drag-handle[draggable='true']");
         const group = handle?.closest(selector);
         const item = group?.querySelector(".project-sidebar-item");
@@ -158,6 +157,79 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       announce(window.WhiteboxI18n.t("filter.more_loaded", { count: Math.max(0, cards.length - previousCount) }));
     });
     const workspaceLists = [$("#workspaceList"), $("#projectSidebarList")].filter(Boolean);
+    const selectSidebarTaskWorkspace = (trigger) => {
+      const project = trigger.closest(".project-sidebar-project")?.querySelector(".project-sidebar-item[data-workspace]");
+      if (!project) return;
+      state.workspace = project.dataset.workspace;
+      state.workspaceSource = "all";
+      state.visibleLimit = 30;
+      renderWorkspaces();
+      if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
+      else renderSessions("filter");
+      syncFilterResetButton();
+    };
+    const sidebarMenu = $("#projectSidebarMenu");
+    let menuProjectKey = "";
+    const showSidebarMenu = (trigger) => {
+      const group = trigger.closest(".project-sidebar-project");
+      if (!group || !sidebarMenu) return;
+      menuProjectKey = group.dataset.sidebarProjectKey;
+      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")];
+      const index = groups.indexOf(group);
+      sidebarMenu.querySelector('[data-sidebar-menu-action="up"]').disabled = index <= 0;
+      sidebarMenu.querySelector('[data-sidebar-menu-action="down"]').disabled = index < 0 || index === groups.length - 1;
+      sidebarMenu.querySelector('[data-sidebar-menu-action="remove"]').hidden = !group.querySelector("[data-remove-workspace]");
+      sidebarMenu.showPopover();
+      const bounds = trigger.getBoundingClientRect();
+      sidebarMenu.style.left = Math.max(8, Math.min(bounds.right - sidebarMenu.offsetWidth, window.innerWidth - sidebarMenu.offsetWidth - 8)) + "px";
+      sidebarMenu.style.top = Math.max(8, Math.min(bounds.bottom + 4, window.innerHeight - sidebarMenu.offsetHeight - 8)) + "px";
+      sidebarMenu.querySelector('button:not(:disabled):not([hidden])')?.focus();
+    };
+    sidebarMenu?.addEventListener("click", event => {
+      const action = event.target.closest("[data-sidebar-menu-action]")?.dataset.sidebarMenuAction;
+      if (!action) return;
+      const group = $("#projectSidebarList")?.querySelector(`[data-sidebar-project-key="${CSS.escape(menuProjectKey)}"]`);
+      sidebarMenu.hidePopover();
+      if (!group) return;
+      if (action === "remove") { group.querySelector("[data-remove-workspace]")?.click(); return; }
+      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")];
+      const index = groups.indexOf(group);
+      const target = groups[index + (action === "up" ? -1 : 1)];
+      if (index < 0 || !target || !moveProjectOrder(menuProjectKey, target.dataset.projectSortable, action === "down")) return;
+      saveDashboardPreferences();
+      renderWorkspaces();
+      renderSessions("reorder");
+      announce(t("project.position_changed"));
+      $("#projectSidebarList")?.querySelector(`[data-sidebar-project-key="${CSS.escape(menuProjectKey)}"] .project-sidebar-item`)?.focus();
+    });
+    sidebarMenu?.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        sidebarMenu.hidePopover();
+        $("#projectSidebarList")?.querySelector(`[data-sidebar-project-key="${CSS.escape(menuProjectKey)}"] .project-sidebar-item`)?.focus();
+      } else moveFocus(event, sidebarMenu, 'button:not([hidden])', ["ArrowUp"], ["ArrowDown"]);
+    });
+    $("#sidebarProjectSearch")?.addEventListener("input", event => {
+      state.sidebarProjectSearch = event.currentTarget.value;
+      renderWorkspaces();
+    });
+    $("#sidebarProjectSearch")?.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.currentTarget.value = "";
+        state.sidebarProjectSearch = "";
+        renderWorkspaces();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        $("#projectSidebarList")?.querySelector('[role="treeitem"]')?.focus();
+      }
+    });
+    $("#sidebarCollapseAllBtn")?.addEventListener("click", () => {
+      state.sidebarExpandedProjects?.clear();
+      renderWorkspaces();
+      saveDashboardPreferences();
+      announce(t("studio.sidebar.collapse_all"));
+    });
     const handleWorkspaceClick = async (event) => {
       const activeList = event.currentTarget;
       if (activeList.id === "projectSidebarList" && Date.now() - sidebarProjectDragEndedAt < 250) {
@@ -165,6 +237,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         event.stopPropagation();
         return;
       }
+      const menuTrigger = event.target.closest("[data-sidebar-project-menu]");
+      if (menuTrigger) { showSidebarMenu(menuTrigger); return; }
       const projectToggle = activeList.id === "projectSidebarList"
         ? event.target.closest("[data-sidebar-project-toggle]")
         : null;
@@ -173,32 +247,13 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         event.stopPropagation();
         const projectKey = String(projectToggle.dataset.sidebarProjectToggle || "");
         if (!projectKey) return;
-        if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
-        if (state.sidebarCollapsedProjects.has(projectKey)) state.sidebarCollapsedProjects.delete(projectKey);
-        else state.sidebarCollapsedProjects.add(projectKey);
+        if (!(state.sidebarExpandedProjects instanceof Set)) state.sidebarExpandedProjects = new Set();
+        if (state.sidebarExpandedProjects.has(projectKey)) state.sidebarExpandedProjects.delete(projectKey);
+        else state.sidebarExpandedProjects.add(projectKey);
         const announcement = projectToggle.getAttribute("aria-label") || "";
         renderWorkspaces();
         saveDashboardPreferences();
         requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-project-key="${CSS.escape(projectKey)}"] .project-sidebar-item[role="treeitem"]`)
-          ?.focus({ preventScroll: true }));
-        if (announcement) announce(announcement);
-        return;
-      }
-      const sourceToggle = activeList.id === "projectSidebarList"
-        ? event.target.closest("[data-sidebar-source-toggle]")
-        : null;
-      if (sourceToggle) {
-        event.preventDefault();
-        event.stopPropagation();
-        const sourceKey = String(sourceToggle.dataset.sidebarSourceToggle || "");
-        if (!sourceKey) return;
-        if (!(state.sidebarCollapsedSources instanceof Set)) state.sidebarCollapsedSources = new Set();
-        if (state.sidebarCollapsedSources.has(sourceKey)) state.sidebarCollapsedSources.delete(sourceKey);
-        else state.sidebarCollapsedSources.add(sourceKey);
-        const announcement = sourceToggle.getAttribute("aria-label") || "";
-        renderWorkspaces();
-        saveDashboardPreferences();
-        requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-source-key="${CSS.escape(sourceKey)}"] .project-sidebar-source-filter[role="treeitem"]`)
           ?.focus({ preventScroll: true }));
         if (announcement) announce(announcement);
         return;
@@ -212,14 +267,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         // side drawer.
         event.preventDefault();
         event.stopPropagation();
-        const scope = inlinePty.closest(".project-sidebar-source")?.querySelector("[data-source-workspace]");
-        if (scope) {
-          state.workspace = scope.dataset.sourceWorkspace;
-          state.workspaceSource = scope.dataset.projectSource || "all";
-          state.visibleLimit = 30;
-          renderWorkspaces();
-        }
-        if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
+        selectSidebarTaskWorkspace(inlinePty);
         await openDrawer(inlinePty.dataset.ptyFocusTrigger, { trigger: inlinePty, focus: true });
         saveDashboardPreferences();
         return;
@@ -228,7 +276,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         ? event.target.closest("[data-open-session]")
         : null;
       if (openSession) {
+        selectSidebarTaskWorkspace(openSession);
         openDrawer(openSession.dataset.openSession);
+        saveDashboardPreferences();
         return;
       }
       const remove = event.target.closest("[data-remove-workspace]");
@@ -260,24 +310,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       const item = event.target.closest("[data-workspace], [data-source-workspace]");
       if (item) {
-        // A click on an already-open sidebar project row closes it (accordion);
-        // selecting the project happens on the click that opens it. Moving a
-        // project is reserved for its six-dot drag handle.
-        if (activeList.id === "projectSidebarList" && item.classList.contains("project-sidebar-item")) {
-          const projectKey = String(item.dataset.sidebarProjectRef || "");
-          if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
-          if (projectKey && !state.sidebarCollapsedProjects.has(projectKey)) {
-            state.sidebarCollapsedProjects.add(projectKey);
-            renderWorkspaces();
-            saveDashboardPreferences();
-            requestAnimationFrame(() => activeList.querySelector(`[data-sidebar-project-key="${CSS.escape(projectKey)}"] .project-sidebar-item[role="treeitem"]`)
-              ?.focus({ preventScroll: true }));
-            announce(t("studio.sidebar.collapse_project", { project: item.getAttribute("aria-label") || "" }));
-            return;
-          }
-        }
+        // Selection and disclosure are separate: clicking a name always selects.
         const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;
-        const requestedSource = item.dataset.projectSource || "all";
+        const requestedSource = activeList.id === "projectSidebarList" ? "all" : item.dataset.projectSource || "all";
         const canToggleToAll = activeList.id !== "projectSidebarList";
         const toggleToAll = canToggleToAll && requestedWorkspace !== "all"
           && state.workspace === requestedWorkspace
@@ -285,23 +320,6 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         state.workspace = toggleToAll ? "all" : requestedWorkspace;
         state.workspaceSource = toggleToAll || requestedWorkspace === "all" ? "all" : requestedSource;
         if (activeList.id === "projectSidebarList") {
-          const projectKey = String(item.dataset.sidebarProjectRef || "");
-          const sourceKey = String(item.dataset.sidebarSourceRef || "");
-          if (projectKey) state.sidebarCollapsedProjects?.delete(projectKey);
-          if (sourceKey) state.sidebarCollapsedSources?.delete(sourceKey);
-          if (requestedSource !== "all") {
-            const source = (state.sourcePlugins || []).find((item) => item.id === requestedSource);
-            const sourceEnabled = requestedSource === "direct"
-              || ((state.sourcePluginSettings?.enabledPluginIds || []).includes(requestedSource)
-                && source?.available === true
-                && source?.capabilities?.start !== false);
-            if (sourceEnabled) {
-              state.runSource = requestedSource;
-              state.runDraft = { ...(state.runDraft || {}), sourcePluginId: requestedSource };
-              syncRunComposer();
-              saveRunDraft();
-            }
-          }
           acknowledgeProjectNotices(requestedWorkspace, requestedSource);
         }
         const label = state.workspace === "all"
@@ -356,6 +374,11 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           remove.click();
           return;
         }
+        if (event.currentTarget.id === "projectSidebarList" && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+          const trigger = event.target.closest(".project-sidebar-project")?.querySelector("[data-sidebar-project-menu]");
+          if (trigger) { event.preventDefault(); showSidebarMenu(trigger); }
+          return;
+        }
         if (event.currentTarget.id === "projectSidebarList" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
           const tree = event.currentTarget;
           const treeItem = event.target.closest('[role="treeitem"]');
@@ -369,14 +392,14 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
             level,
             projectRef: String(treeItem.dataset.sidebarProjectRef || ""),
             sourceRef: String(treeItem.dataset.sidebarSourceRef || ""),
-            sessionId: String(treeItem.dataset.openSession || ""),
+            sessionId: String(treeItem.dataset.sidebarSessionId || ""),
           });
           const focusRememberedTreeItem = (identity) => requestAnimationFrame(() => {
             const target = Array.from(tree.querySelectorAll('[role="treeitem"]')).find((candidate) => (
               Number(candidate.getAttribute("aria-level") || 0) === identity.level
               && String(candidate.dataset.sidebarProjectRef || "") === identity.projectRef
               && String(candidate.dataset.sidebarSourceRef || "") === identity.sourceRef
-              && String(candidate.dataset.openSession || "") === identity.sessionId
+              && String(candidate.dataset.sidebarSessionId || "") === identity.sessionId
             ));
             target?.focus({ preventScroll: true });
           });
@@ -404,11 +427,9 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           } else if (expanded === "true") {
             if (!toggleOwnedGroup()) return;
           } else {
-            const parent = level === 3
-              ? treeItem.closest(".project-sidebar-source")?.querySelector('.project-sidebar-source-filter[role="treeitem"]')
-              : level === 2
-                ? treeItem.closest(".project-sidebar-project")?.querySelector('.project-sidebar-item[role="treeitem"]')
-                : null;
+            const parent = level === 2
+              ? treeItem.closest(".project-sidebar-project")?.querySelector('.project-sidebar-item[role="treeitem"]')
+              : null;
             if (!parent) return;
             parent.focus({ preventScroll: true });
           }
@@ -746,12 +767,10 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         && !dismissedPath.startsWith(`${selectedKey}/`)
       )));
       saveProjectDismissals();
-      if (!(state.sidebarCollapsedProjects instanceof Set)) state.sidebarCollapsedProjects = new Set();
-      if (!(state.sidebarCollapsedSources instanceof Set)) state.sidebarCollapsedSources = new Set();
-      state.sidebarCollapsedProjects.delete(selectedKey);
-      state.sidebarCollapsedSources.delete(`${selectedKey}::direct`);
+      state.sidebarProjectSearch = "";
+      if ($("#sidebarProjectSearch")) $("#sidebarProjectSearch").value = "";
       state.workspace = selected.path;
-      state.workspaceSource = "direct";
+      state.workspaceSource = "all";
       state.visibleLimit = 30;
       if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
       else render();
@@ -764,9 +783,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         const targetList = trigger.id === "sidebarNewProjectBtn"
             ? $("#projectSidebarList")
             : $("#workspaceList");
-        const workspaceAttribute = trigger.id === "sidebarNewProjectBtn" ? "data-source-workspace" : "data-workspace";
-        const sourceSelector = trigger.id === "sidebarNewProjectBtn" ? '[data-project-source="direct"]' : "";
-        targetList?.querySelector(`[${workspaceAttribute}="${CSS.escape(selected.path)}"]${sourceSelector}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        targetList?.querySelector(`[data-workspace="${CSS.escape(selected.path)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
       });
     };
     addWorkspaceButtons.forEach((button) => button.addEventListener("click", addWorkspace));

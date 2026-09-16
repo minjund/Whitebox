@@ -1,0 +1,245 @@
+/* Project-first sidebar: names stay in stable rows; tasks expand on demand.
+ * Loaded after the theme layer so both palettes use the same hierarchy. */
+@media (min-width: 721px) {
+  body:not([data-current-view="terminal"]) {
+    --sidebar: clamp(280px, 23vw, 322px);
+  }
+
+  #sidebarProjects {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 180px;
+    max-height: none;
+    padding: 12px 10px 10px;
+  }
+
+  body[data-current-view="terminal"] #sidebarProjects { display: none; }
+}
+
+#sidebarProjects .project-sidebar-search {
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 5px;
+  padding: 0 10px;
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  background: var(--theme-surface);
+  color: var(--theme-text-muted);
+}
+
+#sidebarProjects .project-sidebar-search:focus-within { border-color: var(--theme-accent); }
+#sidebarProjectSearch {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-text);
+  font: 12px/1.5 var(--font-sans);
+}
+#sidebarProjectSearch::placeholder { color: var(--theme-text-muted); }
+#sidebarProjects svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#sidebarProjects > header {
+  min-height: 40px;
+  gap: 4px;
+  padding: 0 4px 4px;
+}
+#sidebarProjects > header > div { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+#sidebarProjects > header h2 { margin: 0; font-size: 12px; color: var(--theme-text-secondary); }
+#sidebarProjectCount { font: 12px/1.5 var(--font-sans); color: var(--theme-text-muted); letter-spacing: 0; }
+#sidebarProjects > header button {
+  --control-height: 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--theme-text-muted);
+}
+#sidebarProjects > header button:hover { color: var(--theme-text); background: var(--theme-surface-subtle); }
+#sidebarProjects .project-sidebar-list {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  height: auto;
+  min-height: 0;
+  gap: 3px;
+  padding: 0 3px 8px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--theme-border) transparent;
+}
+#sidebarProjects .project-sidebar-group {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--theme-text);
+}
+#sidebarProjects .project-sidebar-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 25px;
+  min-height: 50px;
+  gap: 0;
+  padding: 0 3px 0 0;
+  border-radius: 6px;
+}
+#sidebarProjects .project-sidebar-row:hover { background: var(--theme-surface-subtle); }
+#sidebarProjects .selected > .project-sidebar-row {
+  background: color-mix(in srgb, var(--theme-text) 10%, var(--theme-surface));
+}
+#sidebarProjects .selected > .project-sidebar-row::before {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  width: 2px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--theme-accent);
+  content: "";
+}
+#sidebarProjects .project-sidebar-item {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 50px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#sidebarProjects .project-sidebar-icon {
+  width: 16px;
+  min-width: 16px;
+  height: 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-text-muted);
+  box-shadow: none;
+}
+#sidebarProjects .project-sidebar-drag-handle::before { display: none; }
+#sidebarProjects .project-sidebar-copy strong {
+  color: var(--theme-text);
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -.01em;
+}
+#sidebarProjects .project-sidebar-summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+  color: var(--theme-text-muted);
+  font: 12px/1.5 var(--font-sans);
+}
+#sidebarProjects .has-attention .project-sidebar-summary { color: var(--theme-warning); }
+#sidebarProjects .project-sidebar-project-toggle,
+#sidebarProjects .project-sidebar-more {
+  --control-height: 32px;
+  width: 26px;
+  min-width: 26px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--theme-text-muted);
+}
+#sidebarProjects .project-sidebar-project-toggle:hover,
+#sidebarProjects .project-sidebar-more:hover { background: var(--theme-surface-subtle); color: var(--theme-text); }
+#sidebarProjects .project-sidebar-disclosure { color: inherit; font-size: 16px; }
+#sidebarProjects .project-sidebar-toggle-space { width: 26px; }
+#sidebarProjects .project-sidebar-more { width: 24px; min-width: 24px; opacity: 0; font-size: 17px; }
+#sidebarProjects .project-sidebar-row:hover .project-sidebar-more,
+#sidebarProjects .project-sidebar-row:focus-within .project-sidebar-more { opacity: 1; }
+#sidebarProjects .project-sidebar-remove { display: none; }
+#sidebarProjects .project-sidebar-project-state { gap: 0; min-width: 12px; }
+#sidebarProjects :is(.project-sidebar-attention, .project-sidebar-result-ready) { display: flex; gap: 4px; }
+#sidebarProjects :is(.project-sidebar-attention, .project-sidebar-result-ready) b {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: 12px/1.5 var(--font-sans);
+}
+#sidebarProjects .project-sidebar-live { width: 12px; height: 20px; }
+#sidebarProjects :is(.project-sidebar-attention, .project-sidebar-result-ready, .project-sidebar-live) i {
+  width: 5px;
+  height: 5px;
+  box-shadow: none;
+}
+#sidebarProjects .project-sidebar-attention :is(i, b) { color: var(--theme-warning); }
+#sidebarProjects .project-sidebar-attention i { background: var(--theme-warning); }
+#sidebarProjects .project-sidebar-result-ready b { color: var(--theme-info); }
+#sidebarProjects .project-sidebar-result-ready i { background: var(--theme-info); }
+#sidebarProjects .project-sidebar-live i { background: var(--theme-success); }
+#sidebarProjects .project-sidebar-sessions {
+  display: grid;
+  gap: 2px;
+  margin: 3px 4px 8px 34px;
+  padding: 0 0 0 9px;
+  border-left: 1px solid var(--theme-border-soft);
+}
+#sidebarProjects .project-sidebar-sessions[hidden] { display: none; }
+#sidebarProjects .project-sidebar-session {
+  --control-height: 34px;
+  display: grid;
+  grid-template-columns: 5px 18px minmax(0, 1fr);
+  min-height: 34px;
+  gap: 7px;
+  padding: 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--theme-text-secondary);
+}
+#sidebarProjects .project-sidebar-session:hover,
+#sidebarProjects .project-sidebar-session[aria-selected="true"] { background: var(--theme-surface-subtle); }
+#sidebarProjects .project-sidebar-session b { font-size: 12px; line-height: 1.5; color: var(--theme-text-secondary); }
+#sidebarProjects .project-sidebar-agent { color: var(--theme-text-muted); font: 11px/1.5 "Cascadia Code", Consolas, monospace; }
+#sidebarProjects .project-sidebar-session i { box-shadow: none; background: var(--theme-text-muted); }
+#sidebarProjects .project-sidebar-session.live i { background: var(--theme-success); }
+#sidebarProjects .project-sidebar-session.attention i { background: var(--theme-warning); }
+#sidebarProjects .project-sidebar-session.result-ready i { background: var(--theme-info); }
+#projectSidebarMenu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 176px;
+  padding: 5px;
+  border: 1px solid var(--theme-border);
+  border-radius: 7px;
+  background: var(--theme-surface-raised, var(--theme-surface));
+  color: var(--theme-text);
+  box-shadow: var(--theme-shadow-soft);
+}
+#projectSidebarMenu button { display: block; width: 100%; border: 0; border-radius: 4px; background: transparent; color: inherit; padding: 8px 10px; text-align: left; font-size: 12px; }
+#projectSidebarMenu button:hover { background: var(--theme-surface-subtle); }
+#projectSidebarMenu button:disabled { opacity: .4; }
+#projectSidebarMenu [hidden] { display: none; }
+
+@media (hover: none) {
+  #sidebarProjects .project-sidebar-more { opacity: 1; }
+}

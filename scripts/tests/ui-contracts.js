@@ -3132,9 +3132,9 @@ function registerUiContractTests(context) {
       '프로젝트가 둘 이상일 때 드래그 가능한 항목을 만들지 않습니다.');
     assertIncludesAll(sidebarMarkup, [
       'data-sidebar-project-key=',
-      'data-project-scope=',
+      'data-sidebar-session-id=',
       'data-project-source=',
-      'project-sidebar-source',
+      'project-sidebar-sessions',
     ]);
     assertIncludesAll(sidebarMarkup, [
       'aria-grabbed="false"',
@@ -3165,7 +3165,6 @@ function registerUiContractTests(context) {
       'treeItem.getAttribute("aria-owns")',
       'candidate.getAttribute("aria-controls") === ownedGroupId',
       'document.getElementById(ownedGroupId)?.querySelector',
-      'treeItem.closest(".project-sidebar-source")',
       'treeItem.closest(".project-sidebar-project")',
       `? '[role="treeitem"]'`,
       '{ wrap: !tree, roving: tree }',
@@ -3179,8 +3178,7 @@ function registerUiContractTests(context) {
       '트리의 Up/Down은 첫 항목과 마지막 항목에서 반대편으로 순환하면 안 됩니다.');
     assert.match(treeKeyboardBinding, /toggle\.click\(\);[\s\S]*focusRememberedTreeItem\(identity\);/,
       '트리 접기/펼치기는 disclosure를 재사용하고 다시 그린 항목으로 포커스를 복원해야 합니다.');
-    assert.ok(filterEvents.includes('.project-sidebar-item[role="treeitem"]')
-      && filterEvents.includes('.project-sidebar-source-filter[role="treeitem"]'),
+    assert.ok(filterEvents.includes('.project-sidebar-item[role="treeitem"]'),
     '마우스로 disclosure를 누른 뒤에도 소유 treeitem으로 포커스를 복원해야 합니다.');
     assert.match(filterEvents, /Date\.now\(\) - sidebarProjectDragEndedAt < 250/,
       '드래그 직후 click이 프로젝트 선택으로 실행되는 것을 막아야 합니다.');
@@ -3289,7 +3287,7 @@ function registerUiContractTests(context) {
       const marker = `data-project-sortable="${key}"`;
       const start = sidebar.innerHTML.indexOf(marker);
       const next = sidebar.innerHTML.indexOf('data-project-sortable="', start + marker.length);
-      return start < 0 ? '' : sidebar.innerHTML.slice(start, next < 0 ? sidebar.innerHTML.length : next);
+      return start < 0 ? '' : sidebar.innerHTML.slice(sidebar.innerHTML.lastIndexOf('<section', start), next < 0 ? sidebar.innerHTML.length : sidebar.innerHTML.lastIndexOf('<section', next));
     };
     const parentProjectMarkup = projectMarkup('d:/repo');
     const nestedProjectMarkup = projectMarkup('d:/repo/nested');
@@ -3318,14 +3316,11 @@ function registerUiContractTests(context) {
     assert.doesNotMatch(sidebar.innerHTML, /data-result-ready-count="[1-9]\d*"/);
   });
 
-  test('프로젝트 아래 프로그램과 root 작업을 계층화하고 두 disclosure·source 필터·프로젝트 없음을 격리한다', () => {
+  test('프로젝트 아래 출처를 합친 root 작업을 직접 펼치고 검색·프로젝트 없음을 격리한다', () => {
     const dashboardSource = fs.readFileSync(path.join(root, 'renderer', 'app-dashboard.js'), 'utf8');
     const eventSource = fs.readFileSync(path.join(root, 'renderer', 'app-events-filters.js'), 'utf8');
     const appSource = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
-    const interactionSource = fs.readFileSync(path.join(root, 'scripts', 'interaction-check.js'), 'utf8');
     const qualitySource = fs.readFileSync(path.join(root, 'renderer', 'app-quality.js'), 'utf8');
-    const messagesSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
-    const sidebarStyles = fs.readFileSync(path.join(root, 'renderer', 'styles-studio-shell.css'), 'utf8');
     const sidebar = { dataset: {}, innerHTML: '' };
     const sandbox = {
       window: {
@@ -3368,7 +3363,7 @@ function registerUiContractTests(context) {
     const state = {
       snapshot: { sessions, tmux: { distros: [] } },
       workspaces: [], workspace: 'all', workspaceSource: 'all', projectOrder: [], dismissedProjects: new Set(),
-      sidebarCollapsedProjects: new Set(), sidebarCollapsedSources: new Set(),
+      sidebarExpandedProjects: new Set(), sidebarProjectSearch: "",
       providerMap: new Map(), providers: [], availability: {}, sessionOrder: [], view: 'all', search: '', sort: 'recent',
       providerFilters: new Set(),
       sourcePluginSettings: { version: 2, enabledPluginIds: ['builtin.opencode', 'builtin.aside'], asideHistoryFolders: [] },
@@ -3420,310 +3415,107 @@ function registerUiContractTests(context) {
     };
     const projectKey = 'd:/shared/project';
     const projectlessKey = '__projectless__';
-    const sourceKey = (project, source) => `${project}::${source}`;
 
     dashboard.renderWorkspaces();
+    const projectBlock = () => siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
     assert.equal((sidebar.innerHTML.match(/data-sidebar-project-key=/g) || []).length, 2,
-      '동일 경로 세 source는 세 프로젝트가 아니라 경로 프로젝트 하나와 프로젝트 없음 하나로 합쳐져야 합니다.');
-    assertIncludesAll(sidebar.innerHTML, [
-      `data-sidebar-project-key="${projectKey}"`,
-      `data-sidebar-project-key="${projectlessKey}"`,
-      'Whitebox',
-      'OpenCode',
-      'Aside Browser',
-    ]);
-    const sharedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
+      '같은 경로의 모든 출처는 하나의 프로젝트로 합치고 프로젝트 없음은 별도로 둡니다.');
+    assert.doesNotMatch(sidebar.innerHTML, /data-sidebar-source-key|data-source-workspace|aria-level="3"/);
+    const shared = projectBlock();
+    assert.equal((shared.match(/data-sidebar-session-id=/g) || []).length, 7,
+      '직접 실행 5개와 가져온 root 2개를 모두 표시해야 합니다.');
+    for (const id of ['direct-root', 'direct-root-2', 'direct-root-3', 'direct-root-4', 'direct-root-5']) {
+      assert.ok(shared.includes('data-pty-focus-trigger="' + id + '"'));
+    }
+    for (const id of ['builtin.opencode:open-root', 'builtin.aside:aside-root']) {
+      assert.ok(shared.includes('data-open-session="' + id + '"'));
+    }
+    assert.ok(!shared.includes('data-sidebar-session-id="builtin.opencode:open-child"'));
     const projectless = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectlessKey);
-    assert.equal((sharedProject.match(/data-sidebar-source-key=/g) || []).length, 3,
-      '한 프로젝트 아래 Whitebox·OpenCode·Aside 프로그램 행이 각각 있어야 합니다.');
-    assert.equal((projectless.match(/data-sidebar-source-key=/g) || []).length, 3,
-      '프로젝트 없음도 별도 source-first 목록이 아니라 같은 프로젝트→프로그램 계층이어야 합니다.');
-    for (const source of ['direct', 'builtin.opencode', 'builtin.aside']) {
-      assert.ok(sharedProject.includes(`data-sidebar-source-key="${sourceKey(projectKey, source)}"`));
-      assert.ok(projectless.includes(`data-sidebar-source-key="${sourceKey(projectlessKey, source)}"`));
-      const expectedKind = source === 'direct' ? 'program' : 'plugin';
-      assert.ok(tagWith(
-        siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, source)),
-        `data-sidebar-source-key="${sourceKey(projectKey, source)}"`,
-      ).includes(`data-source-kind="${expectedKind}"`),
-      `${source} 행이 ${expectedKind} 유형임을 마크업에서 구분할 수 없습니다.`);
-      assert.ok(sharedProject.includes(`data-source-workspace="${cwd}" data-project-source="${source}"`),
-        `${source} 프로그램 필터가 동일 경로의 다른 source와 구분되지 않았습니다.`);
-      assert.ok(projectless.includes(`data-source-workspace="${projectlessKey}" data-project-source="${source}"`),
-        `${source} 프로젝트 없음 필터가 source 경계를 잃었습니다.`);
-    }
-    const sharedProjectSelector = tagWith(sharedProject, `data-workspace="${cwd}" data-project-source="all"`);
-    const projectlessSelector = tagWith(projectless, `data-workspace="${projectlessKey}" data-project-source="all"`);
-    assert.ok(sharedProjectSelector.includes('project-sidebar-item'),
-      '프로젝트 이름 버튼이 source=all인 전체 선택 필터여야 합니다.');
-    assert.ok(projectlessSelector.includes('project-sidebar-item'),
-      '프로젝트 없음 이름 버튼도 source=all인 전체 선택 필터여야 합니다.');
-    assert.equal(sidebar.innerHTML.includes('모든 프로그램과 플러그인'), false,
-      '프로젝트 아래에 중복 전체 선택 행을 표시하면 안 됩니다.');
-    assert.equal(sidebar.innerHTML.includes('studio.sidebar.all_sources'), false,
-      '번역 키가 그대로 보이는 경우에도 중복 전체 선택 행으로 간주해야 합니다.');
-
-    const directProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'direct'));
-    const openCodeProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode'));
-    const asideProgram = siblingBlock(sharedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.aside'));
-    // Direct root tasks open the full PTY focus surface; imported transcript-only
-    // records use the shared read-only detail drawer through data-open-session.
-    assertIncludesAll(directProgram, [
-      'data-pty-focus-trigger="direct-root"',
-      'data-pty-focus-trigger="direct-root-2"',
-      'data-pty-focus-trigger="direct-root-3"',
-      'project-sidebar-session-more',
-      '+ 2개 작업 더 있음',
+    assert.equal((projectless.match(/data-sidebar-session-id=/g) || []).length, 3);
+    assertDisclosure(shared, 'data-sidebar-project-toggle', false, 'project-sidebar-sessions');
+    assertIncludesAll(tagWith(shared, 'data-workspace="' + cwd + '"'), [
+      'role="treeitem"', 'aria-level="1"', 'aria-selected="false"', 'aria-expanded="false"', 'aria-owns=', 'tabindex="0"',
     ]);
-    assert.equal((directProgram.match(/data-pty-focus-trigger=/g) || []).length, 3,
-      '작업이 많은 프로그램도 최신 root 작업 3개까지만 미리 보여야 합니다.');
-    assert.equal(directProgram.includes('data-pty-focus-trigger="direct-root-4"'), false);
-    assert.equal(directProgram.includes('data-pty-focus-trigger="direct-root-5"'), false);
-    assert.ok(openCodeProgram.includes('data-open-session="builtin.opencode:open-root"'));
-    assert.equal(openCodeProgram.includes('data-open-session="builtin.opencode:open-child"'), false,
-      '프로그램 아래에는 하위 agent가 아니라 root session 작업 행만 표시해야 합니다.');
-    assert.equal(openCodeProgram.includes('project-sidebar-session-more'), false,
-      '남은 root 작업이 없는 프로그램에 더 있음 요약을 표시하면 안 됩니다.');
-    assert.ok(asideProgram.includes('data-open-session="builtin.aside:aside-root"'));
-    assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'direct'))
-      .includes('data-pty-focus-trigger="direct-projectless"'));
-    assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.opencode'))
-      .includes('data-open-session="builtin.opencode:open-projectless"'));
-    assert.ok(siblingBlock(projectless, 'data-sidebar-source-key', sourceKey(projectlessKey, 'builtin.aside'))
-      .includes('data-open-session="builtin.aside:aside-projectless"'));
-
-    const projectTreeItem = tagWith(sharedProject, `data-workspace="${cwd}" data-project-source="all"`);
-    const sourceTreeItem = tagWith(openCodeProgram, `data-source-workspace="${cwd}" data-project-source="builtin.opencode"`);
-    assertIncludesAll(projectTreeItem, ['role="treeitem"', 'aria-level="1"', 'aria-selected="false"', 'aria-expanded="true"', 'aria-owns=', 'tabindex="0"']);
-    assertIncludesAll(sourceTreeItem, ['role="treeitem"', 'aria-level="2"', 'aria-selected="false"', 'aria-expanded="true"', 'aria-owns=', 'tabindex="-1"']);
-    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1,
-      '프로젝트 트리는 렌더 시 진입 가능한 treeitem을 하나만 제공해야 합니다.');
-    assert.equal((sidebar.innerHTML.match(/data-sidebar-(?:project|source)-toggle=[^>]*tabindex="-1"/g) || []).length, 8,
-      '프로젝트와 프로그램 disclosure는 별도 Tab 정지점이 아니어야 합니다.');
-    const removeButtons = sidebar.innerHTML.match(/<button[^>]*data-remove-workspace[^>]*>/g) || [];
-    assert.match(dashboardSource, /data-remove-workspace[\s\S]{0,500}?tabindex="-1"/,
-      '프로젝트 제거 버튼 정의는 composite tree의 별도 Tab 정지점을 만들지 않아야 합니다.');
-    assert.ok(removeButtons.every(button => button.includes('tabindex="-1"')),
-      '프로젝트 제거 버튼은 composite tree의 별도 Tab 정지점이 아니어야 합니다.');
+    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
     const treeButtons = sidebar.innerHTML.match(/<button[^>]*>/g) || [];
-    assert.equal(treeButtons.filter(button => !/tabindex="(?:0|-1)"/.test(button)).length, 0,
-      '프로젝트 트리 내부에는 로빙 treeitem 외의 암묵적 Tab 정지점이 없어야 합니다.');
-    for (const item of [projectTreeItem, sourceTreeItem]) {
-      const ownedId = /aria-owns="([^"]+)"/.exec(item)?.[1];
-      assert.ok(ownedId && tagWith(sidebar.innerHTML, `id="${ownedId}"`).includes('role="group"'),
-        '트리 선택 항목이 펼침 화살표의 자식 그룹을 접근성 트리에 소유해야 합니다.');
-    }
-
-    const controls = [...sidebar.innerHTML.matchAll(/aria-controls="([^"]+)"/g)]
-      .map(match => match[1])
-      .filter(id => id !== 'ptyFocusSurface');
-    assert.equal(controls.length, 8, '프로젝트 2개와 프로그램 6개 모두 독립 disclosure여야 합니다.');
-    assert.equal(new Set(controls).size, controls.length, '각 disclosure의 aria-controls 대상 ID가 겹치면 안 됩니다.');
-    controls.forEach(id => assert.equal((sidebar.innerHTML.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1));
-    assertDisclosure(sharedProject, 'data-sidebar-project-toggle', true, 'project-sidebar-source-list');
-    assertDisclosure(openCodeProgram, 'data-sidebar-source-toggle', true, 'project-sidebar-sessions');
-
-    state.sidebarCollapsedProjects.add(projectKey);
-    dashboard.renderWorkspaces();
-    assertDisclosure(siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey),
-      'data-sidebar-project-toggle', false, 'project-sidebar-source-list');
-    assert.equal(state.sidebarCollapsedSources.size, 0, '프로젝트 접기가 프로그램별 접기 상태를 덮어쓰면 안 됩니다.');
-
-    state.sidebarCollapsedProjects.delete(projectKey);
-    state.sidebarCollapsedSources.add(sourceKey(projectKey, 'builtin.opencode'));
+    assert.ok(treeButtons.every(button => /tabindex="(?:0|-1)"/.test(button)));
+    assertIncludesAll(tagWith(shared, 'data-sidebar-session-id="direct-root"'), ['aria-level="2"', 'tabindex="-1"']);
+    state.sidebarExpandedProjects.add(projectKey);
     state.workspace = cwd;
-    state.workspaceSource = 'builtin.aside';
+    state.workspaceSource = 'all';
     dashboard.renderWorkspaces();
-    const expandedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
-    assertDisclosure(siblingBlock(expandedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.opencode')),
-      'data-sidebar-source-toggle', false, 'project-sidebar-sessions');
-    assertDisclosure(siblingBlock(expandedProject, 'data-sidebar-source-key', sourceKey(projectKey, 'builtin.aside')),
-      'data-sidebar-source-toggle', true, 'project-sidebar-sessions');
-    assert.equal(state.workspace, cwd);
-    assert.equal(state.workspaceSource, 'builtin.aside');
-    const selectedSourceTreeItem = tagWith(expandedProject, `data-project-source="builtin.aside"`);
-    assert.ok(selectedSourceTreeItem.includes('aria-selected="true"'),
-      '다른 프로그램을 접어도 선택한 source 필터가 바뀌면 안 됩니다.');
-    assert.ok(selectedSourceTreeItem.includes('tabindex="0"'),
-      '선택한 프로그램은 프로젝트 트리의 단일 Tab 진입점이어야 합니다.');
-    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
+    assertDisclosure(projectBlock(), 'data-sidebar-project-toggle', true, 'project-sidebar-sessions');
+    assert.ok(tagWith(projectBlock(), 'data-workspace="' + cwd + '"').includes('aria-selected="true"'));
+    assert.equal(Array.from(sessions.filter(dashboard.matchesWorkspaceFilter)).length, 8,
+      '프로젝트 선택은 출처와 관계없이 root 및 하위 작업을 모두 포함해야 합니다.');
+    state.sidebarExpandedProjects.clear();
+    dashboard.renderWorkspaces();
+    assertDisclosure(projectBlock(), 'data-sidebar-project-toggle', false, 'project-sidebar-sessions');
+    assert.equal(state.workspace, cwd, '접기는 프로젝트 선택을 바꾸지 않습니다.');
 
-    state.sidebarCollapsedProjects.add(projectKey);
+    state.sidebarProjectSearch = 'D:/SHARED';
     dashboard.renderWorkspaces();
-    const collapsedSelectedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
-    assert.ok(tagWith(collapsedSelectedProject, `data-workspace="${cwd}" data-project-source="all"`).includes('tabindex="0"'),
-      '선택한 프로그램의 부모 프로젝트가 접히면 보이는 프로젝트 항목이 Tab 진입점이어야 합니다.');
-    assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
-    state.sidebarCollapsedProjects.delete(projectKey);
+    assert.equal((sidebar.innerHTML.match(/data-sidebar-project-key=/g) || []).length, 1);
+    state.sidebarProjectSearch = 'does-not-exist';
     dashboard.renderWorkspaces();
+    assert.doesNotMatch(sidebar.innerHTML, /data-sidebar-project-key=/);
+    assert.match(sidebar.innerHTML, /studio.sidebar.no_matches/);
+    assert.equal(state.workspace, cwd, '검색 결과가 없어도 현재 작업 영역을 유지해야 합니다.');
+    state.sidebarProjectSearch = '';
+    dashboard.renderWorkspaces();
+    assert.equal((sidebar.innerHTML.match(/data-sidebar-project-key=/g) || []).length, 2);
 
-    const workspaceHandler = eventSource.slice(
-      eventSource.indexOf('const handleWorkspaceClick = async (event) => {'),
-      eventSource.indexOf('workspaceLists.forEach', eventSource.indexOf('const handleWorkspaceClick = async (event) => {')),
-    );
-    const projectToggleIndex = workspaceHandler.indexOf('[data-sidebar-project-toggle]');
-    const sourceToggleIndex = workspaceHandler.indexOf('[data-sidebar-source-toggle]');
-    const filterIndex = workspaceHandler.indexOf('[data-workspace], [data-source-workspace]');
-    assert.ok(projectToggleIndex >= 0 && sourceToggleIndex >= 0 && filterIndex > projectToggleIndex && filterIndex > sourceToggleIndex,
-      '프로젝트·프로그램 disclosure 화살표는 이름 필터 선택과 분리해 먼저 처리해야 합니다.');
-    assert.ok(appSource.includes('"data-source-workspace"'),
-      '프로그램 이름 버튼은 렌더 후에도 포커스를 복원할 수 있는 안정 식별자여야 합니다.');
-    assert.ok(eventSource.includes(`? '[role="treeitem"]'`),
-      '프로젝트·프로그램·작업 이름이 프로젝트 트리의 방향키 탐색 순서에 포함되어야 합니다.');
-    assert.ok(eventSource.includes('const workspaceAttribute = trigger.id === "sidebarNewProjectBtn" ? "data-source-workspace" : "data-workspace";'),
-      '새 프로젝트를 추가한 뒤 직접 실행 프로그램 행으로 스크롤해야 합니다.');
-    assertIncludesAll(eventSource, [
-      'state.sidebarCollapsedProjects.delete(selectedKey);',
-      'state.sidebarCollapsedSources.delete(`${selectedKey}::direct`);',
-    ]);
-    assert.ok(interactionSource.includes("{ selector: '[data-source-workspace]', action: 'workspace:source-select' }"),
-      '프로그램 이름 버튼이 상호작용 전수 점검 매니페스트에 없습니다.');
-    assert.ok(interactionSource.includes("{ selector: '[data-sidebar-project-toggle]', action: 'workspace:project-toggle' }")
-      && interactionSource.includes("{ selector: '[data-sidebar-source-toggle]', action: 'workspace:source-toggle' }"),
-    '분리된 프로젝트·프로그램 펼침 화살표가 상호작용 전수 점검 매니페스트에 없습니다.');
-    assertIncludesAll(workspaceHandler, ['state.sidebarCollapsedProjects', 'state.sidebarCollapsedSources', 'renderWorkspaces()']);
     activeSessionIds.delete('direct-root');
     activeSessionIds.delete('direct-root-2');
     dashboard.renderWorkspaces();
-    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'), false,
-      '기록으로 이동한 작업은 사이드바에서 제거되어야 합니다.');
-    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-2"'), false);
-    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-4"'),
-      '기록을 제외한 뒤 다음 현재 작업이 미리보기를 채워야 합니다.');
-    assert.equal(sidebar.innerHTML.includes('project-sidebar-session-more'), false,
-      '더 있음 개수에서도 지난 기록을 제외해야 합니다.');
+    assert.ok(!sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'));
+    assert.ok(!sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-2"'));
+    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-5"'));
     activeSessionIds.delete('builtin.opencode:open-root');
     dashboard.renderWorkspaces();
     assert.ok(sidebar.innerHTML.includes('data-open-session="builtin.opencode:open-root"'),
-      '하위 작업이 실행 중이면 부모 작업은 사이드바에 유지되어야 합니다.');
+      '하위 작업이 실행 중이면 부모 root를 유지해야 합니다.');
     activeSessionIds.delete('builtin.opencode:open-child');
-    activeSessionIds.delete('direct-projectless');
     dashboard.renderWorkspaces();
-    assert.equal(sidebar.innerHTML.includes('data-open-session="builtin.opencode:open-root"'), false);
-    assert.equal(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-projectless"'), false);
-    assert.equal(sidebar.innerHTML.includes(`data-sidebar-source-key="${sourceKey(projectKey, 'builtin.opencode')}"`), false,
-      '표시할 작업이 없는 프로그램 항목 자체를 숨겨야 합니다.');
-    assert.equal(sidebar.innerHTML.includes(`data-sidebar-source-key="${sourceKey(projectlessKey, 'direct')}"`), false);
-    assert.equal(sidebar.innerHTML.includes('project-sidebar-session-empty'), false);
-    state.view = 'active';
-    state.workspace = 'all';
-    state.workspaceSource = 'all';
-    assert.ok(dashboard.filteredSessions().some(session => session.id === 'direct-root'),
-      '사이드바에서 제거한 작업은 지난 기록에서 계속 조회할 수 있어야 합니다.');
+    assert.ok(!sidebar.innerHTML.includes('data-open-session="builtin.opencode:open-root"'));
+    state.view = 'active'; state.workspace = 'all'; state.workspaceSource = 'all';
+    assert.ok(dashboard.filteredSessions().some(session => session.id === 'direct-root'));
     activeSessionIds.add('direct-root');
     dashboard.renderWorkspaces();
-    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'),
-      '작업이 다시 활성화되면 사이드바에도 복귀해야 합니다.');
+    assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'));
     activeSessionIds.clear();
     dashboard.renderWorkspaces();
-    assert.equal(sidebar.innerHTML.includes('data-sidebar-source-key='), false);
-    assert.equal(sidebar.innerHTML.includes('data-sidebar-project-key='), false,
-      '현재 작업이 없는 자동 수집 프로젝트와 프로젝트 없음 그룹도 숨겨야 합니다.');
+    assert.doesNotMatch(sidebar.innerHTML, /data-sidebar-project-key=/);
     sessions.forEach(session => activeSessionIds.add(session.id));
-    const concreteSourceSync = workspaceHandler.slice(
-      workspaceHandler.indexOf('if (requestedSource !== "all")'),
-      workspaceHandler.indexOf('acknowledgeProjectNotices(requestedWorkspace, requestedSource)'),
-    );
-    assert.match(concreteSourceSync, /^if \(requestedSource !== "all"\) \{/,
-      'parent source=all 선택은 기존 실행 source를 유지해야 합니다.');
-    assertIncludesAll(concreteSourceSync, [
-      'state.runSource = requestedSource;',
-      'syncRunComposer();',
-      'saveRunDraft();',
-    ]);
-    assert.ok(
-      /state\.runDraft\.sourcePluginId = requestedSource;/.test(concreteSourceSync)
-        || /state\.runDraft = \{[\s\S]*?sourcePluginId: requestedSource[\s\S]*?\};/.test(concreteSourceSync),
-      '프로그램 leaf 선택은 실행 source와 저장 draft를 함께 동기화해야 합니다.',
-    );
-    assertIncludesAll(appSource, ['sidebarCollapsedProjects: new Set()', 'sidebarCollapsedSources: new Set()']);
-    assertIncludesAll(qualitySource, [
-      'state.sidebarCollapsedProjects = new Set(',
-      'Array.isArray(dashboard.sidebarCollapsedProjects)',
-      'state.sidebarCollapsedSources = new Set(',
-      'Array.isArray(dashboard.sidebarCollapsedSources)',
-      'sidebarCollapsedProjects: [...(state.sidebarCollapsedProjects || [])]',
-      'sidebarCollapsedSources: [...(state.sidebarCollapsedSources || [])]',
-    ]);
-    assertIncludesAll(sidebarStyles, [
-      '.project-sidebar-project',
-      '.project-sidebar-source',
-      '.project-sidebar-source-list',
-      '.project-sidebar-sessions',
-      '.project-sidebar-session-more',
-    ]);
-    assert.match(
-      messagesSource,
-      /"studio\.sidebar\.more_source_sessions": \{"ko":"\+ \{count\}개 작업 더 있음","en":"[^"]+","zh-CN":"[^"]+"\}/,
-      '남은 작업 수 요약은 한국어·영어·중국어에서 지역화해야 합니다.',
-    );
-
-    state.workspace = cwd;
-    state.workspaceSource = 'builtin.opencode';
-    assert.deepStrictEqual(
-      Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id),
-      ['builtin.opencode:open-root', 'builtin.opencode:open-child'],
-    );
-    state.workspaceSource = 'direct';
-    assert.deepStrictEqual(
-      Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id),
-      ['direct-root', 'direct-root-2', 'direct-root-3', 'direct-root-4', 'direct-root-5'],
-      '사이드바 preview 제한이 실제 프로젝트·source 필터 결과를 잘라내면 안 됩니다.',
-    );
-
-    state.workspace = '__projectless__';
-    state.workspaceSource = 'builtin.aside';
-    dashboard.renderWorkspaces();
-    assert.equal(state.workspace, '__projectless__');
-    assert.equal(state.workspaceSource, 'builtin.aside');
-    const selectedProjectless = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectlessKey);
-    assert.ok(tagWith(selectedProjectless, 'data-project-source="builtin.aside"').includes('aria-selected="true"'),
-      'Aside 프로젝트 없음 항목의 선택 상태가 다른 source로 새면 안 됩니다.');
-    assert.deepStrictEqual(
-      Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id),
-      ['builtin.aside:aside-projectless'],
-      '프로젝트 없음 필터도 source 경계를 유지해야 합니다.',
-    );
-
-    state.workspace = cwd;
-    state.workspaceSource = 'builtin.aside';
     state.sourcePluginSettings.enabledPluginIds = ['builtin.opencode'];
     dashboard.renderWorkspaces();
-    assert.equal(sidebar.innerHTML.includes('::builtin.aside"'), false);
-    assert.ok(sidebar.innerHTML.includes(`data-sidebar-project-key="${projectKey}"`),
-      '선택한 플러그인만 사라져도 다른 프로그램이 있는 프로젝트 자체는 유지해야 합니다.');
-    assert.equal(state.workspace, cwd);
-    assert.equal(state.workspaceSource, 'all',
-      '선택 source만 사라지면 같은 프로젝트의 전체 프로그램 필터로 복구해야 합니다.');
+    assert.ok(!sidebar.innerHTML.includes('data-open-session="builtin.aside:aside-root"'));
+    assert.ok(sidebar.innerHTML.includes('data-sidebar-project-key="' + projectKey + '"'));
 
+    state.workspace = projectlessKey;
+    dashboard.renderWorkspaces();
+    assert.ok(tagWith(siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectlessKey),
+      'data-workspace="' + projectlessKey + '"').includes('aria-selected="true"'));
+    assert.deepStrictEqual(Array.from(visibleSessions().filter(dashboard.matchesWorkspaceFilter), session => session.id),
+      ['direct-projectless', 'builtin.opencode:open-projectless']);
     sessions.splice(0, sessions.length, ...sessions.filter(session => !session.originCwd));
     state.workspace = cwd;
-    state.workspaceSource = 'all';
     dashboard.renderWorkspaces();
-    assert.equal(sidebar.innerHTML.includes(`data-sidebar-project-key="${projectKey}"`), false);
     assert.equal(state.workspace, 'all');
-    assert.equal(state.workspaceSource, 'all');
-
     state.workspaces = [{ name: '빈 저장 프로젝트', path: cwd }];
     state.workspace = cwd;
-    state.workspaceSource = 'direct';
     dashboard.renderWorkspaces();
-    const emptySavedProject = siblingBlock(sidebar.innerHTML, 'data-sidebar-project-key', projectKey);
-    assert.ok(emptySavedProject.includes('빈 저장 프로젝트'),
-      '작업이 없는 저장 프로젝트 자체는 프로젝트 목록에 남아야 합니다.');
-    assert.equal((emptySavedProject.match(/data-sidebar-source-key=/g) || []).length, 0,
-      '작업이 없는 저장 프로젝트 아래에 Whitebox 또는 플러그인 source 행을 만들면 안 됩니다.');
-    assert.equal(emptySavedProject.includes(`data-sidebar-source-key="${sourceKey(projectKey, 'direct')}"`), false,
-      '작업 0건인 Whitebox source 행이 저장 프로젝트 아래에 남으면 안 됩니다.');
-    assert.equal(emptySavedProject.includes('data-sidebar-project-toggle'), false,
-      'source가 없는 프로젝트에 빈 disclosure를 표시하면 안 됩니다.');
-    assert.equal(emptySavedProject.includes('project-sidebar-source-list'), false,
-      'source가 없는 프로젝트에 빈 source 컨테이너를 표시하면 안 됩니다.');
-    assert.equal(emptySavedProject.includes('<small>'), false,
-      '빈 저장 프로젝트에 0건 source 요약을 표시하면 안 됩니다.');
+    assert.ok(projectBlock().includes('빈 저장 프로젝트'));
+    assert.doesNotMatch(projectBlock(), /data-sidebar-project-toggle|data-sidebar-session-id/);
     assert.equal(state.workspace, cwd);
-    assert.equal(state.workspaceSource, 'all',
-      '사라진 direct source 선택은 저장 프로젝트 자체를 유지한 채 전체 source로 복구해야 합니다.');
+    assertIncludesAll(qualitySource, [
+      'state.sidebarExpandedProjects = new Set(',
+      'Array.isArray(dashboard.sidebarExpandedProjects)',
+      'sidebarExpandedProjects: [...(state.sidebarExpandedProjects || [])]',
+    ]);
+    assertIncludesAll(appSource, ['sidebarExpandedProjects: new Set()', 'sidebarProjectSearch: ""']);
+    assertIncludesAll(eventSource, ['selectSidebarTaskWorkspace', 'showSidebarMenu', 'state.sidebarExpandedProjects', 'state.sidebarProjectSearch']);
   });
 
   test('플러그인 설정 응답은 응답 시점의 drawer 선택만 닫는다', () => {

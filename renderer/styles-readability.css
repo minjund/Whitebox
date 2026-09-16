@@ -783,7 +783,7 @@ body button:not(.icon-button):not(.brand-shortcut-button):not(.pty-focus-node) {
   line-height: 1.35;
 }
 
-body button:not(.icon-button):not(.brand-shortcut-button):not(.pty-focus-node) :is(b, strong, span, small) {
+body button:not(.icon-button):not(.brand-shortcut-button):not(.pty-focus-node):not(.project-sidebar-item):not(.project-sidebar-session) :is(b, strong, span, small) {
   font-size: 12px !important;
   line-height: 1.45;
 }
@@ -806,7 +806,7 @@ body .terminal-slash-menu .terminal-slash-menu-list > button {
   min-height: 52px !important;
 }
 
-body :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, summary, [role="button"]) {
+body :is(input:not([type="checkbox"]):not([type="radio"]):not(#sidebarProjectSearch), select, textarea, summary, [role="button"]) {
   min-height: 44px !important;
 }
 

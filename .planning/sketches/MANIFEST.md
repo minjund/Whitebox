@@ -28,3 +28,4 @@ LoadToAgent의 핵심 정보인 사용자 판단, 실행 관계, 완료 기록�
 | 009 | inline-pty-toggle | 현재 화면을 그대로 둔 채 오른쪽 세션 팝업만 클릭한 AI 에이전트 행 바로 아래의 PTY로 바꾸고 기존 상세 정보를 작업 진행 화면에 넣을 수 있는가? | 최소 변경안 | current-ui, inline-pty, detail-view, minimal-change |
 | 010 | comprehension-packet-placement | 이해 패킷이 PTY 문맥을 끊지 않으면서 어디에 떠야 하는가? | A · 중앙 이해 브리핑 | comprehension, packet, pty-focus, modal, layout, open-book |
 | 011 | comprehension-remediation-flow | 오답→해설→변형 문제 전환을 같은 팝업에서 어떻게 보여줄 것인가? | C · 카드 제자리 변환 | comprehension, remediation, quiz, feedback, cognitive-debt |
+| 012 | sidebar-project-readability | 프로젝트 이름, 상태, 작업을 어떤 위계로 보여줘야 왼쪽 목록이 가장 빨리 읽히는가? | A · 심플 리스트 (구현) | sidebar, projects, readability, orca, cmux |

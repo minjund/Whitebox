@@ -318,10 +318,10 @@ app.whenReady().then(async () => {
     for (const workspace of projectPaths) {
       await win.webContents.executeJavaScript(`(() => {
         const item = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
-        if (item?.getAttribute('aria-expanded') === 'true') item.click();
+        if (item?.getAttribute('aria-expanded') === 'true') item.closest('.project-sidebar-project').querySelector('[data-sidebar-project-toggle]')?.click();
       })()`);
       await waitFor(win, `[...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
-        .find(node => node.dataset.workspace === ${JSON.stringify(workspace)})?.getAttribute('aria-expanded') === 'false'`, `프로젝트 접기 실패: ${workspace}`);
+        .find(node => node.dataset.workspace === ${JSON.stringify(workspace)})?.getAttribute('aria-expanded') !== 'true'`, `프로젝트 접기 실패: ${workspace}`);
       await win.webContents.executeJavaScript(`(() => {
         const item = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')].find(node => node.dataset.workspace === ${JSON.stringify(workspace)});
         item?.click();
@@ -331,7 +331,7 @@ app.whenReady().then(async () => {
         selected: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"][aria-selected="true"]').length,
         projects: document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]').length,
         sources: document.querySelectorAll('#projectSidebarList [data-source-workspace]').length,
-        projectsWithSources: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+        projectsWithTasks: [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
           .filter(item => item.hasAttribute('aria-expanded')).length,
         emptySources: [...document.querySelectorAll('#projectSidebarList .project-sidebar-source')]
           .filter(item => !item.querySelector('.project-sidebar-session')).length,
@@ -345,9 +345,9 @@ app.whenReady().then(async () => {
       }))()`);
       if (projectState.selected !== 1 || projectState.projects !== projectPaths.length
         || projectState.emptySources !== 0
-        || projectState.expandedProjects > projectState.projectsWithSources
-        || projectState.expandedSources !== projectState.sources
-        || projectState.nestedSessionAreas !== projectState.sources
+        || projectState.expandedProjects > projectState.projectsWithTasks
+        || projectState.sources !== 0 || projectState.expandedSources !== 0
+        || projectState.nestedSessionAreas !== projectState.projectsWithTasks
         || projectState.nestedSessions < projectState.projects
         || projectState.mainProjects.length > 1) {
         throw new Error(`프로젝트 선택 격리 실패: ${workspace} · ${JSON.stringify(projectState)}`);

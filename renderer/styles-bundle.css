@@ -35,6 +35,7 @@
 @import url("styles-studio-shell.css") layer(studio);
 @import url("styles-polish.css") layer(polish);
 @import url("styles-theme.css") layer(theme);
+@import url("styles-project-sidebar.css") layer(theme);
 
 @layer control-room {
   .downstream-stack .child-session .agent-flow-session-title,

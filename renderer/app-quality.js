@@ -152,7 +152,9 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.workspace = typeof dashboard.workspace === "string" && dashboard.workspace.length <= 2_000
         ? dashboard.workspace
         : "all";
-      state.workspaceSource = normalizedWorkspaceSource(dashboard.workspaceSource);
+      // The project list now selects work across all origins. Do not restore
+      // an invisible source filter from the previous three-level sidebar.
+      state.workspaceSource = "all";
       state.sort = ["recent", "tokens", "context"].includes(dashboard.sort) ? dashboard.sort : "recent";
       state.controlRoomSort = ["recent", "tokens", "context"].includes(dashboard.controlRoomSort) ? dashboard.controlRoomSort : "recent";
       state.sessionOrder = Array.isArray(dashboard.sessionOrder)
@@ -161,14 +163,9 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.projectOrder = Array.isArray(dashboard.projectOrder)
         ? dashboard.projectOrder.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000)
         : [];
-      state.sidebarCollapsedProjects = new Set(
-        Array.isArray(dashboard.sidebarCollapsedProjects)
-          ? dashboard.sidebarCollapsedProjects.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
-          : [],
-      );
-      state.sidebarCollapsedSources = new Set(
-        Array.isArray(dashboard.sidebarCollapsedSources)
-          ? dashboard.sidebarCollapsedSources.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
+      state.sidebarExpandedProjects = new Set(
+        Array.isArray(dashboard.sidebarExpandedProjects)
+          ? dashboard.sidebarExpandedProjects.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
           : [],
       );
     } else {
@@ -180,8 +177,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.controlRoomSort = "recent";
       state.sessionOrder = [];
       state.projectOrder = [];
-      state.sidebarCollapsedProjects = new Set();
-      state.sidebarCollapsedSources = new Set();
+      state.sidebarExpandedProjects = new Set();
     }
     const search = $("#searchInput");
     if (search) search.value = state.search;
@@ -224,9 +220,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       controlRoomSort: ["recent", "tokens", "context"].includes(state.controlRoomSort) ? state.controlRoomSort : "recent",
       sessionOrder: (state.sessionOrder || []).filter(id => typeof id === "string" && id.length <= 500).slice(0, 1_000),
       projectOrder: (state.projectOrder || []).filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000),
-      sidebarCollapsedProjects: [...(state.sidebarCollapsedProjects || [])]
-        .filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500),
-      sidebarCollapsedSources: [...(state.sidebarCollapsedSources || [])]
+      sidebarExpandedProjects: [...(state.sidebarExpandedProjects || [])]
         .filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500),
     };
     try {

@@ -620,14 +620,8 @@ app.whenReady().then(async () => {
       const individualExpanded = Boolean(document.querySelector('.control-room-project-group')?.open);
       firstSummary?.click();
       const individualCollapsed = !document.querySelector('.control-room-project-group')?.open;
-      let cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
+      const cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
         .find(node => node.querySelector('strong')?.textContent.trim().startsWith('CMS_WEB'));
-      if (cmsChip?.getAttribute('aria-expanded') === 'true') {
-        control.state.sidebarCollapsedProjects.add(cmsChip.dataset.sidebarProjectRef);
-        control.renderWorkspaces();
-        cmsChip = [...document.querySelectorAll('#projectSidebarList .project-sidebar-item[data-workspace][data-project-source="all"]')]
-          .find(node => node.querySelector('strong')?.textContent.trim().startsWith('CMS_WEB'));
-      }
       cmsChip?.click();
       const projectFiltered = control.state.workspace === 'D:\\\\cms-web'
         && document.querySelector('#projectContextName')?.textContent.trim() === 'CMS_WEB'
