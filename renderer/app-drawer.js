@@ -170,6 +170,19 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
         }))
       : null;
     if (globalThis.document?.querySelector?.("#detailDrawer")?.classList.contains("open")) closeDrawer(false);
+    if (root && window.WhiteboxTerminal?.refreshAgentTargets) {
+      try {
+        // A project snapshot can arrive before the terminal inventory. Refresh
+        // it before deciding to resume: bridge projections already own a PTY
+        // and cannot be launched as provider conversation IDs.
+        await window.WhiteboxTerminal.refreshAgentTargets(root);
+      } catch (error) {
+        window.WhiteboxRendererUtils?.reportRecoverableError?.("pty-focus-target-refresh", error);
+        if (isCurrent()) toast(window.WhiteboxI18n.errorText(error, "pty_focus.terminal_unavailable"));
+        return false;
+      }
+      if (!isCurrent()) return false;
+    }
     let exactTarget = options.targetId || options.terminalId
       ? { id: options.targetId || options.terminalId, terminalId: options.terminalId || options.targetId }
       : resultReviewPtyTarget(root);
@@ -189,6 +202,8 @@ window.WhiteboxAppFactories.createDrawer = function createDrawer(context = {}) {
           if (createdId) exactTarget = { id: createdId, terminalId: createdId };
         } catch (error) {
           window.WhiteboxRendererUtils?.reportRecoverableError?.("pty-focus-create", error);
+          if (isCurrent()) toast(window.WhiteboxI18n.errorText(error, "pty_focus.terminal_unavailable"));
+          return false;
         }
       }
     }

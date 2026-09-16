@@ -100,9 +100,15 @@ async function run() {
         && window.WhiteboxTerminal && window.WhiteboxInlineTerminal && window.interactionTest)`,
       'PTY focus renderer fixture가 준비되지 않았습니다.');
 
-    const opened = await rendererValue(win, `(() => {
+    const opened = await rendererValue(win, `(async () => {
+      const original = window.interactionTest.getTerminals().find(item => item.id === 'terminal-main');
+      window.interactionTest.removeTerminal('terminal-main');
+      await window.WhiteboxTerminal.refresh();
+      window.interactionTest.addTerminal(original);
+      // The host has a live terminal, but the renderer has not received its
+      // inventory event yet. Use the same entry point as the task card.
       window.interactionTest.clearCalls();
-      return window.WhiteboxApp.openPtyFocus('fixture-root', { focus: true });
+      return window.WhiteboxApp.openDrawer('fixture-root', { focus: true });
     })()`);
     assert(opened === true, 'fixture-root의 full PTY focus 화면을 열지 못했습니다.');
     await waitForRenderer(win, `(() => {

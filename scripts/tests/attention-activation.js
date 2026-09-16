@@ -355,6 +355,69 @@ function registerAttentionActivationTests(context) {
     }
   });
 
+  test('집중 모드는 오래된 터미널 목록을 갱신하고 기존 PTY를 재사용한다', async () => {
+    const root = path.resolve(__dirname, '..', '..');
+    const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
+    for (const provider of ['claude', 'codex']) {
+      const session = { id: `bridge:terminal:${provider}`, provider, source: 'whitebox-bridge' };
+      const target = { id: `terminal:${provider}`, terminalId: `terminal:${provider}`, kind: 'terminal' };
+      let ready = false;
+      let refreshes = 0;
+      let launches = 0;
+      const mounts = [];
+      const notices = [];
+      const listeners = new Map();
+      const sandbox = { window: {
+        WhiteboxAppFactories: {},
+        WhiteboxI18n: { t: key => key, errorText: error => error.message },
+        WhiteboxTerminal: {
+          refreshAgentTargets: async requested => {
+            assert.strictEqual(requested, session);
+            refreshes += 1;
+            ready = true;
+            return [target];
+          },
+          resumeForAgent: async () => { launches += 1; throw new Error('Bridge projections cannot be resumed'); },
+        },
+        addEventListener: (name, listener) => listeners.set(name, listener),
+      } };
+      vm.runInNewContext(source, sandbox, { filename: 'app-drawer-stale-inventory.js' });
+      const drawer = sandbox.window.WhiteboxAppFactories.createDrawer({
+        state: { details: new Map() },
+        snapshotSession: () => session,
+        resultReviewPtyTarget: () => ready ? target : null,
+        markGuideStep: () => {},
+        toast: message => notices.push(message),
+        canOpenPtyFocus: () => true,
+        openPtyFocusVerified: async (id, options) => { mounts.push({ id, options }); return { opened: true }; },
+      });
+      assert.equal(await drawer.openDrawer(session.id), true);
+      assert.equal(refreshes, 1);
+      assert.equal(launches, 0, 'Existing app-owned terminals must not be resumed as provider histories');
+      assert.equal(mounts.length, 1);
+      assert.equal(mounts[0].options.terminalId, target.terminalId);
+
+      let finishRefresh;
+      sandbox.window.WhiteboxTerminal.refreshAgentTargets = () => new Promise(resolve => { finishRefresh = resolve; });
+      const pending = drawer.openDrawer(session.id);
+      listeners.get('whitebox:terminal-manual-selection')();
+      finishRefresh([target]);
+      assert.equal(await pending, false, 'A newer selection must cancel the pending focus open');
+      assert.equal(mounts.length, 1);
+      assert.equal(launches, 0);
+
+      sandbox.window.WhiteboxTerminal.refreshAgentTargets = async () => { throw new Error('Inventory unavailable'); };
+      assert.equal(await drawer.openDrawer(session.id), false);
+      assert.equal(notices.at(-1), 'Inventory unavailable');
+      assert.equal(launches, 0, 'An inventory failure must not launch a duplicate terminal');
+
+      ready = false;
+      sandbox.window.WhiteboxTerminal.refreshAgentTargets = async () => [];
+      assert.equal(await drawer.openDrawer(session.id), false);
+      assert.equal(notices.at(-1), 'Bridge projections cannot be resumed', 'Preserve the actual launch failure');
+    }
+  });
+
   test('renderer reload 전 delivery ACK는 새 delivery를 처리 완료시키지 못한다', () => {
     const deliveries = [];
     const coordinator = new AttentionActivationCoordinator({

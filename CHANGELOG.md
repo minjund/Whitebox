@@ -5,6 +5,12 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+- Refresh the terminal inventory before entering focus mode so existing PTYs
+  reconnect even when the renderer has not received their latest state.
+- Show the actual terminal launch error when a conversation cannot be opened.
+- Keep the AI questionnaire inbox available in the project control room and
+  open its questionnaires only when selected, without automatic popups.
+
 ## 1.8.20 - 2026-09-16
 
 - Open existing GPT/Codex conversations with `codex resume` using the same
