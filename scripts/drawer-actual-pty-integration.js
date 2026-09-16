@@ -161,7 +161,7 @@ async function run() {
     storeFile,
     agentProviders: {
       claude: fixtureProvider,
-      codex: { ...fixtureProvider, label: 'Codex Desktop fork PTY integration' },
+      codex: { ...fixtureProvider, label: 'Codex Desktop resume PTY integration' },
     },
   });
   const server = new TerminalHostServer({
@@ -175,7 +175,7 @@ async function run() {
   const ipcCalls = [];
   let win = null;
   let terminalId = '';
-  let codexForkTerminalId = '';
+  let codexResumeTerminalId = '';
   let terminalRetired = false;
   let exitCode = 0;
 
@@ -809,10 +809,10 @@ async function run() {
       && ipcCalls.filter(call => call.operation === 'create').length === directIpcCreateCountBefore + 1,
     `fresh direct PTY focus가 같은 node-pty를 재사용하지 않았거나 별도 terminal을 만들었습니다: ${JSON.stringify(directFocusResult)}`);
 
-    const codexForkExternalId = 'actual-pty-fork-source';
-    const codexForkSource = {
-      id: `codex:${codexForkExternalId}`,
-      externalId: codexForkExternalId,
+    const codexResumeExternalId = 'actual-pty-resume-source';
+    const codexResumeSource = {
+      id: `codex:${codexResumeExternalId}`,
+      externalId: codexResumeExternalId,
       provider: 'codex',
       clientKind: 'codex-desktop',
       status: 'running',
@@ -829,7 +829,7 @@ async function run() {
       lifecycle: [],
     };
     const codexMainRoute = await rendererValue(win, `(async () => {
-      const source = ${JSON.stringify(codexForkSource)};
+      const source = ${JSON.stringify(codexResumeSource)};
       window.WhiteboxApp.closePtyFocus({ restore: false });
       window.WhiteboxApp.state.controlRoomObservedIds.add(source.id);
       window.interactionTest.addSession(source);
@@ -838,23 +838,23 @@ async function run() {
       const main = document.querySelector('.control-room-main[data-pty-focus-trigger="' + CSS.escape(source.id) + '"]');
       if (!main) return { button: false, opened: false };
       window.interactionTest.clearCalls();
-      const support = window.WhiteboxTerminal.forkSupport(source);
-      const forkTargetBefore = window.WhiteboxTerminal.forkTargetForAgent(source);
+      const support = window.WhiteboxTerminal.resumeSupport(source, { resumeOriginOwned: true });
+      const resumeTargetBefore = window.WhiteboxTerminal.agentTargets(source).find(target => target.kind === 'terminal') || null;
       const regularTargetsBefore = window.WhiteboxTerminal.agentTargets(source);
       const canOpen = window.WhiteboxApp.canOpenPtyFocus(source);
       const focusSurface = main.dataset.focusSurface || '';
       main.click();
       const deadline = Date.now() + 20_000;
-      let forkTarget = null;
+      let resumeTarget = null;
       while (Date.now() < deadline) {
-        forkTarget = window.WhiteboxTerminal.forkTargetForAgent(source);
+        resumeTarget = window.WhiteboxTerminal.agentTargets(source).find(target => target.kind === 'terminal') || null;
         const embedded = window.WhiteboxTerminal.embeddedState();
-        if (forkTarget
+        if (resumeTarget
           && window.WhiteboxApp.state.ptyFocusSessionId === source.id
-          && window.WhiteboxApp.state.ptyFocusTargetId === forkTarget.terminalId
+          && window.WhiteboxApp.state.ptyFocusTargetId === resumeTarget.terminalId
           && embedded.connected
           && embedded.agentSessionId === source.id
-          && embedded.terminalId === forkTarget.terminalId
+          && embedded.terminalId === resumeTarget.terminalId
           && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm')) break;
         await new Promise(resolve => setTimeout(resolve, 25));
       }
@@ -862,78 +862,78 @@ async function run() {
       return {
         button: true,
         focusSurface,
-        opened: Boolean(forkTarget)
+        opened: Boolean(resumeTarget)
           && window.WhiteboxApp.state.ptyFocusSessionId === source.id
-          && window.WhiteboxApp.state.ptyFocusTargetId === forkTarget.terminalId
+          && window.WhiteboxApp.state.ptyFocusTargetId === resumeTarget.terminalId
           && embedded.connected
           && embedded.agentSessionId === source.id
-          && embedded.terminalId === forkTarget.terminalId,
+          && embedded.terminalId === resumeTarget.terminalId,
         support,
-        forkTargetBefore,
-        forkTarget,
+        connectionSignature: window.WhiteboxTerminal.agentConnectionSignature(source),
+        resumeTargetBefore,
+        resumeTarget,
         regularTargetsBefore,
         canOpen,
         createCalls: window.interactionTest.getCalls()
           .filter(call => call.name === 'terminalCreate'),
       };
     })()`);
-    codexForkTerminalId = String(codexMainRoute?.forkTarget?.terminalId || '');
-    const forkCreateOptions = codexMainRoute?.createCalls?.[0]?.args?.[0] || null;
+    codexResumeTerminalId = String(codexMainRoute?.resumeTarget?.terminalId || '');
+    const resumeCreateOptions = codexMainRoute?.createCalls?.[0]?.args?.[0] || null;
     assert(codexMainRoute?.button === true
       && codexMainRoute.focusSurface === 'pty'
       && codexMainRoute.opened === true
       && codexMainRoute.support?.supported === true
-      && JSON.stringify(codexMainRoute.support.args) === JSON.stringify(['fork', codexForkExternalId])
-      && !codexMainRoute.forkTargetBefore
+      && JSON.stringify(codexMainRoute.support.args) === JSON.stringify(['resume', codexResumeExternalId])
+      && !codexMainRoute.resumeTargetBefore
       && codexMainRoute.regularTargetsBefore?.length === 0
       && codexMainRoute.canOpen === true,
-    `실행 중 Codex Desktop 담당 노드의 첫 클릭이 실제 fork PTY로 라우팅되지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
-    assert(codexForkTerminalId
-      && codexMainRoute.forkTarget?.forked === true
-      && codexMainRoute.forkTarget?.creationId
+    `실행 중 Codex Desktop 담당 노드의 첫 클릭이 실제 resume PTY로 라우팅되지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
+    assert(codexResumeTerminalId
+      && codexMainRoute.resumeTarget?.forked !== true
       && codexMainRoute.createCalls.length === 1,
-    `담당 노드 클릭의 renderer→IPC Codex fork 생성이 정확히 한 번 완주하지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
-    assert(forkCreateOptions?.type === 'agent'
-      && forkCreateOptions.provider === 'codex'
-      && JSON.stringify(forkCreateOptions.args) === JSON.stringify(['fork', codexForkExternalId])
-      && forkCreateOptions.cwd === root
-      && forkCreateOptions.sessionBackend === 'direct'
-      && forkCreateOptions.agentForkSourceSessionId === codexForkSource.id
-      && forkCreateOptions.agentForkSourceSignature === codexMainRoute.support.sourceSignature
-      && forkCreateOptions.creationId === codexMainRoute.forkTarget.creationId
-      && !forkCreateOptions.bridgeId
-      && !forkCreateOptions.agentConnectionSignature
-      && !forkCreateOptions.recoveryArgs
-      && !forkCreateOptions.reuseBridge
-      && !forkCreateOptions.initialCommand
-      && !forkCreateOptions.initialCommandInArgs,
-    `Codex fork renderer launch spec에 원본 attach/resume 또는 질문이 섞였습니다: ${JSON.stringify(forkCreateOptions)}`);
+    `담당 노드 클릭의 renderer→IPC Codex resume 생성이 정확히 한 번 완주하지 않았습니다: ${JSON.stringify(codexMainRoute)}`);
+    assert(resumeCreateOptions?.type === 'agent'
+      && resumeCreateOptions.provider === 'codex'
+      && JSON.stringify(resumeCreateOptions.args) === JSON.stringify(['resume', codexResumeExternalId])
+      && resumeCreateOptions.cwd === root
+      && !resumeCreateOptions.agentForkSourceSessionId
+      && !resumeCreateOptions.agentForkSourceSignature
+      && resumeCreateOptions.bridgeId === codexResumeSource.id
+      && resumeCreateOptions.agentConnectionSignature === codexMainRoute.connectionSignature
+      && JSON.stringify(resumeCreateOptions.recoveryArgs) === JSON.stringify(['resume', codexResumeExternalId])
+      && resumeCreateOptions.reuseBridge === true
+      && !resumeCreateOptions.initialCommand
+      && !resumeCreateOptions.initialCommandInArgs,
+    `Codex resume renderer launch spec이 원본 세션 신원을 보존하지 않았거나 질문이 섞였습니다: ${JSON.stringify(resumeCreateOptions)}`);
 
-    const codexLaunchArgs = ['fork', codexForkExternalId];
+    const codexLaunchArgs = ['resume', codexResumeExternalId];
     const codexLaunchMarker = fixtureLaunchArgumentsMarker(codexLaunchArgs);
     await waitUntil(async () => {
-      const forkSession = await client.get(codexForkTerminalId, true);
-      return Number(forkSession?.pid) > 0
-        && String(forkSession?.replay || '').includes(codexLaunchMarker);
-    }, 'Codex fork launch spec이 실제 node-pty 자식 fixture에 도착하지 않았습니다.');
-    const codexForkSession = await client.get(codexForkTerminalId, true);
-    assert(codexForkSession.status === 'running'
-      && codexForkSession.provider === 'codex'
-      && codexForkSession.backend === 'direct'
-      && codexForkSession.agentForkSourceSessionId === codexForkSource.id
-      && codexForkSession.agentForkSourceSignature === codexMainRoute.support.sourceSignature
-      && codexForkSession.agentResumeSessionId === ''
-      && codexForkSession.conversationBound === false,
-    `실제 Codex fork PTY가 원본 대화 writer에 attach되지 않은 새 세션이 아닙니다: ${JSON.stringify(codexForkSession)}`);
+      const resumeSession = await client.get(codexResumeTerminalId, true);
+      return Number(resumeSession?.pid) > 0
+        && String(resumeSession?.replay || '').includes(codexLaunchMarker);
+    }, 'Codex resume launch spec이 실제 node-pty 자식 fixture에 도착하지 않았습니다.');
+    const codexResumeSession = await client.get(codexResumeTerminalId, true);
+    assert(codexResumeSession.status === 'running'
+      && codexResumeSession.provider === 'codex'
+      && codexResumeSession.backend === 'direct'
+      && !codexResumeSession.agentForkSourceSessionId
+      && !codexResumeSession.agentForkSourceSignature
+      && codexResumeSession.bridgeId === codexResumeSource.id
+      && codexResumeSession.agentConnectionSignature === codexMainRoute.connectionSignature
+      && codexResumeSession.agentResumeSessionId === codexResumeExternalId
+      && codexResumeSession.conversationBound === true,
+    `실제 Codex resume PTY가 원본 대화 신원에 연결되지 않았습니다: ${JSON.stringify(codexResumeSession)}`);
     await waitForRenderer(win, `(() => {
       const embedded = window.WhiteboxTerminal.embeddedState();
       return embedded.connected
-        && embedded.agentSessionId === ${JSON.stringify(codexForkSource.id)}
-        && embedded.terminalId === ${JSON.stringify(codexForkTerminalId)}
-        && window.WhiteboxApp.state.ptyFocusSessionId === ${JSON.stringify(codexForkSource.id)}
-        && window.WhiteboxApp.state.ptyFocusTargetId === ${JSON.stringify(codexForkTerminalId)}
+        && embedded.agentSessionId === ${JSON.stringify(codexResumeSource.id)}
+        && embedded.terminalId === ${JSON.stringify(codexResumeTerminalId)}
+        && window.WhiteboxApp.state.ptyFocusSessionId === ${JSON.stringify(codexResumeSource.id)}
+        && window.WhiteboxApp.state.ptyFocusTargetId === ${JSON.stringify(codexResumeTerminalId)}
         && document.querySelector('#ptyFocusTerminalViewport > .terminal-screen .xterm');
-    })()`, 'Codex fork 실제 PTY가 full PTY focus xterm에 mount되지 않았습니다.');
+    })()`, 'Codex resume 실제 PTY가 full PTY focus xterm에 mount되지 않았습니다.');
     const codexMount = await rendererValue(win, `(() => ({
         embedded: window.WhiteboxTerminal.embeddedState(),
         focusSessionId: window.WhiteboxApp.state.ptyFocusSessionId || '',
@@ -951,17 +951,17 @@ async function run() {
           .filter(call => call.name === 'terminalCreate').length,
       }))()`);
     assert(codexMount.embedded?.connected
-      && codexMount.embedded?.agentSessionId === codexForkSource.id
-      && codexMount.embedded?.terminalId === codexForkTerminalId
-      && codexMount.focusSessionId === codexForkSource.id
-      && codexMount.focusTargetId === codexForkTerminalId
+      && codexMount.embedded?.agentSessionId === codexResumeSource.id
+      && codexMount.embedded?.terminalId === codexResumeTerminalId
+      && codexMount.focusSessionId === codexResumeSource.id
+      && codexMount.focusTargetId === codexResumeTerminalId
       && codexMount.focusVisible && codexMount.xtermMounted && codexMount.retiredDomAbsent && codexMount.drawerReady
       && codexMount.terminalCreateCount === 1,
-    `Codex fork 실제 PTY가 full PTY focus xterm에 정확히 한 번 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
+    `Codex resume 실제 PTY가 full PTY focus xterm에 정확히 한 번 mount되지 않았습니다: ${JSON.stringify(codexMount)}`);
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLaunchMarker)})`,
-      'Codex fork argv marker가 실제 renderer xterm에 hydrate되지 않았습니다.');
+      'Codex resume argv marker가 실제 renderer xterm에 hydrate되지 않았습니다.');
 
-    const codexLiveMarker = `LTA_CODEX_FORK_LIVE_${Date.now()}`;
+    const codexLiveMarker = `LTA_CODEX_RESUME_LIVE_${Date.now()}`;
     const codexLiveCommand = encodedMarkerCommand(codexLiveMarker);
     const codexPasted = await rendererValue(win, `(() => {
       const input = document.querySelector('#ptyFocusTerminalViewport .xterm-helper-textarea');
@@ -975,21 +975,21 @@ async function run() {
       }));
       return document.activeElement === input;
     })()`);
-    assert(codexPasted, 'Codex fork xterm의 실제 입력 경로에 포커스/붙여넣기를 전달하지 못했습니다.');
+    assert(codexPasted, 'Codex resume xterm의 실제 입력 경로에 포커스/붙여넣기를 전달하지 못했습니다.');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
-    await waitUntil(async () => String((await client.get(codexForkTerminalId, true))?.replay || '').includes(codexLiveMarker),
-      'Codex fork renderer 입력이 TerminalHost/node-pty를 거쳐 되돌아오지 않았습니다.');
+    await waitUntil(async () => String((await client.get(codexResumeTerminalId, true))?.replay || '').includes(codexLiveMarker),
+      'Codex resume renderer 입력이 TerminalHost/node-pty를 거쳐 되돌아오지 않았습니다.');
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLiveMarker)})`,
-      'Codex fork live marker가 renderer xterm에 표시되지 않았습니다.');
+      'Codex resume live marker가 renderer xterm에 표시되지 않았습니다.');
 
     const codexReuse = await rendererValue(win, `(async () => {
       const source = window.WhiteboxApp.state.snapshot.sessions
-        .find(item => item.id === ${JSON.stringify(codexForkSource.id)});
-      const beforeRefresh = window.WhiteboxTerminal.forkTargetForAgent(source);
+        .find(item => item.id === ${JSON.stringify(codexResumeSource.id)});
+      const beforeRefresh = window.WhiteboxTerminal.agentTargets(source).find(target => target.kind === 'terminal') || null;
       await window.WhiteboxTerminal.refresh();
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const afterRefresh = window.WhiteboxTerminal.forkTargetForAgent(source);
+      const afterRefresh = window.WhiteboxTerminal.agentTargets(source).find(target => target.kind === 'terminal') || null;
       const createCountAfterRefresh = window.interactionTest.getCalls()
         .filter(call => call.name === 'terminalCreate').length;
       window.WhiteboxApp.closePtyFocus({ restore: false });
@@ -1000,7 +1000,7 @@ async function run() {
       const deadline = Date.now() + 20_000;
       let afterReopen = null;
       while (Date.now() < deadline) {
-        afterReopen = window.WhiteboxTerminal.forkTargetForAgent(source);
+        afterReopen = window.WhiteboxTerminal.agentTargets(source).find(target => target.kind === 'terminal') || null;
         const embedded = window.WhiteboxTerminal.embeddedState();
         if (afterReopen
           && window.WhiteboxApp.state.ptyFocusSessionId === source.id
@@ -1028,26 +1028,23 @@ async function run() {
           && embedded.terminalId === afterReopen.terminalId,
       };
     })()`);
-    const managerForks = manager.list().filter(item =>
-      item.agentForkSourceSessionId === codexForkSource.id);
-    const forkIpcCreates = ipcCalls.filter(call => call.operation === 'create'
-      && call.args?.[0]?.agentForkSourceSessionId === codexForkSource.id);
+    const managerResumes = manager.list().filter(item =>
+      item.bridgeId === codexResumeSource.id && item.agentResumeSessionId === codexResumeExternalId);
+    const resumeIpcCreates = ipcCalls.filter(call => call.operation === 'create'
+      && call.args?.[0]?.bridgeId === codexResumeSource.id);
     assert(codexReuse.mainFound
-      && codexReuse.beforeRefresh?.terminalId === codexForkTerminalId
-      && codexReuse.afterRefresh?.terminalId === codexForkTerminalId
-      && codexReuse.afterReopen?.terminalId === codexForkTerminalId
-      && codexReuse.beforeRefresh?.creationId === forkCreateOptions.creationId
-      && codexReuse.afterRefresh?.creationId === forkCreateOptions.creationId
-      && codexReuse.afterReopen?.creationId === forkCreateOptions.creationId
+      && codexReuse.beforeRefresh?.terminalId === codexResumeTerminalId
+      && codexReuse.afterRefresh?.terminalId === codexResumeTerminalId
+      && codexReuse.afterReopen?.terminalId === codexResumeTerminalId
       && codexReuse.createCountAfterRefresh === 1
       && codexReuse.createCountAfterReopen === 1
       && codexReuse.reopened === true
-      && managerForks.length === 1
-      && managerForks[0].id === codexForkTerminalId
-      && forkIpcCreates.length === 1,
-    `snapshot refresh와 담당 노드 재클릭이 기존 Codex fork PTY를 재사용하지 않았습니다: ${JSON.stringify({ codexReuse, managerForks, forkIpcCreates })}`);
+      && managerResumes.length === 1
+      && managerResumes[0].id === codexResumeTerminalId
+      && resumeIpcCreates.length === 1,
+    `snapshot refresh와 담당 노드 재클릭이 기존 Codex resume PTY를 재사용하지 않았습니다: ${JSON.stringify({ codexReuse, managerResumes, resumeIpcCreates })}`);
     await waitForRenderer(win, `${terminalTextExpression}.includes(${JSON.stringify(codexLiveMarker)})`,
-      'Codex fork PTY를 다시 연 뒤 기존 xterm 출력이 유지되지 않았습니다.');
+      'Codex resume PTY를 다시 연 뒤 기존 xterm 출력이 유지되지 않았습니다.');
 
     const summary = {
       terminalId,
@@ -1058,13 +1055,13 @@ async function run() {
       directProjectionId,
       mismatchedCreationIdRejected: mismatchedCreationId,
       directLiveMarker,
-      codexForkTerminalId,
-      codexForkPid: codexForkSession.pid,
-      codexForkSourceSessionId: codexForkSource.id,
-      codexForkArgs: codexLaunchArgs,
-      codexForkLiveMarker: codexLiveMarker,
-      codexForkCreateCount: codexReuse.createCountAfterReopen,
-      codexForkReusedAfterRefresh: codexReuse.reopened,
+      codexResumeTerminalId,
+      codexResumePid: codexResumeSession.pid,
+      codexResumeSourceSessionId: codexResumeSource.id,
+      codexResumeArgs: codexLaunchArgs,
+      codexResumeLiveMarker: codexLiveMarker,
+      codexResumeCreateCount: codexReuse.createCountAfterReopen,
+      codexResumeReusedAfterRefresh: codexReuse.reopened,
       hostEndpoint: hostInfo.endpoint,
       authenticatedHostClients: server.clients.size,
       hydrationMarker,

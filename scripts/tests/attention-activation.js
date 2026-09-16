@@ -289,13 +289,14 @@ function registerAttentionActivationTests(context) {
     }
   });
 
-  test('작업 카드의 명시 PTY 진입은 생성된 resume와 Codex fork terminal만 verified mount한다', async () => {
+  test('작업 카드의 명시 PTY 진입은 Claude와 Codex CLI/Desktop 모두 resume terminal을 verified mount한다', async () => {
     const root = path.resolve(__dirname, '..', '..');
     const source = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
 
     for (const scenario of [
-      { name: 'resume', session: { id: 'claude:root', provider: 'claude', status: 'running' }, terminalId: 'terminal:resume' },
-      { name: 'fork', session: { id: 'codex:desktop', provider: 'codex', clientKind: 'codex-desktop', status: 'completed' }, terminalId: 'terminal:fork' },
+      { name: 'claude', session: { id: 'claude:root', provider: 'claude', status: 'running' }, terminalId: 'terminal:claude' },
+      { name: 'codex-cli', session: { id: 'codex:cli', provider: 'codex', clientKind: 'codex-cli', status: 'running' }, terminalId: 'terminal:cli' },
+      { name: 'codex-desktop', session: { id: 'codex:desktop', provider: 'codex', clientKind: 'codex-desktop', status: 'completed' }, terminalId: 'terminal:desktop' },
     ]) {
       const dispatchedEvents = [];
       const created = [];
@@ -305,7 +306,7 @@ function registerAttentionActivationTests(context) {
           WhiteboxAppFactories: {},
           WhiteboxI18n: { t: key => key },
           WhiteboxRendererUtils: {
-            canForkCodexDesktopSession: session => scenario.name === 'fork' && session === scenario.session,
+            canForkCodexDesktopSession: session => scenario.name === 'codex-desktop' && session === scenario.session,
             reportRecoverableError: error => { throw error; },
           },
           WhiteboxTerminal: {
@@ -338,11 +339,11 @@ function registerAttentionActivationTests(context) {
 
       assert.equal(await drawer.openDrawer(scenario.session.id, { focus: true }), true);
       assert.equal(created.length, 1);
-      assert.equal(created[0][0], scenario.name);
+      assert.equal(created[0][0], 'resume');
       assert.strictEqual(created[0][1], scenario.session);
       assert.equal(created[0][2], '');
       assert.equal(created[0][3], false);
-      assert.deepEqual(created[0][4], { focus: false });
+      assert.deepEqual(created[0][4], { focus: false, resumeOriginOwned: true });
       assert.equal(mounted.length, 1);
       assert.equal(mounted[0].sessionId, scenario.session.id);
       assert.equal(mounted[0].options.targetId, scenario.terminalId);
@@ -709,13 +710,13 @@ function registerAttentionActivationTests(context) {
         kind: 'bridge', terminalId: 'terminal:manual-b', creationId: 'creation:manual-b', provider: 'codex',
       }],
     };
-    const forkSession = {
-      id: 'codex:desktop-fork-source', externalId: 'desktop-fork-source',
+    const desktopSession = {
+      id: 'codex:desktop-resume-source', externalId: 'desktop-resume-source',
       provider: 'codex', clientKind: 'codex-desktop', status: 'running',
       controlCapabilities: { pty: true }, presentation: { conversationSurface: 'transcript' },
     };
-    const forkTarget = {
-      id: 'terminal:desktop-fork', terminalId: 'terminal:desktop-fork', kind: 'terminal',
+    const resumeTarget = {
+      id: 'terminal:desktop-resume', terminalId: 'terminal:desktop-resume', kind: 'terminal',
     };
     let embedded = { connected: true, agentSessionId: session.id, terminalId: 'terminal:exact' };
     const dispatched = [];
@@ -736,16 +737,16 @@ function registerAttentionActivationTests(context) {
         },
         WhiteboxRendererUtils: {
           isWritableDirectSession: value => value === session,
-          canForkCodexDesktopSession: () => false,
+          canForkCodexDesktopSession: value => value === desktopSession,
         },
         WhiteboxTerminal: {
-          agentTargets: value => value === forkSession ? [] : [
+          agentTargets: value => value === desktopSession ? [resumeTarget] : [
               { id: 'terminal:exact', terminalId: 'terminal:exact', kind: 'terminal' },
               { id: 'terminal:manual-b', terminalId: 'terminal:manual-b', kind: 'terminal' },
             ],
           forkTargetForAgent: value => {
             forkTargetRequests.push(value?.id || '');
-            return value === forkSession ? forkTarget : null;
+            return value === desktopSession ? { id: 'terminal:fork-decoy', terminalId: 'terminal:fork-decoy', kind: 'terminal' } : null;
           },
           embeddedState: () => ({ ...embedded }),
         },
@@ -763,26 +764,26 @@ function registerAttentionActivationTests(context) {
     };
     const focus = sandbox.window.WhiteboxAppFactories.createPtyFocusMode(focusContext);
 
-    focusState.snapshot.sessions.push(forkSession);
+    focusState.snapshot.sessions.push(desktopSession);
     embedded = {
       connected: true,
-      agentSessionId: forkSession.id,
-      terminalId: forkTarget.terminalId,
+      agentSessionId: desktopSession.id,
+      terminalId: resumeTarget.terminalId,
     };
-    focusContext.__syncResult = { ok: true, target: forkTarget };
-    assert.deepEqual(await focus.openPtyFocusVerified(forkSession.id, {
-      targetId: forkTarget.terminalId,
-      terminalId: forkTarget.terminalId,
+    focusContext.__syncResult = { ok: true, target: resumeTarget };
+    assert.deepEqual(await focus.openPtyFocusVerified(desktopSession.id, {
+      targetId: resumeTarget.terminalId,
+      terminalId: resumeTarget.terminalId,
       attentionActivation: true,
-    }), { opened: true, retryable: false, target: forkTarget },
-    '다시 실행 중이 된 Codex Desktop 메인 노드도 기존 signed fork target으로 PTY 집중모드를 열어야 합니다.');
-    assert.equal(forkTargetRequests.includes(forkSession.id), true,
-      'Codex Desktop 메인 노드 검증은 일반 agentTargets가 아니라 fork 전용 association을 조회해야 합니다.');
-    assert.deepEqual(await focus.openPtyFocusVerified(forkSession.id, {
+    }), { opened: true, retryable: false, target: resumeTarget },
+    '다시 실행 중이 된 Codex Desktop 메인 노드도 기존 signed resume target으로 PTY 집중모드를 열어야 합니다.');
+    assert.equal(forkTargetRequests.includes(desktopSession.id), false,
+      'Codex Desktop 메인 노드 검증은 일반 agentTargets로 검증하고 다른 대화의 fork association을 조회하면 안 됩니다.');
+    assert.deepEqual(await focus.openPtyFocusVerified(desktopSession.id, {
       targetId: 'terminal:fork-decoy',
       terminalId: 'terminal:fork-decoy',
     }), { opened: false, retryable: true, reason: 'target-expired' },
-    '서명된 fork target과 다른 PTY id를 메인 노드 focus 대상으로 받아들이면 안 됩니다.');
+    '서명된 resume target과 다른 PTY id를 메인 노드 focus 대상으로 받아들이면 안 됩니다.');
     focus.closePtyFocus({ restore: false });
     closed.length = 0;
     embedded = { connected: true, agentSessionId: session.id, terminalId: 'terminal:exact' };

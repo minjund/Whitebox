@@ -220,8 +220,8 @@ function createInlineHarness(root, options = {}) {
         ? options.restartForAgent(...args, restartCalls.length)
         : { ok: true, target: connectedTarget };
     },
-    resumeSupport: mountedSession => options.resumeSupport
-      ? options.resumeSupport(mountedSession)
+    resumeSupport: (mountedSession, supportOptions) => options.resumeSupport
+      ? options.resumeSupport(mountedSession, supportOptions)
       : { supported: true, reason: 'resumable in fixture' },
     forkSupport: mountedSession => options.forkSupport
       ? options.forkSupport(mountedSession)
@@ -653,8 +653,9 @@ function registerInlineAgentTerminalTests(context) {
     await Promise.resolve();
     assert.equal(harness.mountCalls.length, 1, '동시 sync가 mountForAgent를 중복 호출했습니다.');
     assert.equal(harness.mountCalls[0].options.createIfMissing, true);
-    assert.equal(harness.mountCalls[0].options.forkIfOriginOwned, true,
-      '사용자가 펼친 인라인 PTY가 Desktop-origin fork 허용을 전달하지 않았습니다.');
+    assert.equal(harness.mountCalls[0].options.resumeOriginOwned, true,
+      '사용자가 펼친 인라인 PTY가 같은 원본 세션 resume을 요청하지 않았습니다.');
+    assert.notEqual(harness.mountCalls[0].options.forkIfOriginOwned, true);
 
     const forced = harness.sync({ force: true });
     await Promise.resolve();
@@ -974,102 +975,71 @@ function registerInlineAgentTerminalTests(context) {
       'surface 전환 중 resume 버튼이 영구 disabled 상태로 남았습니다.');
   });
 
-  test('Codex Desktop 인라인 PTY는 원본 resume 대신 기록을 이어받은 새 세션을 연다', async () => {
-    let forkAlive = false;
-    const harness = createInlineHarness(root, {
-      session: {
-        id: 'codex:desktop-fork-source',
-        externalId: 'desktop-fork-source',
-        provider: 'codex',
-        clientKind: 'codex-desktop',
-        cwd: 'D:\\fixture',
-        parentId: null,
-        status: 'running',
-      },
-      resumeSupport: () => ({ supported: false, originOwned: true }),
-      forkSupport: () => ({ supported: true, action: 'fork' }),
-      agentTargets: (_session, connectedTarget) => forkAlive && connectedTarget ? [connectedTarget] : [],
-      forkForAgent: async () => {
-        forkAlive = true;
-        return {
-          id: 'terminal:inline-desktop-fork',
-          terminalId: 'terminal:inline-desktop-fork',
-        };
-      },
-      mountForAgent: async (_session, _mountOptions, mountCount) => {
-        if (mountCount === 2) return { ok: false, reason: 'no-target' };
-        forkAlive = true;
-        const terminalId = mountCount === 1
-          ? 'terminal:inline-desktop-fork'
-          : 'terminal:inline-desktop-fork-reopened';
-        return {
+  test('화이트박스 GPT/Codex PTY는 CLI·Desktop 기록 모두 같은 세션으로 resume한다', async () => {
+    for (const clientKind of ['codex-cli', 'codex-desktop']) {
+      const harness = createInlineHarness(root, {
+        session: {
+          id: 'codex:same-session', externalId: 'same-session', provider: 'codex',
+          clientKind, cwd: 'D:\\fixture', parentId: null, status: 'running',
+          controlCapabilities: { pty: true },
+        },
+        resumeSupport: (_session, options) => ({ supported: options?.resumeOriginOwned === true }),
+        forkSupport: () => ({ supported: true, action: 'fork' }),
+        resumeForAgent: async () => ({ id: 'terminal:resumed', terminalId: 'terminal:resumed' }),
+        mountForAgent: async () => ({
           ok: true,
-          target: { id: terminalId, terminalId, kind: 'terminal' },
-        };
-      },
-    });
+          target: { id: 'terminal:resumed', terminalId: 'terminal:resumed', kind: 'terminal' },
+        }),
+      });
+      harness.dispatchDocument('click', { target: harness.resumeButton, stopPropagation() {} });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(harness.resumeCalls.length, 1);
+      assert.equal(harness.forkCalls.length, 0, '세션 열기가 원본 대신 새 fork를 만들었습니다.');
+      assert.equal(harness.resumeCalls[0][0].externalId, 'same-session');
+      assert.equal(harness.resumeCalls[0][1], '');
+      assert.equal(harness.resumeCalls[0][2], false);
+      assert.equal(harness.resumeCalls[0][3].resumeOriginOwned, true);
+      assert.equal(harness.mountCalls.length, 1);
+      assert.equal(harness.mountCalls[0].options.resumeOriginOwned, true);
+      assert.notEqual(harness.mountCalls[0].options.forkIfOriginOwned, true);
+      await harness.sync();
+      assert.equal(harness.mountCalls.length, 1, '연결된 resume PTY를 재사용하지 않았습니다.');
 
-    harness.dispatchDocument('click', { target: harness.resumeButton, stopPropagation() {} });
-    await new Promise(resolve => setTimeout(resolve, 5));
+      let releaseMount;
+      const opening = createInlineHarness(root, {
+        initialOpen: false,
+        session: harness.session,
+        forkSupport: () => ({ supported: true }),
+        mountForAgent: () => new Promise(resolve => { releaseMount = resolve; }),
+      });
+      opening.toggle(opening.session.id, { focus: false });
+      const explicit = opening.sync();
+      const passive = opening.sync({ force: true });
+      await Promise.resolve();
+      assert.equal(opening.mountCalls.length, 1, '사용자의 resume 열기 중 passive sync가 중복 mount를 만들었습니다.');
+      assert.equal(opening.mountCalls[0].options.resumeOriginOwned, true);
+      assert.notEqual(opening.mountCalls[0].options.forkIfOriginOwned, true);
+      releaseMount({ ok: true, target: { id: 'terminal:opened', terminalId: 'terminal:opened', kind: 'terminal' } });
+      await Promise.all([explicit, passive]);
+      assert.equal(opening.forkCalls.length, 0);
 
-    assert.equal(harness.forkCalls.length, 1, 'Desktop-origin 기록에서 새 Codex fork를 만들지 않았습니다.');
-    assert.equal(harness.resumeCalls.length, 0, 'Desktop-origin 기록을 기존 대화 ID로 resume했습니다.');
-    assert.equal(harness.forkCalls[0][0].externalId, 'desktop-fork-source');
-    assert.equal(harness.forkCalls[0][1], '');
-    assert.equal(harness.forkCalls[0][2], false);
-    assert.equal(harness.forkCalls[0][3].focus, false);
-    assert.equal(harness.mountCalls.length, 1, '새 fork PTY를 인라인 화면에 마운트하지 않았습니다.');
-    assert.equal(harness.mountCalls[0].options.forkIfOriginOwned, true);
-    assert.equal(harness.mountCalls[0].options.forkCreationGesture, false,
-      '명시 fork 버튼 뒤의 force sync가 별도 fork gesture를 다시 발급했습니다.');
-
-    forkAlive = false;
-    harness.setEmbedded({ connected: false, agentSessionId: '', terminalId: '' });
-    const passiveAfterExit = await harness.sync({ force: true });
-    assert.equal(passiveAfterExit.reason, 'no-target');
-    assert.equal(harness.forkCalls.length, 1,
-      '종료된 fork 뒤 passive inline sync가 forkForAgent를 다시 호출했습니다.');
-    assert.equal(harness.mountCalls[1].options.forkCreationGesture, false,
-      '종료된 fork 뒤 passive inline sync가 새 fork 권한을 전달했습니다.');
-
-    assert.equal(harness.close({ render: false }), true);
-    harness.toggle(harness.session.id, { focus: false });
-    const reopened = await harness.sync({ force: true });
-    assert.equal(reopened.ok, true);
-    assert.equal(harness.mountCalls[2].options.forkCreationGesture, true,
-      '사용자가 inline surface를 닫았다 다시 펼친 새 gesture가 fork 권한을 전달하지 않았습니다.');
-
-    let releaseExplicitMount;
-    const forceRace = createInlineHarness(root, {
-      initialOpen: false,
-      session: {
-        id: 'codex:desktop-fork-force-race',
-        externalId: 'desktop-fork-force-race',
-        provider: 'codex',
-        clientKind: 'codex-desktop',
-        cwd: 'D:\\fixture',
-        parentId: null,
-        status: 'running',
-      },
-      forkSupport: () => ({ supported: true, action: 'fork' }),
-      mountForAgent: () => new Promise(resolve => { releaseExplicitMount = resolve; }),
-    });
-    forceRace.toggle(forceRace.session.id, { focus: false });
-    const explicitMount = forceRace.sync();
-    await Promise.resolve();
-    assert.equal(forceRace.mountCalls.length, 1);
-    assert.equal(forceRace.mountCalls[0].options.forkCreationGesture, true);
-    const passiveForce = forceRace.sync({ force: true });
-    await Promise.resolve();
-    assert.equal(forceRace.mountCalls.length, 1,
-      '진행 중인 명시적 inline fork mount를 passive force sync가 취소하면 안 됩니다.');
-    releaseExplicitMount({
-      ok: true,
-      target: { id: 'terminal:inline-force-race', terminalId: 'terminal:inline-force-race', kind: 'terminal' },
-    });
-    const [explicitResult, passiveResult] = await Promise.all([explicitMount, passiveForce]);
-    assert.equal(explicitResult.ok, true);
-    assert.equal(passiveResult.ok, true);
+      const busy = createInlineHarness(root, {
+        session: harness.session,
+        forkSupport: () => ({ supported: true }),
+        resumeForAgent: async () => {
+          const error = new Error('Another window owns this session');
+          error.code = 'CODEX_SESSION_WRITER_ACTIVE';
+          throw error;
+        },
+        mountForAgent: async () => { throw new Error('Must not mount after a writer conflict'); },
+      });
+      busy.dispatchDocument('click', { target: busy.resumeButton, stopPropagation() {} });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(busy.resumeCalls.length, 1);
+      assert.equal(busy.forkCalls.length, 0, 'writer 충돌을 새 fork로 우회했습니다.');
+      assert.equal(busy.mountCalls.length, 0);
+      assert.equal(busy.resumeButton.disabled, false, 'writer 충돌 뒤 재시도가 막혔습니다.');
+    }
   });
 
   test('A resume 완료는 이미 전환한 B inline PTY를 force sync하지 않는다', async () => {
