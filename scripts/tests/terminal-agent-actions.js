@@ -910,7 +910,7 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(workbenchOpened, false, '백그라운드 전송은 터미널 화면을 강제로 열지 않아야 합니다.');
   });
 
-  test('CLI GPT 대화의 PTY 열기는 포크를 한 번 만들고 기존 포크와 앱 소유 연결을 재사용한다', async () => {
+  test('명시적 CLI GPT fork 요청은 포크를 한 번 만들고 기존 포크와 앱 소유 연결을 재사용한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const creates = [];
     const state = { sessions: [], platform: { id: 'win32' }, terminals: new Map(), embeddedGeneration: 0, terminalSessionRevision: 1 };
@@ -1020,7 +1020,7 @@ function registerTerminalAgentActionTests(context) {
     assert.equal(creates.length, 2);
   });
 
-  test('실행 중 Codex Desktop 기록은 원본 resume이 아닌 별도 fork PTY를 만들고 같은 PTY를 재사용한다', async () => {
+  test('명시적 Codex Desktop fork 요청은 별도 PTY를 만들고 같은 PTY를 재사용한다', async () => {
     const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
     const createCalls = [];
     const commandCalls = [];
@@ -1766,102 +1766,136 @@ function registerTerminalAgentActionTests(context) {
   });
 
   test('대화창을 열면 질문 없이 같은 세션의 실제 PTY를 한 번만 만들고 재사용한다', async () => {
-    const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
-    const createCalls = [];
-    const commandCalls = [];
-    let createdRecord = null;
-    const state = {
-      snapshot: null,
-      sessions: [],
-      platform: { id: 'win32' },
-      wslDistros: [],
-    };
-    const sandbox = {
-      window: {
-        WhiteboxI18n: { t: key => key },
-        whitebox: {
-          terminalCreate: async options => {
-            createCalls.push(options);
-            await new Promise(resolve => setTimeout(resolve, 10));
-            createdRecord = {
-              id: 'terminal:prompt-free-resume',
-              type: 'agent',
-              provider: options.provider,
-              bridgeId: options.bridgeId,
-              agentResumeSessionId: '019f-prompt-free-resume',
-              agentConnectionSignature: options.agentConnectionSignature,
-              backend: 'direct',
-              conversationBound: true,
-              cwd: options.cwd,
-              distro: options.distro,
-              status: 'running',
-              pid: 5252,
-              title: options.title,
-            };
-            return createdRecord;
-          },
-          terminalCommand: async (...args) => {
-            commandCalls.push(args);
-            return { ok: true };
+    for (const desktop of [false, true]) {
+      const source = fs.readFileSync(path.join(root, 'renderer', 'terminal-agent.js'), 'utf8');
+      const createCalls = [];
+      const commandCalls = [];
+      let createdRecord = null;
+      let writerActive = false;
+      const state = {
+        snapshot: null,
+        sessions: [],
+        platform: { id: 'win32' },
+        wslDistros: [],
+      };
+      const sandbox = {
+        window: {
+          WhiteboxI18n: { t: key => key },
+          whitebox: {
+            terminalCreate: async options => {
+              createCalls.push(options);
+              if (writerActive) {
+                const error = new Error('Another window owns this session');
+                error.code = 'CODEX_SESSION_WRITER_ACTIVE';
+                error.deliveryState = 'rejected';
+                throw error;
+              }
+              await new Promise(resolve => setTimeout(resolve, 10));
+              createdRecord = {
+                id: 'terminal:prompt-free-resume',
+                type: 'agent',
+                provider: options.provider,
+                bridgeId: options.bridgeId,
+                agentResumeSessionId: '019f-prompt-free-resume',
+                agentConnectionSignature: options.agentConnectionSignature,
+                backend: 'direct',
+                conversationBound: true,
+                cwd: options.cwd,
+                distro: options.distro,
+                status: 'running',
+                pid: 5252,
+                title: options.title,
+              };
+              return createdRecord;
+            },
+            terminalCommand: async (...args) => {
+              commandCalls.push(args);
+              return { ok: true };
+            },
           },
         },
-      },
-      setTimeout,
-    };
-    vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
-    const actions = sandbox.window.WhiteboxTerminalAgentActions({
-      $: () => null,
-      state,
-      init: async () => {},
-      notice: () => {},
-      moveWorkbench: () => {},
-      selectTmux: async () => {},
-      selectSession: async () => {},
-      bindAgent: () => {},
-      queueHistoryRefresh: () => {},
-      renderTarget: () => {},
-      fitEntry: () => {},
-      refreshSessions: async () => {
-        if (createdRecord) state.sessions = [createdRecord];
-      },
-      resumeSupport: session => ({
-        supported: true,
-        provider: session.provider,
-        sessionId: session.externalId,
-        args: ['resume', session.externalId],
-      }),
-      resumeLaunchArgs: (support, prompt = '') => prompt ? [...support.args, '--', prompt] : [...support.args],
-      preferredWorkspace: () => 'D:\\workspace',
-      providerLabel: provider => provider,
-      terminalTypeLabel: () => 'Codex',
-      esc: value => String(value),
-    });
-    const session = {
-      id: 'codex:prompt-free-resume',
-      provider: 'codex',
-      externalId: '019f-prompt-free-resume',
-      cwd: 'D:\\workspace',
-      runtimePresence: [],
-    };
+        setTimeout,
+      };
+      vm.runInNewContext(source, sandbox, { filename: 'terminal-agent.js' });
+      let actions;
+      const terminalSource = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
+      const supportSource = terminalSource.slice(
+        terminalSource.indexOf('  function isWhiteboxBridgeProjection('),
+        terminalSource.indexOf('  function terminalTypeLabel('),
+      );
+      const launch = vm.runInNewContext(`${supportSource}\n({ resumeSupport, resumeLaunchArgs })`, {
+        t: key => key,
+        providerLabel: provider => provider,
+        forkSupport: session => actions.forkSupport(session),
+      });
+      actions = sandbox.window.WhiteboxTerminalAgentActions({
+        $: () => null,
+        state,
+        init: async () => {},
+        notice: () => {},
+        moveWorkbench: () => {},
+        selectTmux: async () => {},
+        selectSession: async () => {},
+        bindAgent: () => {},
+        queueHistoryRefresh: () => {},
+        renderTarget: () => {},
+        fitEntry: () => {},
+        refreshSessions: async () => {
+          if (createdRecord) state.sessions = [createdRecord];
+        },
+        resumeSupport: launch.resumeSupport,
+        resumeLaunchArgs: launch.resumeLaunchArgs,
+        preferredWorkspace: () => 'D:\\workspace',
+        providerLabel: provider => provider,
+        terminalTypeLabel: () => 'Codex',
+        esc: value => String(value),
+      });
+      const session = {
+        id: 'codex:019f-prompt-free-resume',
+        clientKind: desktop ? 'codex-desktop' : 'codex-cli',
+        provider: 'codex',
+        externalId: '019f-prompt-free-resume',
+        cwd: 'D:\\workspace',
+        runtimePresence: [],
+      };
 
-    const [first, second] = await Promise.all([
-      actions.ensureForAgent(session),
-      actions.ensureForAgent(session),
-    ]);
-    const third = await actions.ensureForAgent(session);
+      const openOptions = { resumeOriginOwned: true };
+      const [first, second] = await Promise.all([
+        actions.ensureForAgent(session, openOptions),
+        actions.ensureForAgent(session, openOptions),
+      ]);
+      const third = await actions.ensureForAgent(session, openOptions);
 
-    assert.equal(first.id, 'terminal:prompt-free-resume');
-    assert.equal(second.id, first.id);
-    assert.equal(third.id, first.id);
-    assert.equal(createCalls.length, 1, '동시 렌더와 재렌더가 PTY를 중복 생성하면 안 됩니다.');
-    assert.deepStrictEqual(Array.from(createCalls[0].args), ['resume', '019f-prompt-free-resume']);
-    assert.deepStrictEqual(Array.from(createCalls[0].recoveryArgs), ['resume', '019f-prompt-free-resume']);
-    assert.equal(createCalls[0].bridgeId, session.id);
-    assert.equal(createCalls[0].reuseBridge, true);
-    assert.equal(createCalls[0].transient, false);
-    assert.equal(createCalls[0].initialCommand, '');
-    assert.equal(createCalls[0].initialCommandInArgs, false);
-    assert.equal(commandCalls.length, 0, 'PTY 연결 중 예전 질문이나 초안을 보내면 안 됩니다.');
+      assert.equal(first.id, 'terminal:prompt-free-resume');
+      assert.equal(second.id, first.id);
+      assert.equal(third.id, first.id);
+      assert.equal(createCalls.length, 1, '동시 렌더와 재렌더가 PTY를 중복 생성하면 안 됩니다.');
+      assert.deepStrictEqual(Array.from(createCalls[0].args), ['resume', '019f-prompt-free-resume']);
+      assert.deepStrictEqual(Array.from(createCalls[0].recoveryArgs), ['resume', '019f-prompt-free-resume']);
+      assert.equal(createCalls[0].bridgeId, session.id);
+      assert.equal(createCalls[0].reuseBridge, true);
+      assert.equal(createCalls[0].transient, false);
+      assert.equal(createCalls[0].initialCommand, '');
+      assert.equal(createCalls[0].initialCommandInArgs, false);
+      assert.equal(commandCalls.length, 0, 'PTY 연결 중 예전 질문이나 초안을 보내면 안 됩니다.');
+      assert.equal(actions.agentTargets(session)[0]?.terminalId, first.id,
+        '같은 원본 세션의 signed resume PTY를 다시 찾지 못했습니다.');
+      if (desktop) {
+        await assert.rejects(actions.ensureForAgent(session), error => error.code === 'CODEX_DESKTOP_SESSION_ORIGIN_OWNED');
+        await assert.rejects(actions.ensureForAgent({ ...session, externalId: 'different-history' }, openOptions),
+          error => error.code === 'CODEX_DESKTOP_FORK_INVALID_SESSION');
+        await assert.rejects(actions.ensureForAgent({ ...session, readOnly: true }, openOptions),
+          error => error.code === 'CODEX_DESKTOP_FORK_INVALID_SESSION');
+      }
+      createdRecord = null;
+      state.sessions = [];
+      writerActive = true;
+      await assert.rejects(actions.ensureForAgent(session, openOptions),
+        error => error.code === 'CODEX_SESSION_WRITER_ACTIVE');
+      assert.equal(createCalls.length, 2, 'writer 충돌 뒤 별도 세션으로 fallback했습니다.');
+      assert.deepStrictEqual(Array.from(createCalls[1].args), ['resume', session.externalId]);
+      assert.equal(commandCalls.length, 0);
+    }
   });
 
   test('외부 tmux에서 실행 중인 대화도 writable pane 대신 app-owned provider resume PTY에 연결한다', async () => {
@@ -3626,7 +3660,7 @@ function registerTerminalAgentActionTests(context) {
     const composer = actions.agentCommandComposer(desktopCompleted);
     assert.match(composer, /control-origin-owned/u);
     assert.match(composer, /<textarea[^>]*disabled/u);
-    assert.match(composer, /agent\.codex_desktop_fork_help/u);
+    assert.match(composer, /agent\.codex_desktop_resume_help/u);
     assert.equal(composer.includes('<button type="submit"'), false,
       '완료·attention Desktop 카드가 resume 전송 버튼을 노출했습니다.');
   });

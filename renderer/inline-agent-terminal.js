@@ -15,7 +15,7 @@
     focusOrigin: null,
     userFocusRevision: 0,
     reconnectOwnerTerminalId: "",
-    forkCreationGestures: new Map(),
+    openGestures: new Map(),
   };
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const report = (scope, error) => window.WhiteboxRendererUtils?.reportRecoverableError?.(scope, error);
@@ -231,9 +231,10 @@
   }
 
   function launchSupport(terminal, session) {
-    const fork = terminal?.forkSupport?.(session);
-    if (fork?.supported) return { ...fork, action: "fork" };
-    return { ...(terminal?.resumeSupport?.(session) || { supported: false, reason: "" }), action: "resume" };
+    return {
+      ...(terminal?.resumeSupport?.(session, { resumeOriginOwned: true }) || { supported: false, reason: "" }),
+      action: "resume",
+    };
   }
 
   async function sync(options = {}) {
@@ -279,13 +280,11 @@
       // surface, so the joined result is already mounted in the right place.
       return pendingResume.promise;
     }
-    const explicitOpenGesture = local.forkCreationGestures.get(session.id) === signature;
-    const forkCreationGesture = explicitOpenGesture
-      && launchSupport(terminal, session).action === "fork";
+    const explicitOpenGesture = local.openGestures.get(session.id) === signature;
     // Consume the gesture before any early return. If a live target is already
     // mounted, this open action has been satisfied and must not remain armed
     // until a later passive sync after that PTY exits.
-    local.forkCreationGestures.delete(session.id);
+    local.openGestures.delete(session.id);
     const rememberedTargetId = String(local.targetIds.get(session.id) || "");
     const focusTargetId = isFocusSurface(root, instance)
       ? String(instance.state.ptyFocusTargetId || "")
@@ -331,11 +330,10 @@
       && pendingMount.viewport === viewport
       && pendingMount.signature === signature
       && String(pendingMount.targetId || "") === requestedTargetId;
-    // A user PTY gesture must promote an in-flight passive mount. Reusing the
-    // passive promise here would consume the one-shot gesture without ever
-    // granting fork creation authority.
-    if (matchingPendingMount && (pendingMount.forkCreationGesture === true
-      || (!forkCreationGesture && options.force !== true))) {
+    // A user PTY gesture must promote an in-flight passive mount. Preserve
+    // that explicit open while passive refreshes wait for the same terminal.
+    if (matchingPendingMount && (pendingMount.explicitOpenGesture === true
+      || (!explicitOpenGesture && options.force !== true))) {
       return pendingMount.promise;
     }
     if (options.force) {
@@ -353,18 +351,17 @@
     if (!options.force && cachedAutoFailure && !mountableTargetAppeared) {
       const support = launchSupport(terminal, session);
       const resumable = Boolean(support?.supported);
-      const forking = resumable && support.action === "fork";
       setEmpty(
         root,
         true,
-        forking ? "drawer.terminal_fork_available" : resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
-        forking ? "drawer.terminal_fork_available_help" : resumable ? "drawer.terminal_resume_available_help" : "drawer.terminal_unavailable_help",
+        resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
+        resumable ? "drawer.terminal_resume_available_help" : "drawer.terminal_unavailable_help",
         resumable,
         support.action,
       );
       setStatus(
         root,
-        forking ? "drawer.terminal_fork_available" : resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
+        resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
         support?.reason || "",
         "unavailable",
       );
@@ -381,8 +378,7 @@
           targetId: requestedTargetId,
           requireTargetId,
           createIfMissing,
-          forkIfOriginOwned: true,
-          forkCreationGesture,
+          resumeOriginOwned: true,
         });
         if (generation !== local.generation || !isCurrentSurface(session.id, root, instance)) {
           return { ok: false, reason: "cancelled" };
@@ -410,18 +406,17 @@
           }
           const support = result?.reason === "no-target" ? launchSupport(terminal, session) : null;
           const resumable = Boolean(support?.supported);
-          const forking = resumable && support.action === "fork";
           setEmpty(
             root,
             true,
-            forking ? "drawer.terminal_fork_available" : resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
-            forking ? "drawer.terminal_fork_available_help" : resumable ? "drawer.terminal_resume_available_help" : "drawer.terminal_unavailable_help",
+            resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
+            resumable ? "drawer.terminal_resume_available_help" : "drawer.terminal_unavailable_help",
             resumable,
             support?.action || "resume",
           );
           setStatus(
             root,
-            forking ? "drawer.terminal_fork_available" : resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
+            resumable ? "drawer.terminal_resume_available" : "drawer.terminal_unavailable",
             "",
             "unavailable",
           );
@@ -453,7 +448,7 @@
         if (local.pendingMount?.promise === task) local.pendingMount = null;
       }
     })();
-    local.pendingMount = { sessionId: session.id, viewport, signature, targetId: requestedTargetId, forkCreationGesture, promise: task };
+    local.pendingMount = { sessionId: session.id, viewport, signature, targetId: requestedTargetId, explicitOpenGesture, promise: task };
     return task;
   }
 
@@ -469,7 +464,7 @@
       local.focusSessionId = "";
       local.focusOrigin = null;
     }
-    if (activeFocusSessionId !== sessionId) local.forkCreationGestures.delete(sessionId);
+    if (activeFocusSessionId !== sessionId) local.openGestures.delete(sessionId);
     instance.state.inlineTerminalSessionId = null;
     const embedded = window.WhiteboxTerminal?.embeddedState?.();
     if (!activeFocusSessionId
@@ -529,7 +524,7 @@
     }
     // This token is consumed by the first sync against the visible focus
     // surface. Passive state restoration never grants provider fork creation.
-    local.forkCreationGestures.set(id, connectionSignature(session));
+    local.openGestures.set(id, connectionSignature(session));
     instance.state.ptyFocusSessionId = id;
     return true;
   }
@@ -545,7 +540,7 @@
       local.focusSessionId = "";
       local.focusOrigin = null;
     }
-    local.forkCreationGestures.delete(sessionId);
+    local.openGestures.delete(sessionId);
     instance.state.ptyFocusSessionId = null;
     if (options.unmount !== false) {
       // Focus owns both the visible host and any async mount still targeting
@@ -576,7 +571,7 @@
     // user's PTY click should still place the caret in xterm after either the
     // overview or focused layout finishes mounting.
     requestTerminalFocus(id);
-    local.forkCreationGestures.set(id, connectionSignature(session));
+    local.openGestures.set(id, connectionSignature(session));
     instance.state.inlineTerminalSessionId = id;
     instance.renderSessions?.("focus");
   }
@@ -590,15 +585,14 @@
     const sessionId = String(session.id || "");
     const signature = connectionSignature(session);
     const support = launchSupport(window.WhiteboxTerminal, session);
-    const forking = support.action === "fork";
     if (!support.supported) return;
     const existing = local.pendingResume;
     if (existing?.sessionId === sessionId && existing.signature === signature && existing.action === support.action) {
       markPendingButton(existing, button);
       setEmpty(root, true,
-        forking ? "drawer.terminal_forking" : "drawer.terminal_resuming",
-        forking ? "drawer.terminal_forking_help" : "drawer.terminal_resuming_help");
-      setStatus(root, forking ? "drawer.terminal_forking" : "drawer.terminal_resuming");
+        "drawer.terminal_resuming",
+        "drawer.terminal_resuming_help");
+      setStatus(root, "drawer.terminal_resuming");
       return existing.promise;
     }
     if (button.getAttribute("aria-busy") === "true") return;
@@ -613,23 +607,19 @@
     setEmpty(
       root,
       true,
-      forking ? "drawer.terminal_forking" : "drawer.terminal_resuming",
-      forking ? "drawer.terminal_forking_help" : "drawer.terminal_resuming_help",
+      "drawer.terminal_resuming",
+      "drawer.terminal_resuming_help",
     );
-    setStatus(root, forking ? "drawer.terminal_forking" : "drawer.terminal_resuming");
+    setStatus(root, "drawer.terminal_resuming");
     // Capture the user's resume gesture before the provider can spend seconds
     // reopening its history. Later interaction changes userFocusRevision and
     // must not be erased when this await eventually resolves.
     focusRequestToken = requestTerminalFocus(sessionId);
     const task = (async () => {
       try {
-        const resumed = forking
-          ? await window.WhiteboxTerminal.forkForAgent(session, "", false, { focus: false })
-          : await window.WhiteboxTerminal.resumeForAgent(session, "", false, { focus: false });
+        const resumed = await window.WhiteboxTerminal.resumeForAgent(session, "", false, { focus: false, resumeOriginOwned: true });
         const targetId = String(resumed?.terminalId || resumed?.id || "");
-        if (!targetId) throw new Error(t(forking
-          ? "terminal.agent.fork_terminal_failed"
-          : "terminal.agent.resume_terminal_failed"));
+        if (!targetId) throw new Error(t("terminal.agent.resume_terminal_failed"));
         if (!activeIdentityMatches(sessionId, signature)) {
           clearOwnFocusIntent();
           return;
@@ -649,19 +639,19 @@
           setEmpty(
             currentRoot,
             true,
-            forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
-            forking ? "drawer.terminal_fork_failed_help" : "drawer.terminal_resume_failed_help",
+            "drawer.terminal_resume_failed",
+            "drawer.terminal_resume_failed_help",
             true,
             support.action,
           );
           setStatus(
             currentRoot,
-            forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed",
-            window.WhiteboxI18n.errorText(error, forking ? "drawer.terminal_fork_failed" : "drawer.terminal_resume_failed"),
+            "drawer.terminal_resume_failed",
+            window.WhiteboxI18n.errorText(error, "drawer.terminal_resume_failed"),
             "error",
           );
         }
-        report(forking ? "inline-agent-terminal-fork" : "inline-agent-terminal-resume", error);
+        report("inline-agent-terminal-resume", error);
       } finally {
         if (local.pendingResume === record) local.pendingResume = null;
         releasePendingButtons(record);

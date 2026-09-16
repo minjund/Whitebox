@@ -381,7 +381,7 @@ window.WhiteboxAppFactories.createAgentActions = function createAgentActions(con
         : mode === "resume"
           ? t("agent.resume_help")
           : mode === "origin-owned"
-            ? t("agent.codex_desktop_fork_help")
+            ? t("agent.codex_desktop_resume_help")
           : mode === "origin-resume"
               ? t("agent.origin_resume_help", { provider: (origin && origin.provider) || t("agent.desktop") })
               : mode === "connect"

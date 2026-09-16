@@ -376,7 +376,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     const current = controlRoomSummary(latestWorkCopy(root) || root.statusDetail || root.title, 120);
     const presentedStatus = controlRoomStatus(root);
     const writablePty = activeFocusMode !== "transcript";
-    const forkedCodexPty = writablePty
+    const desktopCodexPty = writablePty
       && window.WhiteboxRendererUtils.canForkCodexDesktopSession?.(root) === true;
     surface.setAttribute("style", providerStyle(root.provider));
     surface.dataset.ptyFocusSession = root.id;
@@ -391,8 +391,8 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     $("#ptyFocusTerminalTitle").textContent = writablePty
       ? `${provider.label} · PTY`
       : `${provider.label} · ${t("pty_focus.readonly_title")}`;
-    $("#ptyFocusTerminalHelp").textContent = t(forkedCodexPty
-      ? "agent.codex_desktop_fork_help"
+    $("#ptyFocusTerminalHelp").textContent = t(desktopCodexPty
+      ? "agent.codex_desktop_resume_help"
       : writablePty ? "pty_focus.terminal_help" : "pty_focus.readonly_help");
     const rootStatus = $("#ptyFocusRootStatus");
     rootStatus.className = `pty-focus-root-status ${["running", "starting"].includes(presentedStatus) ? "is-live" : presentedStatus === "waiting" ? "is-waiting" : "is-complete"}`;
@@ -594,12 +594,9 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     }
     let targets;
     try {
-      // A Codex Desktop root owns its transcript writer, so agentTargets()
-      // intentionally never exposes that conversation as a writable target.
-      // Its user-created `codex fork` PTY is held under a separate, signed
-      // source association and must be verified through that exact path.
-      const forkTarget = terminal.forkTargetForAgent?.(root) || null;
-      targets = (forkTarget ? [forkTarget] : terminal.agentTargets(root))
+      // Verify the resumed conversation's signed target. A historical fork
+      // belongs to a different conversation and cannot replace this target.
+      targets = terminal.agentTargets(root)
         .filter(target => target?.kind === "terminal");
     } catch (error) {
       reportRecoverableError("pty-focus-targets", error);

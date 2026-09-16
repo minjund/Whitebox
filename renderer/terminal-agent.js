@@ -310,8 +310,12 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
       : null;
   }
 
-  function originOwnedSessionError(agentSession) {
-    if (isCodexDesktopSession(agentSession)) return codexDesktopOriginOwnedError();
+  function originOwnedSessionError(agentSession, options = {}) {
+    if (isCodexDesktopSession(agentSession)) {
+      if (options.resumeOriginOwned !== true) return codexDesktopOriginOwnedError();
+      const history = forkSupport(agentSession);
+      if (!history.supported) return rejectedError(history.reason, history.code);
+    }
     if (isWhiteboxBridgeProjection(agentSession)) return whiteboxBridgeProjectionOriginOwnedError();
     return null;
   }
@@ -523,7 +527,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     if (!agentSession || !agentSession.id) return [];
     if (agentSession.parentId) return [];
     const appOwnedBridge = Boolean(window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(agentSession));
-    if (!appOwnedBridge && isOriginOwnedSession(agentSession)) return [];
+    if (!appOwnedBridge && isWhiteboxBridgeProjection(agentSession)) return [];
     if (!appOwnedBridge && hasNonDirectSessionMarkers(agentSession)) return [];
     const targets = [];
     const connectionSignature = agentConnectionSignature(agentSession);
@@ -1191,11 +1195,9 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
   async function resumeForAgent(agentSession, draft = '', sendDraft = false, options = {}) {
     if (!agentSession?.id) throw rejectedError(t('terminal.resume.no_session_info'));
     if (agentSession.parentId) throw rejectedError(t('terminal.resume.parent_controlled'));
-    // Codex Desktop owns the thread through its private app-server. A projected
-    // completed/idle/attention state describes only the latest turn and is not
-    // evidence that the app-server released its writer, so never start an
-    // independent resume for this origin.
-    const originOwnedError = originOwnedSessionError(agentSession);
+    // Only the explicit PTY route can request a Desktop history resume. The
+    // host's writer check remains authoritative, regardless of turn status.
+    const originOwnedError = originOwnedSessionError(agentSession, options);
     if (originOwnedError) throw originOwnedError;
     const nonDirectError = nonDirectSessionError(agentSession);
     if (nonDirectError) throw nonDirectError;
@@ -1204,7 +1206,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
     const excludedTerminalIds = new Set((options.excludeTerminalIds || []).map(value => String(value || '')).filter(Boolean));
     let support;
     try {
-      support = resumeSupport(agentSession);
+      support = resumeSupport(agentSession, options);
     } catch (error) {
       throw markRejectedBeforeDelivery(error);
     }
@@ -1419,7 +1421,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         skipPostCreateRefresh: options.skipPostCreateRefresh,
       });
     }
-    const originOwnedError = originOwnedSessionError(agentSession);
+    const originOwnedError = originOwnedSessionError(agentSession, options);
     if (originOwnedError) throw originOwnedError;
     const nonDirectError = nonDirectSessionError(agentSession);
     if (nonDirectError) throw nonDirectError;
@@ -1466,7 +1468,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
           return { ...refreshed, reused: true, terminal: terminalConnectionRecord(refreshed) };
         }
 
-        const support = resumeSupport(agentSession);
+        const support = resumeSupport(agentSession, options);
         if (!support.supported) throw rejectedError(support.reason || t('terminal.agent.no_input_target'));
         const externalId = String(agentSession.externalId || '').trim();
         const runId = String(agentSession.runId || '').trim();
@@ -1479,6 +1481,7 @@ window.WhiteboxTerminalAgentActions = function createModule(context) {
         // establishing that terminal; the user must type after xterm connects.
         return resumeForAgent(agentSession, '', false, {
           focus: false,
+          resumeOriginOwned: options.resumeOriginOwned === true,
           excludeTerminalIds: [...excludedTerminalIds],
           inventoryFresh: true,
           includeReplay: options.includeReplay,

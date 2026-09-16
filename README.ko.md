@@ -139,7 +139,7 @@ codex --remote "$(whitebox codex-endpoint)" resume <SESSION_ID>
 
 이 주소는 `127.0.0.1`에만 열리며 Codex 서버가 다시 시작되면 바뀔 수 있으므로 저장하지 말고 매번 조회하세요. 대화 ID는 기존처럼 저장되지만 공유 서버 주소는 세션 기록에 저장되지 않습니다. 호스트보다 오래 살아야 하는 macOS/Linux managed-tmux Codex와 Windows WSL Codex에는 이 주소를 주입하지 않으므로 기존 백그라운드·재연결 수명이 유지됩니다. Claude, Gemini, Grok 실행 인자도 이 기능으로 변경되지 않습니다.
 
-공식 Codex Desktop에서 연 작업은 예외입니다. 현재 Desktop 앱의 app-server는 외부 연결 주소를 공개하지 않으므로 Whitebox나 별도 CLI가 그 writer에 동시에 붙을 수 없습니다. 턴 완료나 `attention` 표시는 writer 해제의 근거가 아니므로, Whitebox는 Desktop에서 시작한 작업에는 상태와 무관하게 독립 `codex resume`을 실행하지 않고 원래 Codex 앱에서 계속하도록 합니다. 이 제한은 [Codex App Server 문서](https://learn.chatgpt.com/docs/app-server)에 공개된 연결 방식 기준입니다.
+Whitebox에서 GPT/Codex 세션의 PTY를 열면 연결된 터미널을 재사용하거나 `codex resume <SESSION_ID>`로 같은 대화를 이어 엽니다. Codex Desktop에서 시작한 기록도 같은 ID를 사용하며, 새 세션으로 분기하지 않습니다. 다른 CLI나 Desktop 창이 해당 대화를 사용 중이면 연결 오류를 표시하므로 기존 창에서 그 대화를 종료한 뒤 다시 시도하세요. 턴 완료나 `attention` 표시만으로 사용이 끝났다고 판단하지 않습니다. 프로젝트 선택에 따른 자동 연결과 별도 명령 입력창은 Desktop 기록을 자동으로 재개하지 않습니다.
 
 macOS와 WSL의 지속형 AI 터미널은 개인 tmux와 분리된 `tmux -L whitebox` 서버에서 실행됩니다. `터미널 화면 닫기`는 attach 화면만 분리하고 AI 작업은 백그라운드에서 계속합니다. 목록의 `기존 작업 다시 연결`은 새 AI 대화를 만들지 않고 같은 tmux 세션과 Whitebox 세션 ID에 다시 붙습니다. `AI 세션 종료`는 실제 tmux 작업을 끝내되 확인할 수 있도록 기록을 남기며, 중지된 기록은 별도로 제거할 수 있습니다.
 
