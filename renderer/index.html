@@ -20,11 +20,16 @@
       </div>
 
       <section id="sidebarProjects" class="sidebar-projects" aria-labelledby="sidebarProjectsTitle">
+        <label class="project-sidebar-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
+          <input id="sidebarProjectSearch" type="search" autocomplete="off" placeholder="프로젝트 검색" aria-label="프로젝트 검색" data-i18n-placeholder="studio.sidebar.search" data-i18n-aria-label="studio.sidebar.search" />
+        </label>
         <header>
           <div>
-            <span data-i18n="studio.sidebar.eyebrow">내 프로젝트</span>
             <h2 id="sidebarProjectsTitle" data-i18n="studio.sidebar.title">프로젝트</h2>
+            <span id="sidebarProjectCount" class="project-sidebar-count"></span>
           </div>
+          <button id="sidebarCollapseAllBtn" type="button" aria-label="프로젝트 모두 접기" title="프로젝트 모두 접기" data-i18n-aria-label="studio.sidebar.collapse_all" data-i18n-title="studio.sidebar.collapse_all"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8 4-4 4 4m-8 8 4 4 4-4"/></svg></button>
           <button id="sidebarNewProjectBtn" type="button" aria-label="프로젝트 추가" data-i18n-aria-label="studio.sidebar.new_project" title="프로젝트 추가" data-i18n-title="studio.sidebar.new_project">＋</button>
         </header>
         <div id="projectSidebarList" class="project-sidebar-list" role="tree" aria-label="프로젝트별 작업 보기" data-i18n-aria-label="studio.sidebar.project_filter"></div>
@@ -48,6 +53,12 @@
         <span id="sidebarAppVersion" class="sidebar-app-version">—</span>
       </div>
     </aside>
+
+    <div id="projectSidebarMenu" class="project-sidebar-menu" popover="auto" role="menu" aria-label="프로젝트 메뉴" data-i18n-aria-label="studio.sidebar.menu">
+      <button type="button" role="menuitem" data-sidebar-menu-action="up" data-i18n="studio.sidebar.move_up">위로 이동</button>
+      <button type="button" role="menuitem" data-sidebar-menu-action="down" data-i18n="studio.sidebar.move_down">아래로 이동</button>
+      <button type="button" role="menuitem" data-sidebar-menu-action="remove" data-i18n="ui.remove_from_list">목록에서 제거</button>
+    </div>
 
     <main id="mainContent" class="main-stage" tabindex="-1">
       <header class="topbar">

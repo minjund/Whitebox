@@ -33,7 +33,7 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({
     width: 1560,
     height: 940,
-    show: true,
+    show: false,
     backgroundColor: '#08111b',
     webPreferences: {
       preload: path.join(__dirname, 'interaction-fixture-preload.js'),
@@ -86,7 +86,7 @@ app.whenReady().then(async () => {
           node.dispatchEvent(event);
           return event.defaultPrevented;
         };
-        dispatchDrag(source.querySelector('.project-sidebar-item'), 'dragstart');
+        dispatchDrag(source.querySelector('.project-sidebar-drag-handle'), 'dragstart');
         const targetBounds = target.getBoundingClientRect();
         const dragoverAccepted = dispatchDrag(target, 'dragover', targetBounds.top + 1);
         const dropAccepted = dispatchDrag(target, 'drop', targetBounds.top + 1);
@@ -138,14 +138,9 @@ app.whenReady().then(async () => {
         .map(project => ({
           key: project.dataset.sidebarProjectRef || '',
           name: project.querySelector('.project-sidebar-copy strong')?.textContent.trim() || '',
-          initial: project.querySelector('.project-sidebar-icon')?.textContent.trim() || '',
+          hasFolder: Boolean(project.querySelector('.project-sidebar-icon svg')),
           priority: project.dataset.projectPriority || '',
         }));
-      const expectedInitial = name => {
-        const characters = Array.from(String(name || '').trim());
-        return (characters.find(character => /[\p{L}\p{N}]/u.test(character)) || characters[0] || '•')
-          .toLocaleUpperCase('ko-KR');
-      };
       const renderedProjectKeys = projectOrder.map(project => project.key);
       const reorderableProjectKeys = renderedProjectKeys.filter(key => key !== '__projectless__');
       const fixedProjectKeys = (window.WhiteboxApp.state.projectOrder || [])
@@ -183,7 +178,7 @@ app.whenReady().then(async () => {
           document.querySelector('#projectSidebarList')
           && document.querySelector('#projectSidebarList').scrollWidth <= document.querySelector('#projectSidebarList').clientWidth + 1
         ),
-        projectInitialsMatch: projectOrder.every(project => project.initial === expectedInitial(project.name)),
+        projectFoldersPresent: projectOrder.every(project => project.hasFolder),
         projectOrder,
         fixedProjectOrder,
         liveVisible: visible(document.querySelector('#liveSection')),
@@ -194,8 +189,8 @@ app.whenReady().then(async () => {
     const activeProjectsFirst = firstInactiveProject < 0
       || initial.projectActivityOrder.slice(firstInactiveProject).every(count => count === 0);
     if (initial.workspace !== 'all' || initial.prompt !== '프로젝트를 선택해주세요'
-      || !initial.promptVisible || initial.projectCount < 2 || initial.sourceCount < initial.projectCount
-      || initial.expandedProjects !== initial.projectCount
+      || !initial.promptVisible || initial.projectCount < 2 || initial.sourceCount !== 0
+      || initial.expandedProjects !== 0
       || initial.removableProjects < 1 || initial.sidebarAddOpensRun
       || !initial.settingsAboveProviders || initial.visibleSettingsButtons !== 1
       || !initial.settingsRemovedFromTools || !initial.projectListNoHorizontalOverflow
@@ -214,7 +209,7 @@ app.whenReady().then(async () => {
     await capture(win, initialOutput);
 
     const removeHoverBefore = await win.webContents.executeJavaScript(`(() => {
-      const button = document.querySelector('#projectSidebarList .project-sidebar-remove');
+      const button = document.querySelector('#projectSidebarList .project-sidebar-more');
       const row = button?.closest('.project-sidebar-row');
       const list = document.querySelector('#projectSidebarList');
       const rect = element => {
@@ -237,7 +232,7 @@ app.whenReady().then(async () => {
     });
     await wait(240);
     const removeHoverAfter = await win.webContents.executeJavaScript(`(() => {
-      const button = document.querySelector('#projectSidebarList .project-sidebar-remove');
+      const button = document.querySelector('#projectSidebarList .project-sidebar-more');
       const row = button?.closest('.project-sidebar-row');
       const list = document.querySelector('#projectSidebarList');
       const rect = element => {
@@ -372,6 +367,7 @@ app.whenReady().then(async () => {
       return {
         projectCount: projects.length,
         sourceCount: sources.length,
+        projectsWithTasks: projects.filter(project => project.hasAttribute('aria-expanded')).length,
         projectActivityOrder: projects.map(project => Number(project.dataset.liveSessionCount || 0)),
         allProjectsVisible: projects.every(project => project.getBoundingClientRect().height > 0),
         allSourcesVisible: sources.every(source => source.getBoundingClientRect().height > 0),
@@ -407,9 +403,9 @@ app.whenReady().then(async () => {
     if (selected.projectCount !== initial.projectCount || selected.sourceCount !== initial.sourceCount
       || !selected.allProjectsVisible || !selected.allSourcesVisible
       || selected.selectedCount !== 1 || selected.selectedWorkspace !== selectedWorkspace
-      || selected.expandedProjectCount !== selected.projectCount
+      || selected.expandedProjectCount !== 0
       || selected.expandedSourceCount !== selected.sourceCount
-      || selected.nestedSessionAreas !== selected.sourceCount || selected.nestedSessions < selected.sourceCount
+      || selected.nestedSessionAreas !== selected.projectsWithTasks || selected.nestedSessions < selected.projectsWithTasks
       || !selected.taskToolbarVisible || !selected.taskButtonInProject || selected.taskProjectPath !== selectedWorkspace
       || selected.taskButtonText !== '＋새 AI 작업 시작' || !selected.taskButtonShortcutRemoved
       || selected.mainProjects.length !== 1 || selected.reviewCards.length !== 0

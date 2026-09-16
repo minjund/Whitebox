@@ -24,11 +24,7 @@ const removedSelectors = [
   '#terminalSection', '#terminalHistoryPanel', '#terminalHistoryList',
   '#automationOverview', '#tmuxSection', '#tmuxCreateModal',
 ];
-const PROJECT_TREE_INTERACTIONS = [
-  { selector: '[data-source-workspace]', action: 'workspace:source-select' },
-  { selector: '[data-sidebar-project-toggle]', action: 'workspace:project-toggle' },
-  { selector: '[data-sidebar-source-toggle]', action: 'workspace:source-toggle' },
-];
+const exerciseProjectSidebar = require('./tests/project-sidebar-interactions');
 app.setPath('userData', userData);
 
 function assert(value, message) {
@@ -108,96 +104,7 @@ async function prepareProject(win) {
 }
 
 async function exerciseNavigationAndSettings(win) {
-  const projectTree = await rendererValue(win, `(async () => {
-    const app = window.WhiteboxApp;
-    const twoFrames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const readPreferences = () => JSON.parse(localStorage.getItem('whitebox:dashboard-preferences:v2') || '{}');
-    const source = document.querySelector('#projectSidebarList [data-source-workspace]');
-    if (!source) return { ok: false, missing: '[data-source-workspace]' };
-    const expected = {
-      workspace: source.dataset.sourceWorkspace,
-      sourceId: source.dataset.projectSource,
-      sourceKey: source.dataset.sidebarSourceRef,
-      projectKey: source.dataset.sidebarProjectRef,
-    };
-    source.click();
-    await twoFrames();
-    const selectedSource = document.querySelector(
-      '[data-sidebar-source-key="' + CSS.escape(expected.sourceKey) + '"] [data-source-workspace]'
-    );
-    const selected = app.state.workspace === expected.workspace
-      && app.state.workspaceSource === expected.sourceId
-      && app.state.view === 'all'
-      && selectedSource?.getAttribute('aria-selected') === 'true'
-      && selectedSource?.closest('.project-sidebar-source')?.classList.contains('selected')
-      && readPreferences().workspace === expected.workspace
-      && readPreferences().workspaceSource === expected.sourceId;
-
-    let projectToggle = document.querySelector(
-      '[data-sidebar-project-toggle="' + CSS.escape(expected.projectKey) + '"]'
-    );
-    if (!projectToggle) return { ok: false, missing: '[data-sidebar-project-toggle]', expected, selected };
-    projectToggle.click();
-    await twoFrames();
-    let projectItem = document.querySelector(
-      '[data-sidebar-project-key="' + CSS.escape(expected.projectKey) + '"] .project-sidebar-item'
-    );
-    let projectSources = projectItem && document.getElementById(projectItem.getAttribute('aria-owns'));
-    const projectCollapsed = app.state.sidebarCollapsedProjects.has(expected.projectKey)
-      && projectItem?.getAttribute('aria-expanded') === 'false'
-      && Boolean(projectSources?.hidden)
-      && readPreferences().sidebarCollapsedProjects?.includes(expected.projectKey)
-      && document.activeElement === projectItem;
-    projectToggle = document.querySelector(
-      '[data-sidebar-project-toggle="' + CSS.escape(expected.projectKey) + '"]'
-    );
-    projectToggle?.click();
-    await twoFrames();
-    projectItem = document.querySelector(
-      '[data-sidebar-project-key="' + CSS.escape(expected.projectKey) + '"] .project-sidebar-item'
-    );
-    projectSources = projectItem && document.getElementById(projectItem.getAttribute('aria-owns'));
-    const projectExpanded = !app.state.sidebarCollapsedProjects.has(expected.projectKey)
-      && projectItem?.getAttribute('aria-expanded') === 'true'
-      && !projectSources?.hidden
-      && !readPreferences().sidebarCollapsedProjects?.includes(expected.projectKey);
-
-    let sourceToggle = document.querySelector(
-      '[data-sidebar-source-toggle="' + CSS.escape(expected.sourceKey) + '"]'
-    );
-    if (!sourceToggle) return { ok: false, missing: '[data-sidebar-source-toggle]', expected, selected };
-    sourceToggle.click();
-    await twoFrames();
-    let sourceItem = document.querySelector(
-      '[data-sidebar-source-key="' + CSS.escape(expected.sourceKey) + '"] [data-source-workspace]'
-    );
-    let sourceSessions = sourceItem && document.getElementById(sourceItem.getAttribute('aria-owns'));
-    const sourceCollapsed = app.state.sidebarCollapsedSources.has(expected.sourceKey)
-      && sourceItem?.getAttribute('aria-expanded') === 'false'
-      && Boolean(sourceSessions?.hidden)
-      && readPreferences().sidebarCollapsedSources?.includes(expected.sourceKey)
-      && document.activeElement === sourceItem;
-    sourceToggle = document.querySelector(
-      '[data-sidebar-source-toggle="' + CSS.escape(expected.sourceKey) + '"]'
-    );
-    sourceToggle?.click();
-    await twoFrames();
-    sourceItem = document.querySelector(
-      '[data-sidebar-source-key="' + CSS.escape(expected.sourceKey) + '"] [data-source-workspace]'
-    );
-    sourceSessions = sourceItem && document.getElementById(sourceItem.getAttribute('aria-owns'));
-    const sourceExpanded = !app.state.sidebarCollapsedSources.has(expected.sourceKey)
-      && sourceItem?.getAttribute('aria-expanded') === 'true'
-      && !sourceSessions?.hidden
-      && !readPreferences().sidebarCollapsedSources?.includes(expected.sourceKey);
-    return {
-      ok: selected && projectCollapsed && projectExpanded && sourceCollapsed && sourceExpanded,
-      expected, selected, projectCollapsed, projectExpanded, sourceCollapsed, sourceExpanded,
-      interactions: ${JSON.stringify(PROJECT_TREE_INTERACTIONS)},
-    };
-  })()`);
-  assert(projectTree.ok && projectTree.interactions.length === PROJECT_TREE_INTERACTIONS.length,
-    '프로젝트/프로그램 트리 상호작용이 올바르지 않습니다: ' + JSON.stringify(projectTree));
+  await exerciseProjectSidebar(win);
   await prepareProject(win);
   const navigation = await rendererValue(win, "(async()=>{"
     + "const result=[];"

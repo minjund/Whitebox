@@ -2,7 +2,7 @@
 sketch: 012
 name: sidebar-project-readability
 question: "왼쪽 프로젝트 목록에서 이름, 상태, 작업을 어떤 위계로 보여줘야 가장 빨리 읽히는가?"
-winner: null
+winner: A
 recommendation: A
 tags: [sidebar, projects, readability, orca, cmux]
 ---
@@ -13,8 +13,8 @@ tags: [sidebar, projects, readability, orca, cmux]
 
 - Branch: `codex/sidebar-project-readability`
 - Base: fetched `origin/main`, `347b69877455d9a4e9e586ec4969e1ccecf96612`
-- Scope: 일회용 HTML 스케치. 제품 renderer와 updater/release 파일 변경 없음.
-- User selection: 미정. A는 작성자 추천이며 사용자가 선택한 안이 아님.
+- Scope: HTML 스케치와 선택한 A안의 제품 renderer 구현.
+- User selection: A · 심플 리스트 (2026-09-16 승인). 사용자는 실행 출처보다 프로젝트와 작업의 가독성이 중요하다고 확인함.
 
 ## 보는 방법
 
@@ -35,7 +35,7 @@ tags: [sidebar, projects, readability, orca, cmux]
 
 | 안 | 구조 | 장점 | 구현 시 주의 |
 |---|---|---|---|
-| A · 심플 리스트 (추천) | 프로젝트 이름 + 짧은 상태, 필요할 때 작업 펼침 | 안정적인 순서와 읽기 쉬운 이름, 적은 시각적 잡음 | 출처별 필터를 작업 영역에서 제공해야 기존 기능 보존 가능 |
+| A · 심플 리스트 (추천) | 프로젝트 이름 + 짧은 상태, 필요할 때 작업 펼침 | 안정적인 순서와 읽기 쉬운 이름, 적은 시각적 잡음 | 사용자 결정에 따라 프로젝트 선택은 모든 출처의 작업을 함께 표시 |
 | B · 프로젝트 트리 | 프로젝트 → 실행 출처 → 작업 | 현재 데이터·동작 구조를 가장 적게 바꾸는 안 | 많은 프로젝트를 펼치면 스크롤 증가. 펼침 상태 보존 필요 |
 | C · 상태 중심 | 확인 필요 → 진행 중 → 결과 도착 → 최근 | 사용자의 다음 행동을 빠르게 찾음 | 상태 변경으로 위치가 바뀜. 실제 적용 시 선택·스크롤 유지 필요 |
 
@@ -53,7 +53,7 @@ tags: [sidebar, projects, readability, orca, cmux]
 
 - `renderer/app-dashboard.js`: 프로젝트를 source별로 묶고 live/attention/result-ready를 집계한다. 현재 트리는 3단계이고 source별 세션은 3개까지 미리 본다.
 - `renderer/styles-studio-shell.css`: 프로젝트 이름 12px, source 이름 11px, 일부 보조 텍스트 10px. 들여쓰기와 여러 고정 폭 버튼이 프로젝트·작업 이름 공간을 줄인다.
-- 기존 `projectOrder`, `sidebarCollapsedProjects`, `sidebarCollapsedSources`, 정확한 PTY 연결, source 필터, projectless 그룹, 결과 확인 상태를 실제 패치에서 보존해야 한다.
+- 구현은 기존 `projectOrder`, 정확한 PTY 연결, projectless 그룹, 결과 확인 상태를 유지한다. 펼침 상태는 `sidebarExpandedProjects`로 저장하고, 과거 출처 선택 필터는 `all`로 초기화한다.
 - 스케치는 sample source와 task만 사용하며 실제 생산 데이터가 아니다. Git 브랜치/PR/포트 메타데이터를 새로 요구하지 않는다.
 
 ## 참고한 공식 자료
@@ -75,3 +75,15 @@ tags: [sidebar, projects, readability, orca, cmux]
 - `node --check serve.cjs`, 인라인 script의 `vm.Script` 구문 검사, `git diff --check` 실행.
 - PNG 재생성: 저장소 루트에서 `node_modules/.bin/electron .planning/sketches/012-sidebar-project-readability/capture.cjs`.
 - 실제 앱의 회귀/Windows updater E2E는 실행하지 않았다. 이 변경은 스케치 파일에 한정된다.
+
+## A안 구현
+
+- 프로젝트 이름 14px, 보조 상태 12px, 중립 배경과 폴더 아이콘.
+- 프로젝트 이름은 선택, 화살표는 작업 펼치기. 출처 중간 행 없이 모든 현재 root 작업을 최신순으로 표시.
+- 이름·경로 검색, 전체 접기, 더보기 메뉴에서 위/아래 이동 및 목록 제거. 폴더 아이콘 드래그와 Alt+방향키 순서 변경 유지.
+- 작업이 없는 저장 프로젝트와 별도 프로젝트 없음 그룹 유지. 정확한 세션 ID와 PTY/읽기 전용 라우팅 유지.
+- 키보드 트리는 프로젝트→작업 2단계, 한 개의 Tab 진입점 및 펼침 상태 저장.
+
+검증: `node scripts/regression-test.js` (529개), `npm run check:source`, `electron scripts/project-sidebar-readability-check.js`, `WHITEBOX_INTERACTION_ROUNDS=1 electron scripts/interaction-check.js`, `electron scripts/project-selection-visual.js --reorder-only`. 실제 Electron fixture 화면에서 다크/라이트, 1024px 폭, 32개 추가 프로젝트와 긴 이름, 한국어/영어/중국어를 확인함. 스크린샷은 `artifacts/sidebar-readability/`에 생성됨.
+
+추가 검사 제한: `project-studio-interaction-check.js`는 1280px PTY 화면의 기존 작업 기록 버튼이 오른쪽 1296px까지 나가 실패한다. `project-selection-visual.js` 전체 모드는 삭제된 `#projectContextNav`를 `getComputedStyle`에 넘기는 기존 검사 코드에서 중단된다. 두 실패 모두 정확한 기반 SHA `347b69877455d9a4e9e586ec4969e1ccecf96612`의 별도 worktree에서도 재현했다. 이 패치의 사이드바 검사는 새 독립 Electron 검사와 현재 `interaction-check.js` 1회 전체 실행으로 검증했다.
