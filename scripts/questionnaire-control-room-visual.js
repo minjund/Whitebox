@@ -42,7 +42,10 @@ async function run() {
     webPreferences: { preload: path.join(__dirname, 'interaction-fixture-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false } });
   const errors = [];
   win.webContents.on('console-message', (_event, level, message) => { if (level >= 3) errors.push(message); });
-  const js = code => win.webContents.executeJavaScript(code, true);
+  const js = async code => {
+    try { return await win.webContents.executeJavaScript(code, true); }
+    catch (error) { throw new Error(`${error.message}\nRenderer command: ${code}\n${errors.join('\n')}`); }
+  };
   const openId = () => js('window.WhiteboxApp.comprehensionPacketController.isOpen() ? window.WhiteboxApp.comprehensionPacketController.getSessionId() : ""');
   const add = async session => {
     await js(`window.interactionTest.addSession(${JSON.stringify(session)}); window.interactionTest.emitSnapshot()`);
@@ -51,6 +54,7 @@ async function run() {
     await js(`window.interactionTest.updateSession(${JSON.stringify(id)}, ${JSON.stringify(patch)}); window.interactionTest.emitSnapshot()`);
   };
   const close = () => js("document.querySelector('#comprehensionPacketClose').click()");
+  const openFromInbox = title => js(`[...document.querySelectorAll('[data-questionnaire-open]')].find(el => el.textContent.includes(${JSON.stringify(title)})).click()`);
   await win.loadFile(path.join(rendererRoot, 'index.html'));
   await waitFor(() => js('Boolean(window.WhiteboxApp?.initialized)'), 'initialization');
   await js(`window.WhiteboxI18n.setLocale('ko'); window.WhiteboxTheme.setTheme('dark'); window.WhiteboxApp.state.workspace = ${JSON.stringify('D:\\fixture')}; window.WhiteboxApp.state.workspaceSource = 'all'; window.WhiteboxApp.selectView('all'); window.interactionTest.clearCalls()`);
@@ -60,7 +64,10 @@ async function run() {
   await add({ ...first, comprehension: { status: 'generating', schemaVersion: 1 } });
   await waitFor(() => js("document.querySelector('#questionnaireInboxStatus').textContent.includes('1')"), 'generation status in control room');
   await update(first.id, first);
-  await waitFor(async () => (await openId()) === first.id, 'new questionnaire opens over control room');
+  await waitFor(() => js("document.querySelectorAll('[data-questionnaire-open]').length === 1"), 'new questionnaire added to inbox');
+  assert.equal(await openId(), '', 'completion must not interrupt the control room');
+  await openFromInbox(first.comprehension.packet.title);
+  await waitFor(async () => (await openId()) === first.id, 'selected questionnaire opens over control room');
   assert.equal(await js('window.WhiteboxApp.state.view'), 'all');
   assert.equal(await js("document.querySelector('#ptyFocusSurface').classList.contains('hidden')"), true);
   assert.equal(await js("document.querySelector('#appShell').hasAttribute('inert')"), true);
@@ -72,7 +79,9 @@ async function run() {
   assert.equal(await openId(), first.id, 'another completion must not replace the open questionnaire');
   assert.equal(await js("document.querySelector('#comprehensionPacketQuestionList input[value=\"a\"]').checked"), true);
   await close();
-  await waitFor(async () => (await openId()) === second.id, 'next pending questionnaire');
+  await waitFor(async () => !(await openId()), 'closing must not open another questionnaire');
+  await openFromInbox(second.comprehension.packet.title);
+  await waitFor(async () => (await openId()) === second.id, 'select another questionnaire');
   await close();
   await waitFor(async () => !(await openId()), 'return to control room');
   assert.equal(await js("document.querySelector('#appShell').hasAttribute('inert')"), false);
@@ -91,6 +100,7 @@ async function run() {
   assert.equal(await js("document.querySelector('#questionnaireInbox').classList.contains('hidden')"), true, 'settings must hide the control room inbox');
   await js("window.WhiteboxApp.selectView('all')");
   assert.equal(await js("document.querySelector('#questionnaireInbox').classList.contains('hidden')"), false, 'returning to control room restores the inbox');
+  assert.equal(await openId(), '', 'returning to control room must not open a questionnaire');
   await update(first.id, { status: 'completed', completionObserved: true, comprehension: first.comprehension });
   await waitFor(() => js("window.WhiteboxApp.state.snapshot.sessions.find(s => s.id === 'questionnaire-first').status === 'completed'"), 'completed focus fixture');
   await js(`window.WhiteboxApp.openResponsibleFocus(${JSON.stringify(first.id)})`);
@@ -109,6 +119,10 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(await openId(), '', 'unselected projects must not interrupt this control room');
   assert.equal(await js("document.querySelector('#questionnaireInboxList').textContent.includes('다른 프로젝트 결과')"), false);
+  await js(`window.WhiteboxApp.state.workspace = ${JSON.stringify(otherProject.cwd)}; window.WhiteboxApp.renderSessions('filter')`);
+  await waitFor(() => js("document.querySelector('#questionnaireInboxList').textContent.includes('다른 프로젝트 결과')"), 'selected project inbox');
+  assert.equal(await openId(), '', 'selecting a project with unseen questionnaires must not open a popup');
+  await js(`window.WhiteboxApp.state.workspace = ${JSON.stringify('D:\\fixture')}; window.WhiteboxApp.renderSessions('filter')`);
 
   await js('window.WhiteboxApp.openRunModal()');
   await waitFor(() => js("!document.querySelector('#runModal').classList.contains('hidden')"), 'existing dialog');
@@ -117,7 +131,10 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(await openId(), '', 'existing dialog must stay in front');
   await js('window.WhiteboxApp.closeRunModal()');
-  await waitFor(async () => (await openId()) === third.id, 'questionnaire deferred until dialog closes');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(await openId(), '', 'closing another dialog must not open an unsolicited questionnaire');
+  await openFromInbox(third.comprehension.packet.title);
+  await waitFor(async () => (await openId()) === third.id, 'open requested questionnaire after dialog closes');
 
   const artifacts = path.join(root, 'artifacts');
   fs.mkdirSync(artifacts, { recursive: true });
@@ -155,7 +172,7 @@ async function run() {
     'reading questionnaires must not start terminals, AI work, or generation');
   assert.deepStrictEqual(errors, []);
   win.destroy();
-  process.stdout.write('Questionnaire control room passed: completion arrival, generation status, multiple results, new-turn retention, shared focus-mode answers, view switching, timestamp deduplication, deferred dialogs, project filtering, responsive layouts, no AI or PTY start.\n');
+  process.stdout.write('Questionnaire control room passed: click-only inbox, no popup on completion or project selection, generation status, multiple results, new-turn retention, shared focus-mode answers, view switching, timestamp deduplication, dialogs, project filtering, responsive layouts, no AI or PTY start.\n');
 }
 
 run().then(() => app.quit(), error => { process.stderr.write(`${error.stack}\n`); app.exit(1); });

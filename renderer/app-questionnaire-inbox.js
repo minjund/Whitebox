@@ -7,8 +7,6 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
   const api = window.WhiteboxComprehensionPacket;
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const entries = new Map();
-  const pending = new Set();
-  let initialized = false;
   let queued = false;
   let lastHtml = "";
 
@@ -30,16 +28,11 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
     });
   }
 
-  function openQuestionnaire(key, { auto = false } = {}) {
+  function openQuestionnaire(key) {
     const entry = visibleEntries().find(([id]) => id === key)?.[1];
     if (!entry || !inControlRoom() || currentDialog?.()) return false;
     if (!controller.mount(entry, { surface: document.body, autoPresent: false })) return false;
-    pending.delete(key);
-    if (auto && controller.getProgress()?.autoPresented) {
-      controller.unmount();
-      return false;
-    }
-    return controller.open({ auto });
+    return controller.open({ auto: false });
   }
 
   function syncQuestionnaireInbox() {
@@ -52,18 +45,15 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
         session.comprehensionOrigin?.generation || api.completionGenerationIdentity(session),
         api.packetContentFingerprint(session.comprehension.packet)]);
       if (!entries.has(key)) {
-        if (initialized) pending.add(key);
         entries.set(key, session);
       }
     }
-    initialized = true;
     for (const [key, entry] of entries) {
-      if (!ids.has(entry.id)) { entries.delete(key); pending.delete(key); }
+      if (!ids.has(entry.id)) entries.delete(key);
     }
     while (entries.size > 200) {
       const oldest = entries.keys().next().value;
       entries.delete(oldest);
-      pending.delete(oldest);
     }
     const visible = visibleEntries();
     const creating = sessions.filter(session => !session.parentId && !Number(session.depth || 0)
@@ -86,10 +76,6 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
     if (ownsPresentation && (!inControlRoom() || !visible.some(([, entry]) => entry.id === controller.getSessionId()))) {
       controller.unmount();
     }
-    if (!inControlRoom() || controller.isOpen() || !context.initialized || currentDialog?.()) return;
-    for (const [key] of visible) {
-      if (pending.has(key) && openQuestionnaire(key, { auto: true })) break;
-    }
   }
 
   $("#questionnaireInboxList").addEventListener("click", event => {
@@ -97,7 +83,7 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
     if (button) openQuestionnaire(button.dataset.questionnaireOpen);
   });
   window.addEventListener("whitebox:questionnaire-closed", scheduleSync);
-  // Retry presentation after another dialog closes or the user returns from PTY.
+  // Keep the inbox visibility in sync when dialogs or PTY focus close.
   const observer = new MutationObserver(scheduleSync);
   observer.observe($("#appShell"), { attributes: true, attributeFilter: ["inert"] });
   observer.observe($("#ptyFocusSurface"), { attributes: true, attributeFilter: ["class", "aria-hidden", "data-pty-focus-session"] });

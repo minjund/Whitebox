@@ -963,6 +963,11 @@
     },
     selectTmuxById,
     agentTargets,
+    refreshAgentTargets: async agentSession => {
+      await init();
+      await refreshSessions();
+      return agentTargets(agentSession);
+    },
     agentConnectionSignature,
     resumeSupport,
     dispatchAgentCommand,
