@@ -2159,6 +2159,8 @@ function projectTerminalBridgePresence(sessions, platform = process.platform) {
         terminalId: session.id,
         title: session.title || '',
         provider: session.provider,
+        backend: session.backend || '',
+        managedTmuxSession: session.managedTmuxSession || '',
         pid: session.pid,
         cwd: session.cwd,
         startedAt: session.createdAt,

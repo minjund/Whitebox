@@ -12,12 +12,13 @@ const TOPICS = Object.freeze(['change', 'decision', 'constraint-risk']);
 const TOPIC_SET = new Set(TOPICS);
 const PACKET_STATUSES = new Set(['ready', 'missing', 'invalid', 'unsupported']);
 
-const CONTRACT_OPEN = `<whitebox-comprehension-contract version="${SCHEMA_VERSION}">`;
+const CONTRACT_VERSION = 2;
+const CONTRACT_OPEN = `<whitebox-comprehension-contract version="${CONTRACT_VERSION}">`;
 const CONTRACT_CLOSE = '</whitebox-comprehension-contract>';
 const PACKET_OPEN = `<whitebox-comprehension-packet version="${SCHEMA_VERSION}">`;
 const PACKET_CLOSE = '</whitebox-comprehension-packet>';
 
-const COMPREHENSION_CONTRACT = `${CONTRACT_OPEN}
+const LEGACY_COMPREHENSION_CONTRACT = `<whitebox-comprehension-contract version="1">
 You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use their work only as evidence in the main packet.
 
 Write the normal user-visible final answer first. Then append exactly one ${PACKET_OPEN}...${PACKET_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
@@ -28,9 +29,21 @@ The JSON must use schemaVersion 1 and exactly these fields:
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question and its pre-generated variant must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
 ${CONTRACT_CLOSE}`;
 
-// Keep the version-1 contract byte-stable: persisted launch fingerprints and
-// historical transcript stripping depend on it. Clarify turn scope only in
-// the private provider instruction channel.
+const COMPREHENSION_CONTRACT = `${CONTRACT_OPEN}
+You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use their work only as evidence in the main packet.
+
+Write the normal user-visible final answer first. Then append exactly one ${PACKET_OPEN}...${PACKET_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
+
+The JSON must use schemaVersion 1 and exactly these fields:
+{"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"..."}}]}
+
+Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. A grounded variant question is optional; when included it must use the same multiple-choice shape with 2-6 choices, one valid answerId, and an explanation. Omit variant when it adds little value or cannot be grounded. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
+
+The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Use a few short, readable paragraphs separated by blank lines, within 6000 characters. Make the summary self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.
+${CONTRACT_CLOSE}`;
+
+// Keep the legacy version-1 contract byte-stable for persisted fingerprints and
+// historical transcript stripping; new prompts use the version-2 contract.
 const COMPREHENSION_INSTRUCTIONS = `${COMPREHENSION_CONTRACT}
 
 Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.
@@ -42,8 +55,9 @@ const PACKET_KEYS = Object.freeze([
 ]);
 const EVIDENCE_KEYS = Object.freeze(['id', 'label', 'detail']);
 const QUESTION_KEYS = Object.freeze([
-  'id', 'kind', 'topics', 'prompt', 'options', 'answerId', 'explanation', 'evidenceIds', 'variant',
+  'id', 'kind', 'topics', 'prompt', 'options', 'answerId', 'explanation', 'evidenceIds',
 ]);
+const OPTIONAL_QUESTION_KEYS = Object.freeze(['variant']);
 const OPTION_KEYS = Object.freeze(['id', 'label']);
 const VARIANT_KEYS = Object.freeze(['prompt', 'options', 'answerId', 'explanation']);
 
@@ -186,8 +200,12 @@ function validateComprehensionPacket(value) {
   } else {
     value.questions.forEach((question, index) => {
       const questionPath = `$.questions[${index}]`;
-      if (!hasExactKeys(question, QUESTION_KEYS)) {
-        issues.push(issue(questionPath, 'QUESTION_KEYS', `must contain exactly ${QUESTION_KEYS.join(', ')}`));
+      const questionKeys = isPlainObject(question) ? Object.keys(question).sort() : [];
+      const allowedQuestionKeys = [...QUESTION_KEYS, ...OPTIONAL_QUESTION_KEYS].sort();
+      if (!isPlainObject(question)
+        || QUESTION_KEYS.some(key => !Object.prototype.hasOwnProperty.call(question, key))
+        || questionKeys.some(key => !allowedQuestionKeys.includes(key))) {
+        issues.push(issue(questionPath, 'QUESTION_KEYS', `must contain ${QUESTION_KEYS.join(', ')} and may contain ${OPTIONAL_QUESTION_KEYS.join(', ')}`));
         return;
       }
       safeId(question.id, `${questionPath}.id`, issues, definedIds);
@@ -226,13 +244,15 @@ function validateComprehensionPacket(value) {
         });
       }
 
-      if (!hasExactKeys(question.variant, VARIANT_KEYS)) {
-        issues.push(issue(`${questionPath}.variant`, 'VARIANT_KEYS', `must contain exactly ${VARIANT_KEYS.join(', ')}`));
-      } else {
-        safeText(question.variant.prompt, `${questionPath}.variant.prompt`, 1200, issues);
-        safeText(question.variant.explanation, `${questionPath}.variant.explanation`, 2400, issues);
-        const variantOptionIds = validateOptions(question.variant.options, `${questionPath}.variant.options`, issues);
-        validAnswer(question.variant.answerId, variantOptionIds, `${questionPath}.variant.answerId`, issues);
+      if (question.variant !== undefined) {
+        if (!hasExactKeys(question.variant, VARIANT_KEYS)) {
+          issues.push(issue(`${questionPath}.variant`, 'VARIANT_KEYS', `must contain exactly ${VARIANT_KEYS.join(', ')}`));
+        } else {
+          safeText(question.variant.prompt, `${questionPath}.variant.prompt`, 1200, issues);
+          safeText(question.variant.explanation, `${questionPath}.variant.explanation`, 2400, issues);
+          const variantOptionIds = validateOptions(question.variant.options, `${questionPath}.variant.options`, issues);
+          validAnswer(question.variant.answerId, variantOptionIds, `${questionPath}.variant.answerId`, issues);
+        }
       }
     });
   }
@@ -360,14 +380,19 @@ function extractComprehensionPacket(value) {
 
 function stripComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
-  const prefix = `${COMPREHENSION_CONTRACT}\n\n`;
-  if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
-  return prompt === COMPREHENSION_CONTRACT ? '' : prompt;
+  for (const contract of [COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT]) {
+    const prefix = `${contract}\n\n`;
+    if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
+    if (prompt === contract) return '';
+  }
+  return prompt;
 }
 
 function hasComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
-  return prompt === COMPREHENSION_CONTRACT || prompt.startsWith(`${COMPREHENSION_CONTRACT}\n\n`);
+  return [COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT].some(contract => (
+    prompt === contract || prompt.startsWith(`${contract}\n\n`)
+  ));
 }
 
 function injectComprehensionContract(value) {

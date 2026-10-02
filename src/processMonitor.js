@@ -985,6 +985,17 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
           const agent = pane.agent;
           const linked = agent && agent.linkedSessionId && byId.get(agent.linkedSessionId);
           if (!linked || pane.dead || agent.linkAuthority !== 'explicit-session-id') continue;
+          // A Whitebox-managed tmux task has two runtime layers: its owning
+          // terminal bridge and the tmux pane that carries the same PTY. The
+          // bridge is the user-facing terminal identity, so don't count its
+          // exact managed pane as a second related terminal.
+          const representedByManagedBridge = (linked.runtimePresence || []).some(presence => (
+            presence.kind === 'bridge'
+            && presence.backend === 'managed-tmux'
+            && String(presence.managedTmuxSession || '') === String(tmuxSession.name || '')
+            && (!presence.distro || String(presence.distro) === String(distro.name || ''))
+          ));
+          if (representedByManagedBridge) continue;
           usedSessionIds.add(linked.id);
           markRuntime(linked, {
             id: `tmux:${distro.name}:${pane.nativeId}`,

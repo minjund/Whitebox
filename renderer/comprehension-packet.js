@@ -35,7 +35,8 @@
   }
 })(typeof window !== "undefined" ? window : globalThis, function createComprehensionPacketApi(root) {
   const SCHEMA_VERSION = 1;
-  const CONTRACT_OPEN = '<whitebox-comprehension-contract version="1">';
+  const CONTRACT_OPEN = '<whitebox-comprehension-contract version="2">';
+  const LEGACY_CONTRACT_OPEN = '<whitebox-comprehension-contract version="1">';
   const CONTRACT_CLOSE = "</whitebox-comprehension-contract>";
   const ENVELOPE_OPEN = '<whitebox-comprehension-packet version="1">';
   const ENVELOPE_CLOSE = "</whitebox-comprehension-packet>";
@@ -54,6 +55,11 @@
     evidence_chip: "근거 · {label}",
     required_initial: "이 문항의 답을 선택하세요.",
     required_variant: "변형 문제의 답을 선택하세요.",
+    retry_question: "다시 풀기",
+    retry_question_required: "답을 선택한 뒤 다시 풀어보세요.",
+    retry_question_correct: "정답입니다. 이 문항을 이해했습니다.",
+    retry_question_wrong: "아직 정답이 아닙니다. 요약을 참고해 같은 문제를 다시 풀어보세요.",
+    optional_variant: "변형 문제도 풀어보기 · 선택",
     variant_correct: "정답입니다. 같은 원리를 다른 상황에도 적용했습니다.",
     correct_answer: "정답 · {answer}",
     debt_resolved_score_unchanged: "이해 부채를 해소했습니다. 오답 점수는 그대로 유지됩니다.",
@@ -101,8 +107,8 @@
     missing_initial: "{count}개 문항에 답해주세요.",
     all_correct: "모든 문제를 맞혔습니다.",
     wrong_only: "답안을 저장했습니다. 틀린 문제는 해설을 읽고 다시 풀어보세요.",
-    variant_correct_notice: "정답입니다. 변형 문제 결과를 최종 점수에 반영했습니다.",
-    variant_wrong_notice: "정답과 해설을 확인한 뒤 이해했음을 표시해주세요.",
+    variant_correct_notice: "변형 문제 정답입니다. 원문 문항을 다시 풀어 정답을 확인하세요.",
+    variant_wrong_notice: "변형 문제 결과를 확인하고 원문 문항을 다시 풀어보세요.",
     understood_notice: "이해 부채를 해소했습니다. 오답 점수는 변경되지 않습니다.",
     issue_notice: "원문과 변형 문제를 점수 분모와 이해 부채에서 제외했습니다.",
     closed: "이해 패킷을 닫았습니다.",
@@ -134,7 +140,7 @@
     return interpolateMessage(FALLBACK_MESSAGES[key] || messageKey, params);
   }
 
-  const CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use their work only as evidence in the main packet.
+  const LEGACY_CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use their work only as evidence in the main packet.
 
 Write the normal user-visible final answer first. Then append exactly one ${ENVELOPE_OPEN}...${ENVELOPE_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
 
@@ -142,18 +148,34 @@ The JSON must use schemaVersion 1 and exactly these fields:
 {"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","evidence":[{"id":"...","label":"...","detail":"..."}],"questions":[{"id":"...","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"...","label":"..."}],"answerId":"...","explanation":"...","evidenceIds":["..."],"variant":{"prompt":"...","options":[{"id":"...","label":"..."}],"answerId":"...","explanation":"..."}}]}
 
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question and its pre-generated variant must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.`;
+  const LEGACY_CONTRACT_BLOCK = `${LEGACY_CONTRACT_OPEN}\n${LEGACY_CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
+  const CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
+
+Write the normal user-visible final answer first. Then append exactly one ${ENVELOPE_OPEN}...${ENVELOPE_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
+
+The JSON must use schemaVersion 1 and exactly these fields:
+{"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"..."}}]}
+
+Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. A grounded variant question is optional; when included it must use the same multiple-choice shape with 2-6 choices, one valid answerId, and an explanation. Omit variant when it adds little value or cannot be grounded. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
+
+The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Use a few short, readable paragraphs separated by blank lines, within 6000 characters. Make the summary self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
   const CONTRACT_BLOCK = `${CONTRACT_OPEN}\n${CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
 
   function stripContract(value) {
     const prompt = typeof value === "string" ? value : String(value == null ? "" : value);
-    const prefix = `${CONTRACT_BLOCK}\n\n`;
-    if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
-    return prompt === CONTRACT_BLOCK ? "" : prompt;
+    for (const contract of [CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK]) {
+      const prefix = `${contract}\n\n`;
+      if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
+      if (prompt === contract) return "";
+    }
+    return prompt;
   }
 
   function hasContract(value) {
     const prompt = typeof value === "string" ? value : String(value == null ? "" : value);
-    return prompt === CONTRACT_BLOCK || prompt.startsWith(`${CONTRACT_BLOCK}\n\n`);
+    return [CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK].some(contract => (
+      prompt === contract || prompt.startsWith(`${contract}\n\n`)
+    ));
   }
 
   function injectContract(value) {
@@ -225,11 +247,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         || !isText(question.explanation)
         || !optionListIsRenderable(question.options, question.answerId)
         || !Array.isArray(question.evidenceIds)
-        || !question.evidenceIds.every(id => isText(id) && evidenceIds.has(id))
-        || !isRecord(question.variant)
+        || !question.evidenceIds.every(id => isText(id) && evidenceIds.has(id))) return false;
+      if (question.variant !== undefined && (!isRecord(question.variant)
         || !isText(question.variant.prompt)
         || !isText(question.variant.explanation)
-        || !optionListIsRenderable(question.variant.options, question.variant.answerId)) return false;
+        || !optionListIsRenderable(question.variant.options, question.variant.answerId))) return false;
       questionIds.add(question.id);
     }
     return true;
@@ -582,7 +604,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         const answer = isRecord(raw.answers) ? raw.answers[question.id] : null;
         if (optionIds(question.options).has(answer)) next.answers.set(question.id, answer);
         const variantAnswer = isRecord(raw.variantAnswers) ? raw.variantAnswers[question.id] : null;
-        if (optionIds(question.variant.options).has(variantAnswer)) next.variantAnswers.set(question.id, variantAnswer);
+        if (question.variant && optionIds(question.variant.options).has(variantAnswer)) next.variantAnswers.set(question.id, variantAnswer);
       }
 
       const active = currentPacket.questions.filter(question => !next.excluded.has(question.id));
@@ -600,21 +622,10 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
           next.resolved.add(question.id);
           continue;
         }
-        if (!submittedVariants.has(question.id) || !next.variantAnswers.has(question.id)) {
-          next.outcomes.set(question.id, "wrong");
-          continue;
-        }
-        next.variantSubmitted.add(question.id);
-        if (next.variantAnswers.get(question.id) === question.variant.answerId) {
-          next.outcomes.set(question.id, "variant-correct");
-          next.resolved.add(question.id);
-        } else {
-          next.outcomes.set(question.id, "final-wrong");
-          if (understood.has(question.id)) {
-            next.understood.add(question.id);
-            next.resolved.add(question.id);
-          }
-        }
+        next.outcomes.set(question.id, "wrong");
+        next.resolved.delete(question.id);
+        if (question.variant && submittedVariants.has(question.id)
+          && next.variantAnswers.has(question.id)) next.variantSubmitted.add(question.id);
       }
       return next;
     }
@@ -626,7 +637,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     function correctCount() {
       return activeQuestions().filter(question => {
         const outcome = progress.outcomes.get(question.id);
-        return outcome === "correct" || outcome === "variant-correct";
+        return outcome === "correct";
       }).length;
     }
 
@@ -837,7 +848,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function correctOptionLabel(question) {
-      return question.variant.options.find(option => option.id === question.variant.answerId)?.label || question.variant.answerId;
+      return question.variant?.options.find(option => option.id === question.variant.answerId)?.label || question.variant?.answerId || "";
     }
 
     function makeAnswerSummary(question, variant = false) {
@@ -855,38 +866,25 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
     }
 
     function makeVariantResult(question) {
-      const outcome = progress.outcomes.get(question.id);
       const result = createElement("div", "comprehension-packet-variant-result", {
         role: "status",
         "aria-live": "polite",
       });
-      if (outcome === "variant-correct") {
+      if (!progress.variantSubmitted.has(question.id)) {
+        result.hidden = true;
+        return result;
+      }
+      if (progress.variantAnswers.get(question.id) === question.variant.answerId) {
         result.dataset.tone = "success";
         result.textContent = translate("variant_correct");
         return result;
       }
-      if (outcome !== "final-wrong") {
-        result.hidden = true;
-        return result;
-      }
-
-      result.dataset.tone = progress.understood.has(question.id) ? "acknowledged" : "wrong";
+      result.dataset.tone = "wrong";
       const answer = createElement("b", "", {
         text: translate("correct_answer", { answer: correctOptionLabel(question) }),
       });
       const explanation = createElement("p", "", { text: question.variant.explanation });
       append(result, answer, explanation);
-      if (progress.understood.has(question.id)) {
-        result.append(createElement("p", "comprehension-packet-understood-copy", {
-          text: translate("debt_resolved_score_unchanged"),
-        }));
-      } else {
-        result.append(createElement("button", "comprehension-packet-quiet", {
-          type: "button",
-          text: translate("understood_button"),
-          "data-comprehension-understood": question.id,
-        }));
-      }
       return result;
     }
 
@@ -894,64 +892,76 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       const outcome = progress.outcomes.get(question.id);
       const initiallyCorrect = outcome === "correct";
       const variantWasSubmitted = progress.variantSubmitted.has(question.id);
-      const resolved = progress.resolved.has(question.id);
       const card = createElement("article", `comprehension-packet-question-card ${initiallyCorrect ? "comprehension-packet-result-card" : "comprehension-packet-remediation-card"}`, {
         "data-comprehension-question": question.id,
         tabindex: "-1",
       });
-      if (resolved) card.classList.add("is-resolved");
-      const acknowledged = outcome === "final-wrong" && progress.understood.has(question.id);
-      if (acknowledged) card.classList.add("is-acknowledged");
+      if (initiallyCorrect) card.classList.add("is-resolved");
       card.dataset.comprehensionStatus = reviewStatus(question);
       const meta = makeQuestionMeta(question, index, !initiallyCorrect);
       const status = createElement("span", "comprehension-packet-result-status", { text: card.dataset.comprehensionStatus });
-      const originalPrompt = createElement("p", "comprehension-packet-original-prompt", { text: question.prompt });
+      const originalPrompt = createElement("p", "comprehension-packet-original-prompt", {
+        id: `${instanceId}-retry-title-${index}`,
+        text: question.prompt,
+      });
       const remediation = createElement("section", "comprehension-packet-remediation");
       const explanationTitle = createElement("h3", "", { text: translate("explanation_title") });
       const explanation = createElement("p", "", { text: question.explanation });
-      append(card, meta, status, originalPrompt, makeAnswerSummary(question));
-      append(remediation, explanationTitle, explanation, makeEvidenceChips(question));
       if (initiallyCorrect) {
+        append(card, meta, status, originalPrompt, makeAnswerSummary(question));
+        append(remediation, explanationTitle, explanation, makeEvidenceChips(question));
         card.append(remediation);
         questionNodes.set(question.id, card);
         return card;
       }
-      const variantTitleId = `${instanceId}-variant-title-${index}`;
-      const variantErrorId = `${instanceId}-variant-error-${index}`;
-      const variantBox = createElement("div", "comprehension-packet-variant-box", {
-        "data-comprehension-variant-form": question.id,
-        role: "group",
-        "aria-labelledby": variantTitleId,
-        "aria-describedby": variantErrorId,
-        "aria-errormessage": variantErrorId,
-        "aria-required": variantWasSubmitted ? null : "true",
-        "aria-invalid": "false",
-      });
-      const variantTitle = createElement("b", "", {
-        id: variantTitleId,
-        text: translate("variant_title", { prompt: question.variant.prompt }),
-      });
-      const variantChoices = variantWasSubmitted ? makeAnswerSummary(question, true) : makeChoices(question, true, false, {
-        labelId: variantTitleId,
-        errorId: variantErrorId,
-      });
-      append(variantBox,
-        variantTitle,
-        variantChoices,
-        makeValidationError(variantErrorId, translate("required_variant")));
-      if (!variantWasSubmitted) {
-        const actions = createElement("div", "comprehension-packet-variant-actions");
-        actions.append(createElement("button", "comprehension-packet-primary", {
-          type: "button",
-          text: translate("retry_button"),
-          "data-comprehension-variant-submit": question.id,
-        }));
-        variantBox.append(actions);
+      const retryTitleId = `${instanceId}-retry-title-${index}`;
+      const retryErrorId = `${instanceId}-retry-error-${index}`;
+      const retryChoices = makeChoices(question, false, false, { labelId: retryTitleId, errorId: retryErrorId });
+      const retryActions = createElement("div", "comprehension-packet-variant-actions");
+      retryActions.append(createElement("button", "comprehension-packet-primary", {
+        type: "button",
+        text: translate("retry_question"),
+        "data-comprehension-retry": question.id,
+      }));
+      append(card, meta, status, originalPrompt, retryChoices,
+        makeValidationError(retryErrorId, translate("retry_question_required")), retryActions);
+      if (question.variant) {
+        const optionalVariant = createElement("details", "comprehension-packet-optional-variant");
+        const variantTitleId = `${instanceId}-variant-title-${index}`;
+        const variantErrorId = `${instanceId}-variant-error-${index}`;
+        const variantBox = createElement("div", "comprehension-packet-variant-box", {
+          "data-comprehension-variant-form": question.id,
+          role: "group",
+          "aria-labelledby": variantTitleId,
+          "aria-describedby": variantErrorId,
+          "aria-errormessage": variantErrorId,
+          "aria-required": variantWasSubmitted ? null : "true",
+          "aria-invalid": "false",
+        });
+        const variantTitle = createElement("b", "", {
+          id: variantTitleId,
+          text: translate("variant_title", { prompt: question.variant.prompt }),
+        });
+        const variantChoices = variantWasSubmitted ? makeAnswerSummary(question, true) : makeChoices(question, true, false, {
+          labelId: variantTitleId,
+          errorId: variantErrorId,
+        });
+        append(variantBox, variantTitle, variantChoices, makeValidationError(variantErrorId, translate("required_variant")));
+        if (!variantWasSubmitted) {
+          const actions = createElement("div", "comprehension-packet-variant-actions");
+          actions.append(createElement("button", "comprehension-packet-primary", {
+            type: "button",
+            text: translate("retry_button"),
+            "data-comprehension-variant-submit": question.id,
+          }));
+          variantBox.append(actions);
+        }
+        append(optionalVariant,
+          createElement("summary", "", { text: translate("optional_variant") }),
+          variantBox,
+          makeVariantResult(question));
+        remediation.append(optionalVariant);
       }
-      if (variantWasSubmitted && outcome === "variant-correct") {
-        variantBox.append(createElement("p", "comprehension-packet-variant-explanation", { text: question.variant.explanation }));
-      }
-      append(remediation, variantBox, makeVariantResult(question));
       card.append(remediation);
       questionNodes.set(question.id, card);
       return card;
@@ -1134,7 +1144,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         const preferredCard = questionId ? questionNodes.get(questionId) : null;
         const preferred = selector ? preferredCard?.querySelector(selector) : preferredCard;
         const fallback = questionList.querySelector(
-          "[data-comprehension-variant-submit], [data-comprehension-understood], "
+          "[data-comprehension-retry], [data-comprehension-variant-submit], [data-comprehension-understood], "
           + "[data-comprehension-answer-kind], .comprehension-packet-remediation-card",
         ) || questionList;
         const target = preferred?.isConnected ? preferred : fallback;
@@ -1142,9 +1152,38 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       });
     }
 
+    function handleInitialRetry(questionId) {
+      const question = findQuestion(questionId);
+      if (!question || progress.outcomes.get(question.id) !== "wrong") return;
+      const card = questionNodes.get(question.id);
+      const selected = progress.answers.get(question.id);
+      setAnswerGroupInvalid(card, false);
+      if (!selected) {
+        setAnswerGroupInvalid(card, true);
+        showNotice(translate("retry_question_required"), "warning");
+        card?.querySelector('[data-comprehension-answer-kind="initial"]')?.focus();
+        return;
+      }
+      if (selected === question.answerId) {
+        progress.outcomes.set(question.id, "correct");
+        progress.resolved.add(question.id);
+      }
+      persistProgress();
+      replaceReviewCard(question);
+      updateSummary();
+      if (progress.outcomes.get(question.id) === "correct") {
+        focusTransitionTarget(question.id);
+        showNotice(translate("retry_question_correct"), "success");
+        celebratePerfectScore();
+      } else {
+        focusTransitionTarget(question.id, "[data-comprehension-retry]");
+        showNotice(translate("retry_question_wrong"), "warning");
+      }
+    }
+
     function handleVariantSubmit(questionId) {
       const question = findQuestion(questionId);
-      if (!question || progress.excluded.has(question.id) || progress.resolved.has(question.id)) return;
+      if (!question?.variant || progress.excluded.has(question.id) || progress.resolved.has(question.id)) return;
       const card = questionNodes.get(question.id);
       const variantBox = card?.querySelector("[data-comprehension-variant-form]");
       setAnswerGroupInvalid(variantBox, false);
@@ -1155,22 +1194,14 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         return;
       }
       progress.variantSubmitted.add(question.id);
-      if (progress.variantAnswers.get(question.id) === question.variant.answerId) {
-        progress.outcomes.set(question.id, "variant-correct");
-        progress.resolved.add(question.id);
-      } else {
-        progress.outcomes.set(question.id, "final-wrong");
-        progress.resolved.delete(question.id);
-      }
       persistProgress();
       replaceReviewCard(question);
       updateSummary();
-      if (progress.outcomes.get(question.id) === "variant-correct") {
-        focusTransitionTarget(question.id);
+      if (progress.variantAnswers.get(question.id) === question.variant.answerId) {
+        focusTransitionTarget(question.id, "[data-comprehension-retry]");
         showNotice(translate("variant_correct_notice"), "success");
-        celebratePerfectScore();
       } else {
-        focusTransitionTarget(question.id, "[data-comprehension-understood]");
+        focusTransitionTarget(question.id, "[data-comprehension-retry]");
         showNotice(translate("variant_wrong_notice"), "warning");
       }
     }
@@ -1211,6 +1242,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       const optionId = input.dataset.comprehensionOptionId;
       if (!question) return;
       if (input.dataset.comprehensionAnswerKind === "variant") {
+        if (!question.variant) return;
         if (!optionIds(question.variant.options).has(optionId)) return;
         progress.variantAnswers.set(question.id, optionId);
         setAnswerGroupInvalid(input.closest("[data-comprehension-variant-form]"), false);
@@ -1243,6 +1275,11 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
       const variant = event.target.closest?.("[data-comprehension-variant-submit]");
       if (variant && overlay.contains(variant)) {
         handleVariantSubmit(variant.dataset.comprehensionVariantSubmit);
+        return;
+      }
+      const retry = event.target.closest?.("[data-comprehension-retry]");
+      if (retry && overlay.contains(retry)) {
+        handleInitialRetry(retry.dataset.comprehensionRetry);
         return;
       }
       const understood = event.target.closest?.("[data-comprehension-understood]");
@@ -1628,6 +1665,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         };
       }
       if (node.closest?.("[data-comprehension-issue]")) return { type: "issue", questionId };
+      if (node.closest?.("[data-comprehension-retry]")) return { type: "retry", questionId };
       if (node.closest?.("[data-comprehension-variant-submit]")) return { type: "variant-submit", questionId };
       if (node.closest?.("[data-comprehension-understood]")) return { type: "understood", questionId };
       if (node === card) return { type: "card", questionId };
@@ -1645,6 +1683,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
         )) || null;
       }
       if (descriptor.type === "issue") return card.querySelector("[data-comprehension-issue]");
+      if (descriptor.type === "retry") return card.querySelector("[data-comprehension-retry]");
       if (descriptor.type === "variant-submit") return card.querySelector("[data-comprehension-variant-submit]");
       if (descriptor.type === "understood") return card.querySelector("[data-comprehension-understood]");
       return descriptor.type === "card" ? card : null;
