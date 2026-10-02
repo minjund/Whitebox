@@ -30,7 +30,7 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
 ${CONTRACT_CLOSE}`;
 
 const COMPREHENSION_CONTRACT = `${CONTRACT_OPEN}
-You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use their work only as evidence in the main packet.
+You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
 
 Write the normal user-visible final answer first. Then append exactly one ${PACKET_OPEN}...${PACKET_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
 
