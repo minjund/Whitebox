@@ -275,8 +275,18 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const requestedSource = String(state.workspaceSource || "all");
     if (requestedSource !== "all" && sessionProjectSource(workspaceOwner) !== requestedSource) return false;
     if (state.workspace === PROJECTLESS_WORKSPACE) return isProjectlessSession(workspaceOwner);
-    return !isProjectlessSession(workspaceOwner)
-      && sessionProjectPaths(workspaceOwner).some(path => projectContainsPath(state.workspace, path));
+    if (isProjectlessSession(workspaceOwner)) return false;
+    // Resolve each path to its most specific known workspace before matching.
+    // A plain path-prefix check makes selecting a parent project include every
+    // nested project below it, even though those tasks are listed separately.
+    return sessionProjectPaths(workspaceOwner).some(path => {
+      const owner = state.workspaces
+        .filter(item => projectContainsPath(item.path, path))
+        .sort((a, b) => normalizedProjectPath(b.path).length - normalizedProjectPath(a.path).length)[0];
+      return owner
+        ? normalizedProjectPath(owner.path) === normalizedProjectPath(state.workspace)
+        : projectContainsPath(state.workspace, path);
+    });
   }
 
   function unlinkedLiveTmuxSessions() {

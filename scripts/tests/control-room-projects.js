@@ -89,6 +89,21 @@ function registerControlRoomProjectTests({ test, root, temp, jsonl }) {
     assert.equal(dashboard.matchesWorkspaceFilter(session), false);
   });
 
+  test('상위 프로젝트를 선택해도 별도 등록된 하위 프로젝트 작업은 관제목록에 섞이지 않는다', () => {
+    const sessions = [
+      { id: 'parent-project-task', provider: 'codex', status: 'running', cwd: '/work/repo/app', childIds: [] },
+      { id: 'nested-project-task', provider: 'codex', status: 'running', cwd: '/work/repo/packages/tool', childIds: [] },
+    ];
+    const { state, dashboard } = dashboardHarness(root, sessions, [
+      { path: '/work/repo', name: 'Repository' },
+      { path: '/work/repo/packages/tool', name: 'Tool' },
+    ]);
+    state.workspace = '/work/repo';
+    assert.deepEqual(Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id), ['parent-project-task']);
+    state.workspace = '/work/repo/packages/tool';
+    assert.deepEqual(Array.from(sessions.filter(dashboard.matchesWorkspaceFilter), session => session.id), ['nested-project-task']);
+  });
+
   test('프로젝트 메타데이터가 없는 CLI·WSL·프로젝트 없는 작업의 기존 분류를 유지한다', () => {
     const { state, dashboard } = dashboardHarness(root, []);
     state.workspace = 'D:\\repo';
