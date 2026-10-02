@@ -39,6 +39,10 @@ async function waitUntil(predicate, timeoutMs = 2_000, intervalMs = 10) {
   return predicate();
 }
 
+function uniqueSocketEndpoint() {
+  return path.join(os.tmpdir(), `w-${process.pid}-${crypto.randomBytes(6).toString('hex')}.sock`);
+}
+
 function registerTmuxAndProcessTests(context) {
   const { test } = context;
   test('보존 기간은 Whitebox 환경 변수를 우선하고 기존 공개 설정도 이어받는다', () => {
@@ -2240,7 +2244,7 @@ function registerTerminalLifecycleTests(context) {
     const uncertaintyDiscovery = path.join(temp, `terminal-host-uncertain-${uncertaintySuffix}.json`);
     const uncertaintyEndpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-uncertain-${uncertaintySuffix}`
-      : path.join(os.tmpdir(), `lta-host-uncertain-${uncertaintySuffix}.sock`);
+      : uniqueSocketEndpoint();
     let uncertaintyShutdowns = 0;
     const uncertaintyServer = new TerminalHostServer({
       manager: uncertainManager,
@@ -2746,7 +2750,7 @@ function registerTerminalLifecycleTests(context) {
     const manager = new FakeManager();
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-managed-lifecycle-${process.pid}-${Date.now()}`
-      : path.join(os.tmpdir(), `lta-managed-lifecycle-${process.pid}-${Date.now()}.sock`);
+      : uniqueSocketEndpoint();
     const discovery = path.join(temp, 'managed-tmux-lifecycle-host.json');
     const server = new TerminalHostServer({
       manager,
@@ -3716,7 +3720,7 @@ function registerTerminalLifecycleTests(context) {
     const suffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-raw-write-${suffix}`
-      : path.join(os.tmpdir(), `lta-raw-write-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     const discovery = path.join(temp, `raw-write-host-${suffix}.json`);
     const manager = new TerminalManager({
       platform: 'win32',
@@ -3820,7 +3824,7 @@ function registerTerminalLifecycleTests(context) {
 
       const replacementEndpoint = process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-raw-write-replacement-${suffix}`
-        : path.join(os.tmpdir(), `lta-raw-write-replacement-${suffix}.sock`);
+        : uniqueSocketEndpoint();
       replacementServer = new TerminalHostServer({
         manager,
         endpoint: replacementEndpoint,
@@ -3864,7 +3868,7 @@ function registerTerminalLifecycleTests(context) {
 
       const safeFirstSendEndpoint = process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-raw-write-safe-first-${suffix}`
-        : path.join(os.tmpdir(), `lta-raw-write-safe-first-${suffix}.sock`);
+        : uniqueSocketEndpoint();
       safeFirstSendServer = new TerminalHostServer({
         manager,
         endpoint: safeFirstSendEndpoint,
@@ -3929,7 +3933,7 @@ function registerTerminalLifecycleTests(context) {
     const suffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-raw-write-legacy-${suffix}`
-      : path.join(os.tmpdir(), `lta-raw-write-legacy-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     const discovery = path.join(temp, `raw-write-legacy-host-${suffix}.json`);
     const manager = new TerminalManager({
       platform: 'win32',
@@ -4076,7 +4080,7 @@ function registerTerminalLifecycleTests(context) {
     });
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-test-${process.pid}-${Date.now()}`
-      : path.join(os.tmpdir(), `lta-host-${process.pid}-${Date.now()}.sock`);
+      : uniqueSocketEndpoint();
     const discovery = path.join(temp, 'terminal-host-discovery.json');
     const server = new TerminalHostServer({ manager, endpoint, discoveryFile: discovery, token: 'host-test-token' });
     await server.start();
@@ -4380,7 +4384,7 @@ function registerTerminalLifecycleTests(context) {
     const discovery = path.join(temp, 'terminal-host-runtime-upgrade.json');
     const endpoint = suffix => process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-runtime-${process.pid}-${suffix}`
-      : path.join(os.tmpdir(), `lta-host-runtime-${process.pid}-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     let oldServer = null;
     let legacyExitedNaturally = false;
     oldServer = new TerminalHostServer({
@@ -4493,7 +4497,7 @@ function registerTerminalLifecycleTests(context) {
     }
     const endpoint = suffix => process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-protocol-${process.pid}-${suffix}`
-      : path.join(os.tmpdir(), `lta-host-protocol-${process.pid}-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     const removeLegacyDiscovery = file => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     };
@@ -4692,7 +4696,7 @@ function registerTerminalLifecycleTests(context) {
       protocol: 1,
       endpoint: process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-live-unresponsive-${process.pid}`
-        : path.join(os.tmpdir(), `lta-live-unresponsive-${process.pid}.sock`),
+        : uniqueSocketEndpoint(),
       token: 'live-unresponsive-token',
       pid: process.pid,
     }), 'utf8');
@@ -4729,7 +4733,7 @@ function registerTerminalLifecycleTests(context) {
       protocol: 1,
       endpoint: process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-unknown-${process.pid}`
-        : path.join(os.tmpdir(), `lta-unknown-${process.pid}.sock`),
+        : uniqueSocketEndpoint(),
       token: 'unknown-token',
       pid: 98_765,
     }), 'utf8');
@@ -4756,7 +4760,7 @@ function registerTerminalLifecycleTests(context) {
       protocol: 8,
       endpoint: process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-shared-live-${process.pid}`
-        : path.join(os.tmpdir(), `lta-shared-live-${process.pid}.sock`),
+        : uniqueSocketEndpoint(),
       token: 'shared-live-token',
       pid: process.pid,
     }), 'utf8');
@@ -4785,12 +4789,12 @@ function registerTerminalLifecycleTests(context) {
     const discovery = path.join(temp, 'terminal-host-stale-runtime.json');
     const replacementEndpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-stale-${process.pid}`
-      : path.join(os.tmpdir(), `lta-host-stale-${process.pid}.sock`);
+      : uniqueSocketEndpoint();
     fs.writeFileSync(discovery, JSON.stringify({
       protocol: 1,
       endpoint: process.platform === 'win32'
         ? `\\\\.\\pipe\\whitebox-missing-${process.pid}`
-        : path.join(os.tmpdir(), `lta-host-missing-${process.pid}.sock`),
+        : uniqueSocketEndpoint(),
       token: 'stale-token',
       pid: 98_766,
     }), 'utf8');
@@ -5026,6 +5030,7 @@ function registerTerminalLifecycleTests(context) {
     const options = {
       platform: 'darwin',
       storeFile,
+      now: () => Date.parse(now),
       killTree: () => {},
       ptyModule: { spawn: () => { spawnCount += 1; throw new Error('internal projection was resumed'); } },
     };
@@ -5133,7 +5138,7 @@ function registerTerminalLifecycleTests(context) {
     const discovery = path.join(temp, 'terminal-host-reconnect-discovery.json');
     const endpoint = suffix => process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-reconnect-${process.pid}-${suffix}`
-      : path.join(os.tmpdir(), `lta-host-reconnect-${process.pid}-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     const firstServer = new TerminalHostServer({ manager, endpoint: endpoint('first'), discoveryFile: discovery, token: 'first-token' });
     await firstServer.start();
     let replacementServer = null;
@@ -5446,7 +5451,7 @@ function registerTerminalLifecycleTests(context) {
     const confirmedDiscovery = path.join(temp, `terminal-host-update-stop-${confirmedSuffix}.json`);
     const confirmedEndpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-update-stop-${confirmedSuffix}`
-      : path.join(os.tmpdir(), `lta-host-update-stop-${confirmedSuffix}.sock`);
+      : uniqueSocketEndpoint();
     const confirmedServer = new TerminalHostServer({
       manager: confirmedStopManager,
       endpoint: confirmedEndpoint,
@@ -5599,7 +5604,7 @@ function registerTerminalLifecycleTests(context) {
     const managedDiscovery = path.join(temp, `terminal-host-update-detach-${managedSuffix}.json`);
     const managedEndpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-update-detach-${managedSuffix}`
-      : path.join(os.tmpdir(), `lta-host-update-detach-${managedSuffix}.sock`);
+      : uniqueSocketEndpoint();
     const managedServer = new TerminalHostServer({
       manager: managedDetachManager,
       endpoint: managedEndpoint,
@@ -5666,7 +5671,7 @@ function registerTerminalLifecycleTests(context) {
     const overlapDiscovery = path.join(temp, `terminal-host-update-retire-${suffix}.json`);
     const overlapEndpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-update-retire-${suffix}`
-      : path.join(os.tmpdir(), `lta-host-update-retire-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     const overlapServer = new TerminalHostServer({
       manager,
       endpoint: overlapEndpoint,
@@ -5732,7 +5737,7 @@ function registerTerminalLifecycleTests(context) {
     const discovery = path.join(temp, 'terminal-host-idle-discovery.json');
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-idle-${process.pid}`
-      : path.join(os.tmpdir(), `lta-host-idle-${process.pid}.sock`);
+      : uniqueSocketEndpoint();
     let shutdowns = 0;
     const server = new TerminalHostServer({
       manager,
@@ -5765,7 +5770,7 @@ function registerTerminalLifecycleTests(context) {
     const discovery = path.join(temp, `terminal-host-orphan-${suffix}.json`);
     const endpoint = process.platform === 'win32'
       ? `\\\\.\\pipe\\whitebox-host-orphan-${suffix}`
-      : path.join(os.tmpdir(), `lta-host-orphan-${suffix}.sock`);
+      : uniqueSocketEndpoint();
     let shutdowns = 0;
     const server = new TerminalHostServer({
       manager: new EmptyManager(),
