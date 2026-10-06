@@ -119,6 +119,7 @@
     difficulty_aria: "난이도 {difficulty}",
     difficulty_label: "난이도 ",
     close_aria: "이해 패킷 닫기",
+    close_button: "닫기",
     briefing_eyebrow: "AI 답변 요약 · 오픈북",
     evidence_label: "실제 근거",
     evidence_mark: "근거",
@@ -158,7 +159,7 @@ The JSON must use schemaVersion 1 and exactly these fields:
 
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. A grounded variant question is optional; when included it must use the same multiple-choice shape with 2-6 choices, one valid answerId, and an explanation. Omit variant when it adds little value or cannot be grounded. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
 
-The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Use a few short, readable paragraphs separated by blank lines, within 6000 characters. Make the summary self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
+The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Divide it into a few short, relevant sections separated by blank lines. Each section must use exactly this plain-text shape: a concise subheading on its own line prefixed with "### ", one or two short body sentences, then a final hint line prefixed with "힌트: " (or the equivalent word for hint in the user's language). The hint must point to the fact or reasoning in that section that helps with one or more questions, without giving away the answer. Keep the whole summary within 6000 characters and self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
   const CONTRACT_BLOCK = `${CONTRACT_OPEN}\n${CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
 
   function stripContract(value) {
@@ -1558,7 +1559,7 @@ The summary is the user's open-book reading material, displayed beside the quest
       closeButton = createElement("button", "comprehension-packet-close", {
         id: "comprehensionPacketClose",
         type: "button",
-        text: "×",
+        text: translate("close_button"),
         "data-comprehension-close": "",
         "aria-label": translate("close_aria"),
       });
@@ -1573,8 +1574,22 @@ The summary is the user's open-book reading material, displayed beside the quest
         createElement("h2", "", { id: `${suffix}-briefing-title`, text: currentPacket.title }),
         createElement("p", "comprehension-packet-summary-hint", { id: summaryId, text: translate("summary_hint") }));
       const summary = createElement("div", "comprehension-packet-summary");
-      for (const paragraph of currentPacket.summary.trim().split(/\n\s*\n/u)) {
-        summary.append(createElement("p", "", { text: paragraph }));
+      const summaryBlocks = currentPacket.summary.trim().split(/\n\s*\n/u);
+      const sectionPattern = /^###\s+([^\n]+)\n([\s\S]*?)\n(?:힌트|提示|Hint)[:：]\s*(.+)$/iu;
+      for (const block of summaryBlocks) {
+        const section = sectionPattern.exec(block.trim());
+        if (!section) {
+          summary.append(createElement("p", "", { text: block.trim() }));
+          continue;
+        }
+        const article = createElement("section", "comprehension-packet-summary-section");
+        const hintLabel = section[0].match(/(?:힌트|提示|Hint)[:：]/iu)[0];
+        article.append(
+          createElement("h3", "", { text: section[1].trim() }),
+          createElement("p", "comprehension-packet-summary-section-copy", { text: section[2].trim() }),
+          createElement("p", "comprehension-packet-summary-section-hint", { text: `${hintLabel} ${section[3].trim()}` }),
+        );
+        summary.append(article);
       }
       briefing.append(summary);
 

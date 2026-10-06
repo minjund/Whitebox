@@ -2133,6 +2133,7 @@
     "comprehension.difficulty_aria": {"ko":"난이도 {difficulty}","en":"Difficulty {difficulty}","zh-CN":"难度 {difficulty}"},
     "comprehension.difficulty_label": {"ko":"난이도 ","en":"Difficulty ","zh-CN":"难度 "},
     "comprehension.close_aria": {"ko":"이해 패킷 닫기","en":"Close comprehension packet","zh-CN":"关闭理解包"},
+    "comprehension.close_button": {"ko":"닫기","en":"Close","zh-CN":"关闭"},
     "comprehension.briefing_eyebrow": {"ko":"AI 답변 요약 · 오픈북","en":"AI answer summary · open book","zh-CN":"AI 回答摘要 · 开卷"},
     "comprehension.evidence_label": {"ko":"실제 근거","en":"Actual evidence","zh-CN":"实际依据"},
     "comprehension.evidence_mark": {"ko":"근거","en":"Evidence","zh-CN":"依据"},
