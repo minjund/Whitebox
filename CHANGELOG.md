@@ -9,6 +9,7 @@ GitHub release notes remain the authoritative version history.
 
 - Show a labeled close button in the control room AI questionnaire.
 - Organize open-book summaries into headed sections with always-visible hints.
+- Update the vulnerable release-tooling cache dependency to its patched version.
 - Verify the packaged updater against all frozen and legacy compatibility cohorts.
 
 ## 1.8.21 - 2026-09-16
