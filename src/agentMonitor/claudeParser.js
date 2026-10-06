@@ -701,6 +701,10 @@ function createClaudeParser(dependencies) {
       }
     }
     const activeSubagents = session.collaboration.spawns.filter(record => record.status === 'running');
+    // A parent transcript can stop changing while a Claude task continues in
+    // the background. Once its liveness becomes unverified, do not interpret
+    // the parent's last turn marker as proof that the delegated work finished.
+    const unverifiedSubagents = session.collaboration.spawns.filter(record => record.status === 'unverified');
     if (state.failure) {
       session.status = 'failed';
       session.statusDetail = state.failure.detail;
@@ -714,6 +718,9 @@ function createClaudeParser(dependencies) {
       session.statusDetail = activeSubagents.length === 1
         ? '도움 AI 작업 진행 중'
         : `도움 AI ${activeSubagents.length}개 작업 진행 중`;
+    } else if (!session.depth && unverifiedSubagents.length && state.lastTurnFinished) {
+      session.status = 'running';
+      session.statusDetail = '도움 AI 작업 완료 확인 중';
     } else if (state.lastTurnFinished) {
       session.status = 'completed';
       session.statusDetail = '작업 완료';
