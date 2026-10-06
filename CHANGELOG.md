@@ -5,6 +5,12 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.23 - 2026-10-06
+
+- Show a labeled close button in the control room AI questionnaire.
+- Organize open-book summaries into headed sections with always-visible hints.
+- Verify the packaged updater against all frozen and legacy compatibility cohorts.
+
 ## 1.8.21 - 2026-09-16
 
 - Refresh the terminal inventory before entering focus mode so existing PTYs
