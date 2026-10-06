@@ -669,7 +669,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         : ready ? t("studio.sidebar.result_ready")
           : live ? t("project.in_progress") : t("studio.sidebar.waiting");
       const title = String(session.title || session.workspace || t("studio.session.untitled"));
-      const summary = context.controlRoomSummary
+      const summary = session.conversationTitle
+        ? readablePreview(session.conversationTitle, 44)
+        : context.controlRoomSummary
         ? context.controlRoomSummary(title, 44)
         : readablePreview(title, 44);
       const agent = state.providerMap?.get(session.provider)?.label || session.provider || "AI";

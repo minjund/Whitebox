@@ -542,12 +542,31 @@ function registerCodexParserTests(context) {
       const recentTime = new Date(2026, 7, 4, 10, index % 60, index);
       fs.utimesSync(file, recentTime, recentTime);
     }
+    jsonl(path.join(home, '.codex', 'session_index.jsonl'), [
+      { id: pinnedId, thread_name: '오래 실행 중인 대화 분석' },
+      { id: pinnedId, thread_name: '실행 중인 대화 복원' },
+    ]);
+    let titleDb;
+    try {
+      const { DatabaseSync } = require('node:sqlite');
+      titleDb = new DatabaseSync(path.join(home, '.codex', 'state_5.sqlite'));
+    } catch (_sqliteUnavailable) { /* Older Node versions still test the index. */ }
+    if (titleDb) {
+      titleDb.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)');
+      titleDb.prepare('INSERT INTO threads VALUES (?, ?)').run(pinnedId, '오래 실행 중인 연결의 실제 대화를 보여줘');
+      titleDb.close();
+    }
     const monitor = new AgentMonitor({ home });
     const localEnvironment = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux');
     assert.equal(monitor.scanNow().sessions.some(session => session.externalId === pinnedId), false);
     monitor.setPinnedSessions([{ provider: 'codex', linkedSessionId: `codex:${pinnedId}`, environment: localEnvironment }]);
     const pinned = monitor.scanNow().sessions.find(session => session.externalId === pinnedId);
     assert.ok(pinned, '실행 중인 연결의 정확한 과거 세션을 찾지 못했습니다.');
+    assert.equal(pinned.title, '실행 중인 대화 복원');
+    assert.equal(pinned.conversationTitle, '실행 중인 대화 복원');
+    assert.equal(monitor.detailSession(pinned.id).title, '실행 중인 대화 복원');
+    jsonl(path.join(home, '.codex', 'session_index.jsonl'), [{ id: pinnedId, thread_name: '대화 제목 변경 반영' }]);
+    assert.equal(monitor.scanNow().sessions.find(item => item.id === pinned.id).title, '대화 제목 변경 반영');
     assert.deepStrictEqual(pinned.messages.filter(message => message.role === 'user' || message.role === 'assistant').map(message => message.text), [
       '오래 실행 중인 연결의 실제 대화를 보여줘',
       '정확한 대화를 불러왔습니다.',

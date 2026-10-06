@@ -582,12 +582,13 @@ window.WhiteboxAppFactories.createGraphView = function createGraphView(context =
   function controlRoomAgentGoal(session, maxCharacters = 64) {
     const delegation = session.delegation || {};
     const messages = session.messages || [];
-    const userGoal = [...messages].reverse().find(message => message?.role === "user" && String(message.text || "").trim());
+    const userGoal = messages.find(message => message?.role === "user" && String(message.text || "").trim());
     const title = String(session.title || "");
     // A runtime connection title can outlive discovery of the actual request.
-    const source = delegation.assignment || session.sharedGoal || userGoal?.text
+    const source = delegation.assignment || session.conversationTitle || session.sharedGoal || userGoal?.text
       || title || delegation.taskName || session.taskName || latestWorkCopy(session);
-    return controlRoomSummary(source, maxCharacters);
+    return session.conversationTitle && source === session.conversationTitle
+      ? readablePreview(source, maxCharacters) : controlRoomSummary(source, maxCharacters);
   }
 
   function workflowChatTitle(session, maxCharacters = 48) {
