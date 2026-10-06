@@ -5,6 +5,15 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.24 - 2026-10-06
+
+- Summarize assigned work in the project sidebar and label it at the top of
+  each control-room session card.
+- Keep Claude subagent work visible as running until its completion is verified.
+- Explain why AI questionnaire generation failed instead of showing a generic error.
+- Verify updates from the official 1.8.23 installer alongside every retained
+  frozen, recent, and legacy compatibility cohort.
+
 ## 1.8.23 - 2026-10-06
 
 - Show a labeled close button in the control room AI questionnaire.

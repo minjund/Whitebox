@@ -1790,9 +1790,13 @@ The summary is the user's open-book reading material, displayed beside the quest
         const surface = options.surface || resolveSurface();
         if (!surface) return false;
         const statusKey = generationStatus === "failed" ? "generation_failed" : "generating";
+        const reasonKey = session.comprehension.failureReason
+          ? `generation_failure.${session.comprehension.failureReason}` : "";
+        const statusText = reasonKey
+          ? `${translate(statusKey)} · ${translate(reasonKey)}` : translate(statusKey);
         if (currentSession?.id === session.id && currentSurface === surface && !currentPacket && badge
           && badge.dataset.generationStatus === generationStatus) {
-          badgeText.textContent = translate(statusKey);
+          badgeText.textContent = statusText;
           if (badgeButton) badgeButton.textContent = translate("generation_retry");
           return true;
         }
@@ -1803,7 +1807,7 @@ The summary is the user's open-book reading material, displayed beside the quest
           id: "comprehensionPacketBadge", role: "status", "data-whitebox-comprehension-badge": "",
           "data-generation-status": generationStatus,
         });
-        badgeText = createElement("span", "", { text: translate(statusKey) });
+        badgeText = createElement("span", "", { text: statusText });
         append(badge, createElement("i", "", { "aria-hidden": "true" }), badgeText);
         if (generationStatus === "failed") {
           badgeButton = createElement("button", "comprehension-packet-badge-button", {

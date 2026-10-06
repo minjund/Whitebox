@@ -985,8 +985,8 @@ body details.control-room-project-group > summary.control-project-header {
 }
 
 .control-project-body .control-room-session > header {
-  min-height: 42px;
-  padding: 5px 15px;
+  min-height: 56px;
+  padding: 8px 15px;
 }
 
 .control-project-body .control-room-session > header > .session-drag-handle,
@@ -1185,8 +1185,9 @@ body details.control-room-project-group > summary.control-project-header {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .control-room-session > header > div > b {
@@ -1195,6 +1196,33 @@ body details.control-room-project-group > summary.control-project-header {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.control-session-assignment {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.control-session-assignment > small {
+  flex: 0 0 auto;
+  color: #8fa3b4;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.control-session-assignment > b {
+  min-width: 0;
+  overflow: hidden;
+  color: #e9f1f7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 750;
 }
 
 .control-session-live {

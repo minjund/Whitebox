@@ -669,6 +669,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         : ready ? t("studio.sidebar.result_ready")
           : live ? t("project.in_progress") : t("studio.sidebar.waiting");
       const title = String(session.title || session.workspace || t("studio.session.untitled"));
+      const summary = context.controlRoomSummary
+        ? context.controlRoomSummary(title, 44)
+        : readablePreview(title, 44);
       const agent = state.providerMap?.get(session.provider)?.label || session.provider || "AI";
       const mark = ({ claude: "Cl", codex: "Cx", gemini: "Ge", grok: "Gk" })[session.provider] || "AI";
       // Flatten presentation only. Exact session IDs and PTY/read-only routing
@@ -680,8 +683,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       return `<button type="button" class="project-sidebar-session ${attention ? "attention" : ready ? "result-ready" : live ? "live" : ""}"
         ${interaction} data-sidebar-session-id="${esc(session.id)}" data-sidebar-project-ref="${esc(item.key)}"
         role="treeitem" aria-level="2" tabindex="-1" aria-selected="${state.ptyFocusSessionId === session.id ? "true" : "false"}"
-        aria-label="${esc(`${title}. ${agent}. ${status}`)}" title="${esc(`${title} · ${agent} · ${status}`)}">
-        <i aria-hidden="true"></i><span class="project-sidebar-agent" aria-hidden="true">${esc(mark)}</span><b>${esc(title)}</b>
+        aria-label="${esc(`${summary.text}. ${agent}. ${status}`)}" title="${esc(`${summary.full || title} · ${agent} · ${status}`)}">
+        <i aria-hidden="true"></i><span class="project-sidebar-agent" aria-hidden="true">${esc(mark)}</span><b>${esc(summary.text || title)}</b>
       </button>`;
     };
     const sidebarProjectItem = (item, projectIndex) => {

@@ -59,10 +59,16 @@ function createHierarchyAttacher(dependencies) {
       ? compactText(record.assignment, 180)
       : (record.taskName || '도움 AI 작업');
     child.sharedGoal = record.sharedGoal || parent.title;
-    child.status = ['completed', 'failed', 'cancelled', 'running'].includes(record.status) ? record.status : 'idle';
+    // A stale parent transcript makes a delegated task unverified, not done.
+    // Keep a visible running child until its own completion is observed.
+    child.status = record.status === 'unverified'
+      ? 'running'
+      : (['completed', 'failed', 'cancelled', 'running'].includes(record.status) ? record.status : 'idle');
     child.statusDetail = child.status === 'completed'
       ? '작업 완료 기록'
-      : (child.status === 'running' ? '실행 시작 관측' : '상태 기록만 확인됨');
+      : (child.status === 'running'
+        ? (record.status === 'unverified' ? '도움 AI 작업 상태 확인 중' : '실행 시작 관측')
+        : '상태 기록만 확인됨');
     child.startedAt = timestamp(record.startedAt, parent.startedAt);
     child.updatedAt = timestamp(record.completedAt || record.startedAt, parent.updatedAt);
     child.completedAt = timestamp(record.completedAt, null);

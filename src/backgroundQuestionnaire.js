@@ -11,6 +11,16 @@ const AUTHORITY = 'background-questionnaire-v1';
 const MAX_INPUT_BYTES = 128 * 1024;
 const MAX_RECORDS = 200;
 
+function failureReason(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (/시간이 초과|timed?\s*out|timeout|etimedout/.test(message)) return 'timeout';
+  if (/질문지 응답|질문지 내용|json|packet|schema|format|형식|검증/.test(message)) return 'invalid-response';
+  if (/enoent|not found|cannot find|could not find|실행 파일|찾을 수 없/.test(message)) return 'provider-unavailable';
+  if (/auth|login|sign.?in|unauthorized|인증|로그인/.test(message)) return 'provider-auth';
+  if (/완료된 작업 기록|결과가 너무 큽니다|답변을 확인/.test(message)) return 'source-unavailable';
+  return 'generation-error';
+}
+
 function completedMain(session) {
   return Boolean(session?.id && !session.parentId && !Number(session.depth || 0)
     && session.status === 'completed' && session.completionObserved === true);
@@ -195,7 +205,7 @@ class BackgroundQuestionnaire extends EventEmitter {
         } catch (error) {
           // Error details and generation prompts stay out of the conversation.
           reportRecoverableError('questionnaire-generation', new Error(String(error.message).slice(0, 200)));
-          this.set(record, { status: 'failed' });
+          this.set(record, { status: 'failed', failureReason: failureReason(error) });
         }
       }
     } finally { this.busy = false; }
@@ -216,8 +226,10 @@ class BackgroundQuestionnaire extends EventEmitter {
     if (!completedMain(session)) return session;
     const record = this.records.get(generation(session));
     if (!record || record.sessionId !== session.id) return session;
-    const { status, packet } = record;
-    return { ...session, comprehension: { status, schemaVersion: 1, ...(status === 'ready' ? { packet } : {}) },
+    const { status, packet, failureReason: reason } = record;
+    return { ...session, comprehension: { status, schemaVersion: 1,
+      ...(status === 'failed' && reason ? { failureReason: reason } : {}),
+      ...(status === 'ready' ? { packet } : {}) },
       comprehensionOrigin: { authority: AUTHORITY, generation: record.generation } };
   }
 }
