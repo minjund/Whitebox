@@ -110,6 +110,10 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
   const recent = [
+    { version: '1.8.20', size: 95366645, sha256: '35baa58fe1399f1954d8f88ac6a4877dfa2675d1e5c96ed751add8b9bb510b5a' },
+    { version: '1.8.21', size: 95377747, sha256: '36213f39f66d18d10384fd070c1befdbb0b56259e88ebd1f9ce6d749a8d5bbf5' },
+    { version: '1.8.22', size: 95319223, sha256: 'f9e74a59f59e423168c01db3719e1063b4e77a7afdf6f308263880d3d630c110' },
+    { version: '1.8.23', size: 95322488, sha256: '8c612ba145e5df06cf15d2d6b9b415c6f8333d08efc7b7ab8156a195d3091d4d' },
     {"version":"1.7.6","size":85321320,"sha256":"0fda64f5cf6e051c70e417b39489797125720d84b31e8422c3d168faa3d7f341"},
     {"version":"1.7.8","size":85325513,"sha256":"ff3d775449c6a670e0a3cc9f28f9af0e2dfdf371f500cdaa5d5daff03d7f5311"},
     {"version":"1.7.9","size":85325656,"sha256":"ff68ea266100f683354f9020b9560b51ebf001efc520fa1a997d00b44a43ac81"},

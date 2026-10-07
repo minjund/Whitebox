@@ -704,7 +704,7 @@ function registerCliAndUpdateTests(context) {
       '1.7.3', '1.7.4', '1.7.5', '1.7.6', '1.7.8', '1.7.9',
       '1.7.11', '1.7.12', '1.7.13', '1.7.14', '1.7.15', '1.7.16',
       '1.8.1', '1.8.2', '1.8.3', '1.8.4', '1.8.5', '1.8.6',
-      '1.8.7', '1.8.8', '1.8.9', '1.8.10', '1.8.11', '1.8.12', '1.8.13', '1.8.14', '1.8.15', '1.8.16', '1.8.17', '1.8.18', '1.8.19', manifest.previousFixed.version,
+      '1.8.7', '1.8.8', '1.8.9', '1.8.10', '1.8.11', '1.8.12', '1.8.13', '1.8.14', '1.8.15', '1.8.16', '1.8.17', '1.8.18', '1.8.19', '1.8.20', '1.8.21', '1.8.22', '1.8.23', manifest.previousFixed.version,
     ], 'Every published supported Windows installer must be exercised exactly once');
     const previousFixed = manifest.previousFixed;
     assert.equal(compareVersions(previousFixed.version, manifest.frozen.at(-1).version), 1,
@@ -1980,6 +1980,36 @@ function registerCliAndUpdateTests(context) {
     );
     assert.match(helperSource, /versionMismatch=true/);
     if (process.platform === 'win32') {
+      const logWriter = helperSource.slice(helperSource.indexOf('function Write-UpdateLog('), helperSource.indexOf('function Add-LaunchCandidate('));
+      const contentionScript = [
+        "$ErrorActionPreference = 'Stop'",
+        logWriter,
+        '$LogPath = $env:WHITEBOX_LOG_TEST_PATH',
+        '$signal = $LogPath + ".locked"',
+        '$locker = Start-Job -ArgumentList $LogPath,$signal -ScriptBlock {',
+        '  param($file,$signal)',
+        '  $handle = [IO.File]::Open($file,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,[IO.FileShare]::None)',
+        '  try { [IO.File]::WriteAllText($signal,"locked"); Start-Sleep -Milliseconds 1000 } finally { $handle.Dispose() }',
+        '}',
+        'try {',
+        '  $deadline = [DateTime]::UtcNow.AddSeconds(15)',
+        '  while (-not (Test-Path -LiteralPath $signal)) { if ([DateTime]::UtcNow -ge $deadline) { throw "Lock holder never became ready" }; Start-Sleep -Milliseconds 20 }',
+        '  Write-UpdateLog "relaunchStarted=true;attempt=1;pid=123"',
+        '  if (-not (Wait-Job $locker -Timeout 10)) { throw "Lock holder did not exit" }',
+        '  Receive-Job $locker -ErrorAction Stop | Out-Null',
+        '  $handle = [IO.File]::Open($LogPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)',
+        '  try {',
+        '    $failed = $false',
+        '    try { Write-UpdateLog "must-not-appear" } catch [IO.IOException] { $failed = $true }',
+        '    if (-not $failed) { throw "Permanent log lock was silently accepted" }',
+        '  } finally { $handle.Dispose() }',
+        '  $expected = "relaunchStarted=true;attempt=1;pid=123" + [Environment]::NewLine',
+        '  if ([IO.File]::ReadAllText($LogPath) -cne $expected) { throw "Lost or duplicated helper evidence" }',
+        '} finally { Stop-Job $locker -ErrorAction SilentlyContinue; Remove-Job $locker -Force -ErrorAction SilentlyContinue }',
+      ].join('\n');
+      execFileSync(path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', contentionScript,
+      ], { windowsHide: true, timeout: 40000, env: { ...process.env, WHITEBOX_LOG_TEST_PATH: path.join(temp, 'helper-log-contention.log') } });
       const parserScript = [
         '$helperErrors = $null',
         '$bootstrapErrors = $null',

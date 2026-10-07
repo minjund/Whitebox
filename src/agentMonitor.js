@@ -596,6 +596,7 @@ class AgentMonitor extends EventEmitter {
     ));
     this.availability = {};
     this.parseCache = new Map();
+    this.codexTitleCache = new Map();
     this.listCache = new Map();
     this.managedCache = new Map();
     this.pinnedFileCache = new Map();
@@ -835,6 +836,8 @@ class AgentMonitor extends EventEmitter {
     return {
       ...stored,
       ...detailed,
+      title: stored.conversationTitle || detailed.title,
+      conversationTitle: stored.conversationTitle || detailed.conversationTitle,
       environment: stored.environment,
       delegation: stored.delegation || detailed.delegation,
       childIds: stored.childIds || detailed.childIds || [],
@@ -887,6 +890,41 @@ class AgentMonitor extends EventEmitter {
     return sessions;
   }
 
+  codexConversationTitles(home) {
+    const file = path.join(home, '.codex', 'session_index.jsonl');
+    const database = path.join(home, '.codex', 'state_5.sqlite');
+    const stamps = [file, database, `${database}-wal`].map(source => {
+      const stat = safeStat(source);
+      return stat?.isFile() ? `${stat.mtimeMs}:${stat.size}` : '';
+    });
+    const key = stamps.join('|');
+    const cached = this.codexTitleCache.get(file);
+    if (cached?.key === key) return cached.titles;
+    const titles = new Map();
+    try {
+      for (const row of readJsonLines(file).rows) {
+        const title = compactText(row.thread_name, 180);
+        if (typeof row.id === 'string' && title) titles.set(row.id, title);
+      }
+    } catch (_unavailableIndex) { /* Keep transcript discovery working. */ }
+    if (stamps[1]) {
+      let db;
+      try {
+        const { DatabaseSync } = require('node:sqlite');
+        db = new DatabaseSync(database, { readOnly: true, timeout: 100 });
+        for (const row of db.prepare('SELECT id, title FROM threads').all()) {
+          const title = compactText(row.title, 180);
+          // The desktop summary lives in session_index; SQLite may retain
+          // the original full user prompt even after that summary is generated.
+          if (typeof row.id === 'string' && title && !titles.has(row.id)) titles.set(row.id, title);
+        }
+      } catch (_unavailableTitleDatabase) { /* Older runtimes retain the index fallback. */ }
+      finally { if (db) db.close(); }
+    }
+    this.codexTitleCache.set(file, { key, titles });
+    return titles;
+  }
+
   scanNow() {
     if (this.scanning) return this.lastSnapshot;
     this.scanning = true;
@@ -897,6 +935,7 @@ class AgentMonitor extends EventEmitter {
       const scanStartedAt = Date.now();
 
       for (const [homeIndex, history] of this.historyHomes.entries()) {
+        const codexTitles = this.codexConversationTitles(history.home);
         const roots = {
           claude: path.join(history.home, '.claude', 'projects'),
           codex: path.join(history.home, '.codex', 'sessions'),
@@ -955,6 +994,10 @@ class AgentMonitor extends EventEmitter {
             // implementation details, not user work. Keep them out of the
             // dashboard and runtime-link candidate pool entirely.
             if (copy.utilityKind) continue;
+            if (provider === 'codex' && !copy.depth && codexTitles.has(copy.externalId)) {
+              copy.conversationTitle = codexTitles.get(copy.externalId);
+              copy.title = copy.conversationTitle;
+            }
             copy.environment = { kind: history.kind, distro: history.distro, label: history.label, home: history.home };
             if (history.kind === 'wsl') copy.sourceLabel = history.label;
             sessions.push(copy);

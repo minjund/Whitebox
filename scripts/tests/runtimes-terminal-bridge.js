@@ -448,7 +448,8 @@ function registerTmuxAndProcessTests(context) {
           { role: 'assistant', text: '지금 처리 중인 내용' },
         ],
       };
-      assert.equal(view.controlRoomAgentGoal(withHistory).text, latestRequest.replace(/\s+/g, ' '));
+      assert.equal(view.controlRoomAgentGoal(withHistory).text, '처음 입력한 내용');
+      assert.equal(view.controlRoomAgentGoal({ ...withHistory, conversationTitle: '모듈 분리 기준 분석' }).text, '모듈 분리 기준 분석');
       assert.equal(view.controlRoomAgentGoal({
         ...withHistory, parentId: 'codex:parent', delegation: { assignment: '맡겨진 하위 작업' },
       }).text, '맡겨진 하위 작업');

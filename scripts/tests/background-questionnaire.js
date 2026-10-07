@@ -41,6 +41,8 @@ function registerBackgroundQuestionnaireTests({ test, temp }) {
   test('설명·비교는 퀴즈 대상에서 제외하고 AI 결과는 엄격하게 검증한다', () => {
     for (const text of ['이게 무슨 뜻이야?', '어떤 방식이 더 좋아?', '아직 어떤 방식으로 할지 모르겠어', '1번 2번 무슨차이야?', 'Why does this happen?']) assert(explanationOnly(text), text);
     assert(!explanationOnly('설명하고 코드에 적용해줘'));
+    assert(!explanationOnly('PT · GPT · giftshop-api-master에서 모듈로 나눠진 애들이랑 infra 모듈 안에 있는 애들의 나눈 기준이 궁금한데 분석해줘봐'));
+    assert(!explanationOnly('Why are these modules separate? Analyze their responsibilities.'));
     assert.equal(parseResult(quiz()).status, 'ready');
     assert.equal(parseResult('{"kind":"skip"}').status, 'skipped');
     for (const bad of ['{}', '```json\n{}\n```', '{"kind":"skip","packet":{}}', JSON.stringify({ kind: 'quiz', packet: { ...packet(), summary: '<script>x</script>' } })]) assert.throws(() => parseResult(bad));

@@ -5,6 +5,14 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.25 - 2026-10-06
+
+- Preserve Windows updater evidence through brief file locks and fail explicitly if logging cannot complete.
+- Keep Codex conversation summary titles in the sidebar and assigned-work cards
+  instead of overwriting them with the original user message.
+- Include completed module and infrastructure analysis in AI questionnaire eligibility.
+- Verify the official 1.8.24 updater while retaining all recent compatibility cohorts.
+
 ## 1.8.24 - 2026-10-06
 
 - Summarize assigned work in the project sidebar and label it at the top of
