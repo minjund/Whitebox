@@ -43,11 +43,13 @@ monitor.setAvailability(workerData.availability || {});
 let lastFingerprint = '';
 let lastPublishedSessions = [];
 let currentBridges = Array.isArray(workerData.bridges) ? workerData.bridges : [];
+let currentCmuxSessions = Array.isArray(workerData.cmuxSessions) ? workerData.cmuxSessions : [];
 const discoveryWatchers = [];
 const scanScheduler = createMonitorScanScheduler(() => monitor.scanNow());
 let stopping = false;
 
 monitor.setBridgePresence(currentBridges);
+monitor.setPinnedSessions([...currentBridges, ...currentCmuxSessions]);
 
 function scheduleScan(delayMs = 80) {
   scanScheduler.request(delayMs);
@@ -584,7 +586,18 @@ parentPort.on('message', message => {
   if (message.type === 'bridge-presence') {
     currentBridges = Array.isArray(message.bridges) ? message.bridges : [];
     monitor.setBridgePresence(currentBridges);
+    monitor.setPinnedSessions([...currentBridges, ...currentCmuxSessions]);
     scheduleScan(0);
+  }
+  if (message.type === 'cmux-sessions') {
+    const next = Array.isArray(message.sessions) ? message.sessions : [];
+    if (JSON.stringify(next) !== JSON.stringify(currentCmuxSessions)) {
+      currentCmuxSessions = next;
+      // Read exact live transcripts even when they fall outside recent history.
+      // These are discovery pins, not synthetic managed terminal bridges.
+      monitor.setPinnedSessions([...currentBridges, ...currentCmuxSessions]);
+      scheduleScan(0);
+    }
   }
   if (message.type === 'source-plugin-state') {
     sourcePluginHost.setRuntimeStatuses(message.statuses || []);

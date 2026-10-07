@@ -8,6 +8,7 @@
   <script src="brand-storage-migration.js"></script>
   <script src="theme.js"></script>
   <link rel="stylesheet" href="styles-bundle.css" />
+  <link rel="stylesheet" href="styles-terminal-groups.css" />
 </head>
 <body>
   <div id="appShell" class="app-shell">
@@ -307,6 +308,7 @@
           <div id="graphBreadcrumbs" class="graph-breadcrumbs" aria-label="AI 작업 위치" data-i18n-aria-label="ui.agent_navigation_path"></div>
           <button id="graphResetBtn" class="graph-reset hidden" type="button" data-i18n="ui.back_to_task_list">작업 목록으로</button>
         </div>
+        <section id="terminalGroupPanel" class="terminal-group-panel hidden" aria-label="tmux AI 그룹"></section>
         <div id="liveSessionGrid" class="live-session-grid"></div>
         <aside id="projectHistoryRail" class="project-history-rail" aria-labelledby="projectHistoryTitle">
           <header>
@@ -473,6 +475,13 @@
         <div id="runProviderLabel" class="field-label" data-i18n="ui.which_ai_should_handle_it">어떤 AI에게 맡길까요?</div>
         <div id="runProviderPicker" class="run-provider-picker" role="radiogroup" aria-labelledby="runProviderLabel"></div>
         <div id="runProviderHelp" class="run-provider-help hidden" role="status"></div>
+        <div class="run-tree-setup">
+          <label for="runWorkingFolder">작업 폴더</label><select id="runWorkingFolder"></select>
+          <label for="runGroupMode">세션 배치 · 워크 트리</label>
+          <select id="runGroupMode"><option value="single">독립 세션으로 시작</option><option value="new">새 AI 그룹 만들기</option></select>
+          <label for="runGroupName">새 그룹 이름</label><input id="runGroupName" maxlength="80" placeholder="AI 그룹" />
+          <small>현재 작업 폴더 아래에 표시됩니다. 폴더와 독립 세션을 함께 둘 수 있습니다.</small>
+        </div>
         <div id="runClaudePermissionModeField" class="run-permission-mode hidden">
           <label for="runClaudePermissionMode"><span><strong data-i18n="run.mode.label">Claude 시작 모드</strong><small data-i18n="run.mode.cycle_help">실행 중에는 터미널에서 Shift+Tab으로 사용 가능한 모드를 바꿀 수 있습니다.</small></span><select id="runClaudePermissionMode" aria-describedby="runClaudePermissionModeHelp">
             <option value="" data-i18n="run.mode.inherit">Claude 기본 설정 사용</option>
@@ -543,6 +552,7 @@
   <script src="ime-submit.js"></script>
   <script src="app.js"></script>
   <script src="app-provider-visibility.js"></script>
+  <script src="sidebar-tree.js"></script>
   <script src="app-dashboard.js"></script>
   <script src="app-graph-model.js"></script>
   <script src="app-graph-view.js"></script>
@@ -576,5 +586,8 @@
   <script src="terminal-prompt.js"></script>
   <script src="terminal.js"></script>
   <script src="inline-agent-terminal.js"></script>
+  <script src="group-layout.js"></script>
+  <script src="terminal-groups.js"></script>
+  <script src="sidebar-terminals.js"></script>
 </body>
 </html>

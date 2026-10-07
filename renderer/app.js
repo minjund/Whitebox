@@ -40,6 +40,7 @@ window.WhiteboxAppFactories.createCore = function createCore(context = {}) {
     workspaceSource: "all",
     sidebarExpandedProjects: new Set(),
     sidebarProjectSearch: "",
+    sidebarTree: { folders: [], assignments: [], expanded: [] },
     search: "",
     sort: "recent",
     sessionOrder: [],

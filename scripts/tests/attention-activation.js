@@ -69,6 +69,46 @@ function activation(id, overrides = {}) {
 function registerAttentionActivationTests(context) {
   const { test } = context;
 
+  test('자동 권한 요청은 터미널을 전환하지 않고 hook을 원래 승인 화면으로 넘긴다', async () => {
+    const acknowledgements = [];
+    let opens = 0;
+    let shown = 0;
+    const coordinator = new AttentionActivationCoordinator({ enabled: true });
+    coordinator.rendererReady();
+    let delivered;
+    coordinator.onDeliver = value => { delivered = value; return true; };
+    coordinator.reconcile([activation('passive')]);
+    const controller = createAttentionActivationController({
+      autoOpenPty: false,
+      getSessions: () => [{ id: 'codex:session-1', provider: 'codex' }],
+      openPty: () => { opens += 1; return { opened: true }; },
+      showSession: () => { shown += 1; },
+      acknowledge: value => { acknowledgements.push(value); return coordinator.acknowledge(value); },
+    });
+    controller.handle(delivered);
+    await flush();
+    assert.equal(opens, 0);
+    assert.equal(shown, 0);
+    assert.equal(acknowledgements[0].status, 'notified');
+    assert.equal(controller.pendingCount(), 0);
+    delivered = null;
+    coordinator.rendererUnavailable();
+    coordinator.rendererReady();
+    assert.equal(delivered, null, 'reload must not revive a passive request');
+    const main = fs.readFileSync(path.join(__dirname, '..', '..', 'main.js'), 'utf8');
+    const released = [];
+    const sandbox = {
+      attentionActivationCoordinator: { acknowledge: () => ({ acknowledged: true, status: 'notified', activationId: 'passive' }) },
+      hookAttentionRequests: new Map([['hook', { key: 'hook' }]]),
+      hookPopupRequest: () => ({}), attentionActivationRecord: () => ({ activationId: 'passive' }),
+      attentionHookServer: { resolve: (...args) => released.push(args) },
+    };
+    vm.runInNewContext(namedFunctionSource(main.replace('function acknowledgeAttentionActivation(value = {})', 'function acknowledgeAttentionActivation(value)'), 'acknowledgeAttentionActivation') + ';acknowledgeAttentionActivation({});', sandbox);
+    assert.equal(released[0][0], 'hook');
+    assert.equal(released[0][1].action, 'none', 'must not grant permission automatically');
+    controller.dispose(); coordinator.dispose();
+  });
+
   test('Codex snapshot attention은 표시명 GPT가 아니라 canonical provider id로 exact 세션을 연다', () => {
     const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'main.js'), 'utf8');
     const sandbox = {

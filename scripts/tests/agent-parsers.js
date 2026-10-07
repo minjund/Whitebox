@@ -7,7 +7,7 @@ const {
   AgentMonitor, parseClaude, parseCodex, parseGeneric, attachHierarchy, isProjectlessSession, mergeManagedWithHistory,
   buildSummary,
 } = require('../../src/agentMonitor');
-const { bridgeLinkScore } = require('../../src/processMonitor');
+const { bridgeLinkScore, applyRuntimePresence, promptFingerprint } = require('../../src/processMonitor');
 const { MAX_JSON_BYTES } = require('../../src/agentMonitor/sessionFiles');
 const {
   assistantRequestsUserResponse, assistantResponseIntent, structuredInputRequestText,
@@ -520,6 +520,61 @@ function registerClaudeParserTests(context) {
 
 function registerCodexParserTests(context) {
   const { test, temp, jsonl } = context;
+  test('Codex TUI의 상속된 vscode 출처는 실제 PTY와 한 세션으로 연결한다', () => {
+    const now = Date.parse('2026-10-07T06:54:00Z');
+    const prompt = '위노라에서 poc가 먼지 찾아서 나한테 알려줘';
+    const make = (id, originator) => {
+      const parsed = parseCodex(jsonl(path.join(temp, 'codex', `rollout-${id}.jsonl`), [
+        { timestamp: '2026-10-07T06:52:56Z', type: 'session_meta', payload: { id, originator, source: 'vscode', cwd: '/repo' } },
+        { timestamp: '2026-10-07T06:52:58Z', type: 'event_msg', payload: { type: 'user_message', message: prompt } },
+      ]));
+      return { ...parsed, environment: { kind: 'macos', distro: '' } };
+    };
+    const tui = make('tui-session', 'codex-tui');
+    const desktop = make('desktop-session', 'Codex Desktop');
+    const ide = make('ide-session', 'codex_vscode');
+    assert.equal(tui.clientKind, 'codex-cli');
+    assert.equal(desktop.clientKind, 'codex-desktop');
+    assert.equal(ide.clientKind, 'codex-ide');
+    const bridge = { id: 'terminal:new', terminalId: 'terminal:new', provider: 'codex', environment: 'macos', cwd: '/repo', startedAt: '2026-10-07T06:52:55Z', initialPromptFingerprint: promptFingerprint(prompt) };
+    const observed = applyRuntimePresence([tui, desktop, ide], { panes: [] }, { processes: [], available: true }, now, [bridge]);
+    assert.equal(observed.length, 3, 'only existing conversations remain; no duplicate synthetic bridge');
+    assert.equal(observed.find(s => s.id === tui.id).runtimePresence[0].terminalId, bridge.terminalId);
+    assert.equal(observed.find(s => s.id === desktop.id).runtimePresence.length, 0);
+    assert.equal(observed.find(s => s.id === ide.id).runtimePresence.length, 0);
+    const resumed = { ...bridge, id: tui.id, terminalId: 'terminal:resumed', bridgeId: tui.id, linkedSessionId: tui.id, initialPromptFingerprint: '', startedAt: '2026-10-07T06:56:15Z' };
+    const recovered = applyRuntimePresence([tui], {}, { processes: [] }, now, [bridge, resumed]);
+    assert.equal(recovered.length, 1, 'already resumed conversation must not retain a synthetic launch duplicate');
+    assert.deepEqual(recovered[0].runtimePresence.map(p => p.terminalId), ['terminal:resumed'], 'display deduplication never transfers write authority');
+
+  });
+
+  test('긴 대화의 첫 요청이 카드에서 잘려도 시작 증거로만 연결하고 최신 턴을 유지한다', () => {
+    const home = path.join(temp, 'long-bridge-home');
+    const file = path.join(home, '.codex', 'sessions', 'rollout-long-bridge.jsonl');
+    const prompt = '처음 시작한 작업';
+    jsonl(file, [
+      { timestamp: '2026-10-07T06:52:56Z', type: 'session_meta', payload: { id: 'long-bridge', originator: 'codex-tui', source: 'vscode', cwd: '/repo' } },
+      { timestamp: '2026-10-07T06:52:58Z', type: 'event_msg', payload: { type: 'user_message', message: prompt } },
+      { timestamp: '2026-10-07T06:54:00Z', type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(400000) } },
+      { timestamp: '2026-10-07T06:58:00Z', type: 'event_msg', payload: { type: 'user_message', message: '지금 요청' } },
+    ]);
+    const environment = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
+    const bridge = { id: 'terminal:long', terminalId: 'terminal:long', provider: 'codex', environment, cwd: '/repo', startedAt: '2026-10-07T06:52:55Z', initialPromptFingerprint: promptFingerprint(prompt) };
+    const monitor = new AgentMonitor({ home, runsDir: path.join(home, 'runs'), cardJsonlBytes: 262144 });
+    monitor.setBridgePresence([bridge]);
+    const card = monitor.scanNow().sessions.find(s => s.id === 'codex:long-bridge');
+    assert(card.truncated);
+    assert.equal(card.messages.findLast(m => m.role === 'user').text, '지금 요청');
+    assert.equal(card.messages.some(m => m.text === prompt), false, 'recovered launch proof does not enter visible history');
+    const resumed = { ...bridge, id: card.id, terminalId: 'terminal:resumed', bridgeId: card.id, linkedSessionId: card.id, initialPromptFingerprint: '' };
+    const projected = applyRuntimePresence([card], {}, { processes: [] }, Date.now(), [bridge, resumed]);
+    assert.equal(projected.length, 1);
+    assert.equal(projected[0].runtimePresence[0].terminalId, 'terminal:resumed');
+    const mismatch = applyRuntimePresence([card], {}, { processes: [] }, Date.now(), [{ ...bridge, initialPromptFingerprint: promptFingerprint('다른 요청') }, resumed]);
+    assert.equal(mismatch.length, 2, 'same directory and time alone cannot hide an unrelated terminal');
+  });
+
   test('실행 중인 Codex 연결은 최근 파일 한도를 벗어난 정확한 대화도 불러온다', () => {
     const home = path.join(temp, 'pinned-codex-home');
     const sessionsRoot = path.join(home, '.codex', 'sessions', '2026', '07', '24');

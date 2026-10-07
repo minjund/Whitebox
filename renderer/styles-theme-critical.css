@@ -24,6 +24,10 @@ html[data-theme] :where(
   box-shadow: 0 0 0 6px var(--theme-focus-ring) !important;
 }
 
+html[data-theme] #sidebarTreeDialog :is(button, input, select):focus-visible {
+  box-shadow: 0 0 0 2px var(--theme-focus-ring) !important;
+}
+
 /* Readability owns the type floor with !important legacy colors. Keep that
  * sizing contract while routing the color through the active palette. */
 html[data-theme] body small,

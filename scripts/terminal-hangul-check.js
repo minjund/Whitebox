@@ -151,6 +151,47 @@ app.whenReady().then(async () => {
     assert.equal(redraw.alternate, '대체 화면 한글😀조합 중 출력');
     pass('ANSI cursor overwrite, colored Hangul, synchronized TUI redraw and alternate-screen restoration preserve complete cells');
 
+    const replayGrid = await evaluate(async () => {
+      const originalGet = whitebox.terminalGet;
+      const originalResize = whitebox.terminalResize;
+      const sizes = [];
+      let releaseDetail;
+      whitebox.terminalGet = () => new Promise(resolve => { releaseDetail = resolve; });
+      whitebox.terminalResize = async (_id, cols, rows) => { sizes.push([cols, rows]); };
+      const state = { terminals: new Map(), sessions: [], selectedId: 'replay-grid', platform: { id: 'darwin' } };
+      const workbench = WhiteboxTerminalWorkbench({ $: selector => document.querySelector(selector), state,
+        xtermOptions: () => ({ cols: 80, rows: 24, fontSize: 15, scrollback: 5000 }) });
+      const expected = Array.from({ length: 40 }, (_, i) => `${i + 1}. 한글 복원 검증: 값이 읽고 앉아 꽃잎 ABC123 ` + '정확한 줄 위치 '.repeat(5));
+      const frame = '\x1b[2J\x1b[H' + expected.map((line, i) => `\x1b[${i + 1};1H${line}`).join('');
+      const pending = workbench.ensureSessionTerminal({ id: 'replay-grid', cols: 100, rows: 30 });
+      const entry = state.terminals.get('replay-grid');
+      entry.host.classList.remove('hidden');
+      workbench.fitEntry(entry);
+      await delay();
+      const sizesBeforeDetail = sizes.length;
+      entry.acceptOutput({ data: '\x1b[1;1H중복 출력', outputSequence: 10 });
+      entry.acceptOutput({ data: '\x1b[42;1H실시간 한글 유지', outputSequence: 11 });
+      releaseDetail({ cols: 136, rows: 57, replay: frame.repeat(30), outputSequence: 10, status: 'running' });
+      await pending;
+      const buffer = entry.terminal.buffer.active;
+      const restored = expected.map((_, i) => buffer.getLine(buffer.baseY + i).translateToString(true));
+      const result = { expected, restored, cols: entry.terminal.cols, rows: entry.terminal.rows,
+        live: buffer.getLine(buffer.baseY + 41).translateToString(true), sizesBeforeDetail, sizesAfterReplay: sizes.length };
+      await delay();
+      result.sizesAfterFit = sizes.length;
+      entry.terminal.dispose(); entry.host.remove();
+      whitebox.terminalGet = originalGet; whitebox.terminalResize = originalResize;
+      return result;
+    });
+    assert.equal(replayGrid.cols, 136);
+    assert.equal(replayGrid.rows, 57);
+    assert.deepEqual(replayGrid.restored, replayGrid.expected, 'Wide Korean TUI replay must use its saved PTY grid');
+    assert.equal(replayGrid.live, '실시간 한글 유지');
+    assert.equal(replayGrid.sizesBeforeDetail, 0);
+    assert.equal(replayGrid.sizesAfterReplay, 0, 'Replay restoration must not resize the live PTY');
+    assert(replayGrid.sizesAfterFit > 0, 'A fit requested during hydration must run afterward');
+    pass('136x57 Korean TUI replay restores before fitting, defers concurrent resize, and retains only fresh sequenced output');
+
     for (const light of [false, true]) {
       await evaluate(async (light, samples) => {
         term.reset(); term.resize(90, 24);

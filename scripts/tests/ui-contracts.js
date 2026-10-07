@@ -3176,7 +3176,7 @@ function registerUiContractTests(context) {
       '모든 트리 항목의 Left/Right no-op도 기본 스크롤과 버블링을 막아야 합니다.');
     assert.match(filterEvents, /const next = wrap[\s\S]*Math\.max\(0, Math\.min\(items\.length - 1, requested\)\)/,
       '트리의 Up/Down은 첫 항목과 마지막 항목에서 반대편으로 순환하면 안 됩니다.');
-    assert.match(treeKeyboardBinding, /toggle\.click\(\);[\s\S]*focusRememberedTreeItem\(identity\);/,
+    assert.match(treeKeyboardBinding, /disclosure\.click\(\);[\s\S]*focusRememberedTreeItem\(identity\);/,
       '트리 접기/펼치기는 disclosure를 재사용하고 다시 그린 항목으로 포커스를 복원해야 합니다.');
     assert.ok(filterEvents.includes('.project-sidebar-item[role="treeitem"]'),
     '마우스로 disclosure를 누른 뒤에도 소유 treeitem으로 포커스를 복원해야 합니다.');
@@ -3227,6 +3227,7 @@ function registerUiContractTests(context) {
       document: { body: { dataset: {} } },
       Intl,
     };
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'sidebar-tree.js'), 'utf8'), sandbox, { filename: 'sidebar-tree.js' });
     vm.runInNewContext(dashboardSource, sandbox, { filename: 'app-dashboard.js' });
     const state = { projectOrder: [] };
     const dashboard = sandbox.window.WhiteboxAppFactories.createDashboard({ state, visibleSessions: () => [] });
@@ -3342,6 +3343,7 @@ function registerUiContractTests(context) {
       document: { body: { dataset: {} } },
       Intl,
     };
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'sidebar-tree.js'), 'utf8'), sandbox, { filename: 'sidebar-tree.js' });
     vm.runInNewContext(dashboardSource, sandbox, { filename: 'app-dashboard.js' });
     const cwd = 'D:\\shared\\project';
     const sessions = [
@@ -3438,7 +3440,7 @@ function registerUiContractTests(context) {
       'role="treeitem"', 'aria-level="1"', 'aria-selected="false"', 'aria-expanded="false"', 'aria-owns=', 'tabindex="0"',
     ]);
     assert.equal((sidebar.innerHTML.match(/role="treeitem"[^>]*tabindex="0"/g) || []).length, 1);
-    const treeButtons = sidebar.innerHTML.match(/<button[^>]*>/g) || [];
+    const treeButtons = (sidebar.innerHTML.match(/<button[^>]*>/g) || []).filter(button => button.includes('role="treeitem"'));
     assert.ok(treeButtons.every(button => /tabindex="(?:0|-1)"/.test(button)));
     assertIncludesAll(tagWith(shared, 'data-sidebar-session-id="direct-root"'), ['aria-level="2"', 'tabindex="-1"']);
     state.sidebarExpandedProjects.add(projectKey);
@@ -3469,7 +3471,7 @@ function registerUiContractTests(context) {
     activeSessionIds.delete('direct-root');
     activeSessionIds.delete('direct-root-2');
     dashboard.renderWorkspaces();
-    assert.ok(!sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'));
+    assert.ok(!sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root"'), '지난 대화가 열린 세션 목록을 채우지 않습니다.');
     assert.ok(!sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-2"'));
     assert.ok(sidebar.innerHTML.includes('data-pty-focus-trigger="direct-root-5"'));
     activeSessionIds.delete('builtin.opencode:open-root');

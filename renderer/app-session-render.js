@@ -263,6 +263,9 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     keepDesktopSidebarAtTop();
     const previousLayout = deferMotion ? null : captureMotionLayout();
     syncViewChrome();
+    window.WhiteboxCmux?.renderOverview();
+    window.WhiteboxTerminalGroups?.renderOverview();
+    if (motionKind === "filter") context.renderWorkspaces?.();
     renderGuide();
     const settingsView = state.view === "settings";
     const memoryView = state.view === "active";
@@ -298,7 +301,9 @@ window.WhiteboxAppFactories.createSessionRenderer = function createSessionRender
     const sessions = filteredSessions();
     if (operationsView) renderOperationsOverview();
     const showMap = homeView && projectSelected;
-    const graphLiveCount = showMap ? renderAgentMap(graphFilteredSessions(), motionKind) : 0;
+    const graphLiveCount = showMap ? renderAgentMap(graphFilteredSessions(), motionKind)
+      + (window.WhiteboxCmux?.groupsForWorkspace().length || 0)
+      + (window.WhiteboxTerminalGroups?.groupsForWorkspace().length || 0) : 0;
     const regular = memoryView ? [...sessions] : [];
     const compactMemory = memoryView && window.matchMedia("(max-width: 760px)").matches;
     const effectiveLimit = compactMemory && state.visibleLimit === 30 ? 2 : state.visibleLimit;

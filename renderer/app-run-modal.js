@@ -48,6 +48,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
       options.prompt,
       Boolean(options.allowWrites),
       normalizedClaudePermissionMode(options.permissionMode),
+      options.groupSelection || 'single', options.groupName || '',
     ]);
   }
 
@@ -226,7 +227,9 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
   }
 
   function syncLockedProject() {
-    const path = selectedProjectPath();
+    const project = selectedProjectPath();
+    const selected = $('#runWorkingFolder')?.value || '';
+    const path = selected && (selected === project || selected.startsWith(`${project}/`)) ? selected : project;
     const cwd = $("#runCwd");
     if (cwd) {
       cwd.value = path;
@@ -258,6 +261,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     const submitLabel = $("#runSubmitLabel");
     const submit = $('#runForm button[type="submit"]');
     const directSource = state.runSource === "direct";
+    if ($('#runGroupMode')) $('#runGroupMode').disabled = !directSource;
     const hasProvider = selectedSourceAvailable();
     $("#runProviderLabel")?.classList.toggle("hidden", !directSource);
     $("#runProviderPicker")?.classList.toggle("hidden", !directSource);
@@ -349,6 +353,37 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
     normalizeRunSourceSelection();
     ensureRunSourcePicker();
     $("#runCwd").value = projectPath;
+    const workingFolder = $('#runWorkingFolder');
+    if (workingFolder) {
+      workingFolder.replaceChildren();
+      const paths = new Set([projectPath]);
+      for (const item of [...(state.snapshot?.sessions || []), ...(state.sidebarTerminalEntries || [])]) {
+        for (const path of [...(item.workspaceRoots || []), item.originCwd || item.cwd]) {
+          if (path && (path === projectPath || path.startsWith(`${projectPath}/`))) paths.add(path);
+        }
+      }
+      for (const path of [...paths].sort()) { const option = document.createElement('option'); option.value = path; option.textContent = path === projectPath ? selectedProjectName(path) : path.slice(projectPath.length + 1); workingFolder.append(option); }
+      workingFolder.value = [...paths].includes(state.runDraft?.cwd) ? state.runDraft.cwd : projectPath;
+    }
+    const groupMode = $('#runGroupMode');
+    if (groupMode) {
+      groupMode.innerHTML = '<option value="single">독립 세션으로 시작</option><option value="new">새 AI 그룹 만들기</option>';
+      if ($('#runGroupName')) $('#runGroupName').value = state.runDraft?.groupName || '';
+      window.whitebox.terminalGroups?.().then(groups => {
+        const updateGroups = () => {
+          const previous = groupMode.value;
+          groupMode.innerHTML = '<option value="single">독립 세션으로 시작</option><option value="new">새 AI 그룹 만들기</option>';
+          for (const group of groups.filter(item => item.cwd === (workingFolder?.value || projectPath))) {
+            const option = document.createElement('option'); option.value = group.id; option.textContent = `${group.name}에 참여`; groupMode.append(option);
+          }
+          if ([...groupMode.options].some(option => option.value === previous)) groupMode.value = previous;
+          syncLockedProject();
+        };
+        updateGroups();
+        if ([...groupMode.options].some(option => option.value === state.runDraft?.groupSelection)) groupMode.value = state.runDraft.groupSelection;
+        if (workingFolder) workingFolder.onchange = updateGroups;
+      }).catch(error => { $('#runError').textContent = error.message; $('#runError').classList.remove('hidden'); });
+    }
     $("#runError").classList.add("hidden");
     syncRunProviderAvailability();
     clearTimeout(motionState.modalTimer);
@@ -474,6 +509,10 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
           ? ["acceptEdits", "auto", "bypassPermissions"].includes(normalizedClaudePermissionMode($("#runClaudePermissionMode")?.value))
           : $("#allowWrites").checked,
       };
+      const groupSelection = $('#runGroupMode')?.value || 'single';
+      if (groupSelection !== 'single' && state.runSource !== 'direct') throw new Error('AI 그룹은 직접 실행에서 선택할 수 있습니다.');
+      runOptions.groupSelection = groupSelection;
+      runOptions.groupName = groupSelection === 'new' ? $('#runGroupName')?.value.trim() || '' : '';
       const creationKey = runCreationKey(runOptions);
       if (typeof context.setPendingRunCreation === "function") {
         pendingRunCreation = restoredPendingRunCreation(creationKey);
@@ -482,7 +521,9 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
         rememberPendingRunCreation({ key: creationKey, id: nextRunCreationId() });
       }
       const result = state.runSource === "direct"
-        ? await window.WhiteboxTerminal.startAgent({ ...runOptions, creationId: pendingRunCreation.id })
+        ? groupSelection !== 'single'
+          ? await window.WhiteboxTerminalGroups.startTask({ ...runOptions, creationId: pendingRunCreation.id }, { id: groupSelection === 'new' ? '' : groupSelection, name: $('#runGroupName')?.value.trim() })
+          : await window.WhiteboxTerminal.startAgent({ ...runOptions, creationId: pendingRunCreation.id })
         : await window.whitebox.startSourceTask(state.runSource, {
           ...runOptions,
           requestId: pendingRunCreation.id,
@@ -500,7 +541,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
       closeRunModal(true);
       clearRunDraft({ silent: true, focus: false });
       syncRunComposer();
-      if (state.runSource === "direct") {
+      if (state.runSource === "direct" && !result.groupId) {
         // The monitor may first expose this as a provisional bridge node. Keep
         // the exact creation identity and open that same PTY in focus mode as
         // soon as its snapshot projection is available.
@@ -509,7 +550,8 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
           creationId: result.creationId,
           focus: true,
         });
-      } else selectView("active");
+      } else if (result.groupId) { selectView('all'); await window.WhiteboxTerminalGroups.refresh(); }
+      else selectView("active");
       toast(result.creationFailed
         ? (result.error || window.WhiteboxI18n.t("ui.could_not_start_the_task"))
         : result.creationUnavailable

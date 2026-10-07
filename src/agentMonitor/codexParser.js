@@ -118,7 +118,10 @@ function createCodexParser(dependencies) {
       && historyEndByteOffset >= 0 ? historyEndByteOffset : null;
     const isCliFork = Boolean(session.forkSourceSessionId)
       && /^cli$/i.test(String(meta.source || '').trim());
-    if (isCliFork) {
+    // The TUI can inherit source=vscode when launched from a desktop-hosted
+    // shell. Its explicit originator still identifies a terminal conversation.
+    const isTui = typeof meta.source === 'string' && /^codex-tui$/i.test(String(meta.originator || '').trim());
+    if (isCliFork || isTui) {
       session.clientKind = 'codex-cli';
     } else if (/codex desktop/i.test(String(meta.originator || ''))) {
       session.clientKind = 'codex-desktop';
@@ -803,7 +806,7 @@ function createCodexParser(dependencies) {
   }
 
   return function parseCodex(fileInfo, options = {}) {
-    const parsed = readJsonLines(fileInfo.file, options.maxBytes);
+    const parsed = readJsonLines(fileInfo.file, options.maxBytes, { fromStart: options.prefixOnly === true });
     if (!parsed.rows.length) return null;
     const { session, meta } = initializeSession(fileInfo, parsed, options);
     const state = createParseState(session, meta);

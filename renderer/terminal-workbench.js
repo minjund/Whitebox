@@ -299,7 +299,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
                 const text = await navigator.clipboard.readText();
                 // Clipboard access is asynchronous: never paste into a task
                 // that was switched or closed while permission was pending.
-                if (!host.isConnected || (state.selectedId !== key && state.embeddedTerminalId !== key)) return;
+                if (!host.isConnected || (state.selectedId !== key && state.embeddedTerminalId !== key && !host.dataset.groupTerminal)) return;
                 terminal.paste(text);
                 terminal.focus();
               }
@@ -434,11 +434,14 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       }, true);
       if (!inputDisabled) {
         terminal.onData(data => {
-          if (state.selectedId !== key && state.embeddedTerminalId !== key) return;
+          if (state.selectedId !== key && state.embeddedTerminalId !== key && !host.dataset.groupTerminal) return;
           enqueueRawInput(entry, key, data);
         });
       }
       terminal.onResize(size => {
+        // Restoring the parser's grid must not resize the live PTY. Its saved
+        // ANSI cursor positions still refer to the grid returned by terminalGet.
+        if (entry.outputHydrating) return;
         entry.pendingResize = { cols: size.cols, rows: size.rows };
         if (entry.resizePromise) return;
         entry.resizePromise = (async () => {
@@ -480,10 +483,14 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
 
   function fitEntry(entry, _sessionId = '') {
     if (!entry || entry.host.classList.contains('hidden')) return;
+    if (entry.outputHydrating) {
+      entry.fitAfterHydration = true;
+      return;
+    }
     const activeBuffer = entry.terminal.buffer?.active;
     const userScrollRevision = entry.userScrollRevision;
-    // A hidden xterm is hydrated at its default grid before it is mounted in
-    // the smaller inline viewport. Preserve the pre-fit follow intent: another
+    // A hidden terminal is hydrated at the PTY grid before it is mounted in
+    // the inline viewport. Preserve the pre-fit follow intent: another
     // queued fit can otherwise grow baseY before this frame and make the old
     // bottom look like a user-selected scrollback anchor.
     const shouldFollow = Boolean(activeBuffer)
@@ -545,6 +552,14 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       state.terminals.set(session.id, entry);
       entry.ready = (async () => {
         const detail = await window.whitebox.terminalGet(session.id);
+        // Replay contains absolute cursor positions and implicit line wraps,
+        // not plain text. Parsing it at the default 80x24 and resizing later
+        // irreversibly scatters wide Korean cells across rows.
+        const cols = Number(detail?.cols ?? session.cols);
+        const rows = Number(detail?.rows ?? session.rows);
+        if (Number.isSafeInteger(cols) && cols > 0 && Number.isSafeInteger(rows) && rows > 0) {
+          entry.terminal.resize(cols, rows);
+        }
         const sequenceValue = detail?.outputSequence;
         const parsedSequence = sequenceValue == null || sequenceValue === '' ? Number.NaN : Number(sequenceValue);
         entry.outputSequence = Number.isSafeInteger(parsedSequence) && parsedSequence >= 0
@@ -571,6 +586,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
           const tail = entry.comprehensionOutputFilter.flush();
           if (tail) entry.terminal.write(tail);
         }
+        if (entry.fitAfterHydration) {
+          entry.fitAfterHydration = false;
+          fitEntry(entry);
+        }
         return entry;
       })().catch(error => {
         // Every caller awaiting this entry must observe the same initialization
@@ -593,7 +612,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   }
 
   function hideScreens() {
-    for (const entry of state.terminals.values()) entry.host.classList.add('hidden');
+    for (const entry of state.terminals.values()) if (!entry.host.dataset.groupTerminal) entry.host.classList.add('hidden');
     if (state.remoteTerminal) state.remoteTerminal.host.classList.add('hidden');
   }
 

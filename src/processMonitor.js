@@ -450,6 +450,8 @@ function selectAgentProcesses(rows, options = {}) {
     pid: item.pid,
     parentPid: item.parentPid,
     ancestorPids: ancestorPids(item),
+    ...(environment === 'macos' && ancestorPids(item).some(pid => /\/cmux[^/]*\.app\/Contents\/MacOS\/cmux$/i.test(String(rawByPid.get(pid)?.name || '')))
+      ? { terminalHost: 'cmux' } : {}),
     command: String(item.name || '').replace(/\.exe$/i, '').split(/[\\/]/).pop(),
     startedAt: item.startedAt,
     externalId: processSessionExternalId(item, item.provider),
@@ -596,20 +598,20 @@ function bridgePromptMatches(session, bridge) {
   if (!/^[a-f0-9]{64}$/u.test(expected) || !Number.isFinite(bridgeStart)) return false;
   if (bridge?.initialPromptFingerprintVersion === 'instructions-v1') {
     return bridgeComprehensionLaunchOwned(bridge)
-      && normalizedComprehensionContractPromptFingerprints(session.comprehensionUserPromptFingerprints).includes(expected);
+      && normalizedComprehensionContractPromptFingerprints([...(session.comprehensionUserPromptFingerprints || []), ...(session.bridgeLaunchProof?.userFingerprints || [])]).includes(expected);
   }
   if (bridge?.initialPromptFingerprintVersion === 'raw-v1') {
     const exactPromptFingerprints = normalizedComprehensionContractPromptFingerprints(
-      session.comprehensionContractPromptFingerprints,
+      [...(session.comprehensionContractPromptFingerprints || []), ...(session.bridgeLaunchProof?.contractFingerprints || [])],
     );
     // raw-v1 bridge provenance is paired only with the exact parser proof.
     // Missing, malformed, or mismatched proof must not fall back to the legacy
     // display-clipped comparison.
-    return session.comprehensionContractObserved === true
+    return (session.comprehensionContractObserved === true || session.bridgeLaunchProof?.contractObserved === true)
       && exactPromptFingerprints.length > 0
       && exactPromptFingerprints.includes(expected);
   }
-  return (session?.messages || []).some(message => {
+  return [...(session?.bridgeLaunchProof?.messages || []), ...(session?.messages || [])].some(message => {
     if (message?.role !== 'user' || !withinBridgeDiscoveryWindow(message.timestamp, bridgeStart)) return false;
     if (cachedMessagePromptFingerprint(message) === expected) return true;
     if (session.comprehensionContractObserved !== true) return false;
@@ -905,6 +907,7 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
   const usedSessionIds = new Set();
   const usedBridgeIds = new Set();
   const bridgePairs = [];
+  const explicitlyLinkedSessionIds = new Set();
   for (const bridge of bridges || []) {
     if (bridge?.comprehensionProvenanceOnly === true) {
       // This record exists only to restore packet provenance after the PTY has
@@ -934,12 +937,12 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
     if (bridgeComprehensionBindingOwned(linked, bridge)) {
       promoteComprehensionCandidate(linked, 'whitebox-terminal-binding');
     }
+    explicitlyLinkedSessionIds.add(linked.id);
     markRuntime(linked, { ...bridge, kind: 'bridge', label: 'Whitebox AI 명령창', linkScore: 'explicit' });
   }
   for (const bridge of bridges || []) {
     if (usedBridgeIds.has(bridge.id)) continue;
     for (const session of sessions) {
-      if (usedSessionIds.has(session.id)) continue;
       const score = bridgeLinkScore(session, bridge, now);
       if (score > 0) bridgePairs.push({ bridge, session, score });
     }
@@ -959,13 +962,17 @@ function applyRuntimePresence(agentSessions, tmuxSnapshot, processSnapshot, now 
   }
   bridgePairs.sort((a, b) => b.score - a.score);
   for (const pair of bridgePairs) {
-    if (usedBridgeIds.has(pair.bridge.id) || usedSessionIds.has(pair.session.id)) continue;
+    if (usedBridgeIds.has(pair.bridge.id)) continue;
     const terminalId = String(pair.bridge.terminalId || pair.bridge.id || '');
     if (terminalCandidates.get(terminalId)?.size !== 1
       || sessionCandidates.get(pair.session.id)?.size !== 1) {
       continue;
     }
     usedBridgeIds.add(pair.bridge.id);
+    // A previously misclassified launch may already have a separately resumed
+    // terminal for this exact conversation. Fold its duplicate display only;
+    // retain the authenticated resumed terminal as the sole writable target.
+    if (explicitlyLinkedSessionIds.has(pair.session.id)) continue;
     usedSessionIds.add(pair.session.id);
     promoteBridgeComprehension(pair.session, pair.bridge, 'whitebox-terminal-bridge');
     markRuntime(pair.session, {

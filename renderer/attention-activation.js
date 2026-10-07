@@ -168,6 +168,12 @@
       const operationEpoch = entry.operationEpoch;
       const operationCurrent = () => isCurrent(entry) && entry.operationEpoch === operationEpoch;
       try {
+      // Passive requests must never attach or replace the user's current terminal.
+      // Acknowledgement releases a provider hook back to its native approval UI.
+      if (options.autoOpenPty === false) {
+        await acknowledge(entry, 'notified');
+        return;
+      }
       const session = sessionFor(entry.activation);
       if (!session) {
         if (scheduleRetry(entry)) return;

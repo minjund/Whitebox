@@ -1,6 +1,54 @@
 'use strict';
 
-function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, isProviderVisible = () => true, listWslDistros, sendError }) {
+function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, groupStoreFile, isCmuxEnabled = () => false, cmuxClient, onCmuxInventory = () => {}, isProviderVisible = () => true, listWslDistros, sendError }) {
+  const { CmuxClient } = require('../cmuxClient');
+  const cmux = cmuxClient || new CmuxClient();
+  for (const operation of ['list', 'read', 'frame', 'focus', 'input', 'arrange']) {
+    ipcMain.handle(`cmux:${operation}`, (event, ...args) => {
+      requireTrustedSender(event);
+      if (!isCmuxEnabled()) {
+        cmux.entries = [];
+        if (operation === 'list') return { installed: false, enabled: false, entries: [], groups: [] };
+        throw new Error('설정에서 cmux 플러그인을 연결하세요.');
+      }
+      if (operation === 'list') return cmux.list().then(result => {
+        // A settings change can overtake an in-flight native inventory read.
+        if (!isCmuxEnabled()) { cmux.entries = []; return { installed: false, enabled: false, entries: [], groups: [] }; }
+        onCmuxInventory(result);
+        return { ...result, enabled: true };
+      });
+      return cmux[operation](...args);
+    });
+  }
+  let groups;
+  const presentedTerminals = new Set();
+  const tmuxPresentation = new (require('../managedTmuxRuntime').ManagedTmuxRuntime)();
+  const executePresentation = require('util').promisify(require('child_process').execFile);
+  async function presentGroups(result) {
+    // Existing long-lived hosts may predate the embedded presentation default.
+    // Change only the exact managed session, leaving user tmux defaults alone.
+    await Promise.all(result.flatMap(group => group.members).map(async member => {
+      const terminal = member.terminal;
+      if (!terminal || terminal.backend !== 'managed-tmux' || !terminal.managedTmuxSession || !terminal.tmuxSocket || presentedTerminals.has(terminal.id)) return;
+      const command = tmuxPresentation.command(terminal, ['set-option', '-t', terminal.managedTmuxSession, 'status', 'off']);
+      try {
+        await executePresentation(command.file, command.args, { timeout: 5000, windowsHide: true });
+        presentedTerminals.add(terminal.id);
+      } catch (_) { /* A newly spawning session is retried on the next inventory. */ }
+    }));
+    return result;
+  }
+  for (const operation of ['list', 'create', 'add', 'remove', 'delete', 'rename', 'instruct']) {
+    ipcMain.handle(`terminal-groups:${operation}`, (event, ...args) => {
+      requireTrustedSender(event);
+      if (!groups) {
+        const { TerminalGroups } = require('../terminalGroups');
+        groups = new TerminalGroups({ manager, storeFile: groupStoreFile, isProviderVisible });
+      }
+      const result = groups[operation](...args);
+      return operation === 'list' ? result.then(presentGroups) : result;
+    });
+  }
   ipcMain.handle('terminals:list', event => {
     requireTrustedSender(event);
     return manager() ? manager().list().filter(session => !session.transient && (session.type !== 'agent' || isProviderVisible(session.provider))) : [];

@@ -3613,8 +3613,9 @@ function registerTerminalLifecycleTests(context) {
         },
       },
     });
-    const sessions = Array.from({ length: 24 }, (_, index) => manager.create({
-      type: 'powershell',
+    const sessions = Array.from({ length: 96 }, (_, index) => manager.create({
+      type: 'agent', provider: 'grok',
+      bridgeId: `grok:capacity-history-${index}`,
       cwd: root,
       title: `용량 검증 ${index + 1}`,
     }));
@@ -3628,7 +3629,7 @@ function registerTerminalLifecycleTests(context) {
       sessionBackend: 'direct',
     });
 
-    assert.equal(manager.list().length, 24);
+    assert.equal(manager.list().length, 96);
     assert.equal(manager.get(sessions[0].id), null);
     assert.equal(manager.get(replacement.id).status, 'running');
     manager.dispose();

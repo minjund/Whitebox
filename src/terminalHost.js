@@ -72,6 +72,7 @@ function normalizedTerminalHostCapabilities(value) {
     ...(Number(value?.rawWriteDelivery) >= RAW_WRITE_DELIVERY_CAPABILITY
       ? { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY } : {}),
     ...(value?.forceStopForUpdate === 1 ? { forceStopForUpdate: 1 } : {}),
+    ...(value?.managedStartupPrompt === 1 ? { managedStartupPrompt: 1 } : {}),
     ...(value?.scopedUpdateShutdown === 1 ? { scopedUpdateShutdown: 1 } : {}),
   };
 }
@@ -461,6 +462,7 @@ class TerminalHostServer {
       Object.hasOwn(options, 'capabilities')
         ? options.capabilities
         : { rawWriteDelivery: RAW_WRITE_DELIVERY_CAPABILITY,
+            ...(this.manager?.supportsManagedStartupPrompt ? { managedStartupPrompt: 1 } : {}),
             ...(typeof this.manager?.forceStopForUpdate === 'function'
               ? { forceStopForUpdate: 1, scopedUpdateShutdown: 1 } : {}) },
     );

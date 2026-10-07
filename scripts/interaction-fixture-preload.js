@@ -573,6 +573,8 @@ const currentUpdate = {
 };
 
 let terminals = clone(initialTerminals);
+let cmuxFrameOverride = null;
+let cmuxInventory = { installed: false, entries: [], groups: [] };
 let update = clone(availableUpdate);
 let attentionPopups = { enabled: true, hookStatus: 'installed', hookDetail: '' };
 const questionnaireSetupTest = process.env.WHITEBOX_QUESTIONNAIRE_SETUP_TEST === '1';
@@ -908,6 +910,7 @@ const api = {
     ipcRenderer.on('app:navigate-back', handler);
     return () => ipcRenderer.removeListener('app:navigate-back', handler);
   },
+  ackAttentionActivation: async value => { calls.push({name:'ackAttentionActivation',args:[value]}); return {acknowledged:true}; },
   onAttentionRequested: callback => { attentionListeners.add(callback); return () => attentionListeners.delete(callback); },
   onTerminalPromptResolved: callback => { terminalPromptResolutionListeners.add(callback); return () => terminalPromptResolutionListeners.delete(callback); },
   onUpdateState: callback => { updateStateListeners.add(callback); return () => updateStateListeners.delete(callback); },
@@ -960,6 +963,8 @@ if (realTerminalFixture) {
 }
 
 const testApi = {
+  setCmuxFrame: value => { cmuxFrameOverride = clone(value); },
+  setCmuxInventory: value => { cmuxInventory = clone(value); },
   setProviderAvailability: value => { providerAvailability = clone(value); return true; },
   getCalls: () => clone(calls),
   getSnapshot: () => clone(snapshot),
@@ -1044,7 +1049,7 @@ const testApi = {
   },
   restoreUpdate: () => { update = clone(availableUpdate); updateStateListeners.forEach(listener => listener(clone(update))); return clone(update); },
   restoreCurrentUpdate: () => { update = clone(currentUpdate); updateStateListeners.forEach(listener => listener(clone(update))); return clone(update); },
-  triggerAttention: sessionId => { attentionListeners.forEach(listener => listener({ sessionId })); return attentionListeners.size; },
+  triggerAttention: sessionId => { attentionListeners.forEach(listener => listener(typeof sessionId === 'object' ? clone(sessionId) : { sessionId })); return attentionListeners.size; },
   resolveTerminalPrompt: payload => {
     terminalPromptResolutionListeners.forEach(listener => listener(clone(payload || {})));
     return terminalPromptResolutionListeners.size;
@@ -1068,5 +1073,32 @@ const testApi = {
   },
 };
 
+if (process.argv.includes('--whitebox-terminal-groups-live')) {
+  Object.assign(api, {
+    cmuxList: async () => controlled('cmuxList', [], clone(cmuxInventory)),
+    cmuxRead: async id => `cmux terminal output: ${id}`,
+    cmuxFrame: async id => cmuxFrameOverride ? clone(cmuxFrameOverride) : ({ ansi: `\x1b[2J\x1b[H\x1b[38;2;132;214;188mcmux terminal output: ${id}\x1b[0m\r\n$ \x1b[?25h`, columns: 80, rows: 24 }),
+    cmuxFocus: async id => { calls.push({ name: 'cmuxFocus', args: [id] }); return { ok: true }; },
+    cmuxInput: async (id, data) => { calls.push({ name: 'cmuxInput', args: [id, data] }); return { ok: true }; },
+    cmuxArrange: async (id, options) => controlled('cmuxArrange', [id, options], { ok: true, inventory: clone(cmuxInventory) }),
+    terminalGroups: () => ipcRenderer.invoke('terminal-groups:list'),
+    terminalGroupCreate: options => ipcRenderer.invoke('terminal-groups:create', options),
+    terminalGroupAdd: (id, options) => ipcRenderer.invoke('terminal-groups:add', id, options),
+    terminalGroupRemove: (id, creationId) => ipcRenderer.invoke('terminal-groups:remove', id, creationId),
+    terminalGroupDelete: id => ipcRenderer.invoke('terminal-groups:delete', id),
+    terminalGroupInstruct: (id, creationId) => ipcRenderer.invoke('terminal-groups:instruct', id, creationId),
+    terminalGroupRename: (id, name) => ipcRenderer.invoke('terminal-groups:rename', id, name),
+    terminalList: () => ipcRenderer.invoke('terminals:list'),
+    terminalGet: id => ipcRenderer.invoke('terminals:get', id),
+    terminalWrite: (id, data, options) => ipcRenderer.invoke('terminals:write', id, data, options).then(value => {
+      if (!value.ok) throw new Error(value.error.message);
+      return value.result;
+    }),
+    terminalResize: (id, cols, rows) => ipcRenderer.invoke('terminals:resize', id, cols, rows),
+    terminalReconnect: id => ipcRenderer.invoke('terminals:reconnect', id),
+    onTerminalData: callback => { const handler = (_, payload) => callback(payload); ipcRenderer.on('terminals:data', handler); return () => ipcRenderer.removeListener('terminals:data', handler); },
+    onTerminalState: callback => { const handler = (_, payload) => callback(payload); ipcRenderer.on('terminals:state', handler); return () => ipcRenderer.removeListener('terminals:state', handler); },
+  });
+}
 contextBridge.exposeInMainWorld('whitebox', api);
 contextBridge.exposeInMainWorld('interactionTest', testApi);

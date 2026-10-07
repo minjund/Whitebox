@@ -12,7 +12,7 @@ function dashboardHarness(root, sessions, workspaces = []) {
     window: { WhiteboxAppFactories: {}, WhiteboxI18n: { t: key => key } },
     document: { body: { dataset: {} } }, Intl,
   };
-  for (const file of ['app-dashboard.js', 'app-graph-model.js']) {
+  for (const file of ['sidebar-tree.js', 'app-dashboard.js', 'app-graph-model.js']) {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', file), 'utf8'), sandbox);
   }
   const state = {
