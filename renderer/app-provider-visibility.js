@@ -60,7 +60,8 @@ window.WhiteboxAppFactories.createProviderVisibility = function createProviderVi
   }
 
   function isSessionVisible(session) {
-    return isSourcePluginVisible(session?.sourcePluginId)
+    return (!session?.cmux || isSourcePluginVisible('builtin.cmux'))
+      && isSourcePluginVisible(session?.sourcePluginId)
       && (session?.sourcePluginId || isProviderVisible(session?.provider))
       && isDesktopSessionVisible(session);
   }

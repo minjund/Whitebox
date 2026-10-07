@@ -15,7 +15,7 @@ window.WhiteboxAppFactories.createNavigationEventBindings = function createNavig
     const selectors = [
       "[data-comprehension-close]", "#closeQuickPaletteBtn", "#closeShortcutHelpBtn",
       "#cancelTmuxCreateBtn", "#cancelRunBtn", "#closeDrawerBtn",
-      "#ptyFocusBackBtn",
+      "#ptyFocusBackBtn", "[data-cmux-back]",
     ];
     const button = selectors.map(selector => $(selector)).find(element => (
       element && !element.disabled

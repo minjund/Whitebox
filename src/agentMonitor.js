@@ -602,6 +602,8 @@ class AgentMonitor extends EventEmitter {
     this.pinnedFileCache = new Map();
     this.pinnedSessions = [];
     this.bridgeDiscoveryScopes = [];
+    this.bridgeLaunchBindings = [];
+    this.bridgeLaunchCache = new Map();
     this.bridgeDiscoveryRefreshScopes = [];
     this.historyHomes = [];
     this.startupRecoveryKeys = new Set();
@@ -645,6 +647,8 @@ class AgentMonitor extends EventEmitter {
 
   setBridgePresence(bindings = []) {
     this.setPinnedSessions(bindings);
+    this.bridgeLaunchBindings = bindings.filter(binding => binding.terminalId && !binding.linkedSessionId && !binding.bridgeId
+      && /^[a-f0-9]{64}$/i.test(binding.initialPromptFingerprint || '') && !binding.agentForkSourceSessionId);
     const scopes = [];
     const seen = new Set();
     for (const binding of bindings || []) {
@@ -675,6 +679,35 @@ class AgentMonitor extends EventEmitter {
     }
     this.bridgeDiscoveryScopes = scopes;
     if (previousKey !== nextKey) this.invalidateDiscoveryCaches();
+  }
+
+  recoverBridgeLaunchMessages(session, info, provider, history) {
+    if (!['claude', 'codex'].includes(provider) || session.parentId
+      || (!session.truncated && session.messages.length < MAX_MESSAGES)) return;
+    const started = Date.parse(session.startedAt || '');
+    if (!this.bridgeLaunchBindings.some(binding => {
+      const launch = Date.parse(binding.startedAt || '');
+      return binding.provider === provider && binding.environment === history.kind
+        && String(binding.distro || '') === String(history.distro || '')
+        && started >= launch - 5000 && started <= launch + 5 * 60_000;
+    })) return;
+    // Card tails can lose the first prompt. Recover only bounded launch proof,
+    // never replace the latest conversation/status with the prefix snapshot.
+    const key = `${info.file}:${info.mtimeMs}:${info.size}`;
+    let proof = this.bridgeLaunchCache.get(key);
+    if (!proof) {
+      const parser = provider === 'codex' ? parseCodex : parseClaude;
+      const initial = parser(info, { prefixOnly: true, maxBytes: 2 * 1024 * 1024, fullHistory: true });
+      proof = initial?.id === session.id ? {
+        messages: initial.messages.filter(message => message.role === 'user'),
+        userFingerprints: initial.comprehensionUserPromptFingerprints || [],
+        contractFingerprints: initial.comprehensionContractPromptFingerprints || [],
+        contractObserved: initial.comprehensionContractObserved === true,
+      } : { messages: [] };
+      this.bridgeLaunchCache.set(key, proof);
+      while (this.bridgeLaunchCache.size > 80) this.bridgeLaunchCache.delete(this.bridgeLaunchCache.keys().next().value);
+    }
+    session.bridgeLaunchProof = proof;
   }
 
   bridgeDiscoveryScopeMatches(scopes, provider, history) {
@@ -1000,6 +1033,7 @@ class AgentMonitor extends EventEmitter {
             }
             copy.environment = { kind: history.kind, distro: history.distro, label: history.label, home: history.home };
             if (history.kind === 'wsl') copy.sourceLabel = history.label;
+            this.recoverBridgeLaunchMessages(copy, info, provider, history);
             sessions.push(copy);
           }
         };

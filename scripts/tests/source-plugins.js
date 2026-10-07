@@ -97,7 +97,7 @@ function registerSourcePluginTests(context) {
     assert.equal(normalized.provenance.runtime.label, 'OpenCode');
   });
 
-  test('source plugin 설정은 OpenCode·Aside만 opt-in으로 정규화하고 방어 복사해 저장한다', () => {
+  test('source plugin 설정은 OpenCode·Aside·cmux를 opt-in으로 저장한다', () => {
     const settingsFile = path.join(temp, 'source-plugin-settings-v2.json');
     // Legacy (pre-v3) input: desktop toggles did not exist yet, so they are
     // migrated in as enabled instead of being treated as an opt-out.
@@ -121,6 +121,11 @@ function registerSourcePluginTests(context) {
       [...DESKTOP_SOURCE_PLUGIN_IDS, 'builtin.opencode'],
     );
     assert.throws(() => store.setPluginEnabled('builtin.unknown', true), /지원하지 않는/);
+    assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.cmux'), false);
+    store.setPluginEnabled('builtin.cmux', true);
+    assert.equal(isSourcePluginEnabled(new SourcePluginSettingsStore(settingsFile).snapshot(), 'builtin.cmux'), true);
+    store.setPluginEnabled('builtin.cmux', false);
+    assert.equal(isSourcePluginEnabled(new SourcePluginSettingsStore(settingsFile).snapshot(), 'builtin.cmux'), false);
   });
 
   test('데스크톱 앱 토글은 기본 켜짐이고 v3 파일의 명시적 opt-out만 유지된다', () => {

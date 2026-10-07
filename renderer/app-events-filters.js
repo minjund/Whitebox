@@ -160,6 +160,10 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
     const selectSidebarTaskWorkspace = (trigger) => {
       const project = trigger.closest(".project-sidebar-project")?.querySelector(".project-sidebar-item[data-workspace]");
       if (!project) return;
+      const sessionId = trigger.dataset.sidebarSessionId || trigger.dataset.ptyFocusTrigger || trigger.dataset.openSession;
+      const session = state.snapshot?.sessions?.find(item => item.id === sessionId);
+      state.sidebarFolderFilter = { projectKey: project.dataset.workspace, entryId: sessionId, name: session?.title || trigger.querySelector('b')?.textContent || '', path: session?.originCwd || session?.cwd || project.dataset.workspace };
+      state.cmuxSidebarSelectedId = ''; state.graphFocusId = '';
       state.workspace = project.dataset.workspace;
       state.workspaceSource = "all";
       state.visibleLimit = 30;
@@ -168,6 +172,18 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       else renderSessions("filter");
       syncFilterResetButton();
     };
+    window.WhiteboxSidebarTree.bind({ state, list: $("#projectSidebarList"), renderWorkspaces, saveDashboardPreferences, announce,
+      selectFolder: filter => {
+        state.sidebarFolderFilter = filter;
+        state.workspace = state.workspaces.find(item => normalizedProjectPath(item.path) === normalizedProjectPath(filter.projectKey))?.path || filter.projectKey; state.workspaceSource = 'all';
+        state.cmuxSidebarSelectedId = ''; state.graphFocusId = ''; state.visibleLimit = 30;
+        window.dispatchEvent(new CustomEvent('whitebox-sidebar-folder-selected'));
+        renderWorkspaces();
+        if (state.view !== 'all') selectViewFromUser('all', { motionKind: 'filter' });
+        else renderSessions('filter');
+        document.querySelector('.main-stage')?.scrollTo({ top: 0, behavior: 'auto' });
+      },
+    });
     const sidebarMenu = $("#projectSidebarMenu");
     let menuProjectKey = "";
     const showSidebarMenu = (trigger) => {
@@ -226,6 +242,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
     });
     $("#sidebarCollapseAllBtn")?.addEventListener("click", () => {
       state.sidebarExpandedProjects?.clear();
+      if (state.sidebarTree) state.sidebarTree.expanded = [];
       renderWorkspaces();
       saveDashboardPreferences();
       announce(t("studio.sidebar.collapse_all"));
@@ -310,6 +327,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       const item = event.target.closest("[data-workspace], [data-source-workspace]");
       if (item) {
+        state.sidebarFolderFilter = null;
         // Selection and disclosure are separate: clicking a name always selects.
         const requestedWorkspace = item.dataset.workspace || item.dataset.sourceWorkspace;
         const requestedSource = activeList.id === "projectSidebarList" ? "all" : item.dataset.projectSource || "all";
@@ -375,6 +393,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           return;
         }
         if (event.currentTarget.id === "projectSidebarList" && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+          const node = event.target.closest("[data-sidebar-folder-id], [data-sidebar-session-id]");
+          if (node) { event.preventDefault(); node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); return; }
           const trigger = event.target.closest(".project-sidebar-project")?.querySelector("[data-sidebar-project-menu]");
           if (trigger) { event.preventDefault(); showSidebarMenu(trigger); }
           return;
@@ -387,12 +407,14 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           event.stopPropagation();
           const level = Number(treeItem.getAttribute("aria-level") || 0);
           const expanded = treeItem.getAttribute("aria-expanded");
-          const ownedGroupId = treeItem.getAttribute("aria-owns") || "";
+          const ownedGroupId = treeItem.getAttribute("aria-owns") || treeItem.getAttribute('aria-controls') || "";
           const rememberTreeItem = () => ({
             level,
             projectRef: String(treeItem.dataset.sidebarProjectRef || ""),
             sourceRef: String(treeItem.dataset.sidebarSourceRef || ""),
             sessionId: String(treeItem.dataset.sidebarSessionId || ""),
+            folderId: String(treeItem.dataset.sidebarFolderId || ""),
+            pathId: String(treeItem.dataset.pathTreeToggle || ''),
           });
           const focusRememberedTreeItem = (identity) => requestAnimationFrame(() => {
             const target = Array.from(tree.querySelectorAll('[role="treeitem"]')).find((candidate) => (
@@ -400,6 +422,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
               && String(candidate.dataset.sidebarProjectRef || "") === identity.projectRef
               && String(candidate.dataset.sidebarSourceRef || "") === identity.sourceRef
               && String(candidate.dataset.sidebarSessionId || "") === identity.sessionId
+              && String(candidate.dataset.sidebarFolderId || "") === identity.folderId
+              && String(candidate.dataset.pathTreeToggle || '') === identity.pathId
             ));
             target?.focus({ preventScroll: true });
           });
@@ -410,7 +434,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
             ));
             if (!toggle) return false;
             const identity = rememberTreeItem();
-            toggle.click();
+            const disclosure = toggle.querySelector('.sidebar-tree-chevron') || toggle;
+            disclosure.click();
             focusRememberedTreeItem(identity);
             return true;
           };
@@ -427,9 +452,10 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
           } else if (expanded === "true") {
             if (!toggleOwnedGroup()) return;
           } else {
-            const parent = level === 2
+            const parentFolder = treeItem.parentElement.closest(".sidebar-tree-children")?.parentElement.querySelector("[data-sidebar-folder-id], [data-path-tree-toggle]");
+            const parent = parentFolder || (level === 2
               ? treeItem.closest(".project-sidebar-project")?.querySelector('.project-sidebar-item[role="treeitem"]')
-              : null;
+              : null);
             if (!parent) return;
             parent.focus({ preventScroll: true });
           }
@@ -682,6 +708,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       }
       state.sourcePluginSettingRequests?.delete(pluginId);
       state.sourcePluginSettings = result.settings;
+      if (pluginId === 'builtin.cmux') window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'));
       if (Array.isArray(result.sources)) state.sourcePlugins = result.sources;
       if (!requestedEnabled && state.workspaceSource === pluginId) {
         state.workspaceSource = "all";
@@ -706,6 +733,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       const fallbackLabels = {
         "builtin.opencode": "OpenCode",
         "builtin.aside": "Aside",
+        "builtin.cmux": "cmux",
         "builtin.claude-desktop": "Claude Desktop",
         "builtin.codex-desktop": "Codex Desktop",
       };

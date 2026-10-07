@@ -139,6 +139,7 @@
       return true;
     };
     const attentionActivation = window.WhiteboxAttentionActivation?.createAttentionActivationController({
+      autoOpenPty: false,
       getSessions: () => state.snapshot?.sessions || [],
       isProviderVisible,
       canOpenPty: session => canOpenPtyFocus?.(ownerRootSession?.(session)) === true,

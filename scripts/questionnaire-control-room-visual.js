@@ -131,7 +131,7 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(await openId(), '', 'existing dialog must stay in front');
   await js('window.WhiteboxApp.closeRunModal()');
-  await new Promise(resolve => setTimeout(resolve, 200));
+  await waitFor(() => js("document.querySelector('#runModal').classList.contains('hidden')"), 'run dialog close animation');
   assert.equal(await openId(), '', 'closing another dialog must not open an unsolicited questionnaire');
   await openFromInbox(third.comprehension.packet.title);
   await waitFor(async () => (await openId()) === third.id, 'open requested questionnaire after dialog closes');

@@ -955,6 +955,66 @@
   }
 
   window.WhiteboxTerminal = {
+    mountGroupTerminal: async (id, mount, options = {}) => {
+      await init();
+      const session = await window.whitebox.terminalGet(id);
+      if (!session || session.backend !== 'managed-tmux') throw new Error('tmux AI 세션을 찾을 수 없습니다.');
+      if (session.status === 'detached') await window.whitebox.terminalReconnect(id);
+      const entry = await ensureSessionTerminal(session);
+      if (!mount.isConnected) return () => {};
+      entry.host.dataset.groupTerminal = 'true';
+      const previous = { cursorBlink: entry.terminal.options.cursorBlink, cursorStyle: entry.terminal.options.cursorStyle, fontSize: entry.terminal.options.fontSize };
+      entry.terminal.options.cursorBlink = false;
+      entry.terminal.options.cursorStyle = 'bar';
+      entry.terminal.options.fontSize = options.fontSize || 15;
+      const syncCursor = () => {
+        if (entry.terminal.disposed || !entry.terminal.renderer) return;
+        const focused = document.hasFocus() && document.activeElement === entry.terminal.textarea;
+        mount.closest('[data-group-member]')?.classList.toggle('is-input-active', focused);
+        if (entry.terminal.renderer.cursorVisible !== focused) {
+          entry.terminal.renderer.cursorVisible = focused;
+          entry.terminal.refresh();
+        }
+      };
+      const focusTerminal = event => { if (event.button === 0) entry.terminal.focus(); };
+      mount.addEventListener('pointerdown', focusTerminal);
+      document.addEventListener('focusin', syncCursor);
+      document.addEventListener('focusout', syncCursor);
+      window.addEventListener('focus', syncCursor);
+      window.addEventListener('blur', syncCursor);
+      const cursorRender = entry.terminal.onRender(syncCursor);
+      mount.appendChild(entry.host);
+      entry.host.classList.remove('hidden');
+      let fitTimer;
+      const scheduleFit = () => {
+        clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => { if (!entry.terminal.disposed && mount.isConnected) fitEntry(entry, id); }, 80);
+      };
+      const observer = new ResizeObserver(scheduleFit);
+      observer.observe(mount);
+      scheduleFit();
+      syncCursor();
+      const dispose = () => {
+        clearTimeout(fitTimer);
+        observer.disconnect();
+        cursorRender.dispose();
+        mount.removeEventListener('pointerdown', focusTerminal);
+        document.removeEventListener('focusin', syncCursor);
+        document.removeEventListener('focusout', syncCursor);
+        window.removeEventListener('focus', syncCursor);
+        window.removeEventListener('blur', syncCursor);
+        if (!entry.terminal.disposed) {
+          Object.assign(entry.terminal.options, previous);
+          if (entry.terminal.renderer) entry.terminal.renderer.cursorVisible = true;
+        }
+        if (entry.host.parentElement !== mount) return;
+        delete entry.host.dataset.groupTerminal;
+        entry.host.classList.add('hidden');
+        $('#terminalRuntimeMount')?.appendChild(entry.host);
+      };
+      dispose.setFontSize = size => { entry.terminal.options.fontSize = size; scheduleFit(); syncCursor(); };
+      return dispose;
+    },
     deactivate,
     updateSnapshot,
     refresh: async () => {

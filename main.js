@@ -13,6 +13,8 @@ const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const { AgentRunner, probeProviders } = require('./src/agentRunner');
 const { BackgroundQuestionnaire } = require('./src/backgroundQuestionnaire');
+const { CmuxClient } = require('./src/cmuxClient');
+const { CmuxMembership } = require('./src/cmuxMembership');
 const { QuestionnairePreferenceStore } = require('./src/questionnairePreferenceStore');
 const { bindWindowNavigation } = require('./src/windowNavigation');
 const { snapshotWithoutSessions } = require('./src/agentMonitor');
@@ -126,6 +128,8 @@ let monitorWorkerRestartTimer = null;
 let monitorWorkerRestartAttempts = 0;
 let runner = null;
 let backgroundQuestionnaire = null;
+const cmuxClient = new CmuxClient();
+let cmuxMembership = null;
 let questionnairePreferenceStore = null;
 let terminalManager = null;
 let bridgeLauncher = null;
@@ -414,7 +418,8 @@ function saveProviderVisibility(value = {}) {
 function visibleSnapshotSessions(snapshot = lastSnapshot) {
   const sourceSettings = sourcePluginSettingsStore?.snapshot() || { enabledPluginIds: [] };
   const hiddenDesktopIds = new Set();
-  let sessions = (snapshot.sessions || []).filter(session => {
+  let sessions = (snapshot.sessions || []).map(session => cmuxMembership?.project(session) || session).filter(session => {
+    if (session.cmux && !isSourcePluginEnabled(sourceSettings, 'builtin.cmux')) { hiddenDesktopIds.add(session.id); return false; }
     if (runner?.isQuestionnaireSession(session)) { hiddenDesktopIds.add(session.id); return false; }
     if (session.sourcePluginId) return isSourcePluginEnabled(sourceSettings, session.sourcePluginId);
     if (!isProviderVisible(session.provider)) return false;
@@ -841,10 +846,15 @@ function persistInferredTerminalBindings(bindings) {
   }));
 }
 
+function cmuxObservedSessions() {
+  return (cmuxClient.entries || []).filter(entry => entry.currentSessionId)
+    .map(entry => ({ provider: entry.currentSessionId.split(':')[0], sessionId: entry.currentSessionId }));
+}
+
 function startMonitorWorker() {
   if (isQuitting || demoCapture || !monitorWorkerConfig) return null;
   const worker = new Worker(path.join(__dirname, 'src', 'monitorWorker.js'), {
-    workerData: { ...monitorWorkerConfig, bridges: bridgePresence() },
+    workerData: { ...monitorWorkerConfig, bridges: bridgePresence(), cmuxSessions: cmuxObservedSessions() },
   });
   monitorWorker = worker;
   worker.on('message', message => {
@@ -870,6 +880,7 @@ function startMonitorWorker() {
           ...guardedForkSessionIds,
         ])];
         lastSnapshot = snapshotWithoutSessions(message.snapshot, hiddenSessionIds, availability);
+        cmuxMembership?.update(cmuxMembership.groups, lastSnapshot.sessions || []);
         backgroundQuestionnaire?.observe(visibleSnapshotSessions(lastSnapshot).sessions);
         const snapshot = visibleSnapshotSessions(lastSnapshot);
         attentionNotifier.sync(snapshot);
@@ -1498,7 +1509,7 @@ function sendAttentionActivation(payload) {
 function acknowledgeAttentionActivation(value = {}) {
   const result = attentionActivationCoordinator?.acknowledge(value)
     || { ok: false, acknowledged: false };
-  if (result.acknowledged === true && ['opened-pty', 'opened-session', 'user-navigated'].includes(result.status)) {
+  if (result.acknowledged === true && ['opened-pty', 'opened-session', 'user-navigated', 'notified'].includes(result.status)) {
     const releasedActivationIds = new Set([
       result.activationId,
       ...(Array.isArray(result.suppressedActivationIds) ? result.suppressedActivationIds : []),
@@ -1841,7 +1852,8 @@ async function setupAttentionRuntime() {
   const preference = loadAttentionPopupPreference();
   attentionActivationCoordinator = new AttentionActivationCoordinator({
     enabled: true,
-    onShow: showMainWindow,
+    // Incoming permission requests update status without stealing window focus.
+    onShow: () => {},
     onDeliver: sendAttentionActivation,
     onCancel: sendAttentionActivation,
     onError: (error, detail) => reportRecoverableError(
@@ -2039,6 +2051,11 @@ async function setupRuntime() {
   updateManager.on('state', sendUpdateState);
   attentionNotifier = createAttentionNotifier();
   sourcePluginSettingsStore = new SourcePluginSettingsStore(userFile('source-plugins.json'));
+  cmuxMembership = new CmuxMembership(userFile('cmux-membership.json'));
+  if (isSourcePluginEnabled(sourcePluginSettingsStore.snapshot(), 'builtin.cmux')) {
+    const inventory = await cmuxClient.list();
+    cmuxMembership.update(inventory.groups || [], lastSnapshot.sessions || []);
+  }
   sourcePluginControlHost = new SourcePluginControlHost({
     platform: process.platform,
     home: os.homedir(),
@@ -2322,12 +2339,18 @@ function registerIpcHandlers() {
       return session;
     },
     setSourcePluginEnabled: (pluginId, enabled) => {
-      if (DESKTOP_SOURCE_PLUGIN_IDS.includes(String(pluginId || ''))) {
+      if (pluginId === 'builtin.cmux' || DESKTOP_SOURCE_PLUGIN_IDS.includes(String(pluginId || ''))) {
         // Desktop toggles have no monitor plugin behind them — they only gate
         // core sessions in the snapshot, so a settings save plus a re-filtered
         // snapshot push is the complete state change.
         const update = sourcePluginSettingsUpdateQueue.catch(() => {}).then(() => {
           const settings = sourcePluginSettingsStore.setPluginEnabled(pluginId, enabled === true);
+          if (pluginId === 'builtin.cmux' && !enabled) {
+            cmuxMembership?.update([], []);
+            cmuxClient.entries = [];
+            monitorWorker?.postMessage({ type: 'cmux-sessions', sessions: [] });
+            backgroundQuestionnaire?.observe(visibleSnapshotSessions(lastSnapshot).sessions);
+          }
           sendSnapshot(visibleSnapshotSessions(lastSnapshot));
           return {
             ok: true,
@@ -2367,10 +2390,19 @@ function registerIpcHandlers() {
   });
   handleTrusted('providers:usage', options => collectProviderUsage(options || {}));
   registerTerminalIpc({
+    cmuxClient,
+    onCmuxInventory: inventory => {
+      monitorWorker?.postMessage({ type: 'cmux-sessions', sessions: cmuxObservedSessions() });
+      cmuxMembership?.update(inventory.groups || [], lastSnapshot.sessions || []);
+      backgroundQuestionnaire?.observe(visibleSnapshotSessions(lastSnapshot).sessions);
+      sendSnapshot(visibleSnapshotSessions(lastSnapshot));
+    },
+    isCmuxEnabled: () => isSourcePluginEnabled(sourcePluginSettingsStore?.snapshot(), 'builtin.cmux'),
     ipcMain,
     requireTrustedSender,
     trustedSender,
     manager: () => terminalManager,
+    groupStoreFile: userFile('terminal-groups.json'),
     isProviderVisible,
     listWslDistros,
     sendError: payload => sendTerminal('terminals:error', payload),

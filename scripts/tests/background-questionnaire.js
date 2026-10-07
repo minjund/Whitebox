@@ -7,6 +7,7 @@ const { EventEmitter } = require('events');
 const { spawnSync } = require('child_process');
 const { BackgroundQuestionnaire: QuestionnaireService, AUTHORITY, explanationOnly, parseResult } = require('../../src/backgroundQuestionnaire');
 const { questionnaireCommand, utf8PipeSpec } = require('../../src/questionnaireCommand');
+const { CmuxMembership } = require('../../src/cmuxMembership');
 const { AgentRunner } = require('../../src/agentRunner');
 const { selectAgentProcesses } = require('../../src/processMonitor');
 const { isEligibleSession } = require('../../renderer/comprehension-packet');
@@ -38,6 +39,92 @@ function session(id = 'task', turn = 1, prompt = '버튼을 파란색으로 바�
 }
 
 function registerBackgroundQuestionnaireTests({ test, temp }) {
+  test('cmux 소속은 정확한 대화 ID로 유지하며 재시작 후에도 작업자와 오케스트레이터를 구분한다', () => {
+    const processes = selectAgentProcesses([
+      { pid: 1, parentPid: 0, name: '/Applications/cmux.app/Contents/MacOS/cmux' },
+      { pid: 2, parentPid: 1, name: '/bin/zsh' },
+      { pid: 3, parentPid: 2, name: 'agent' },
+      { pid: 4, parentPid: 0, name: 'agent' },
+    ], { environment: 'macos', providerResolver: row => row.name === 'agent' ? 'codex' : '' });
+    assert.equal(processes.find(row => row.pid === 3).terminalHost, 'cmux');
+    assert.equal(processes.find(row => row.pid === 4).terminalHost, undefined);
+    const file = path.join(temp, 'cmux-membership.json');
+    const membership = new CmuxMembership(file);
+    const groups = [{ id: 'group', title: 'TAW', cwd: '/shared', members: [
+      { id: 'leader', title: '오케스트레이션', sessionIds: ['leader-session', 'previous-session'], currentSessionId: 'leader-session', processIds: [100] },
+      { id: 'worker', title: '작업자', sessionIds: ['worker-session'], processIds: [200] },
+    ] }];
+    membership.update(groups, [{ id: 'exact-pid', runtimePresence: [{ pid: 100 }] }, { id: 'wsl', environment: { kind: 'wsl' }, runtimePresence: [{ pid: 100 }] }]);
+    assert.equal(membership.project({ id: 'leader-session' }).cmux.role, 'orchestrator');
+    assert.equal(membership.project({ id: 'worker-session' }).cmux.role, 'worker');
+    assert.equal(membership.project({ id: 'leader-session' }).cmux.active, true);
+    assert.equal(membership.project({ id: 'previous-session' }).cmux.active, false);
+    assert.equal(membership.project({ id: 'exact-pid' }).cmux.role, 'orchestrator');
+    assert.equal(membership.project({ id: 'wsl' }).cmux, undefined);
+    assert.equal(membership.project({ id: 'unrelated', cwd: '/shared' }).cmux, undefined);
+    membership.update([], [{ id: 'new-while-disabled', runtimePresence: [{ terminalHost: 'cmux' }] }]);
+    assert.equal(membership.project({ id: 'new-while-disabled' }).cmux.role, 'unknown');
+    const reloaded = new CmuxMembership(file);
+    assert.equal(reloaded.project({ id: 'worker-session' }).cmux.workspaceId, 'group');
+    assert.equal(reloaded.project({ id: 'reused-pid', runtimePresence: [{ pid: 100 }] }).cmux, undefined);
+  });
+
+  test('cmux 설문지는 오케스트레이터의 완료 대화만 사용하고 작업자 결과는 생성하지 않는다', async () => {
+    const leader = { ...session('leader'), cmux: { workspaceId: 'group', role: 'orchestrator', active: true } };
+    const worker = { ...session('worker'), cmux: { workspaceId: 'group', role: 'worker', active: true } };
+    const requests = [];
+    const service = new BackgroundQuestionnaire({ file: path.join(temp, 'quiz-cmux.json'), now: () => 1000,
+      requestDetail: async id => { requests.push(id); return id === leader.id ? leader : worker; },
+      runner: { generateQuestionnaire: async () => quiz() } });
+    const historical = { ...session('previous'), cmux: { workspaceId: 'group', role: 'orchestrator', active: false } };
+    service.observe([]); service.observe([{ ...leader, cmux: { ...leader.cmux, active: false } }, worker, historical]); await settled(service);
+    assert.deepEqual(requests, [], 'unconfirmed bindings cannot generate');
+    service.observe([leader, worker, historical]); await settled(service);
+    assert.deepEqual(requests, ['leader']);
+    assert.equal(service.project(leader).comprehension.status, 'ready');
+    assert.equal(service.project(worker).comprehension, undefined);
+    assert.equal(service.project(historical).comprehension, undefined);
+  });
+
+  test('오케스트레이터 보고 생성은 같은 요청의 모니터 재개를 견디고 새 요청과 분리한다', async () => {
+    let task = { ...session('report'), cmux: { role: 'orchestrator', active: true } };
+    let resolve;
+    const inputs = [];
+    const service = new BackgroundQuestionnaire({ file: path.join(temp, 'quiz-report.json'), now: () => 1000,
+      requestDetail: async () => task, runner: { generateQuestionnaire: input => { inputs.push(input); return new Promise(done => { resolve = done; }); } } });
+    service.observe([]); service.observe([task]); await tick();
+    assert(inputs[0].prompt.includes('completed milestones'));
+    const completed = task;
+    task = { ...task, status: 'running', completionObserved: false };
+    service.observe([task]); resolve(quiz()); await settled(service);
+    assert.equal(service.project(task).comprehension, undefined, 'in-progress report is never shown as complete');
+    task = completed; service.observe([task]); await settled(service);
+    assert.equal(service.project(task).comprehension.status, 'ready');
+    assert.equal(inputs.length, 1, 'monitor activity does not discard or charge again for a completed quiz');
+    task = { ...session('report', 2), cmux: completed.cmux };
+    service.observe([task]); await tick();
+    task = { ...session('report', 3), status: 'running', completionObserved: false, cmux: completed.cmux };
+    service.observe([task]); resolve(quiz()); await settled(service);
+    assert.equal(service.project(task).comprehension, undefined, 'changed human request cannot receive previous report');
+  });
+
+  test('오케스트레이터의 누락·건너뛴 결과는 명시적으로 다시 생성하되 작업자는 제외한다', async () => {
+    const task = { ...session('manual-report'), cmux: { role: 'orchestrator', active: true } };
+    let calls = 0;
+    const service = new BackgroundQuestionnaire({ file: path.join(temp, 'quiz-manual-report.json'), now: () => 5000,
+      requestDetail: async () => task, runner: { generateQuestionnaire: async () => { calls += 1; return calls === 1 ? '{"kind":"skip"}' : quiz(); } } });
+    service.observe([task]); assert.equal(calls, 0, 'historical work is not billed automatically');
+    assert.equal(service.retry(task.id).ok, true); await settled(service);
+    assert.equal(service.project(task).comprehension.skipReason, 'no-deliverable');
+    assert.equal(service.retry(task.id).ok, true); await settled(service);
+    assert.equal(service.project(task).comprehension.status, 'ready');
+    assert.equal(service.retry(task.id).ok, false, 'ready quiz is not regenerated');
+    service.observe([{ ...task, cmux: { ...task.cmux, role: 'worker' } }]);
+    assert.equal(service.retry(task.id).ok, false);
+    assert.equal(parseResult('```json\n' + quiz() + '\n```').status, 'ready');
+    assert.throws(() => parseResult('Here is your quiz: ' + quiz()));
+  });
+
   test('설명·비교는 퀴즈 대상에서 제외하고 AI 결과는 엄격하게 검증한다', () => {
     for (const text of ['이게 무슨 뜻이야?', '어떤 방식이 더 좋아?', '아직 어떤 방식으로 할지 모르겠어', '1번 2번 무슨차이야?', 'Why does this happen?']) assert(explanationOnly(text), text);
     assert(!explanationOnly('설명하고 코드에 적용해줘'));

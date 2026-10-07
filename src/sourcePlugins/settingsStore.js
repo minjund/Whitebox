@@ -8,7 +8,7 @@ const SOURCE_PLUGIN_SETTINGS_VERSION = 3;
 // Desktop toggles gate sessions the core monitor already reads (clientKind
 // claude-desktop / codex-desktop); they have no monitor plugin of their own.
 const DESKTOP_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.claude-desktop', 'builtin.codex-desktop']);
-const SUPPORTED_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.opencode', 'builtin.aside', ...DESKTOP_SOURCE_PLUGIN_IDS]);
+const SUPPORTED_SOURCE_PLUGIN_IDS = Object.freeze(['builtin.opencode', 'builtin.aside', 'builtin.cmux', ...DESKTOP_SOURCE_PLUGIN_IDS]);
 const DEFAULT_SETTINGS = Object.freeze({
   version: SOURCE_PLUGIN_SETTINGS_VERSION,
   enabledPluginIds: DESKTOP_SOURCE_PLUGIN_IDS,

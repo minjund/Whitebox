@@ -5,6 +5,21 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.26 - 2026-10-07
+
+- Organize sessions and AI terminal groups in nested sidebar folders with exact
+  project, folder, and session filtering and duplicate-session suppression.
+- Add opt-in cmux integration with interactive terminal panels, per-session
+  status, right-click layout controls, and responsive divider dragging.
+- Create and manage native tmux AI groups from the new-task dialog; removing a
+  member also terminates its managed terminal session.
+- Generate group questionnaires from the orchestrator's relevant completed work
+  and keep permission requests from forcibly switching the active terminal.
+- Restore terminal replay at its original grid size to prevent scattered Korean
+  text, and use a readable 15px default with cursors limited to the active pane.
+- Verify updates from the official 1.8.25 installer while retaining all earlier
+  pinned frozen, recent, and legacy compatibility cohorts.
+
 ## 1.8.25 - 2026-10-06
 
 - Preserve Windows updater evidence through brief file locks and fail explicitly if logging cannot complete.

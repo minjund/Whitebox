@@ -1498,6 +1498,8 @@ function launchSpec(options, platform = process.platform, agentProviders = AGENT
         ...providerArgs,
         ...options.args,
         ';',
+        'set-option', '-t', options.managedTmuxSession, 'status', 'off',
+        ';',
         'set-option', '-g', 'window-size', 'largest',
       ];
       if (platform !== 'win32') {

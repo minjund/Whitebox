@@ -568,6 +568,7 @@ function registerTerminalAgentActionTests(context) {
       },
     };
     vm.runInNewContext(runModalSource, modalSandbox, { filename: 'app-run-modal.js' });
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'sidebar-tree.js'), 'utf8'), modalSandbox, { filename: 'sidebar-tree.js' });
     vm.runInNewContext(qualitySource, modalSandbox, { filename: 'app-quality.js' });
 
     const makeElement = (initial = {}) => {

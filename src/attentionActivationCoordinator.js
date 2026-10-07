@@ -1,6 +1,6 @@
 'use strict';
 
-const TERMINAL_STATUSES = new Set(['opened-pty', 'opened-session', 'user-navigated', 'ignored']);
+const TERMINAL_STATUSES = new Set(['opened-pty', 'opened-session', 'user-navigated', 'notified', 'ignored']);
 
 function boundedText(value, limit = 1_000) {
   return String(value == null ? '' : value)
@@ -256,7 +256,7 @@ class AttentionActivationCoordinator {
     // superseded alerts must stay in work status instead of being promoted and
     // stealing the user's terminal. Their underlying session data is not
     // removed; only automatic foreground activation is suppressed.
-    if (['opened-pty', 'opened-session', 'user-navigated'].includes(status)) {
+    if (['opened-pty', 'opened-session', 'user-navigated', 'notified'].includes(status)) {
       for (const candidate of this.entries.values()) {
         if (candidate === entry || !candidate.active || candidate.handled) continue;
         this.cancel(candidate, status === 'user-navigated' ? 'user-navigated' : 'foreground-settled');

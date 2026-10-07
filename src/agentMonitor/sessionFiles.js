@@ -103,12 +103,12 @@ function appendJsonLines(text, rows) {
   }
 }
 
-function readJsonLines(file, maxBytes = MAX_JSONL_BYTES) {
+function readJsonLines(file, maxBytes = MAX_JSONL_BYTES, { fromStart = false } = {}) {
   const stat = safeStat(file);
   if (!stat || !stat.isFile()) return { rows: [], truncated: false, firstTimestamp: null };
   const limit = boundedBytes(maxBytes, MAX_JSONL_BYTES, MAX_JSONL_BYTES);
-  const start = Math.max(0, stat.size - limit);
-  const length = stat.size - start;
+  const start = fromStart ? 0 : Math.max(0, stat.size - limit);
+  const length = Math.min(limit, stat.size - start);
   const fd = fs.openSync(file, 'r');
   let buffer = Buffer.alloc(0);
   let headerLine = '';
@@ -140,7 +140,7 @@ function readJsonLines(file, maxBytes = MAX_JSONL_BYTES) {
     });
     firstTimestamp = firstTimestampedRow ? firstTimestampedRow.timestamp : null;
   }
-  return { rows, truncated: start > 0, firstTimestamp };
+  return { rows, truncated: stat.size > limit, firstTimestamp };
 }
 
 function jsonlReadBudget(size, maxBytes = MAX_JSONL_BYTES) {

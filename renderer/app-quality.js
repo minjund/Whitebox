@@ -63,7 +63,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
     const permissionMode = directClaude && CLAUDE_PERMISSION_MODES.has(value.permissionMode)
       ? value.permissionMode
       : "";
-    return [
+    const options = [
       sourcePluginId,
       provider,
       String(value.cwd || "").trim().slice(0, 2_000),
@@ -72,6 +72,8 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       directClaude ? CLAUDE_WRITE_PERMISSION_MODES.has(permissionMode) : Boolean(value.allowWrites),
       permissionMode,
     ];
+    if (value.groupSelection && value.groupSelection !== 'single') options.push(String(value.groupSelection), String(value.groupName || ''));
+    return options;
   }
 
   function runCreationFingerprint(value = {}) {
@@ -163,6 +165,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.projectOrder = Array.isArray(dashboard.projectOrder)
         ? dashboard.projectOrder.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000)
         : [];
+      state.sidebarTree = window.WhiteboxSidebarTree.normalize(dashboard.sidebarTree);
       state.sidebarExpandedProjects = new Set(
         Array.isArray(dashboard.sidebarExpandedProjects)
           ? dashboard.sidebarExpandedProjects.filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500)
@@ -178,6 +181,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       state.sessionOrder = [];
       state.projectOrder = [];
       state.sidebarExpandedProjects = new Set();
+      state.sidebarTree = window.WhiteboxSidebarTree.normalize();
     }
     const search = $("#searchInput");
     if (search) search.value = state.search;
@@ -220,6 +224,7 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       controlRoomSort: ["recent", "tokens", "context"].includes(state.controlRoomSort) ? state.controlRoomSort : "recent",
       sessionOrder: (state.sessionOrder || []).filter(id => typeof id === "string" && id.length <= 500).slice(0, 1_000),
       projectOrder: (state.projectOrder || []).filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 1_000),
+      sidebarTree: window.WhiteboxSidebarTree.normalize(state.sidebarTree),
       sidebarExpandedProjects: [...(state.sidebarExpandedProjects || [])]
         .filter(id => typeof id === "string" && id.length <= 2_000).slice(0, 500),
     };
@@ -245,6 +250,8 @@ window.WhiteboxAppFactories.createQualityEnhancements = function createQualityEn
       allowWrites: directClaude ? CLAUDE_WRITE_PERMISSION_MODES.has(permissionMode) : Boolean($("#allowWrites")?.checked),
       permissionMode,
       provider,
+      groupSelection: $('#runGroupMode')?.value || 'single',
+      groupName: $('#runGroupMode')?.value === 'new' ? $('#runGroupName')?.value.trim() || '' : '',
     };
     const pendingCreation = normalizedPendingCreation(
       state.runDraft,
