@@ -38,7 +38,7 @@ function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, man
     }));
     return result;
   }
-  for (const operation of ['list', 'create', 'add', 'remove', 'delete', 'rename']) {
+  for (const operation of ['list', 'create', 'add', 'remove', 'delete', 'rename', 'instruct']) {
     ipcMain.handle(`terminal-groups:${operation}`, (event, ...args) => {
       requireTrustedSender(event);
       if (!groups) {

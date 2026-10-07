@@ -7,6 +7,13 @@ GitHub release notes remain the authoritative version history.
 
 ## 1.8.26 - 2026-10-07
 
+- Match managed group terminal fonts, colors, cursors and tab controls to the
+  connected cmux view, with exact input focus labels and split/tab management.
+- Deliver group communication instructions at AI startup and scope peer lookup
+  to exact group/panel identities; discard inherited foreign terminal IDs.
+- Include groups in both sidebar and AI filters and separate background
+  conversation attachments from group workspace capacity.
+
 - Organize sessions and AI terminal groups in nested sidebar folders with exact
   project, folder, and session filtering and duplicate-session suppression.
 - Add opt-in cmux integration with interactive terminal panels, per-session

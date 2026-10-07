@@ -33,14 +33,14 @@ body.terminal-group-active #liveSessionGrid { display: none; }
 @media (max-width: 1000px) { .terminal-group-grid { grid-template-columns: minmax(0, 1fr); } }
 .cmux-overview { display: grid; gap: 12px; margin: 16px 0; }
 .cmux-overview:empty { display: none; }
-.cmux-overview-card { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px 20px; border: 1px solid var(--theme-border); border-radius: 8px; background: var(--theme-surface); }
-.cmux-overview-card > div { display: grid; gap: 7px; min-width: 0; }
-.cmux-overview-card strong { overflow-wrap: anywhere; font-size: 15px; color: var(--theme-text); }
-.cmux-overview-card small, .cmux-mark { color: var(--theme-text-muted); font-size: 12px; }
+:is(.cmux-overview-card, .group-overview-card) { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px 20px; border: 1px solid var(--theme-border); border-radius: 8px; background: var(--theme-surface); }
+:is(.cmux-overview-card, .group-overview-card) > div { display: grid; gap: 7px; min-width: 0; }
+:is(.cmux-overview-card, .group-overview-card) strong { overflow-wrap: anywhere; font-size: 15px; color: var(--theme-text); }
+:is(.cmux-overview-card, .group-overview-card) small, .cmux-mark { color: var(--theme-text-muted); font-size: 12px; }
 .cmux-overview-connection { color: var(--theme-text-muted); }
-.cmux-overview-card button, .cmux-detail button, .cmux-detail select { display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: inherit; font-size: 12px; color: var(--theme-text-secondary); border: 1px solid var(--theme-border); background: var(--theme-surface); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-.cmux-detail :is(button, select):hover, .cmux-overview-card button:hover { background: var(--theme-surface-subtle); color: var(--theme-text); }
-.cmux-detail :is(button, select):focus-visible, .cmux-overview-card button:focus-visible { outline: 2px solid var(--theme-accent-border); outline-offset: 2px; }
+:is(.cmux-overview-card, .group-overview-card) button, .cmux-detail button, .cmux-detail select { display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: inherit; font-size: 12px; color: var(--theme-text-secondary); border: 1px solid var(--theme-border); background: var(--theme-surface); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+.cmux-detail :is(button, select):hover, :is(.cmux-overview-card, .group-overview-card) button:hover { background: var(--theme-surface-subtle); color: var(--theme-text); }
+.cmux-detail :is(button, select):focus-visible, :is(.cmux-overview-card, .group-overview-card) button:focus-visible { outline: 2px solid var(--theme-accent-border); outline-offset: 2px; }
 .cmux-detail button:disabled { opacity: .45; cursor: default; }
 .cmux-detail [hidden] { display: none !important; }
 .cmux-detail svg, .cmux-overview svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -112,7 +112,7 @@ body.cmux-detail-open #mainContent > :not(.cmux-detail) { display: none !importa
 }
 @media (max-width: 600px) {
   body.cmux-detail-open #mainContent { padding: 0 0 72px; }
-  .cmux-overview-card { flex-wrap: wrap; }
+  :is(.cmux-overview-card, .group-overview-card) { flex-wrap: wrap; }
   .cmux-detail-head { padding: 8px; }
   .cmux-workbench-actions { gap: 5px; }
   .cmux-workbench-actions select { flex: 1; width: 0; max-width: none; }
@@ -169,3 +169,50 @@ body.terminal-group-active #mainContent > :not(#terminalGroupPanel) { display: n
 .cmux-pane[data-drop-direction=right]::after { content: '오른쪽에 배치'; left: 50%; }
 .cmux-pane[data-drop-direction=up]::after { content: '위에 배치'; bottom: 50%; }
 .cmux-pane[data-drop-direction=down]::after { content: '아래에 배치'; top: 50%; }
+
+/* Managed AI groups use the same workspace vocabulary as cmux. */
+.terminal-group-panel { position: relative; }
+.terminal-group-panel .terminal-group-grid.is-workspace { display: flex; padding: 0; overflow: hidden; }
+.group-layout-split { display: grid; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.group-layout-split.horizontal { grid-template-columns: minmax(0, var(--split-ratio)) 4px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.group-layout-split.vertical { grid-template-rows: minmax(0, var(--split-ratio)) 4px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); }
+.group-layout-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; position: relative; overflow: hidden; background: var(--theme-surface); }
+.group-layout-pane[hidden] { display: none; }
+.group-layout-pane > .terminal-group-pane { flex: 1; }
+.group-layout-tabs { display: flex; overflow-x: auto; flex: none; background: var(--theme-surface-muted, var(--theme-surface)); border-bottom: 1px solid var(--theme-border); }
+.group-layout-tabs button { border: 0; border-right: 1px solid var(--theme-border); border-radius: 0; padding: 7px 14px; font-size: 11px; white-space: nowrap; cursor: grab; }
+.group-layout-tabs button[aria-selected="true"] { box-shadow: inset 0 -2px var(--theme-accent-action); color: var(--theme-text); background: var(--theme-surface); }
+.group-layout-divider { background: var(--theme-border); touch-action: none; z-index: 2; }
+.horizontal > .group-layout-divider { cursor: col-resize; }
+.vertical > .group-layout-divider { cursor: row-resize; }
+.group-layout-divider:hover, .group-layout-divider:focus { background: var(--theme-accent-action); }
+.group-provider-mark { color: var(--theme-accent-action); font: 600 11px monospace; }
+.group-layout-pane[data-group-drop]::after { content: '탭으로 합치기'; position: absolute; inset: 0; background: color-mix(in srgb, var(--theme-accent-action) 22%, transparent); border: 2px solid var(--theme-accent-action); display: grid; place-items: center; pointer-events: none; z-index: 5; font-size: 13px; }
+.group-layout-pane[data-group-drop="left"]::after { right: 50%; content: '왼쪽 분할'; }
+.group-layout-pane[data-group-drop="right"]::after { left: 50%; content: '오른쪽 분할'; }
+.group-layout-pane[data-group-drop="up"]::after { bottom: 50%; content: '위 분할'; }
+.group-layout-pane[data-group-drop="down"]::after { top: 50%; content: '아래 분할'; }
+.is-expanded .group-layout-split { display: flex; }
+.is-expanded .group-layout-divider { display: none; }
+.is-expanded .group-layout-split:not(:has(.group-layout-pane:not([hidden]))) { display: none; }
+.group-arrange-menu { position: absolute; right: 16px; top: 110px; z-index: 20; display: flex; flex-wrap: wrap; gap: 8px; max-width: min(360px, 90%); padding: 16px; background: var(--theme-surface); border: 1px solid var(--theme-border); border-radius: 8px; box-shadow: 0 8px 32px #0006; }
+.group-arrange-menu b, .group-arrange-menu > div { width: 100%; }
+.group-arrange-menu > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.group-empty { margin: auto; display: flex; flex-direction: column; gap: 16px; color: var(--theme-text-muted); }
+.group-host-inventory { margin-top: 12px; color: var(--theme-text-muted); font-size: 12px; }
+.group-host-inventory ul { padding-left: 18px; }
+.group-host-inventory li { padding: 4px 0; }
+.group-host-inventory li small { display: block; overflow-wrap: anywhere; }
+.terminal-group-head .terminal-group-actions [data-group-picker] { width: 105px; }
+
+/* One 34px tab/control row, matching the connected cmux terminal chrome. */
+.group-layout-pane > .group-layout-tabs { position: absolute; top: 0; left: 0; right: 100px; height: 34px; z-index: 1; align-items: stretch; background: var(--theme-surface); }
+.group-layout-tabs button { min-width: 60px; max-width: 220px; padding: 7px 12px; border-right: 0; text-overflow: ellipsis; overflow: hidden; background: transparent; color: var(--theme-text-muted); }
+.group-layout-tabs button:only-child { flex: 1; max-width: none; text-align: left; box-shadow: none; }
+.group-layout-tabs button[aria-selected=true] { background: transparent; box-shadow: inset 0 -2px var(--theme-accent-border); }
+.group-layout-pane > .terminal-group-pane > header { padding: 0 3px; justify-content: flex-end; gap: 2px; }
+.group-layout-pane > .terminal-group-pane > header :is(.group-provider-mark, [data-group-title], [data-group-session-status]) { display: none; }
+.terminal-group-viewport > .terminal-screen > .ghostty-terminal { padding: 0; border: 0; border-radius: 0; }
+
+.group-layout-tabs button { display: inline-flex; align-items: center; gap: 8px; }
+.group-layout-tabs .cmux-session-status { margin-left: auto; }

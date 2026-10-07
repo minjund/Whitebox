@@ -92,12 +92,12 @@ window.WhiteboxSidebarTree = (() => {
       return [...children].sort(([a], [b]) => a.localeCompare(b)).map(([name, entries], index) => {
         const originalRoot = String(entries[0].sidebarCwd || entries[0].cwd || projectKey).replace(/\\/g, '/').slice(0, projectKey.length);
         const path = `${originalRoot}/${[...parts, name].join('/')}`;
-        const expanded = !collapsed.has(path), id = `${groupPrefix}Path${encodeURIComponent(path)}`;
+        const expanded = Boolean(state.sidebarProjectSearch?.trim()) || !collapsed.has(path), id = `${groupPrefix}Path${encodeURIComponent(path)}`;
         return `<div class="sidebar-tree-folder"><div class="sidebar-tree-folder-row"><button type="button" class="sidebar-tree-folder-toggle" aria-selected="${!state.sidebarFolderFilter?.entryId && state.sidebarFolderFilter?.projectKey === projectKey && state.sidebarFolderFilter?.path === path}" data-path-tree-toggle="${esc(path)}" data-sidebar-project-ref="${esc(projectKey)}" role="treeitem" aria-level="${level}" aria-expanded="${expanded}" aria-controls="${esc(id)}" tabindex="-1"><span class="sidebar-tree-chevron">${expanded ? '⌄' : '›'}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><b>${esc(name)}</b></button></div><div id="${esc(id)}" class="sidebar-tree-children" role="group"${expanded ? '' : ' hidden'}>${renderPaths(entries, level + 1, [...parts, name])}</div></div>`;
       }).join('') + leaves.map(session => `<div class="sidebar-tree-session-row">${renderSession(session, level)}</div>`).join('');
     }
     const renderGroup = (parentId, level) => folders.filter(folder => folder.parentId === parentId).map(folder => {
-      const expanded = tree.expanded.includes(folder.id);
+      const expanded = Boolean(state.sidebarProjectSearch?.trim()) || tree.expanded.includes(folder.id);
       const groupId = `${groupPrefix}Folder${tree.folders.indexOf(folder)}`;
       return `<div class="sidebar-tree-folder" data-tree-folder="${esc(folder.id)}">
         <div class="sidebar-tree-folder-row">

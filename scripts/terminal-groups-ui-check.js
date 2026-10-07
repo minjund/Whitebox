@@ -35,7 +35,7 @@ app.whenReady().then(async () => {
   const manager = new TerminalManager({ storeFile: path.join(directory, 'sessions.json'), managedTmuxRuntime: runtime,
     agentProviders: Object.fromEntries(['claude', 'codex'].map(id => [id, { command: '/bin/sh', args: ['-i'], label: id }])) });
   const host = { list: () => manager.list(), get: (...args) => manager.get(...args), retire: id => manager.retire(id),
-    create: options => manager.create({ ...options, initialCommand: '', tmuxSocket: socket }), write: (...args) => manager.write(...args),
+    create: options => manager.create({ ...options, args: [], initialCommand: '', initialCommandInArgs: false, tmuxSocket: socket }), write: (...args) => manager.write(...args),
     resize: (...args) => manager.resize(...args), reconnect: id => manager.reconnect(id) };
   let win;
   registerTerminalIpc({ ipcMain, requireTrustedSender: event => { assert.equal(event.sender.id, win.webContents.id); },
@@ -77,15 +77,52 @@ app.whenReady().then(async () => {
     }
     assert.equal(await run("document.querySelector('#terminalGroupPanel').parentElement.id"), 'mainContent');
     assert.equal(await run("document.querySelector('[data-group-font-size]').textContent"), '15');
-    assert.equal(await run("nativeGroupTerminals.every(t=>t.options.cursorBlink===false && t.options.fontSize===15)"), true);
+    assert.equal(await run("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>t.options.cursorBlink===false && t.options.fontSize===15 && t.options.fontFamily===WhiteboxTerminalEngine.workspaceOptions().fontFamily)"), true);
     await run("document.querySelector('[data-group-font=\"1\"]').click()");
-    assert.equal(await run("nativeGroupTerminals.every(t=>t.options.fontSize===16)"), true);
+    assert.equal(await run("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>t.options.fontSize===16)"), true);
     await run("document.querySelector('[data-group-font=\"-1\"]').click();document.querySelector('[data-group-columns]').value='1';document.querySelector('[data-group-columns]').dispatchEvent(new Event('change',{bubbles:true}))");
     assert.equal(await run("document.querySelector('.terminal-group-grid').style.getPropertyValue('--group-columns')"), '1');
     await run("document.querySelector('[data-group-columns]').value='2';document.querySelector('[data-group-columns]').dispatchEvent(new Event('change',{bubbles:true}))");
+    assert.equal(await run(`document.querySelector('[data-terminal-group-id="${group.id}"] .project-sidebar-agent').textContent`), 'group');
+    assert.equal(await run(`document.querySelector('[data-terminal-group-id="${group.id}"] .project-sidebar-cmux-count').textContent`), '2');
+    await run("document.querySelector('[data-group-arrange]').click();document.querySelector('[data-arrange-direction=tab]').click()");
+    assert.equal(await run("document.querySelectorAll('.group-layout-pane').length"), 1, 'join as tabs in the same pane');
+    assert.equal(await run("document.querySelectorAll('.terminal-group-pane:not([hidden])').length"), 1);
+    await run("document.querySelector('.group-layout-tabs button').click()");
+    assert.equal(await run("document.querySelector('.group-layout-tabs button').getAttribute('aria-selected')"), 'true');
+    await run("document.querySelector('.terminal-group-pane:not([hidden]) [data-group-arrange]').click();document.querySelector('[data-arrange-direction=down]').click()");
+    assert.equal(await run("document.querySelectorAll('.group-layout-split.vertical').length"), 1, 'split a tab below the peer');
+    await run("document.querySelector('.group-layout-divider').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+    assert.equal(await run("document.querySelector('.group-layout-split').style.getPropertyValue('--split-ratio')"), '55.00000000000001%');
+    assert.equal(manager.list().length, 2, 'layout changes never spawn additional sessions');
+    await run("document.querySelector('[data-group-columns]').value='2';document.querySelector('[data-group-columns]').dispatchEvent(new Event('change',{bubbles:true}))");
+    await run("(()=>{const a=WhiteboxApp;a.state.sidebarProjectSearch='사이드바 팀';a.renderWorkspaces();})()");
+    assert.equal(await run(`Boolean(document.querySelector('#projectSidebarList [data-terminal-group-id="${group.id}"]')?.getClientRects().length)`), true, 'sidebar finds group names and expands their project');
+    await run("(()=>{const a=WhiteboxApp;a.state.sidebarProjectSearch='Cx';a.renderWorkspaces();})()");
+    assert.equal(await run(`Boolean(document.querySelector('#projectSidebarList [data-terminal-group-id="${group.id}"]'))`), true, 'sidebar finds member abbreviations');
+    await run("(()=>{const a=WhiteboxApp;a.state.sidebarProjectSearch='';a.state.search='사이드바 팀';a.state.providerFilters=new Set(['codex']);a.renderSessions();})()");
+    assert.equal(await run("document.querySelectorAll('.group-overview [data-terminal-group-id]').length"), 1, 'group card matches text plus member provider');
+    await run("WhiteboxApp.state.providerFilters=new Set(['gemini']);WhiteboxApp.renderSessions()");
+    assert.equal(await run("document.querySelectorAll('.group-overview [data-terminal-group-id]').length"), 0, 'group card rejects absent provider');
+    await run("WhiteboxApp.state.providerFilters.clear();WhiteboxApp.state.search='no-matching-group';WhiteboxApp.renderSessions()");
+    assert.equal(await run("document.querySelectorAll('.group-overview [data-terminal-group-id]').length"), 0, 'group card rejects unrelated query');
+    await run("WhiteboxApp.state.search='';WhiteboxApp.renderSessions()");
+    const originalOrder = await run("[...document.querySelectorAll('.terminal-group-pane')].map(node=>node.dataset.groupMember)");
+    await run("document.querySelector('[data-group-arrange]').click();document.querySelector('[data-arrange-swap]').click()");
+    assert.deepEqual(await run("[...document.querySelectorAll('.terminal-group-pane')].map(node=>node.dataset.groupMember)"), [...originalOrder].reverse(), 'swap retains both exact running sessions');
+    await run("document.querySelector('[data-group-arrange]').click();document.querySelector('[data-arrange-swap]').click()");
+    await run("document.querySelector('[data-group-arrange]').click();document.querySelector('[data-add-split=tab]').click()");
+    await until("document.querySelectorAll('.terminal-group-pane').length===3 && !document.querySelector('#terminalGroupPanel').hasAttribute('aria-busy')", 'new AI tab created');
+    assert.equal(await run("document.querySelectorAll('.group-layout-pane').length"), 2, 'new tab does not add a split');
+    const thirdId = manager.list().find(item=>!before.some(old=>old.id===item.id)).creationId;
+    await run(`(()=>{const button=[...document.querySelectorAll('[data-group-remove]')].find(node=>node.dataset.groupRemove===${JSON.stringify(thirdId)});button.click()})()`);
+    assert.equal(manager.list().length,3,'first close click requires confirmation');
+    await run(`(()=>{const button=[...document.querySelectorAll('[data-group-remove]')].find(node=>node.dataset.groupRemove===${JSON.stringify(thirdId)});button.click()})()`);
+    await until("document.querySelectorAll('.terminal-group-pane').length===2 && !document.querySelector('#terminalGroupPanel').hasAttribute('aria-busy')", 'confirmed new tab cleanup');
     const nativeTasks = before.map((terminal,i)=>({...quizTask(`native-group-status-${i}`,`자체 AI ${i+1}`),provider:terminal.provider,cwd:directory,status:i?'completed':'running',completionObserved:Boolean(i),comprehension:null,runtimePresence:[{kind:'bridge',terminalId:terminal.id}]}));
     await run(`interactionTest.addSession(${JSON.stringify(nativeTasks[0])});interactionTest.addSession(${JSON.stringify(nativeTasks[1])});interactionTest.emitSnapshot()`);
     await until("[...document.querySelectorAll('[data-group-session-status]')].map(n=>n.dataset.status).join(',')==='running,completed'", 'native group shows each actual AI status');
+    assert.equal(await run("document.querySelectorAll('[data-sidebar-session-id^=native-group-status]').length"), 0, 'group members appear only inside the group');
     await run("document.querySelector('#terminalGroupPanel textarea').focus();window.nativeInput=document.activeElement;interactionTest.updateSession('native-group-status-1',{attention:{category:'required',source:'execution-approval'}});interactionTest.emitSnapshot()");
     await until("[...document.querySelectorAll('[data-group-session-status]')][1].dataset.status==='waiting'", 'native worker approval status');
     assert.equal(await run("document.activeElement===window.nativeInput && !nativeGroupTerminals[1].renderer.cursorVisible"), true, 'status updates retain input and keep other cursors hidden');
@@ -105,7 +142,7 @@ app.whenReady().then(async () => {
     await run("document.querySelector('#terminalGroupPanel').scrollIntoView({block:'start'})");
     await wait(200);
     assert.equal(await run("[...document.querySelectorAll('#terminalGroupPanel .terminal-screen')].every(node=>{const b=node.getBoundingClientRect(),p=node.parentElement.getBoundingClientRect();return b.left>=p.left&&b.right<=p.right&&b.top>=p.top&&b.bottom<=p.bottom})"), true, 'terminals must stay inside their own pane');
-    await until("nativeGroupTerminals.every(t=>Math.abs(t.renderer.getCanvas().getBoundingClientRect().width - t.renderer.getMetrics().width*t.cols)<2 && t.renderer.getCanvas().getBoundingClientRect().width <= t.element.clientWidth+1)", 'native grid retains readable cell widths after layout and font changes');
+    await until("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>Math.abs(t.renderer.getCanvas().getBoundingClientRect().width - t.renderer.getMetrics().width*t.cols)<2 && t.renderer.getCanvas().getBoundingClientRect().width <= t.element.clientWidth+1)", 'native grid retains readable cell widths after layout and font changes');
     fs.writeFileSync(path.join(output, 'groups-dark.png'), (await win.webContents.capturePage()).toPNG());
     await run("window.WhiteboxTheme.setTheme('light')"); await wait(150);
     fs.writeFileSync(path.join(output, 'groups-light.png'), (await win.webContents.capturePage()).toPNG());
@@ -123,12 +160,12 @@ app.whenReady().then(async () => {
     await run(`document.querySelector('[data-terminal-group-id="${group.id}"]').click()`);
     await until("document.querySelectorAll('#terminalGroupPanel .terminal-screen').length===2 && !document.querySelector('#terminalGroupPanel').hasAttribute('aria-busy')", 'restore group');
     assert.equal(manager.list().length, 2, 'reopening group must reuse the same two tmux sessions');
-    await run("document.querySelector('#terminalGroupPanel [data-group-remove]').click()");
+    await run("document.querySelector('#terminalGroupPanel [data-group-remove]').click();document.querySelector('#terminalGroupPanel [data-group-remove]').click()");
     await until("document.querySelectorAll('#terminalGroupPanel .terminal-group-pane').length===1 && !document.querySelector('#terminalGroupPanel').hasAttribute('aria-busy')", 'remove destroys pane');
     assert.equal(manager.get(before[0].id), null);
     assert.equal(runtime.existsStrict({ ...before[0], managedTmuxSession: before[0].managedTmuxSession }), false);
     assert.equal(manager.list().length, 1);
-    await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
+    await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
     await until("document.querySelector('#terminalGroupPanel').classList.contains('hidden')", 'delete hides group');
     assert.equal(manager.list().length, 0);
     assert.deepEqual(await run('whitebox.terminalGroups()'), []);
@@ -136,8 +173,9 @@ app.whenReady().then(async () => {
     await until("document.querySelectorAll('#terminalGroupPanel .terminal-screen').length===1 && document.querySelector('#runModal').classList.contains('hidden')", 'new task creates actual tmux group');
     assert.equal(manager.list().length, 1);
     assert.equal((await run('whitebox.terminalGroups()'))[0].name, '새 작업 그룹');
-    await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
+    await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
     await until("document.querySelector('#terminalGroupPanel').classList.contains('hidden')", 'new task group cleanup');
+    if (process.argv.includes('--managed-only')) { console.log('✓ managed group sidebar, tabs, split, resize, terminal input, persistence and cleanup'); return; }
     await run("window.WhiteboxApp.state.sourcePluginSettings={version:3,enabledPluginIds:['builtin.cmux','builtin.codex-desktop','builtin.claude-desktop']}");
     await run("(()=>{const Base=window.WhiteboxTerminalEngine.Terminal;window.cmuxTestTerminals=[];window.WhiteboxTerminalEngine.Terminal=class extends Base { constructor(options){super(options);this.testResizeCount=0;window.cmuxTestTerminals.push(this);} resize(...args){this.testResizeCount++;return super.resize(...args);} };})()");
     const cmuxGroup = { id: 'cmux-workspace:fixture', title: 'TAW', cwd: directory, cmuxWorkspace: true, provider: 'cmux', status: 'running', members: [
@@ -150,7 +188,7 @@ app.whenReady().then(async () => {
     const emptyGroup = await run(`whitebox.terminalGroupCreate({name:'빈 그룹',cwd:${JSON.stringify(directory)},ownerId:'test-empty'})`);
     await run(`interactionTest.setCmuxInventory({installed:true,error:'',entries:${JSON.stringify(cmuxGroup.members)},groups:[${JSON.stringify(cmuxGroup)}]});window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'))`);
     await until("document.querySelectorAll('[data-cmux-workspace]').length===1", 'one cmux workspace entry');
-    assert.equal(await run(`Boolean(document.querySelector('[data-terminal-group-id="${emptyGroup.id}"]'))`), false, 'empty managed groups do not clutter the sidebar');
+    assert.equal(await run(`Boolean(document.querySelector('[data-terminal-group-id="${emptyGroup.id}"]'))`), true, 'empty managed groups remain accessible for adding or retrying a session');
     assert.equal(await run(`document.querySelector('[data-workspace="${directory}"]').dataset.liveSessionCount`), '1', 'one cmux group counts once rather than once per represented conversation');
     assert.equal(await run(`Boolean(document.querySelector('[data-sidebar-session-id="${represented}"]'))`), false, 'cmux conversation must not also appear as a standalone session, even without runtime PID');
     assert.equal(await run("[...document.querySelectorAll('[data-path-tree-toggle]')].some(node=>node.dataset.pathTreeToggle.endsWith('/taw-poc'))"), false, 'cmux worktrees must not become separate folders');

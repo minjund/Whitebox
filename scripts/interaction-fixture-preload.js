@@ -1086,6 +1086,7 @@ if (process.argv.includes('--whitebox-terminal-groups-live')) {
     terminalGroupAdd: (id, options) => ipcRenderer.invoke('terminal-groups:add', id, options),
     terminalGroupRemove: (id, creationId) => ipcRenderer.invoke('terminal-groups:remove', id, creationId),
     terminalGroupDelete: id => ipcRenderer.invoke('terminal-groups:delete', id),
+    terminalGroupInstruct: (id, creationId) => ipcRenderer.invoke('terminal-groups:instruct', id, creationId),
     terminalGroupRename: (id, name) => ipcRenderer.invoke('terminal-groups:rename', id, name),
     terminalList: () => ipcRenderer.invoke('terminals:list'),
     terminalGet: id => ipcRenderer.invoke('terminals:get', id),

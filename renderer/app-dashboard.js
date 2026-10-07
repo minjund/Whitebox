@@ -570,10 +570,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         .flatMap(entry => entry.members.flatMap(member => member.sessionIds || [])));
       const inCmux = session => session.environment?.kind !== 'wsl' && (Boolean(session.cmux) || cmuxSessionIds.has(session.id)
         || (session.runtimePresence || []).some(runtime => runtime.kind !== 'wsl' && cmuxProcessIds.has(Number(runtime.pid))));
-      const live = observedLive.filter(session => !inCmux(session));
+      const live = observedLive.filter(session => !inCmux(session) && !window.WhiteboxTerminalGroups?.containsSession(session));
       const sessions = latestSessionSort(sidebarRootSessions.filter(session => rootMatches(session)
-        && (liveIds.has(String(session.id)) || placedIds.has(session.id)) && !inCmux(session)));
-      const notices = noticeModel.signalsForProject(item.path, sourceId).filter(signal => !inCmux(signal.root));
+        && (liveIds.has(String(session.id)) || placedIds.has(session.id)) && !inCmux(session) && !window.WhiteboxTerminalGroups?.containsSession(session)));
+      const notices = noticeModel.signalsForProject(item.path, sourceId).filter(signal => !inCmux(signal.root) && !window.WhiteboxTerminalGroups?.containsSession(signal.root));
       const attention = notices.filter(signal => signal.attention.length).map(signal => signal.root);
       const resultReady = notices.filter(signal => signal.result.length).map(signal => signal.root);
       return {
@@ -644,6 +644,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     });
     // Include independent live terminal/group records without importing history.
     for (const session of state.sidebarTerminalEntries || []) {
+      if (session.terminalGroupId && !window.WhiteboxTerminalGroups?.matchesProvider(session)) continue;
       const project = controlRoomProject(session);
       const key = sidebarProjectKey(project.path);
       let node = sidebarProjectNodes.get(key);
@@ -652,7 +653,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         sidebarProjectNodes.set(key, node);
       }
       node.sources.push({ sessions: [session], sourceId: 'direct' });
-      node.live.push(session);
+      if (!session.terminalGroupId || session.members.length) node.live.push(session);
     }
     sidebarProjectNodes.forEach((project) => {
       project.sources.sort((left, right) => Number(sidebarSourceOrder.get(left.sourceId) ?? Number.MAX_SAFE_INTEGER)
@@ -679,7 +680,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const canReorderSidebarProjects = defaultSidebarProjects.length > 1;
     const sidebarSearch = String(state.sidebarProjectSearch || "").trim().toLocaleLowerCase(uiLocale());
     const filteredSidebarProjects = sortedSidebarProjects.filter(item => !sidebarSearch
-      || [item.name, item.path, item.key].some(value => String(value || "").toLocaleLowerCase(uiLocale()).includes(sidebarSearch)));
+      || [item.name, item.path, item.key].some(value => String(value || "").toLocaleLowerCase(uiLocale()).includes(sidebarSearch))
+      || item.sources.some(source => source.sessions.some(session => session.terminalGroupId && window.WhiteboxTerminalGroups?.matchesQuery(session, sidebarSearch))));
     const selectedSidebarProjectKey = sidebarProjectKey(state.workspace);
     const sidebarTabStopProjectKey = filteredSidebarProjects.find(item => item.key === selectedSidebarProjectKey)?.key
       || filteredSidebarProjects[0]?.key || "";
@@ -687,7 +689,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       if (session.terminalGroupId || session.cmuxWorkspace) {
         const action = session.terminalGroupId ? `data-terminal-group-id="${esc(session.terminalGroupId)}"` : `data-cmux-workspace="${esc(session.id)}"`;
         if (session.cmuxWorkspace) return `<button type="button" class="project-sidebar-session project-sidebar-cmux live ${state.cmuxSidebarSelectedId === session.id ? 'selected' : ''}" ${action} role="treeitem" aria-level="${level}" aria-selected="${state.cmuxSidebarSelectedId === session.id}" aria-label="${esc(session.title)} · cmux 그룹 · ${session.members.length} 터미널" tabindex="-1" title="${esc(session.cwd)}"><i></i><span class="project-sidebar-agent">cmux</span><b>${esc(session.title)}</b><small class="project-sidebar-cmux-count" title="연결된 터미널">${session.members.length}</small></button>`;
-        return `<button type="button" class="project-sidebar-session live" ${action} role="treeitem" aria-level="${level}" tabindex="-1" title="${esc(session.cwd)}"><i></i><span class="project-sidebar-agent">${session.terminalGroupId ? '⛓' : 'Cm'}</span><b>${esc(session.title)}${session.cmuxWorkspace ? ` · ${session.members.length} 터미널` : ''}</b></button>`;
+        return `<button type="button" class="project-sidebar-session project-sidebar-cmux live" ${action} role="treeitem" aria-level="${level}" aria-selected="${state.sidebarFolderFilter?.entryId === session.id}" tabindex="-1" title="${esc(session.cwd)}"><i></i><span class="project-sidebar-agent">group</span><b>${esc(session.title)}</b><small class="project-sidebar-cmux-count" title="세션 수">${session.members.length}</small></button>`;
       }
       const live = isControlRoomSession(session);
       const attention = Boolean(context.needsManagementInbox?.(session));
@@ -718,9 +720,14 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     };
     const sidebarProjectItem = (item, projectIndex) => {
       const projectSelected = state.workspace !== "all" && sidebarProjectKey(state.workspace) === item.key;
-      const sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({ ...session, sidebarCwd: sessionOriginPath(session) }));
+      let sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({ ...session, sidebarCwd: sessionOriginPath(session) }));
+      if (sidebarSearch && ![item.name, item.path, item.key].some(value => String(value || '').toLowerCase().includes(sidebarSearch))) {
+        sessions = sessions.filter(session => session.terminalGroupId
+          ? window.WhiteboxTerminalGroups?.matchesQuery(session, sidebarSearch)
+          : [session.title, session.provider, session.cwd].join(' ').toLowerCase().includes(sidebarSearch));
+      }
       const hasTasks = sessions.length > 0 || (state.sidebarTree?.folders || []).some(folder => folder.projectKey === item.key);
-      const projectExpanded = hasTasks && state.sidebarExpandedProjects.has(item.key);
+      const projectExpanded = hasTasks && (state.sidebarExpandedProjects.has(item.key) || Boolean(sidebarSearch));
       const sessionsId = `projectSidebarSessions${projectIndex}`;
       const canReorder = item.key !== PROJECTLESS_WORKSPACE && canReorderSidebarProjects;
       const canRemove = item.saved && item.key !== PROJECTLESS_WORKSPACE;
@@ -1359,7 +1366,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       : window.WhiteboxI18n.t("ui.all_ai");
     $("#providerFilterStatus").textContent = window.WhiteboxI18n.t("filter.result_summary", {
       providers: labels,
-      count: filteredSessions().length,
+      count: state.view === 'all'
+        ? filteredSessions().filter(session => !window.WhiteboxTerminalGroups?.containsSession(session)).length + (window.WhiteboxTerminalGroups?.groupsForWorkspace().length || 0)
+        : filteredSessions().length,
     });
   }
 
@@ -1485,7 +1494,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         current = parent;
       }
     }
-    sessions = [...contextual.values()].filter(session => !window.WhiteboxCmux?.containsSession(session));
+    sessions = [...contextual.values()].filter(session => !window.WhiteboxCmux?.containsSession(session) && !window.WhiteboxTerminalGroups?.containsSession(session));
     if (state.controlRoomSort === "tokens") return [...sessions].sort((a, b) => Number((b.usage && b.usage.total) || 0) - Number((a.usage && a.usage.total) || 0));
     if (state.controlRoomSort === "context") return [...sessions].sort((a, b) => Number((b.context && b.context.percent) || 0) - Number((a.context && a.context.percent) || 0));
     return [...sessions].sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));

@@ -8,7 +8,8 @@ const { randomUUID } = require('crypto');
 function run(directory, senderId, operation, args = []) {
   const roster = JSON.parse(fs.readFileSync(path.join(directory, 'members.json'), 'utf8'));
   if (!roster.members.some(member => member.id === senderId)) throw new Error('This AI is no longer a member of the group.');
-  if (operation === 'members') return roster;
+  if (operation === 'self') return { groupId: roster.groupId, name: roster.name, ...roster.members.find(member => member.id === senderId) };
+  if (operation === 'members') return { ...roster, selfId: senderId };
   if (operation === 'send') {
     const [recipientId, ...words] = args;
     if (!roster.members.some(member => member.id === recipientId)) throw new Error('Recipient is not a member of this group.');
@@ -33,7 +34,7 @@ function run(directory, senderId, operation, args = []) {
     }
     return messages;
   }
-  throw new Error('Use members, send <recipientId> <message>, or inbox.');
+  throw new Error('Use self, members, send <recipientId> <message>, or inbox.');
 }
 if (require.main === module) {
   try {

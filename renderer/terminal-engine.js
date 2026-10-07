@@ -331,5 +331,12 @@
   class FitAddon {
     constructor() { return new ghosttyWeb.FitAddon(); }
   }
-  window.WhiteboxTerminalEngine = { ready, Terminal, FitAddon, name: 'ghostty', get initialized() { return Boolean(ghostty); } };
+  function workspaceTheme() {
+    const css = getComputedStyle(document.documentElement);
+    return { background: css.getPropertyValue('--terminal-bg').trim(), foreground: css.getPropertyValue('--terminal-fg').trim(), cursor: css.getPropertyValue('--terminal-fg').trim() };
+  }
+  function workspaceOptions(fontSize = 15) {
+    return { fontSize, fontFamily: 'Menlo, monospace', cursorBlink: false, cursorStyle: 'bar', screenReaderMode: true, theme: workspaceTheme() };
+  }
+  window.WhiteboxTerminalEngine = { ready, Terminal, FitAddon, workspaceOptions, workspaceTheme, name: 'ghostty', get initialized() { return Boolean(ghostty); } };
 })();

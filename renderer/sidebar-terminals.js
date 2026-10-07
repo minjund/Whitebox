@@ -130,7 +130,8 @@
       try {
         const [managed, cmux] = await Promise.all([api.terminalGroups(), api.cmuxList?.() || { entries: [] }]);
         if (epoch !== inventoryEpoch || busy || resizing) return;
-        await applyInventory(cmux, managed.filter(group => group.members.length > 0).map(group => ({ id: `group:${group.id}`, title: `${group.name} · ${group.members.length} AI`, cwd: group.cwd, terminalGroupId: group.id, status: 'running', provider: 'group' })));
+        window.WhiteboxTerminalGroups?.updateInventory(managed);
+        await applyInventory(cmux, managed.map(group => ({ id: `group:${group.id}`, title: group.name, members: group.members, cwd: group.cwd, terminalGroupId: group.id, status: group.members.length ? 'running' : 'idle', provider: 'group' })));
       } catch (error) { notice.hidden = false; notice.textContent = error.message; }
       finally { refreshing = null; if (epoch !== inventoryEpoch && !busy && !resizing) void refresh(); }
     })();
@@ -197,8 +198,7 @@
     }
   }
   function terminalTheme() {
-    const css = getComputedStyle(document.documentElement);
-    return { background: css.getPropertyValue('--terminal-bg').trim(), foreground: css.getPropertyValue('--terminal-fg').trim(), cursor: css.getPropertyValue('--terminal-fg').trim() };
+    return window.WhiteboxTerminalEngine.workspaceTheme();
   }
   window.addEventListener('whitebox:theme-changed', () => { for (const view of views.values()) view.terminal.options.theme = terminalTheme(); });
   function memberPane(member, entry) {
@@ -207,7 +207,7 @@
       const node = document.createElement('section'); node.className = 'cmux-terminal'; node.dataset.cmuxMember = member.id;
       node.innerHTML = '<div class="cmux-terminal-viewport terminal-screen"></div>';
       const host = node.firstElementChild, engine = window.WhiteboxTerminalEngine;
-      const terminal = new engine.Terminal({ fontSize: terminalFontSize, fontFamily: 'Menlo, monospace', scrollback: 0, cursorBlink: false, cursorStyle: 'bar', screenReaderMode: true, theme: terminalTheme() });
+      const terminal = new engine.Terminal({ ...engine.workspaceOptions(terminalFontSize), scrollback: 0 });
       // Scroll the readable native grid instead of the replay emulator's empty history.
       host.addEventListener('wheel', event => event.stopPropagation(), { capture: true, passive: true });
       const fit = new engine.FitAddon(); terminal.loadAddon(fit); terminal.open(host);

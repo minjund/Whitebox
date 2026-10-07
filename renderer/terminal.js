@@ -328,7 +328,7 @@
 
   function syncXtermTheme() {
     for (const entry of [...state.terminals.values(), state.remoteTerminal].filter(Boolean)) {
-      entry.terminal.options.theme = xtermTheme();
+      entry.terminal.options.theme = entry.host.dataset.groupTerminal ? window.WhiteboxTerminalEngine.workspaceTheme() : xtermTheme();
     }
   }
 
@@ -963,14 +963,15 @@
       const entry = await ensureSessionTerminal(session);
       if (!mount.isConnected) return () => {};
       entry.host.dataset.groupTerminal = 'true';
-      const previous = { cursorBlink: entry.terminal.options.cursorBlink, cursorStyle: entry.terminal.options.cursorStyle, fontSize: entry.terminal.options.fontSize };
-      entry.terminal.options.cursorBlink = false;
-      entry.terminal.options.cursorStyle = 'bar';
-      entry.terminal.options.fontSize = options.fontSize || 15;
+      const workspaceOptions = window.WhiteboxTerminalEngine.workspaceOptions(options.fontSize || 15);
+      const previous = Object.fromEntries(Object.keys(workspaceOptions).map(key => [key, entry.terminal.options[key]]));
+      Object.assign(entry.terminal.options, workspaceOptions);
+      entry.terminal.textarea.setAttribute('aria-label', options.inputLabel || `${session.title} 터미널 입력`);
       const syncCursor = () => {
         if (entry.terminal.disposed || !entry.terminal.renderer) return;
         const focused = document.hasFocus() && document.activeElement === entry.terminal.textarea;
         mount.closest('[data-group-member]')?.classList.toggle('is-input-active', focused);
+        options.onInputFocus?.(focused);
         if (entry.terminal.renderer.cursorVisible !== focused) {
           entry.terminal.renderer.cursorVisible = focused;
           entry.terminal.refresh();

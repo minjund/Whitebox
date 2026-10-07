@@ -94,7 +94,7 @@ class TerminalGroups {
       if (!options.terminalId && (!['claude', 'codex', 'gemini', 'grok'].includes(provider) || !this.isProviderVisible(provider))) {
         throw new Error('실행할 수 없는 AI입니다.');
       }
-      if (group.members.length >= 8) throw new Error('한 그룹에는 AI를 8개까지 추가할 수 있습니다.');
+      if (group.members.length >= 32) throw new Error('한 그룹에는 AI를 32개까지 추가할 수 있습니다.');
       let terminal;
       const creationId = String(options.creationId || randomUUID());
       if (!/^[A-Za-z0-9:._-]{1,200}$/.test(creationId)) throw new Error('유효하지 않은 작업 ID입니다.');
@@ -109,27 +109,44 @@ class TerminalGroups {
         member.terminalId = terminal.id;
         member.provider = terminal.provider;
       }
+      if (this.groups.some(item => item.members.some(value => value.creationId === member.creationId))) throw new Error('이미 다른 그룹에 참여한 AI입니다.');
+      if (group.members.some(value => this.mailbox.memberId(value) === this.mailbox.memberId(member))) throw new Error('중복된 그룹 메시지 ID입니다. 새 작업 ID로 다시 추가하세요.');
       // Persist the creation identity first: even a crash after spawn can be
       // recovered by matching the host's durable creationId on the next load.
       group.members.push(member);
       try { this.save(); } catch (error) { group.members.pop(); throw error; }
       try {
         this.mailbox.sync(group);
+        const instructions = this.mailbox.instructions(group, member);
+        const prompt = [instructions, String(options.prompt || '').trim()].filter(Boolean).join('\n\n');
+        const args = [];
+        const model = String(options.model || '').trim();
+        if (model) args.push('--model', model);
+        if (provider === 'claude') {
+          const mode = String(options.permissionMode || (options.allowWrites ? 'acceptEdits' : 'default'));
+          if (!['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].includes(mode)) throw new Error('유효하지 않은 권한 모드입니다.');
+          args.push('--permission-mode', mode, '--append-system-prompt', instructions.replace(/\s+/gu, ' '));
+        } else if (provider === 'codex') {
+          args.push('--sandbox', options.allowWrites ? 'workspace-write' : 'read-only', '-c', `developer_instructions=${JSON.stringify(instructions)}`);
+        } else if (provider === 'gemini' && options.allowWrites) args.push('--yolo');
+        else if (provider === 'grok') args.push('--no-auto-update', ...(options.allowWrites ? ['--always-approve'] : []));
+        const promptInArgs = provider !== 'grok';
+        if (promptInArgs) args.push(...(provider === 'gemini' ? ['--prompt-interactive'] : []), prompt);
         if (!terminal) terminal = await host.create({
           type: 'agent', provider, cwd: group.cwd, distro: group.distro,
           sessionBackend: 'managed-tmux', creationId: member.creationId,
           title: `${group.name} · ${provider}`, cols: 100, rows: 30,
-          model: String(options.model || ''), allowWrites: options.allowWrites === true,
-          permissionMode: String(options.permissionMode || ''),
-          initialCommand: [this.mailbox.instructions(group, member), String(options.prompt || '')].filter(Boolean).join('\n\n'),
+          args, initialCommand: prompt, initialCommandInArgs: promptInArgs,
         });
-        else if (typeof host.command === 'function') await host.command(terminal.id, this.mailbox.instructions(group, member));
+        else if (typeof host.command === 'function') await host.command(terminal.id, instructions, { deliveryId: `group-join:${group.id}:${member.creationId}` });
+        if (!options.terminalId && !promptInArgs) await host.command(terminal.id, prompt, { deliveryId: `group-start:${group.id}:${member.creationId}` });
         if (terminal.backend !== 'managed-tmux') {
           await host.retire(terminal.id);
           throw new Error('tmux를 사용할 수 없습니다. tmux를 설치한 뒤 다시 추가하세요.');
         }
         member.terminalId = terminal.id;
         this.save();
+        this.mailbox.sync(group);
         return { ...member, terminal };
       } catch (error) {
         // A lost create acknowledgement may still have spawned a live session.
@@ -141,6 +158,18 @@ class TerminalGroups {
         this.mailbox.sync(group);
         throw error;
       }
+    });
+  }
+
+  instruct(id, creationId) {
+    return this.mutate(async () => {
+      const group = this.required(id);
+      const member = group.members.find(value => value.creationId === creationId);
+      if (!member) throw new Error('그룹 참여 AI를 찾을 수 없습니다.');
+      const terminal = (await this.terminals()).find(value => value.creationId === creationId && value.id === member.terminalId);
+      if (!terminal || terminal.backend !== 'managed-tmux') throw new Error('그룹 터미널 연결을 확인하지 못했습니다.');
+      this.mailbox.sync(group);
+      return this.host().command(terminal.id, this.mailbox.instructions(group, member), { deliveryId: `group-context-v2:${group.id}:${member.creationId}` });
     });
   }
 

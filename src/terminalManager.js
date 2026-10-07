@@ -23,7 +23,11 @@ const {
   restrictPathPermissions,
 } = require('./dataRetention');
 
-const MAX_SESSIONS = 24;
+// Provider conversation attachments and user workspaces share a host, but are
+// separate resources. Historical PTY attachments must not exhaust a group's
+// session budget. Retain a host-wide backstop for memory/process usage.
+const MAX_SESSIONS = 96;
+const MAX_WORKSPACE_SESSIONS = 32;
 const MAX_INPUT_CHARS = 128 * 1024;
 const MAX_AGENT_ARGUMENT_CHARS = 8 * 1024;
 const MAX_AGENT_SESSION_ID_CHARS = 200;
@@ -860,6 +864,8 @@ function numericDimension(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Number.isFinite(number) ? number : fallback));
 }
 
+// A new Whitebox PTY never owns the launching app's terminal/surface identity.
+const FOREIGN_TERMINAL_ENV = Object.freeze(['TMUX', 'TMUX_PANE', 'CMUX_WORKSPACE_ID', 'CMUX_SURFACE_ID', 'CMUX_WINDOW_ID', 'CMUX_TAB_ID', 'CMUX_PANEL_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']);
 function terminalEnvironment(extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries({ ...process.env, ...extra })) {
@@ -867,6 +873,7 @@ function terminalEnvironment(extra = {}) {
   }
   env.TERM = !env.TERM || String(env.TERM).toLowerCase() === 'dumb' ? 'xterm-256color' : env.TERM;
   env.COLORTERM = env.COLORTERM || 'truecolor';
+  for (const key of FOREIGN_TERMINAL_ENV) delete env[key];
   return env;
 }
 
@@ -1453,7 +1460,7 @@ function normalizeCreateLaunchOptions(rawOptions = {}, platform = process.platfo
   const requestedPrompt = String(rawOptions.initialCommand || '').trim();
   const separateStartupPrompt = rawOptions.initialCommandInArgs === true
     && rawOptions.type === 'agent'
-    && rawOptions.sessionBackend === 'direct'
+    && ['direct', 'managed-tmux'].includes(rawOptions.sessionBackend)
     && !rawOptions.bridgeId && !rawOptions.agentForkSourceSessionId
     && !agentResumeSessionId(rawOptions)
     && ['claude', 'codex', 'gemini'].includes(rawOptions.provider)
@@ -1494,7 +1501,9 @@ function launchSpec(options, platform = process.platform, agentProviders = AGENT
         'new-session', '-A',
         '-s', options.managedTmuxSession,
         '-c', options.cwd,
-        provider.command,
+        // A reused tmux server can still hold the original launch environment.
+        // Clear routing identities inside the new pane as well as the PTY.
+        'env', ...FOREIGN_TERMINAL_ENV.filter(key => key !== 'TMUX' && key !== 'TMUX_PANE').flatMap(key => ['-u', key]), provider.command,
         ...providerArgs,
         ...options.args,
         ';',
@@ -3285,7 +3294,17 @@ class TerminalManager extends EventEmitter {
     assertCodexWriterAvailable(launchOptions, { platform: this.platform });
     this.deduplicateAgentBridgeSessions();
     this.reclaimFinishedSessions(1);
-    if (this.sessions.size >= MAX_SESSIONS) throw new Error(`동시에 열 수 있는 명령창은 최대 ${MAX_SESSIONS}개입니다.`);
+    const isGroup = normalizedCreationId(rawOptions.creationId).startsWith('group:');
+    const workspaceSessions = [...this.sessions.values()].filter(session =>
+      normalizedCreationId(session.creationId).startsWith('group:') === isGroup
+      && (!session.options.bridgeId || Boolean(session.creationId))
+      && !['exited', 'stopped', 'failed'].includes(session.status));
+    if (workspaceSessions.length >= MAX_WORKSPACE_SESSIONS) {
+      throw new Error(`${isGroup ? 'AI 그룹' : '독립 작업'} 세션이 ${workspaceSessions.length}개 실행 중입니다. 해당 작업의 세션 관리에서 종료 후 다시 추가하세요. (최대 ${MAX_WORKSPACE_SESSIONS}개)`);
+    }
+    if (this.sessions.size >= MAX_SESSIONS) {
+      throw new Error(`전체 터미널 연결이 ${this.sessions.size}개입니다. 이전 대화 연결과 그룹 세션을 포함한 호스트 한도(${MAX_SESSIONS}개)에 도달했습니다.`);
+    }
     const id = `terminal:${Date.now().toString(36)}:${crypto.randomBytes(4).toString('hex')}`;
     if (launchOptions.sessionBackend === 'managed-tmux' && !launchOptions.managedTmuxSession) {
       launchOptions.managedTmuxSession = safeTmuxName(`lta-${launchOptions.provider}-${id.split(':').slice(1).join('-')}`);
@@ -4826,6 +4845,7 @@ class TerminalManager extends EventEmitter {
 
 module.exports = {
   TerminalManager,
+  terminalEnvironment,
   normalizeLaunchOptions,
   normalizeCreateLaunchOptions,
   launchSpec,

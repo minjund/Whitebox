@@ -373,7 +373,7 @@ window.WhiteboxAppFactories.createRunModal = function createRunModal(context = {
         const updateGroups = () => {
           const previous = groupMode.value;
           groupMode.innerHTML = '<option value="single">독립 세션으로 시작</option><option value="new">새 AI 그룹 만들기</option>';
-          for (const group of groups.filter(item => item.members.length > 0 && item.cwd === (workingFolder?.value || projectPath))) {
+          for (const group of groups.filter(item => item.cwd === (workingFolder?.value || projectPath))) {
             const option = document.createElement('option'); option.value = group.id; option.textContent = `${group.name}에 참여`; groupMode.append(option);
           }
           if ([...groupMode.options].some(option => option.value === previous)) groupMode.value = previous;

@@ -11,15 +11,18 @@ const { execFileSync } = require('child_process');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-groups-unit-'));
   const sessions = new Map();
   const stopped = [];
+  const commands = [];
   let blocked = false;
+  let nextTerminalId = 0;
   const manager = {
     list: () => [...sessions.values()],
     get: id => sessions.get(id) || null,
     create: options => {
-      const session = { ...options, id: `terminal:${sessions.size + 1}`, backend: 'managed-tmux', status: 'running' };
+      const session = { ...options, id: `terminal:${++nextTerminalId}`, backend: 'managed-tmux', status: 'running' };
       sessions.set(session.id, session);
       return session;
     },
+    command: async (id, text, options) => { commands.push({id, text, options}); return {ok:true}; },
     retire: async id => {
       if (blocked) throw new Error('termination not acknowledged');
       stopped.push(id); sessions.delete(id); return { ok: true };
@@ -39,6 +42,10 @@ const { execFileSync } = require('child_process');
     assert.equal(communicate(firstId, 'send', secondId, '검증 결과를 공유합니다.').ok, true);
     assert.equal(communicate(secondId, 'inbox')[0].text, '검증 결과를 공유합니다.');
     assert.deepEqual(communicate(secondId, 'inbox'), [], 'read messages must not be delivered again');
+    await groups.instruct(group.id, codex.creationId);
+    assert.equal(commands.at(-1).id, codex.terminalId);
+    assert.ok(commands.at(-1).text.includes(codex.creationId));
+    assert.ok(!commands.at(-1).text.includes('unrelated-surface'));
     blocked = true;
     await assert.rejects(groups.remove(group.id, claude.creationId), /not acknowledged/);
     assert.equal((await groups.list())[0].members.length, 2, 'failed shutdown must remain visible');
@@ -47,6 +54,18 @@ const { execFileSync } = require('child_process');
     assert.equal(sessions.has(claude.terminalId), false);
     assert.equal((await groups.list())[0].members.length, 1);
     assert.throws(() => communicate(firstId, 'members'), /no longer a member/);
+    const isolated = await groups.create({ cwd: directory, name: '개발 팀' });
+    const foreign = await groups.add(isolated.id, { provider: 'codex' });
+    assert.equal(communicate(secondId, 'self').groupId, group.id);
+    assert.equal(communicate(secondId, 'self').panelId, codex.creationId);
+    assert.equal(communicate(secondId, 'members').selfId, secondId);
+    assert.throws(() => communicate(secondId, 'send', groups.mailbox.memberId(foreign), 'wrong panel'), /not a member/);
+    assert.equal(fs.existsSync(path.join(`${storeFile}.mailboxes`, isolated.id, groups.mailbox.memberId(foreign))), false, 'same-folder/same-provider recipient in another group gets no message');
+    assert.ok(codex.terminal.args.some(arg => arg.includes(codex.creationId) && arg.includes(group.id)), 'provider startup arguments carry exact group and own panel');
+    const count = commands.length;
+    await assert.rejects(groups.instruct(group.id, foreign.creationId), /찾을 수 없습니다/);
+    assert.equal(commands.length, count, 'refresh refuses a panel from a different group');
+    await groups.delete(isolated.id);
     const restored = new TerminalGroups({ manager: () => manager, storeFile });
     assert.equal((await restored.list())[0].members[0].terminalId, codex.terminalId);
     await assert.rejects(groups.add(group.id, { terminalId: codex.terminalId }), /이미 그룹/);
