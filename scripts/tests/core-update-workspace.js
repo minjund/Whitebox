@@ -1980,6 +1980,36 @@ function registerCliAndUpdateTests(context) {
     );
     assert.match(helperSource, /versionMismatch=true/);
     if (process.platform === 'win32') {
+      const logWriter = helperSource.slice(helperSource.indexOf('function Write-UpdateLog('), helperSource.indexOf('function Add-LaunchCandidate('));
+      const contentionScript = [
+        "$ErrorActionPreference = 'Stop'",
+        logWriter,
+        '$LogPath = $env:WHITEBOX_LOG_TEST_PATH',
+        '$signal = $LogPath + ".locked"',
+        '$locker = Start-Job -ArgumentList $LogPath,$signal -ScriptBlock {',
+        '  param($file,$signal)',
+        '  $handle = [IO.File]::Open($file,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,[IO.FileShare]::None)',
+        '  try { [IO.File]::WriteAllText($signal,"locked"); Start-Sleep -Milliseconds 1000 } finally { $handle.Dispose() }',
+        '}',
+        'try {',
+        '  $deadline = [DateTime]::UtcNow.AddSeconds(15)',
+        '  while (-not (Test-Path -LiteralPath $signal)) { if ([DateTime]::UtcNow -ge $deadline) { throw "Lock holder never became ready" }; Start-Sleep -Milliseconds 20 }',
+        '  Write-UpdateLog "relaunchStarted=true;attempt=1;pid=123"',
+        '  if (-not (Wait-Job $locker -Timeout 10)) { throw "Lock holder did not exit" }',
+        '  Receive-Job $locker -ErrorAction Stop | Out-Null',
+        '  $handle = [IO.File]::Open($LogPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)',
+        '  try {',
+        '    $failed = $false',
+        '    try { Write-UpdateLog "must-not-appear" } catch [IO.IOException] { $failed = $true }',
+        '    if (-not $failed) { throw "Permanent log lock was silently accepted" }',
+        '  } finally { $handle.Dispose() }',
+        '  $expected = "relaunchStarted=true;attempt=1;pid=123" + [Environment]::NewLine',
+        '  if ([IO.File]::ReadAllText($LogPath) -cne $expected) { throw "Lost or duplicated helper evidence" }',
+        '} finally { Stop-Job $locker -ErrorAction SilentlyContinue; Remove-Job $locker -Force -ErrorAction SilentlyContinue }',
+      ].join('\n');
+      execFileSync(path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', contentionScript,
+      ], { windowsHide: true, timeout: 40000, env: { ...process.env, WHITEBOX_LOG_TEST_PATH: path.join(temp, 'helper-log-contention.log') } });
       const parserScript = [
         '$helperErrors = $null',
         '$bootstrapErrors = $null',

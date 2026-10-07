@@ -31,7 +31,26 @@ $exitCode = -1
 $launchPath = ''
 
 function Write-UpdateLog([string]$Message) {
-  try { $Message | Add-Content -LiteralPath $LogPath -Encoding UTF8 } catch {}
+  $stream = $null
+  for ($logAttempt = 0; $logAttempt -lt 40; $logAttempt++) {
+    try {
+      $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+      break
+    } catch [IO.IOException] {
+      $ioError = $_.Exception
+      while ($null -ne $ioError.InnerException) { $ioError = $ioError.InnerException }
+      $nativeError = $ioError.HResult -band 65535
+      if ($nativeError -notin @(32, 33) -or $logAttempt -eq 39) { throw }
+      Start-Sleep -Milliseconds 50
+    }
+  }
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+  } finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+  }
 }
 
 function Add-LaunchCandidate([System.Collections.Generic.List[string]]$Candidates, [string]$Candidate) {
