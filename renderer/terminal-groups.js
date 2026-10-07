@@ -244,7 +244,7 @@
       return split;
     }
     grid.replaceChildren(...(layout ? [draw(layout)] : []));
-    if (!layout) grid.innerHTML = '<div class="group-empty">이 그룹에 AI 세션을 추가하세요.<button type="button" data-group-manage>＋ AI 참여</button></div>';
+    if (!layout) grid.innerHTML = '<div class="group-empty">이 그룹에 AI 세션을 추가하세요.<button type="button" data-group-manage>＋ AI 참여</button><button type="button" data-group-delete>빈 그룹 삭제</button></div>';
     if (focus?.isConnected && focus.matches('textarea')) focus.focus({ preventScroll: true });
     saveLayout();
   }
@@ -384,8 +384,21 @@
     }
     const deleteButton = event.target.closest('[data-group-delete]');
     if (deleteButton) {
-      if (deleteButton.dataset.confirm) { clearMounts(); act(() => api.terminalGroupDelete(activeId)); }
-      else { deleteButton.dataset.confirm = 'true'; deleteButton.textContent = '모든 참여 AI 종료 및 그룹 삭제'; }
+      if (deleteButton.dataset.confirm) {
+        clearMounts();
+        act(async () => {
+          const deletedId = activeId;
+          await api.terminalGroupDelete(deletedId);
+          localStorage.removeItem(`whitebox-group-layout:${deletedId}`);
+          const app = window.WhiteboxApp;
+          if (app?.state.sidebarFolderFilter?.entryId === `group:${deletedId}`) app.state.sidebarFolderFilter = null;
+          activeId = ''; currentGroup = null; layout = null; layoutGroupId = '';
+          app?.renderWorkspaces(); app?.renderSessions();
+        });
+      } else {
+        deleteButton.dataset.confirm = 'true';
+        deleteButton.textContent = currentGroup?.members.length ? '모든 참여 AI 종료 및 그룹 삭제' : '빈 그룹 삭제하기';
+      }
     }
     if (event.target.closest('[data-group-join]')) {
       const terminalId = panel.querySelector('[name="existing"]').value;

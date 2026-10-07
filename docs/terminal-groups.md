@@ -27,7 +27,9 @@ reuse the existing terminals and do not start extra AI tasks.
 record and pane. Re-adding starts a new AI session. Deleting a group removes all
 members. Failure to confirm termination retains the failed member for retry;
 other members and unrelated terminals are preserved. Provider conversation
-history files are not erased. Closing the group screen only hides the screen.
+history files are not erased. Closing the group screen only hides the screen. Empty groups stay selectable;
+the empty screen offers **빈 그룹 삭제** directly. Confirming it removes the
+group and its saved layout, clears the group filter and refreshes the sidebar.
 
 Groups are saved in `terminal-groups.json` in the Whitebox profile. Each member
 uses the terminal host's durable creation identity, including after reopening.

@@ -175,7 +175,22 @@ app.whenReady().then(async () => {
     assert.equal((await run('whitebox.terminalGroups()'))[0].name, '새 작업 그룹');
     await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
     await until("document.querySelector('#terminalGroupPanel').classList.contains('hidden')", 'new task group cleanup');
-    if (process.argv.includes('--managed-only')) { console.log('✓ managed group sidebar, tabs, split, resize, terminal input, persistence and cleanup'); return; }
+    // A zero-terminal group remains selectable and can be deleted without opening AI participation.
+    const empty = await run(`whitebox.terminalGroupCreate({cwd:${JSON.stringify(directory)},name:'빈 그룹 삭제 검증'})`);
+    await run('window.dispatchEvent(new CustomEvent("whitebox-terminal-inventory-changed"))');
+    await until(`Boolean(document.querySelector('[data-terminal-group-id="${empty.id}"]'))`, 'empty group remains in sidebar');
+    await run(`document.querySelector('[data-terminal-group-id="${empty.id}"]').click()`);
+    await until('Boolean(document.querySelector(".group-empty [data-group-delete]"))', 'empty group exposes direct delete action');
+    assert.equal(await run('document.querySelector(".terminal-group-editor").hidden'), true);
+    await run('document.querySelector(".group-empty [data-group-delete]").click()');
+    assert.equal((await run('whitebox.terminalGroups()')).some(value => value.id === empty.id), true, 'first click asks for confirmation');
+    await run('document.querySelector(".group-empty [data-group-delete]").click()');
+    await until('document.querySelector("#terminalGroupPanel").classList.contains("hidden")', 'empty group deleted');
+    await until(`!document.querySelector('[data-terminal-group-id="${empty.id}"]')`, 'deleted empty group removed from sidebar');
+    assert.equal(await run(`localStorage.getItem('whitebox-group-layout:${empty.id}')`), null);
+    assert.equal(await run('WhiteboxApp.state.sidebarFolderFilter'), null, 'deleted group no longer filters the project');
+    assert.equal(manager.list().length, 0, 'deleting an empty group starts or stops no terminal');
+        if (process.argv.includes('--managed-only')) { console.log('✓ managed group sidebar, tabs, split, resize, terminal input, persistence and cleanup'); return; }
     await run("window.WhiteboxApp.state.sourcePluginSettings={version:3,enabledPluginIds:['builtin.cmux','builtin.codex-desktop','builtin.claude-desktop']}");
     await run("(()=>{const Base=window.WhiteboxTerminalEngine.Terminal;window.cmuxTestTerminals=[];window.WhiteboxTerminalEngine.Terminal=class extends Base { constructor(options){super(options);this.testResizeCount=0;window.cmuxTestTerminals.push(this);} resize(...args){this.testResizeCount++;return super.resize(...args);} };})()");
     const cmuxGroup = { id: 'cmux-workspace:fixture', title: 'TAW', cwd: directory, cmuxWorkspace: true, provider: 'cmux', status: 'running', members: [
