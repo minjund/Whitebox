@@ -25,7 +25,10 @@ app.whenReady().then(async () => {
   // Keep the real group API unchanged, but isolate this test's tmux server.
   const host = {
     list: () => manager.list(), get: (...args) => manager.get(...args), retire: id => manager.retire(id),
-    create: options => manager.create({ ...options, tmuxSocket: socket }),
+    create: options => {
+      if (!host.supportsManagedStartupPrompt) require('../src/terminalManager').normalizeLaunchOptions(options);
+      return manager.create({ ...options, tmuxSocket: socket });
+    },
   };
   const storeFile = path.join(directory, 'groups.json');
   try {
@@ -35,11 +38,16 @@ app.whenReady().then(async () => {
     for (let i = 0; i < 100 && !fs.existsSync(path.join(directory, 'claude.sh.argv')); i++) await wait(50);
     runtime.execute({ tmuxSocket: socket }, ['set-environment', '-g', 'CMUX_SURFACE_ID', 'unrelated-surface']);
     runtime.execute({ tmuxSocket: socket }, ['set-environment', '-g', 'CODEX_THREAD_ID', 'unrelated-thread']);
+    host.supportsManagedStartupPrompt = true;
     const second = await service.add(group.id, { provider: 'codex', prompt: 'MULTILINE_STARTUP\n' + 'x'.repeat(9000) });
     for (let i = 0; i < 100 && !fs.existsSync(path.join(directory, 'codex.sh.argv')); i++) await wait(50);
     const firstArgv = fs.readFileSync(path.join(directory, 'claude.sh.argv'), 'utf8').split('\0');
     const secondArgv = fs.readFileSync(path.join(directory, 'codex.sh.argv'), 'utf8').split('\0');
     assert.ok(firstArgv.includes('--append-system-prompt'));
+    const legacyDocument = JSON.parse(fs.readFileSync(path.join(`${storeFile}.mailboxes`, group.id, `${service.mailbox.memberId(first)}.startup.json`), 'utf8'));
+    assert.ok(legacyDocument.prompt.includes(first.creationId));
+    assert.ok(firstArgv.at(-2).includes(' startup '));
+    assert.ok(firstArgv.every(arg => !/[\r\n]/.test(arg)), 'legacy host receives no multiline option or prompt argument');
     assert.ok(firstArgv.some(arg => arg.includes(`groupId=${group.id}`) && arg.includes(first.creationId)));
     assert.ok(secondArgv.some(arg => arg.endsWith('MULTILINE_STARTUP\n' + 'x'.repeat(9000))), 'startup prompt reaches actual provider argv without clipping or newline loss');
     assert.equal(second.terminal.promptSent, true);

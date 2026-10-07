@@ -119,6 +119,11 @@ class TerminalGroups {
         this.mailbox.sync(group);
         const instructions = this.mailbox.instructions(group, member);
         const prompt = [instructions, String(options.prompt || '').trim()].filter(Boolean).join('\n\n');
+        // App windows can reconnect to an older, still-running PTY host.
+        // Negotiate before sending multiline argv; never replace a busy host.
+        if (host.listFresh) await host.listFresh();
+        const multilineSupported = host.supportsManagedStartupPrompt === true || host.capabilities?.managedStartupPrompt === 1;
+        const launchPrompt = multilineSupported ? prompt : this.mailbox.startupReference(group, member, prompt);
         const args = [];
         const model = String(options.model || '').trim();
         if (model) args.push('--model', model);
@@ -131,12 +136,12 @@ class TerminalGroups {
         } else if (provider === 'gemini' && options.allowWrites) args.push('--yolo');
         else if (provider === 'grok') args.push('--no-auto-update', ...(options.allowWrites ? ['--always-approve'] : []));
         const promptInArgs = provider !== 'grok';
-        if (promptInArgs) args.push(...(provider === 'gemini' ? ['--prompt-interactive'] : []), prompt);
+        if (promptInArgs) args.push(...(provider === 'gemini' ? ['--prompt-interactive'] : []), launchPrompt);
         if (!terminal) terminal = await host.create({
           type: 'agent', provider, cwd: group.cwd, distro: group.distro,
           sessionBackend: 'managed-tmux', creationId: member.creationId,
           title: `${group.name} · ${provider}`, cols: 100, rows: 30,
-          args, initialCommand: prompt, initialCommandInArgs: promptInArgs,
+          args, initialCommand: launchPrompt, initialCommandInArgs: promptInArgs,
         });
         else if (typeof host.command === 'function') await host.command(terminal.id, instructions, { deliveryId: `group-join:${group.id}:${member.creationId}` });
         if (!options.terminalId && !promptInArgs) await host.command(terminal.id, prompt, { deliveryId: `group-start:${group.id}:${member.creationId}` });

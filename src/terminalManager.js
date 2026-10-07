@@ -1984,6 +1984,7 @@ function hasSafeAgentResume(options = {}) {
 class TerminalManager extends EventEmitter {
   constructor(options = {}) {
     super();
+    this.supportsManagedStartupPrompt = true;
     this.ptyModule = options.ptyModule || null;
     this.tmuxControlProxyFactory = options.tmuxControlProxyFactory || createTmuxControlProxyHandle;
     this.killTree = options.killTree || killPtyTree;

@@ -47,7 +47,10 @@ interrupt a busy AI or automatically start another model turn. Existing AI
 terminals receive these instructions when joining. No conversation composer or
 message log is added to the UI. Removing a member revokes its mailbox access;
 deleting the group removes the mailbox. The member environment requires Node.js. Startup instructions are passed in the
-provider's real launch arguments, preserving multiline prompts; Claude and Codex
+provider's real launch arguments, preserving multiline prompts. The app checks
+the live host's managed-startup capability. Older hosts receive a single-line
+reference to a private per-member startup document; `startup` reads the original
+text with exact group/panel validation. Existing AI processes keep running; Claude and Codex
 also receive persistent system/developer instructions. `self` and `members`
 include the exact group/panel IDs. Peer lookup must use that group's roster;
 same-directory or same-provider sessions in another group are never recipients.

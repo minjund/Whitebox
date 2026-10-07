@@ -36,9 +36,11 @@ const { execFileSync } = require('child_process');
       groups.add(group.id, { provider: 'claude' }), groups.add(group.id, { provider: 'codex' }),
     ]);
     assert.equal((await groups.list())[0].members.length, 2);
+    assert.ok(claude.terminal.args.every(arg => !/[\r\n]/.test(arg)), 'legacy host arguments are single-line');
     const helper = path.join(`${storeFile}.mailboxes`, group.id, 'group-message.cjs');
     const firstId = groups.mailbox.memberId(claude), secondId = groups.mailbox.memberId(codex);
     const communicate = (sender, operation, ...args) => JSON.parse(execFileSync(process.execPath, [helper, sender, operation, ...args], { encoding: 'utf8' }));
+    assert.ok(communicate(firstId, 'startup').prompt.includes(claude.creationId));
     assert.equal(communicate(firstId, 'send', secondId, '검증 결과를 공유합니다.').ok, true);
     assert.equal(communicate(secondId, 'inbox')[0].text, '검증 결과를 공유합니다.');
     assert.deepEqual(communicate(secondId, 'inbox'), [], 'read messages must not be delivered again');

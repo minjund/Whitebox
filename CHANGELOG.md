@@ -5,8 +5,11 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
-## 1.8.26 - 2026-10-07
+## 1.8.27 - 2026-10-07
 
+- Keep group AI startup compatible with already-running older terminal hosts;
+  preserve multiline requests in a private, identity-checked startup document.
+- Allow empty groups to be deleted directly and clear their saved layout and filters.
 - Match managed group terminal fonts, colors, cursors and tab controls to the
   connected cmux view, with exact input focus labels and split/tab management.
 - Deliver group communication instructions at AI startup and scope peer lookup

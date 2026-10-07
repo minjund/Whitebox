@@ -8,6 +8,11 @@ const { randomUUID } = require('crypto');
 function run(directory, senderId, operation, args = []) {
   const roster = JSON.parse(fs.readFileSync(path.join(directory, 'members.json'), 'utf8'));
   if (!roster.members.some(member => member.id === senderId)) throw new Error('This AI is no longer a member of the group.');
+  if (operation === 'startup') {
+    const document = JSON.parse(fs.readFileSync(path.join(directory, `${senderId}.startup.json`), 'utf8'));
+    if (document.groupId !== roster.groupId || document.panelId !== roster.members.find(member => member.id === senderId).panelId) throw new Error('Startup identity changed.');
+    return document;
+  }
   if (operation === 'self') return { groupId: roster.groupId, name: roster.name, ...roster.members.find(member => member.id === senderId) };
   if (operation === 'members') return { ...roster, selfId: senderId };
   if (operation === 'send') {
