@@ -16,6 +16,8 @@
   let fontSize = 15;
   let columns = 2;
   let currentGroup = null;
+  let pendingDeleteId = '';
+  let overviewError = '';
   let liveTerminals = new Map();
   document.querySelector('#mainContent').appendChild(panel);
   let expandedMember = '';
@@ -54,8 +56,8 @@
   function renderOverview() {
     const html = groupsForWorkspace().map(group => {
       const members = group.members.filter(member => !window.WhiteboxApp.state.providerFilters.size || window.WhiteboxApp.state.providerFilters.has(member.provider));
-      return `<article class="group-overview-card"><div><span class="cmux-mark">group · ${group.members.length} 세션</span><strong>${esc(group.name)}</strong><small>${members.map(member => `${esc(abbreviations[member.provider])} ${esc(window.WhiteboxApp.sessionStatusLabel?.(memberSession(member), memberSession(member) ? window.WhiteboxApp.controlRoomStatus(memberSession(member)) : member.terminal?.status || 'exited') || member.terminal?.status || '종료됨')}`).join(' · ')}</small></div><button type="button" data-terminal-group-id="${esc(group.id)}">그룹 열기 →</button></article>`;
-    }).join('');
+      return `<article class="group-overview-card"><div><span class="cmux-mark">group · ${group.members.length} 세션</span><strong>${esc(group.name)}</strong><small>${members.map(member => `${esc(abbreviations[member.provider])} ${esc(window.WhiteboxApp.sessionStatusLabel?.(memberSession(member), memberSession(member) ? window.WhiteboxApp.controlRoomStatus(memberSession(member)) : member.terminal?.status || 'exited') || member.terminal?.status || '종료됨')}`).join(' · ')}</small></div><div><button type="button" data-terminal-group-id="${esc(group.id)}">그룹 열기 →</button><button type="button" data-overview-group-delete="${esc(group.id)}" ${busy ? 'disabled' : ''}>${pendingDeleteId === group.id ? (group.members.length ? '모든 참여 AI 종료 및 그룹 삭제' : '빈 그룹 삭제하기') : '그룹 삭제'}</button></div></article>`;
+    }).join('') + (overviewError ? `<p class="terminal-group-status is-error" role="alert">${esc(overviewError)}</p>` : '');
     if (overview.innerHTML !== html) overview.innerHTML = html;
   }
 
@@ -140,6 +142,8 @@
   async function act(action) {
     if (busy) return;
     busy = true;
+    overviewError = '';
+    renderOverview();
     panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll('button,select').forEach(node => { node.disabled = true; });
     try { await action(); await render(); }
@@ -150,8 +154,10 @@
         const message = document.createElement('p'); message.className = 'terminal-group-status'; message.setAttribute('role', 'alert'); panel.append(message);
       }
       status(error.message || String(error), true);
+      overviewError = error.message || String(error);
     } finally {
       busy = false;
+      renderOverview();
       panel.removeAttribute('aria-busy');
       panel.querySelectorAll('button,select').forEach(node => { node.disabled = false; });
     }
@@ -277,8 +283,30 @@
     activeId = ''; generation += 1; clearMounts(); panel.classList.add('hidden'); document.body.classList.remove('terminal-group-active');
     if (window.WhiteboxApp?.state) window.WhiteboxApp.state.terminalGroupOwnerId = '';
   }
+  function deleteGroup(id) {
+    return act(async () => {
+      await api.terminalGroupDelete(id);
+      localStorage.removeItem(`whitebox-group-layout:${id}`);
+      const app = window.WhiteboxApp;
+      if (app?.state.sidebarFolderFilter?.entryId === `group:${id}`) app.state.sidebarFolderFilter = null;
+      if (activeId === id) {
+        close(); currentGroup = null; layout = null; layoutGroupId = '';
+      }
+      pendingDeleteId = '';
+      app?.renderWorkspaces(); app?.renderSessions();
+    });
+  }
   window.addEventListener('whitebox-sidebar-folder-selected', close);
   document.addEventListener('click', event => {
+    const remove = event.target.closest('[data-overview-group-delete]');
+    if (remove) {
+      event.preventDefault(); event.stopPropagation();
+      if (busy) return;
+      const id = remove.dataset.overviewGroupDelete;
+      if (pendingDeleteId === id) deleteGroup(id);
+      else { pendingDeleteId = id; renderOverview(); }
+      return;
+    }
     const direct = event.target.closest('[data-terminal-group-id]');
     if (direct) {
       event.preventDefault(); event.stopPropagation(); activeId = direct.dataset.terminalGroupId;
@@ -385,16 +413,7 @@
     const deleteButton = event.target.closest('[data-group-delete]');
     if (deleteButton) {
       if (deleteButton.dataset.confirm) {
-        clearMounts();
-        act(async () => {
-          const deletedId = activeId;
-          await api.terminalGroupDelete(deletedId);
-          localStorage.removeItem(`whitebox-group-layout:${deletedId}`);
-          const app = window.WhiteboxApp;
-          if (app?.state.sidebarFolderFilter?.entryId === `group:${deletedId}`) app.state.sidebarFolderFilter = null;
-          activeId = ''; currentGroup = null; layout = null; layoutGroupId = '';
-          app?.renderWorkspaces(); app?.renderSessions();
-        });
+        deleteGroup(activeId);
       } else {
         deleteButton.dataset.confirm = 'true';
         deleteButton.textContent = currentGroup?.members.length ? '모든 참여 AI 종료 및 그룹 삭제' : '빈 그룹 삭제하기';

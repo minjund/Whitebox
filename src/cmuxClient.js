@@ -15,7 +15,7 @@ function entriesFromTree(tree) {
       const target = { window: handle(window), workspace: handle(workspace), surface: handle(surface) };
       if (Object.values(target).some(value => !/^(?:[a-f\d-]{36}|(?:window|workspace|surface):\d+)$/i.test(value))) continue;
       result.push({ id: `cmux:${target.surface}`, title: surface.title || surface.name || workspace.title || workspace.name || 'cmux 터미널',
-        cwd: cwd(surface) || cwd(workspace), paneId: handle(pane), selected: surface.selected_in_pane !== false,
+        cwd: cwd(surface) || cwd(workspace), surfaceCwd: cwd(surface), paneId: handle(pane), selected: surface.selected_in_pane !== false,
         layout: workspace.layout || null, workspaceCwd: cwd(workspace), workspaceTitle: workspace.title || workspace.name || 'cmux 작업', provider: 'cmux', status: 'running', cmuxTarget: target });
     }
   }
@@ -36,7 +36,7 @@ function groupsFromEntries(entries) {
     // cmux's automatic workspace title/directory follow the focused tab.
     // Keep the group's anchor on its first terminal as focus changes.
     if (group.members.some(member => member.title === group.title)) group.title = first.title;
-    if (first.processCwd) group.cwd = first.processCwd;
+    if (first.cwd) group.cwd = first.cwd;
     return group;
   });
 }
@@ -79,12 +79,12 @@ function renderGridFrame(grid) {
   return { ansi, columns, rows, cursor: { row: Math.max(0, Math.min(rows - 1, Number(cursor.row) || 0)), column: Math.max(0, Math.min(columns - 1, Number(cursor.column) || 0)), visible: Boolean(cursor.visible) } };
 }
 
-function surfaceProcessIds(tree) {
+function surfaceProcessIds(tree, rootsOnly = false) {
   const result = new Map();
   const collect = processes => (processes || []).flatMap(process => [Number(process.pid), ...collect(process.children)]).filter(pid => Number.isInteger(pid) && pid > 0);
   for (const window of tree.windows || []) for (const workspace of window.workspaces || []) {
     for (const pane of workspace.panes || []) for (const surface of pane.surfaces || []) {
-      result.set(`${handle(window)}:${handle(workspace)}:${handle(surface)}`, [...new Set([...(surface.top_level_pids || []).map(Number), ...collect(surface.processes)])].filter(pid => Number.isInteger(pid) && pid > 0));
+      result.set(`${handle(window)}:${handle(workspace)}:${handle(surface)}`, [...new Set([...(surface.top_level_pids || []).map(Number), ...(rootsOnly ? (surface.processes || []).map(process => Number(process.pid)) : collect(surface.processes))])].filter(pid => Number.isInteger(pid) && pid > 0));
     }
   }
   return result;
@@ -183,10 +183,12 @@ class CmuxClient {
       // Hide duplicate monitor rows only when cmux identifies the exact local
       // process. Sharing a cwd or Git repository never proves membership.
       try {
-        const processes = surfaceProcessIds(JSON.parse(await this.call(['--json', '--id-format', 'uuids', 'top', '--all', '--processes'])));
+        const tree = JSON.parse(await this.call(['--json', '--id-format', 'uuids', 'top', '--all', '--processes']));
+        const processes = surfaceProcessIds(tree), roots = surfaceProcessIds(tree, true);
         for (const entry of entries) {
           const target = entry.cmuxTarget;
           entry.processIds = processes.get(`${target.window}:${target.workspace}:${target.surface}`) || [];
+          entry.rootProcessIds = roots.get(`${target.window}:${target.workspace}:${target.surface}`) || [];
         }
       } catch (_) { /* Older cmux builds may not support process diagnostics. */ }
       const pids = [...new Set(entries.flatMap(entry => entry.processIds || []))];
@@ -202,12 +204,19 @@ class CmuxClient {
         const ids = sessionIdsFromProcesses(files, commands);
         const openIds = await currentCodexSessions(files);
         const directories = processDirectories(files);
+        const shells = new Set(commands.split('\n').flatMap(line => {
+          const match = line.match(/^\s*(\d+)\s+(?:\S*\/)?-?(?:zsh|bash|sh|fish|dash|ksh)(?:\s|$)/);
+          return match ? [Number(match[1])] : [];
+        }));
         for (const entry of entries) {
           entry.sessionIds = [...new Set((entry.processIds || []).flatMap(pid => [...(ids.get(pid) || [])]))];
           const currentIds = [...new Set((entry.processIds || []).flatMap(pid => [...(openIds.get(pid) || [])]))];
           entry.currentSessionId = currentIds.length === 1 ? currentIds[0] : '';
-          entry.processCwd = (entry.processIds || []).map(pid => directories.get(pid)).find(Boolean) || '';
-          if (entry.processCwd) entry.cwd = entry.processCwd;
+          // Descendants include Gradle workers and other build tools whose
+          // cwd is unrelated to the terminal's project. Only a root shell
+          // can supply a fallback when the exact surface has no directory.
+          entry.processCwd = (entry.rootProcessIds || []).filter(pid => shells.has(pid)).map(pid => directories.get(pid)).find(Boolean) || '';
+          entry.cwd = entry.surfaceCwd || entry.processCwd || entry.cwd;
         }
       }
       // Provider hooks update this binding after /clear and resume. A launch
@@ -219,6 +228,9 @@ class CmuxClient {
           // The open root transcript follows Codex /new; resume hooks may lag.
           if (!entry.currentSessionId && payload.surface_id === entry.cmuxTarget.surface && payload.workspace_id === entry.cmuxTarget.workspace && payload.window_id === entry.cmuxTarget.window) entry.currentSessionId = id;
           if (id) entry.sessionIds = [...new Set([...(entry.sessionIds || []), id])];
+          if (id && id === entry.currentSessionId && cwd(payload.resume_binding)) {
+            entry.cwd = entry.surfaceCwd || cwd(payload.resume_binding);
+          }
         } catch (_) { /* Older cmux versions retain exact process/file evidence. */ }
       }));
       if (revision === this.inventoryRevision && !this.mutations.size) this.entries = entries;
@@ -237,7 +249,7 @@ class CmuxClient {
     this.entries = tree.map(entry => {
       const previous = this.entries.find(item => item.id === entry.id);
       if (!previous) return entry;
-      return { ...previous, ...entry, cwd: entry.cwd || previous.cwd, workspaceCwd: entry.workspaceCwd || previous.workspaceCwd };
+      return { ...previous, ...entry, cwd: entry.surfaceCwd || previous.cwd || entry.cwd, workspaceCwd: entry.workspaceCwd || previous.workspaceCwd };
     });
     return this.inventory();
   }

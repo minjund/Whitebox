@@ -59,6 +59,32 @@ const uuid = number => `00000000-0000-0000-0000-${String(number).padStart(12, '0
   assert.equal(groups.length, 2, '작업 경로가 아니라 실제 cmux workspace ID로 묶습니다.');
   assert.equal(groups[0].members.length, 2, '다른 worktree의 터미널도 같은 cmux 작업이면 함께 표시합니다.');
   assert.equal(groups[1].members.length, 1, '같은 경로라도 다른 cmux 작업은 합치지 않습니다.');
+  // The process list can put Gradle workers before the terminal shell.
+  const processTree = JSON.parse(JSON.stringify(tree));
+  processTree.windows[0].workspaces[0].cwd = '/home/test/.gradle/workers';
+  processTree.windows[0].workspaces[0].panes[0].surfaces[0].top_level_pids = [102, 101];
+  processTree.windows[0].workspaces[0].panes[0].surfaces[0].processes = [{ pid: 101, children: [{ pid: 102 }] }];
+  const directoryClient = new CmuxClient({ platform: 'darwin', exists: () => true, execute: async (file, args) => {
+    if (args.includes('tree') || args.includes('top')) return { stdout: JSON.stringify(processTree) };
+    if (file === '/usr/sbin/lsof') return { stdout: 'p102\nfcwd\nn/home/test/.gradle/workers\np101\nfcwd\nn/project/spring-ai-modular\n' };
+    if (file === '/bin/ps') return { stdout: '102 /usr/bin/java GradleWorkerMain\n101 /bin/zsh -l\n' };
+    if (args.includes('resume') && processTree.useBinding) return { stdout: JSON.stringify({ ...binding, resume_binding: { ...binding.resume_binding, cwd: '/project/bound-session' } }) };
+    return { stdout: '{}' };
+  } });
+  let directoryInventory = await directoryClient.list();
+  assert.equal(directoryInventory.entries[0].cwd, '/project/spring-ai-modular', 'build-worker directory cannot replace the terminal shell project');
+  assert.equal(directoryInventory.groups[0].cwd, '/project/spring-ai-modular', 'group project follows the anchor terminal rather than a focused worker');
+  assert.equal((await directoryClient.layoutInventory()).groups[0].cwd, '/project/spring-ai-modular', 'layout refresh keeps the resolved project');
+  processTree.windows[0].workspaces[0].panes[0].surfaces[0].cwd = '/project/explicit-surface';
+  directoryInventory = await directoryClient.list();
+  assert.equal(directoryInventory.entries[0].cwd, '/project/explicit-surface', 'exact surface metadata takes priority over process inference');
+  delete processTree.windows[0].workspaces[0].panes[0].surfaces[0].cwd;
+  processTree.windows[0].workspaces[0].cwd = '/project/workspace';
+  processTree.windows[0].workspaces[0].panes[0].surfaces[0].top_level_pids = [102];
+  processTree.windows[0].workspaces[0].panes[0].surfaces[0].processes = [{ pid: 102, children: [{ pid: 101 }] }];
+  assert.equal((await directoryClient.list()).entries[0].cwd, '/project/workspace', 'a nested shell cannot masquerade as the terminal root');
+  processTree.useBinding = true;
+  assert.equal((await directoryClient.list()).entries[0].cwd, '/project/bound-session', 'exact active provider binding supplies its project');
   const calls = [];
   const client = new CmuxClient({ platform: 'darwin', exists: () => true, execute: async (_file, args) => { calls.push(args); return { stdout: args.includes('tree') ? JSON.stringify(tree) : 'terminal output' }; } });
   assert.equal((await client.list()).entries.length, 1);
