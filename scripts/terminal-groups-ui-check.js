@@ -175,6 +175,22 @@ app.whenReady().then(async () => {
     assert.equal((await run('whitebox.terminalGroups()'))[0].name, '새 작업 그룹');
     await run("document.querySelector('#terminalGroupPanel [data-group-manage]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click();document.querySelector('#terminalGroupPanel [data-group-delete]').click()");
     await until("document.querySelector('#terminalGroupPanel').classList.contains('hidden')", 'new task group cleanup');
+    // Control-room deletion uses the same exact-ID lifecycle without opening terminals.
+    for (const populated of [false, true]) {
+      const overviewGroup = await run(`whitebox.terminalGroupCreate({cwd:${JSON.stringify(directory)},name:'관제 삭제 검증'})`);
+      if (populated) await run(`whitebox.terminalGroupAdd('${overviewGroup.id}',{provider:'claude'})`);
+      await run(`(()=>{const a=WhiteboxApp;a.state.workspace=${JSON.stringify(directory)};a.state.view='all';a.state.search='';a.state.providerFilters.clear();a.state.sidebarFolderFilter=null;a.renderWorkspaces();a.renderSessions();window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'));})()`);
+      const selector = `[data-overview-group-delete="${overviewGroup.id}"]`;
+      await until(`Boolean(document.querySelector('${selector}'))`, 'control-room delete button');
+      await run(`document.querySelector('${selector}').click()`);
+      assert.equal((await run('whitebox.terminalGroups()')).some(value=>value.id===overviewGroup.id), true, 'confirmation does not delete the group');
+      await run("interactionTest.emitSnapshot()"); await wait(100);
+      assert.equal(await run(`document.querySelector('${selector}').textContent`), populated ? '모든 참여 AI 종료 및 그룹 삭제' : '빈 그룹 삭제하기', 'snapshot preserves the confirmation');
+      await run(`document.querySelector('${selector}').click()`);
+      await until(`!document.querySelector('${selector}')`, 'control-room deletion completed');
+      assert.equal((await run('whitebox.terminalGroups()')).some(value=>value.id===overviewGroup.id), false);
+      assert.equal(manager.list().length, 0, 'control-room deletion retires only the selected group terminals');
+    }
     // A zero-terminal group remains selectable and can be deleted without opening AI participation.
     const empty = await run(`whitebox.terminalGroupCreate({cwd:${JSON.stringify(directory)},name:'빈 그룹 삭제 검증'})`);
     await run('window.dispatchEvent(new CustomEvent("whitebox-terminal-inventory-changed"))');

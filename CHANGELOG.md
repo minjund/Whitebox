@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.28 - 2026-10-08
+
+- Keep cmux project paths tied to the exact surface or root terminal shell;
+  prevent build-worker directories from becoming sidebar projects.
+- Delete empty or populated AI groups directly from the control-room overview,
+  with confirmation, exact member shutdown and saved-layout/filter cleanup.
+
 ## 1.8.27 - 2026-10-07
 
 - Keep group AI startup compatible with already-running older terminal hosts;
