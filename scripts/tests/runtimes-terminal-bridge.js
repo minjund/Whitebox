@@ -4142,6 +4142,31 @@ function registerTerminalLifecycleTests(context) {
     manager.dispose();
   });
 
+  test('독립 실행 환경 준비가 느려도 실제 호스트 시작 후 연결 준비 시간을 보장한다', async () => {
+    let spawned = false;
+    let spawnCalls = 0;
+    const client = new TerminalHostClient({
+      discoveryFile: path.join(temp, 'terminal-host-slow-runtime.json'),
+      connectTimeoutMs: 180,
+      processExists: () => true,
+      spawnHost: async () => {
+        spawnCalls += 1;
+        await new Promise(resolve => setTimeout(resolve, 260));
+        spawned = true;
+        return { pid: 54_001 };
+      },
+    });
+    client.connectExisting = async () => {
+      if (!spawned) throw new Error('runtime preparation pending');
+      client.connected = true;
+    };
+    try {
+      await client.connect();
+      assert.equal(client.connected, true);
+      assert.equal(spawnCalls, 1);
+    } finally { client.dispose(); }
+  });
+
   test('느린 터미널 호스트 시작이 연결 제한시간을 넘겨도 같은 PID가 살아 있는 동안 다시 띄우지 않는다', async () => {
     const discovery = path.join(temp, 'terminal-host-slow-launch.json');
     let spawnCalls = 0;
