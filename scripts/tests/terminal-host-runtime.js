@@ -17,11 +17,16 @@ function registerTerminalHostRuntimeTests({ test, temp }) {
     const result = applyScopedUpdateRelaunchProfile({ app, request, profilePath: profile });
     assert.equal(result.applied, true);
     assert.deepEqual(applied, [['userData', fs.realpathSync.native(profile)]]);
+    assert.equal(applyScopedUpdateRelaunchProfile({ app, request }).applied, true,
+      'The ready file from an immutable official helper also binds its existing updates profile');
+    assert.deepEqual(applyScopedUpdateRelaunchProfile({ app, request: {
+      token, readyPath: path.join(temp, 'standalone-downloads', `install-renderer-ready-${token}.json`),
+    } }), { applied: false });
     const other = path.join(temp, 'other-update-profile');
     fs.mkdirSync(path.join(other, 'updates'), { recursive: true });
     assert.throws(() => applyScopedUpdateRelaunchProfile({ app, request, profilePath: other }), /프로필 밖/);
     assert.deepEqual(applyScopedUpdateRelaunchProfile({ app, profilePath: profile }), { applied: false });
-    assert.equal(applied.length, 1);
+    assert.equal(applied.length, 2);
   });
   test('독립 명령창 runtime은 설치 교체 후에도 실행 파일과 코드 및 native addon을 보존한다', async () => {
     for (const platform of ['win32', 'darwin']) {

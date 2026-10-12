@@ -27,11 +27,17 @@ function canonicalPath(fileSystem, candidate) {
 }
 
 function applyScopedUpdateRelaunchProfile(options = {}) {
-  if (!options.request || !options.profilePath) return { applied: false };
+  if (!options.request) return { applied: false };
   const fileSystem = options.fileSystem || fs;
   const pathModule = options.pathModule || path;
-  const profile = String(options.profilePath);
   const request = options.request;
+  // Official older helpers do not carry a profile variable. Their production
+  // ready file is still bound to that profile's updates directory. Standalone
+  // helper fixtures in other download directories keep the legacy default.
+  const readyDirectory = pathModule.dirname(request.readyPath || '');
+  const profile = String(options.profilePath || (pathModule.basename(readyDirectory) === 'updates'
+    ? pathModule.dirname(readyDirectory) : ''));
+  if (!profile) return { applied: false };
   if (!pathModule.isAbsolute(profile) || !pathModule.isAbsolute(request.readyPath || '')
     || !TOKEN_PATTERN.test(request.token || '')
     || pathModule.basename(request.readyPath) !== `install-renderer-ready-${request.token}.json`) {
