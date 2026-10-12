@@ -5,10 +5,12 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
-## 1.8.29 - 2026-10-12
+## 1.8.30 - 2026-10-12
 
 - Keep new packaged terminal hosts outside the app installation so running PTY
   commands survive automatic updates and reconnect after the app restarts.
+- Allow the first private terminal runtime to finish preparing on a busy disk
+  before starting the bounded host connection wait.
 - Preserve active work instead of offering forced termination when an older
   terminal host or a direct in-app job cannot survive installation replacement.
 - Recover verified exited POSIX terminal groups without signaling live jobs,

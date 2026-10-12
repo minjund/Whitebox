@@ -966,7 +966,8 @@ class TerminalHostClient extends EventEmitter {
   }
 
   async connectLoop(generation) {
-    const deadline = Date.now() + this.connectTimeoutMs;
+    let deadline = Date.now() + this.connectTimeoutMs;
+    let launchReadinessBudgetGranted = false;
     let lastError = null;
     let compatibleHostFailures = 0;
     while (!this.disposed && generation === this.connectGeneration && Date.now() < deadline) {
@@ -1051,7 +1052,14 @@ class TerminalHostClient extends EventEmitter {
       // This still prevents duplicate daemons while the recorded PID lives,
       // but allows a replacement within the same connect loop once that PID
       // is proven dead.
-      await this.launchHostOnce();
+      const launch = await this.launchHostOnce();
+      if (launch.launched && !launchReadinessBudgetGranted) {
+        // Preparing a private packaged runtime can exceed the socket timeout
+        // on a busy disk. Start the bounded readiness wait after spawning;
+        // repeated child failures must not renew this budget indefinitely.
+        deadline = Date.now() + this.connectTimeoutMs;
+        launchReadinessBudgetGranted = true;
+      }
       await new Promise(resolve => setTimeout(resolve, 120));
     }
     if (this.disposed || generation !== this.connectGeneration) throw new Error('명령창 다시 연결이 취소되었습니다.');
