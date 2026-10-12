@@ -111,9 +111,9 @@ async function stopOwned(pid) {
     execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
     driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
   }
-  const { terminalPid } = await clickPackagedUpdate(driver, installer, version, {
+  const { terminalPid, terminalId, hostIdentity } = await clickPackagedUpdate(driver, installer, version, {
     retryAfterFailure:true,
-    forceRetry: sourceVersion === '1.7.3',
+    preserveTerminal: sourceVersion === '1.7.3',
     currentVersion: sourceVersion === '1.7.3' ? version : sourceVersion,
     holdIncompleteHookRequest: sourceVersion === '1.7.3',
   });
@@ -129,10 +129,10 @@ async function stopOwned(pid) {
   await waitFor(() => !alive(driver.child.pid), 'production app quit');
   if (sourceVersion === '1.7.3') {
     const stages = events.filter(event => event.attemptId === launch.attemptId).map(event => event.stage);
-    assert.equal(stages.filter(stage => stage === 'workload-force-confirmed').length, 1);
-    assert.equal(stages.filter(stage => stage === 'workload-force-stopped').length, 1);
-    assert(stages.indexOf('workload-force-stopped') < stages.indexOf('helper-ready'));
-    assert(terminalPid > 0 && !alive(terminalPid), 'Candidate force update must stop its own PTY');
+    assert.equal(stages.filter(stage => stage === 'workload-force-confirmed').length, 0);
+    assert.equal(stages.filter(stage => stage === 'external-terminal-host-preserved').length, 1);
+    assert(terminalPid > 0 && alive(terminalPid), 'Candidate update must preserve its PTY');
+    assert(alive(hostIdentity.hostPid), 'Candidate update must preserve the original host');
   }
   let log = '';
   await waitFor(() => {
@@ -150,6 +150,19 @@ async function stopOwned(pid) {
   assert.equal((log.match(/update installed and renderer ready;/g)||[]).length,1);
   await waitFor(() => !fs.existsSync(launch.readyPath) && !fs.existsSync(launch.rendererReadyPath)
     && fs.readdirSync(path.dirname(app)).every(name => !/\.update-|\.backup-|\.failed-/.test(name)), 'helper signals and staging cleanup');
+  if (hostIdentity) {
+    const { TerminalHostClient } = require('../src/terminalHost');
+    const host = new TerminalHostClient({ discoveryFile: hostIdentity.discoveryFile });
+    try {
+      await host.connect();
+      assert.equal(host.discovery.pid, hostIdentity.hostPid);
+      const terminal = await host.get(terminalId);
+      assert.equal(terminal.pid, terminalPid);
+      assert.equal(terminal.status, 'running');
+      await host.close(terminalId); // End only the test's own workload after preservation is proved.
+    } finally { host.dispose({ shutdownIfIdle: true }); }
+    await waitFor(() => !alive(terminalPid) && !alive(hostIdentity.hostPid), 'preserved test PTY and host cleanup', 30000);
+  }
   console.log('PASS packaged macOS update button: persistent failure, retry, actual install, renderer-ready relaunch and cleanup');
 })().catch(error => {
   console.error(error.stack || error);process.exitCode=1;

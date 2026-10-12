@@ -333,6 +333,14 @@ function createWorkbench(root, options = {}) {
     },
   };
   sandbox.window.WhiteboxTerminalEngine = {
+    createView(host, options) {
+      const terminal = new sandbox.window.Terminal(options);
+      const fit = new sandbox.window.FitAddon.FitAddon();
+      terminal.loadAddon(fit);
+      terminal.open(host);
+      if (!options.disableStdin) terminal.loadAddon(sandbox.window.WhiteboxTerminalIme.createAddon());
+      return { terminal, fit };
+    },
     initialized: true, ready: async () => {}, Terminal: sandbox.window.Terminal, FitAddon: sandbox.window.FitAddon.FitAddon,
   };
   // IME DOM/Canvas behavior is covered in terminal-ime-check, not this queue fixture.

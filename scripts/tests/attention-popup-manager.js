@@ -136,24 +136,28 @@ async function flush() {
 const tests = [];
 function test(name, run) { tests.push({ name, run }); }
 
-test('preference defaults on, reports corrupt JSON, and persists an explicit opt-out atomically', () => {
+test('preference defaults off, discards legacy automatic opt-in, and persists an explicit preference atomically', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-popup-pref-'));
   try {
     const file = path.join(temp, 'nested', 'attention-popup.json');
     const errors = [];
     const store = new AttentionPopupPreferenceStore(file, { onError: error => errors.push(error) });
-    assert.deepStrictEqual(store.load(), { enabled: true });
+    assert.deepStrictEqual(store.load(), { enabled: false });
     assert.equal(errors.length, 0);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{}', 'utf8');
-    assert.deepStrictEqual(store.load(), { enabled: true });
+    assert.deepStrictEqual(store.load(), { enabled: false });
+    fs.writeFileSync(file, '{"enabled":true}', 'utf8');
+    assert.deepStrictEqual(store.load(), { enabled: false });
     fs.writeFileSync(file, '{"enabled":"false"}', 'utf8');
-    assert.deepStrictEqual(store.load(), { enabled: true });
+    assert.deepStrictEqual(store.load(), { enabled: false });
     assert.deepStrictEqual(store.setEnabled(false), { enabled: false });
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { enabled: false });
-    assert.equal(store.getEnabled(), false);
-    fs.writeFileSync(file, '{invalid json', 'utf8');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { version: 2, enabled: false });
+    assert.deepStrictEqual(store.setEnabled(true), { enabled: true });
     assert.deepStrictEqual(store.load(), { enabled: true });
+    assert.equal(store.getEnabled(), true);
+    fs.writeFileSync(file, '{invalid json', 'utf8');
+    assert.deepStrictEqual(store.load(), { enabled: false });
     assert.equal(errors.length, 1);
     assert.equal(fs.readdirSync(path.dirname(file)).some(name => name.endsWith('.tmp')), false);
   } finally {
@@ -405,14 +409,14 @@ test('question decisions validate single, multi, Other, required, free-text, and
   ] }), error => error.code === 'ATTENTION_POPUP_INVALID_DECISION');
 });
 
-test('free-text question is focused, terminal choices are allowlisted, and input request is read-only/open-main', async () => {
+test('free-text question never steals focus, terminal choices are allowlisted, and input request is read-only/open-main', async () => {
   const { manager, calls } = fixture({ enabled: true });
   manager.upsert({ id: 'free', type: 'question', questions: [{ id: 'answer', question: '설명해 주세요.' }] }, 'question');
   const freeEntry = manager.windows.get('question\u0000free');
   manager.handleReady(eventFor(freeEntry.window));
-  assert.equal(freeEntry.window.shown, 1);
-  assert.equal(freeEntry.window.focused, 1);
-  assert.equal(freeEntry.window.shownInactive, 0);
+  assert.equal(freeEntry.window.shown, 0);
+  assert.equal(freeEntry.window.focused, 0);
+  assert.equal(freeEntry.window.shownInactive, 1);
 
   manager.upsert({ id: 'terminal', type: 'terminal-approval', choices: [{ id: 'once', label: '이번만' }, { id: 'always', label: '항상' }] }, 'terminal');
   const terminalEntry = manager.windows.get('terminal\u0000terminal');

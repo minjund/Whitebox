@@ -628,6 +628,7 @@ class TerminalHostServer {
         type: 'ready',
         sessions: this.manager.list(),
         capabilities: { ...this.capabilities },
+        ...(this.extraInfo ? { hostRuntime: this.extraInfo()?.hostRuntime } : {}),
       });
       return;
     }

@@ -983,6 +983,17 @@ function terminatePosixPtyGroup(handle, pid, timeoutMs, runtime = {}) {
       }
       timer = setTimeout(check, 20);
     };
+    // A retained handle's root-exit acknowledgement can outlive a failed
+    // group-exit check. Recheck that exact group without signalling a PID
+    // which may since have been reused. A live/unknown group stays blocked.
+    if (runtime.posixVerifyOnly) {
+      if (!handle.__whiteboxExited) {
+        finish(ptyTreeUnconfirmedError());
+        return;
+      }
+      check();
+      return;
+    }
     try {
       killProcess(-pid, signal);
     } catch (cause) {
@@ -4428,9 +4439,18 @@ class TerminalManager extends EventEmitter {
       if (operation === 'retire') return { ok: true, alreadyRetired: true };
       return this.required(terminalId);
     }
-    const previousTermination = forceForUpdate ? session.updateTerminationContext : null;
+    const retainedTermination = session.updateTerminationContext;
+    const recheckExitedGroup = this.platform !== 'win32'
+      && ['stop', 'detach', 'close', 'retire', 'host-shutdown'].includes(operation)
+      && retainedTermination?.session === session
+      && (session.generation === retainedTermination.generation
+        || session.generation === retainedTermination.completionGeneration)
+      && retainedTermination.handle?.__whiteboxExited === true
+      && (!session.process || session.process === retainedTermination.handle)
+      && Number.isSafeInteger(retainedTermination.pid) && retainedTermination.pid > 0;
+    const previousTermination = forceForUpdate || recheckExitedGroup ? retainedTermination : null;
     const uncertain = session.terminationUncertain || session.retiring || session.terminationPending;
-    if (forceForUpdate && uncertain) {
+    if ((forceForUpdate || recheckExitedGroup) && uncertain) {
       // Persisted PIDs cannot identify a process after a host restart. Only a
       // retained transition with the same session/generation may be retried.
       if (!previousTermination || previousTermination.session !== session
@@ -4438,7 +4458,7 @@ class TerminalManager extends EventEmitter {
           && session.generation !== previousTermination.completionGeneration)
         || (session.process && session.process !== previousTermination.handle)
         || (!previousTermination.treeAcknowledged
-          && (!previousTermination.handle || previousTermination.handle.__whiteboxExited))) {
+          && (!previousTermination.handle || (previousTermination.handle.__whiteboxExited && !recheckExitedGroup)))) {
         throw this.uncertainTerminationError(session);
       }
     } else {
@@ -4467,12 +4487,12 @@ class TerminalManager extends EventEmitter {
       operation,
       terminalId,
       session,
-      handle: session.process,
-      pid: session.pid,
+      handle: recheckExitedGroup ? previousTermination.handle : session.process,
+      pid: recheckExitedGroup ? previousTermination.pid : session.pid,
       generation: session.generation,
       previousStatus: session.status,
       previousUpdatedAt: session.updatedAt,
-      treeAcknowledged: !session.process,
+      treeAcknowledged: recheckExitedGroup ? false : !session.process,
       runtimeStarted: false,
       runtimeAcknowledged: session.options.sessionBackend !== 'managed-tmux'
         || !['kill', 'detach', 'stop', 'close', 'retire', 'host-shutdown'].includes(operation),
@@ -4542,7 +4562,8 @@ class TerminalManager extends EventEmitter {
                 { alwaysTerminate: true },
               )
             : this.killTree(context.handle, context.pid, PTY_EXIT_CONFIRM_TIMEOUT_MS,
-                forceForUpdate ? { posixSignal: 'SIGKILL' } : {})
+                recheckExitedGroup ? { posixVerifyOnly: true }
+                  : forceForUpdate ? { posixSignal: 'SIGKILL' } : {})
           : null;
         return treeResult && typeof treeResult.then === 'function'
           ? Promise.resolve(treeResult).then(() => this.finishTransitionAfterTree(context))
@@ -4820,7 +4841,7 @@ class TerminalManager extends EventEmitter {
         return { ok: true };
       };
       if (!pending.length) return finish();
-      const completion = Promise.all(pending).then(() => this.dispose({ preserveSessions: true }));
+      const completion = Promise.all(pending).then(() => this.dispose({ preserveSessions: true, updateOnly }));
       completion.catch(() => {});
       return completion;
     }

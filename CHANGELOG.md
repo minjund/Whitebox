@@ -5,6 +5,19 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.29 - 2026-10-12
+
+- Keep new packaged terminal hosts outside the app installation so running PTY
+  commands survive automatic updates and reconnect after the app restarts.
+- Preserve active work instead of offering forced termination when an older
+  terminal host or a direct in-app job cannot survive installation replacement.
+- Recover verified exited POSIX terminal groups without signaling live jobs,
+  and keep the terminal sidebar available when one inventory source fails.
+- Stop automatic attention events and update relaunches from taking window
+  focus; require explicit opt-in for attention popups.
+- Keep terminal keyboard input, focus and group panels consistent with cmux.
+- Verify the official 1.8.28 updater while retaining earlier pinned cohorts.
+
 ## 1.8.28 - 2026-10-08
 
 - Keep cmux project paths tied to the exact surface or root terminal shell;

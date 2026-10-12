@@ -110,8 +110,6 @@ public static class WhiteboxWindow {
   [DllImport("user32.dll")]
   public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
 
-  [DllImport("user32.dll")]
-  public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 '@
 
@@ -130,8 +128,7 @@ function Restore-AppWindow([int]$TargetPid) {
     $process = Get-Process -Id $TargetPid -ErrorAction SilentlyContinue
     if (-not $process) { return $false }
     if ($process.MainWindowHandle -ne 0) {
-      [void][WhiteboxWindow]::ShowWindowAsync($process.MainWindowHandle, 9)
-      [void][WhiteboxWindow]::SetForegroundWindow($process.MainWindowHandle)
+      [void][WhiteboxWindow]::ShowWindowAsync($process.MainWindowHandle, 4)
       Start-Sleep -Milliseconds 250
       Write-UpdateLog ('windowRestored=true;pid=' + $TargetPid + ';handle=' + $process.MainWindowHandle)
       return $true

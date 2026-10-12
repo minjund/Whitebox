@@ -1201,9 +1201,9 @@ async function main() {
   buttonDriver = driver;
   activeAppPid = driver.child.pid;
   const buttonParentPid = activeAppPid;
-  let buttonTerminalPid = 0;
+  let buttonTerminalPid = 0, buttonTerminalId = '', buttonHostIdentity = null;
   try {
-    ({ terminalPid: buttonTerminalPid } = await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true, forceRetry: true }));
+    ({ terminalPid: buttonTerminalPid, terminalId: buttonTerminalId, hostIdentity: buttonHostIdentity } = await clickPackagedUpdate(driver, targetInstaller, targetVersion, { retryAfterFailure: true, preserveTerminal: true }));
   } finally { driver.close(); }
   const attemptLog = path.join(buttonProfile, 'updates', 'install-attempts.jsonl');
   let events = [];
@@ -1221,17 +1221,30 @@ async function main() {
   assert(buttonLaunch, 'Real packaged update button never acknowledged its helper: ' + JSON.stringify(events));
   for (const event of events.filter(event => event.stage === 'downloaded')) updateInstallerPaths.add(event.downloadedPath);
   const successfulEvents = events.filter(event => event.attemptId === buttonLaunch.attemptId).map(event => event.stage);
-  assert.equal(successfulEvents.filter(stage => stage === 'workload-force-confirmed').length, 1);
-  assert.equal(successfulEvents.filter(stage => stage === 'workload-force-stopped').length, 1);
-  assert(successfulEvents.indexOf('workload-force-stopped') < successfulEvents.indexOf('helper-ready'));
-  assert.equal(processAlive(buttonTerminalPid), false, 'The app-owned packaged PTY must exit before the installer helper starts');
+  assert.equal(successfulEvents.filter(stage => stage === 'workload-force-confirmed').length, 0);
+  assert.equal(successfulEvents.filter(stage => stage === 'external-terminal-host-preserved').length, 1);
+  assert(successfulEvents.indexOf('external-terminal-host-preserved') < successfulEvents.indexOf('helper-ready'));
+  assert.equal(processAlive(buttonTerminalPid), true, 'The packaged PTY must survive helper startup');
+  assert.equal(processAlive(buttonHostIdentity.hostPid), true, 'The original host must survive helper startup');
   assert(successfulEvents.indexOf('workload-stopped') < successfulEvents.indexOf('helper-ready'));
   await waitForProcessExit(buttonParentPid);
   activeAppPid = await waitForRelaunchLog(buttonLaunch.logPath, targetVersion);
   await waitForInstalledPackage(targetVersion);
   await waitForUpdateArtifactCleanup(buttonLaunch);
   assertCompletedInstall(buttonLaunch.logPath, { parentPid: buttonParentPid, expectedVersion: targetVersion });
-  console.log('PASS actual packaged update button: persistent failure, retry, workload shutdown, verified install and renderer-ready relaunch');
+  const { TerminalHostClient } = require('../src/terminalHost');
+  const preserved = new TerminalHostClient({ discoveryFile: buttonHostIdentity.discoveryFile });
+  try {
+    await preserved.connect();
+    assert.equal(preserved.discovery.pid, buttonHostIdentity.hostPid);
+    const terminal = await preserved.get(buttonTerminalId);
+    assert.equal(terminal.pid, buttonTerminalPid);
+    assert.equal(terminal.status, 'running');
+    await preserved.close(buttonTerminalId);
+  } finally { preserved.dispose({ shutdownIfIdle: true }); }
+  await waitForProcessExit(buttonTerminalPid);
+  await waitForProcessExit(buttonHostIdentity.hostPid);
+  console.log('PASS actual packaged update button: persistent failure, retry, preserved PTY, verified install, renderer-ready relaunch and test workload cleanup');
 
   console.log(`✓ Official Whitebox ${SOURCE_VERSION} reached ${targetVersion} through its packaged ${sourceCohort.installMode} path; the candidate updater then acknowledged bootstrap and reinstalled/relaunched the same target exactly once.`);
 }
@@ -1287,6 +1300,9 @@ main().catch(error => {
       stopProcessesAtExactPath(installerPath, 'Integration installer');
     });
   }
+  await captureCleanup('stop isolated runtime processes', async () => {
+    await stopProcessesUnderDirectory(isolatedAppDataRoot, 'Isolated runtime');
+  });
   await captureCleanup('stop installed-path processes', async () => {
     await stopProcessesUnderDirectory(installDir, 'Installed-path');
   });

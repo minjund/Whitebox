@@ -179,7 +179,8 @@ async function run(config = parseConfig()) {
       discoveryFile: config.discoveryFile,
       onShutdown: stop,
       beforeOperation: (operation, args) => prepareCodexOperation(manager, codexAppServer, operation, args),
-      extraInfo: () => ({ codexAppServer: codexAppServer.currentInfo() }),
+      extraInfo: () => ({ codexAppServer: codexAppServer.currentInfo(),
+        hostRuntime: { executable: process.execPath, script: __filename } }),
     });
     bridge = new BridgeServer({
       terminalManager: manager,

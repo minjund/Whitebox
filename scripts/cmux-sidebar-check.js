@@ -92,6 +92,20 @@ const uuid = number => `00000000-0000-0000-0000-${String(number).padStart(12, '0
   assert.deepEqual(await client.frame(entries[0].id), { text: 'terminal output' }, 'older cmux versions retain text support');
   await client.input(entries[0].id, 'hello\\world\r');
   assert.equal(calls.at(-1).at(-1), 'hello\\\\world\\r');
+  const inputTarget = ['send', '--window', target.window, '--workspace', target.workspace, '--surface', target.surface, '--force', '--'];
+  assert.deepEqual(calls.at(-1).slice(0, -1), inputTarget, 'direct keyboard input bypasses the automation draft guard only on the exact surface');
+  // Simulate cmux's reported guard: even Backspace/Enter into a nonempty agent
+  // prompt is rejected unless the caller marks it as deliberate direct input.
+  const executeInput = client.execute;
+  client.execute = async (file, args, options) => {
+    if (args[0] === 'send' && !args.includes('--force')) throw new Error('the agent prompt holds text someone is typing');
+    return executeInput(file, args, options);
+  };
+  for (const data of ['한글', '\x7f', '\r', '--paste', '가\\나\n다\t라']) {
+    await client.input(entries[0].id, data);
+    assert.deepEqual(calls.at(-1).slice(0, -1), inputTarget);
+    assert.equal(calls.at(-1).at(-1), data.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t'));
+  }
   await assert.rejects(() => client.input(entries[0].id, ''), /입력/);
   await assert.rejects(() => client.arrange(entries[0].id, { action: 'move', targetId: 'unknown' }), /위치/);
   await client.focus(entries[0].id);

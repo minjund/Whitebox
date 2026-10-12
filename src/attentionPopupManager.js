@@ -572,13 +572,8 @@ class AttentionPopupManager {
   present(entry, force = false) {
     if (!this.enabled || !this.isAlive(entry) || (!force && entry.presented)) return;
     try {
-      if (entry.hasTextInput) {
-        entry.window.show();
-        if (typeof entry.window.focus === 'function') entry.window.focus();
-      } else if (typeof entry.window.showInactive === 'function') {
+      if (typeof entry.window.showInactive === 'function') {
         entry.window.showInactive();
-      } else {
-        entry.window.show();
       }
       entry.presented = true;
     } catch (error) { this.report(error, 'show-window', entry.record); }
