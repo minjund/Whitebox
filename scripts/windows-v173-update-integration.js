@@ -1232,6 +1232,8 @@ async function main() {
   await waitForInstalledPackage(targetVersion);
   await waitForUpdateArtifactCleanup(buttonLaunch);
   assertCompletedInstall(buttonLaunch.logPath, { parentPid: buttonParentPid, expectedVersion: targetVersion });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(buttonProfile, 'attention-hook-runtime.json'), 'utf8')).pid, activeAppPid,
+    'The relaunched GUI must use the same isolated profile and terminal discovery');
   const { TerminalHostClient } = require('../src/terminalHost');
   const preserved = new TerminalHostClient({ discoveryFile: buttonHostIdentity.discoveryFile });
   try {

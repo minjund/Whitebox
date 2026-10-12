@@ -143,6 +143,8 @@ async function stopOwned(pid) {
     assert.equal(match[2], version); relaunchedPid = Number(match[1]); return true;
   }, 'packaged macOS replacement and renderer readiness');
   assert(alive(relaunchedPid));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'attention-hook-runtime.json'), 'utf8')).pid, relaunchedPid,
+    'The relaunched GUI must restore the same profile and terminal discovery');
   asar.uncache(path.join(app,'Contents','Resources','app.asar'));
   const metadata = JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'), 'package.json'));
   assert.equal(metadata.version, version);

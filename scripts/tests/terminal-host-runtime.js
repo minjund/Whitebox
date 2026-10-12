@@ -4,8 +4,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { prepareTerminalHostRuntime } = require('../../src/terminalHostRuntime');
 const { externalTerminalHost, isExternalDarwinHost, readDarwinHostProcess } = require('../../src/updateWorkloadScope');
+const { applyScopedUpdateRelaunchProfile } = require('../../src/updateRelaunch');
 
 function registerTerminalHostRuntimeTests({ test, temp }) {
+  test('업데이트 재실행은 준비 신호에 연결된 기존 프로필을 복원하고 다른 프로필은 거부한다', () => {
+    const profile = path.join(temp, 'update-profile');
+    fs.mkdirSync(path.join(profile, 'updates'), { recursive: true });
+    const token = 'a'.repeat(48);
+    const request = { token, readyPath: path.join(profile, 'updates', `install-renderer-ready-${token}.json`) };
+    const applied = [];
+    const app = { setPath: (...args) => applied.push(args) };
+    const result = applyScopedUpdateRelaunchProfile({ app, request, profilePath: profile });
+    assert.equal(result.applied, true);
+    assert.deepEqual(applied, [['userData', fs.realpathSync(profile)]]);
+    const other = path.join(temp, 'other-update-profile');
+    fs.mkdirSync(path.join(other, 'updates'), { recursive: true });
+    assert.throws(() => applyScopedUpdateRelaunchProfile({ app, request, profilePath: other }), /프로필 밖/);
+    assert.deepEqual(applyScopedUpdateRelaunchProfile({ app, profilePath: profile }), { applied: false });
+    assert.equal(applied.length, 1);
+  });
   test('독립 명령창 runtime은 설치 교체 후에도 실행 파일과 코드 및 native addon을 보존한다', async () => {
     for (const platform of ['win32', 'darwin']) {
       const install = path.join(temp, `independent-${platform}`, 'Whitebox.app');

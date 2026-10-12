@@ -41,6 +41,8 @@ const {
   LEGACY_READY_TOKEN_ENV,
   READY_PATH_ENV,
   READY_TOKEN_ENV,
+  PROFILE_PATH_ENV,
+  applyScopedUpdateRelaunchProfile,
   applyWindowsUpdateRelaunchProfile,
   readUpdateRelaunchRequest,
   signalRendererReady,
@@ -80,6 +82,8 @@ const { ASIDE_MANIFEST } = require('./src/sourcePlugins/bundled');
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('./src/windowsShellIdentity');
 const packageMetadata = require('./package.json');
 const pendingUpdateRelaunch = readUpdateRelaunchRequest(process.env);
+const pendingUpdateProfile = process.env[PROFILE_PATH_ENV];
+delete process.env[PROFILE_PATH_ENV];
 delete process.env[READY_PATH_ENV];
 delete process.env[READY_TOKEN_ENV];
 delete process.env[LEGACY_READY_PATH_ENV];
@@ -99,7 +103,11 @@ const ALLOW_UNSIGNED_MAC_UPDATES = packageMetadata.whitebox?.distributionChannel
 app.setName(PRODUCT_NAME);
 process.title = PRODUCT_NAME;
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
-applyWindowsUpdateRelaunchProfile({
+const scopedUpdateProfile = applyScopedUpdateRelaunchProfile({
+  app, request: pendingUpdateRelaunch, profilePath: pendingUpdateProfile,
+  platform: process.platform,
+});
+if (!scopedUpdateProfile.applied) applyWindowsUpdateRelaunchProfile({
   app,
   environment: process.env,
   platform: process.platform,
@@ -1733,6 +1741,7 @@ async function performDownloadedUpdateInstall(attemptId) {
     appPath: installPlan.appPath,
     expectedVersion: downloaded.latestVersion,
     parentPid: process.pid,
+    environment: { WHITEBOX_UPDATE_PROFILE_PATH: userFile('') },
     shell,
     allowUnsignedWindowsUpdates: ALLOW_UNSIGNED_WINDOWS_UPDATES,
     allowUnsignedMacUpdates: ALLOW_UNSIGNED_MAC_UPDATES,
