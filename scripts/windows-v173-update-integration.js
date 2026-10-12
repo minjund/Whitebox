@@ -1304,11 +1304,13 @@ main().catch(error => {
       stopProcessesAtExactPath(installerPath, 'Integration installer');
     });
   }
-  await captureCleanup('stop isolated runtime processes', async () => {
-    await stopProcessesUnderDirectory(isolatedAppDataRoot, 'Isolated runtime');
-  });
   await captureCleanup('stop installed-path processes', async () => {
     await stopProcessesUnderDirectory(installDir, 'Installed-path');
+  });
+  // Stop GUI clients first so reconnect cannot respawn an isolated host while
+  // its cleanup is being verified.
+  await captureCleanup('stop isolated runtime processes', async () => {
+    await stopProcessesUnderDirectory(isolatedAppDataRoot, 'Isolated runtime');
   });
 
   asar.uncacheAll();

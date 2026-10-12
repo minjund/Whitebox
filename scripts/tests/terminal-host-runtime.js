@@ -19,6 +19,11 @@ function registerTerminalHostRuntimeTests({ test, temp }) {
       const options = { isPackaged: true, platform, executable, script: path.join(resources, 'app.asar/src/terminalHostDaemon.js'), runtimeRoot: path.join(temp, `runtimes-${platform}`) };
       const runtime = await prepareTerminalHostRuntime(options);
       assert(!runtime.executable.startsWith(install + path.sep));
+      if (platform === 'win32') {
+        assert.equal(path.basename(runtime.executable), 'WhiteboxTerminalHost.exe');
+        assert.equal(fs.existsSync(path.join(path.dirname(runtime.executable), 'Whitebox.exe')), false,
+          'The host image must not match the NSIS GUI process-name shutdown');
+      }
       assert.deepEqual(await prepareTerminalHostRuntime(options), runtime);
       const runtimeArchive = runtime.script.slice(0, runtime.script.indexOf('app.asar') + 'app.asar'.length);
       fs.writeFileSync(path.join(resources, 'app.asar'), 'candidate app');

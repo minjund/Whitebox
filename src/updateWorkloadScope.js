@@ -42,6 +42,9 @@ function isExternalWindowsHost(identity, appPath, canonicalize = value => path.w
   if (!path.win32.isAbsolute(appPath || '')) throw new Error('Invalid installed application path');
   const root = canonicalize(path.win32.dirname(appPath)).toLowerCase();
   const executable = canonicalize(identity.ExecutablePath).toLowerCase();
+  // The standard NSIS app-running check terminates matching image names
+  // across installation paths. Such a host cannot be preserved by relocation.
+  if (path.win32.basename(executable) === path.win32.basename(appPath).toLowerCase()) return false;
   const prefix = root.endsWith('\\') ? root : root + '\\';
   const command = String(identity.CommandLine).replaceAll('/', '\\').toLowerCase();
   const scripts = [...command.matchAll(/"([^"\r\n]*\\terminalhostdaemon\.js)"|(\S*\\terminalhostdaemon\.js)(?=\s|$)/g)]
