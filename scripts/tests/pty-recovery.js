@@ -19,7 +19,9 @@ function registerPtyRecoveryTests({ test, root }) {
           if (signal !== 0) handle.emitExit();
           if (signal === 0 && !present) { const error = new Error('absent'); error.code = 'ESRCH'; throw error; }
         } }) });
-    const terminal = manager.create({ type: 'shell', cwd: root });
+    // The fake PTY exercises POSIX termination, not installed-shell discovery.
+    // A cmd launch spec is portable because spawn is fully injected here.
+    const terminal = manager.create({ type: 'cmd', cwd: root });
     await assert.rejects(manager.stop(terminal.id), { code: 'PTY_TREE_EXIT_UNCONFIRMED' });
     assert.equal(manager.get(terminal.id).terminationUncertain, true);
     calls.length = 0;
@@ -34,7 +36,7 @@ function registerPtyRecoveryTests({ test, root }) {
     assert.equal(manager.get(terminal.id).terminationUncertain, false);
     await manager.close(terminal.id);
     // Neither persisted PIDs nor changed generations may authorize rechecking.
-    const second = manager.create({ type: 'shell', cwd: root });
+    const second = manager.create({ type: 'cmd', cwd: root });
     handle.__whiteboxExited = true;
     const internal = manager.sessions.get(second.id);
     internal.terminationUncertain = true;
