@@ -35,6 +35,18 @@ async function stopOwned(pid) {
   process.kill(pid, 'SIGTERM');
   await waitFor(() => !alive(pid), 'isolated app cleanup', 30000);
 }
+function ownedExecutablePids() {
+  const mappings = execFileSync('/usr/sbin/lsof', ['-d', 'txt', '-Fpn'], {
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  });
+  const pids = new Set();
+  let pid = 0;
+  for (const line of mappings.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1));
+    else if (line.startsWith('n' + root + '/') && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
 (async () => {
   fs.mkdirSync(path.dirname(app), {recursive:true});
   // Reproduce the reported installed macOS 1.7.3 cohort from official bytes.
@@ -182,6 +194,10 @@ async function stopOwned(pid) {
     if(driver) driver.close();
     await stopOwned(relaunchedPid);
     if(driver) await stopOwned(driver.child.pid);
+    // An idle cached host can outlive the GUI briefly. Prove its natural exit
+    // (and every mapped test executable's exit) before deleting its runtime.
+    await waitFor(() => ownedExecutablePids().length === 0, 'all isolated executable processes exited', 30000);
+    console.log('PASS all isolated GUI, helper and cached-host executable mappings absent before directory cleanup');
     assert.equal(path.dirname(root),fs.realpathSync(os.tmpdir()));
     if(!process.exitCode) fs.rmSync(root,{recursive:true,force:true});
     else console.error('Diagnostics preserved: ' + root);
