@@ -16,7 +16,7 @@ function registerTerminalHostRuntimeTests({ test, temp }) {
     const app = { setPath: (...args) => applied.push(args) };
     const result = applyScopedUpdateRelaunchProfile({ app, request, profilePath: profile });
     assert.equal(result.applied, true);
-    assert.deepEqual(applied, [['userData', fs.realpathSync(profile)]]);
+    assert.deepEqual(applied, [['userData', fs.realpathSync.native(profile)]]);
     const other = path.join(temp, 'other-update-profile');
     fs.mkdirSync(path.join(other, 'updates'), { recursive: true });
     assert.throws(() => applyScopedUpdateRelaunchProfile({ app, request, profilePath: other }), /프로필 밖/);
