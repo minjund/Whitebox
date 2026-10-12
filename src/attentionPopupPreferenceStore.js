@@ -9,12 +9,14 @@ class AttentionPopupPreferenceStore {
     this.file = file;
     this.fileSystem = options.fileSystem || fs;
     this.onError = typeof options.onError === 'function' ? options.onError : () => {};
-    this.enabled = true;
+    this.enabled = false;
   }
 
   normalize(value) {
     const candidate = value && typeof value === 'object' ? value.enabled : value;
-    return { enabled: candidate !== false };
+    // Previous versions enabled automatic windows by default. Require a new
+    // explicit opt-in instead of carrying that default into manual viewing.
+    return { enabled: value?.version === 2 && candidate === true };
   }
 
   load() {
@@ -22,19 +24,19 @@ class AttentionPopupPreferenceStore {
       const parsed = JSON.parse(this.fileSystem.readFileSync(this.file, 'utf8'));
       this.enabled = this.normalize(parsed).enabled;
     } catch (error) {
-      this.enabled = true;
+      this.enabled = false;
       if (!error || error.code !== 'ENOENT') this.onError(error);
     }
     return this.snapshot();
   }
 
   save(value) {
-    const next = this.normalize(value);
+    const next = this.normalize({ version: 2, enabled: typeof value === 'boolean' ? value : value?.enabled });
     const directory = path.dirname(this.file);
     const temporary = `${this.file}.${process.pid}.tmp`;
     this.fileSystem.mkdirSync(directory, { recursive: true });
     try {
-      this.fileSystem.writeFileSync(temporary, JSON.stringify(next, null, 2), {
+      this.fileSystem.writeFileSync(temporary, JSON.stringify({ version: 2, ...next }, null, 2), {
         encoding: 'utf8',
         mode: 0o600,
       });

@@ -1471,6 +1471,7 @@ function registerUiContractTests(context) {
     assert.doesNotMatch(styles, /\.pty-focus-child-modal/u, '삭제된 PTY 하위 노드 팝업 스타일이 다시 포함되었습니다.');
     assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/, '동작 줄이기 미디어 계약이 없습니다.');
     const terminal = rendererSource([
+      'terminal-engine.js',
       'terminal-workbench.js',
       'terminal-agent.js',
       'terminal-events.js',
@@ -3091,8 +3092,11 @@ function registerUiContractTests(context) {
       terminal.indexOf('function syncXtermTheme()'),
     );
 
-    assert.match(optionsSource, /letterSpacing:\s*0,/, '음수 자간이 한글 대체 글꼴을 겹쳐 보이게 하면 안 됩니다.');
-    assert.doesNotMatch(optionsSource, /letterSpacing:\s*-\d/, '터미널 글리프 셀 간격을 강제로 압축하면 안 됩니다.');
+    const engine = fs.readFileSync(path.join(root, 'renderer', 'terminal-engine.js'), 'utf8');
+    const sharedOptions = engine.slice(engine.indexOf('function workspaceOptions('), engine.indexOf('function createView('));
+    assert.match(optionsSource, /WhiteboxTerminalEngine\.workspaceOptions\(state\.terminalFontSize\)/);
+    assert.match(sharedOptions, /letterSpacing:\s*0,/, '음수 자간이 한글 대체 글꼴을 겹쳐 보이게 하면 안 됩니다.');
+    assert.doesNotMatch(sharedOptions, /letterSpacing:\s*-\d/, '터미널 글리프 셀 간격을 강제로 압축하면 안 됩니다.');
     assert.match(
       optionsSource,
       /smoothScrollDuration:\s*reduceMotion\s*\?\s*0\s*:\s*TERMINAL_SMOOTH_SCROLL_MS/,

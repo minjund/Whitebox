@@ -271,14 +271,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       rows: Number(session.rows) || 32,
     } : null;
     const inputDisabled = readOnly;
-    const terminal = new engine.Terminal({
+    const { terminal, fit } = engine.createView(host, {
       ...xtermOptions(inputDisabled),
       ...(fixedGrid || {}),
     });
-    const fit = new engine.FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host);
-    if (!readOnly) terminal.loadAddon(window.WhiteboxTerminalIme.createAddon());
     if (typeof terminal.attachCustomKeyEventHandler === 'function') {
       terminal.attachCustomKeyEventHandler(event => {
         const clipboardKey = String(event.key || '').toLowerCase();

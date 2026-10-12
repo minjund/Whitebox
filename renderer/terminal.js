@@ -7,59 +7,7 @@
   const TERMINAL_VIEW_KEY = 'whitebox:terminal-view:v1';
   const TERMINAL_SMOOTH_SCROLL_MS = 100;
   const tmuxTargetKey = (distroName, paneId) => JSON.stringify([String(distroName || ''), String(paneId || '')]);
-  const XTERM_THEMES = Object.freeze({
-    dark: Object.freeze({
-      background: '#030304',
-      foreground: '#f0f0f2',
-      cursor: '#f4f4f5',
-      cursorAccent: '#09090b',
-      selectionBackground: '#3a3a40',
-      black: '#111113',
-      red: '#ff7b91',
-      green: '#4dd2a2',
-      yellow: '#f1b95f',
-      blue: '#76b7f3',
-      magenta: '#c69af4',
-      cyan: '#73c7d4',
-      white: '#d6d6da',
-      brightBlack: '#7f7f89',
-      brightRed: '#ffa0ae',
-      brightGreen: '#7be0b8',
-      brightYellow: '#f5d18a',
-      brightBlue: '#9bcbfa',
-      brightMagenta: '#dcb6fa',
-      brightCyan: '#98dee5',
-      brightWhite: '#ffffff',
-    }),
-    light: Object.freeze({
-      background: '#f3f0ea',
-      foreground: '#26221f',
-      cursor: '#6254d9',
-      cursorAccent: '#ffffff',
-      selectionBackground: '#ddd6fa',
-      black: '#24211f',
-      red: '#bc2f4a',
-      green: '#0b7658',
-      yellow: '#9a5a00',
-      blue: '#25669c',
-      magenta: '#7a4fa2',
-      cyan: '#24788c',
-      white: '#68616f',
-      brightBlack: '#6f6861',
-      brightRed: '#a42e49',
-      brightGreen: '#075f47',
-      brightYellow: '#794409',
-      brightBlue: '#254f82',
-      brightMagenta: '#643b8a',
-      brightCyan: '#1a6576',
-      brightWhite: '#24211f',
-    }),
-  });
-
-  function xtermTheme() {
-    const name = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
-    return { ...XTERM_THEMES[name] };
-  }
+  function xtermTheme() { return window.WhiteboxTerminalEngine.workspaceTheme(); }
 
   function loadSessionOrder() {
     try {
@@ -310,17 +258,11 @@
   function xtermOptions(readOnly = false) {
     const reduceMotion = document.documentElement?.dataset?.motion === 'reduced';
     return {
+      ...window.WhiteboxTerminalEngine.workspaceOptions(state.terminalFontSize),
       allowProposedApi: false,
       cursorBlink: !readOnly,
-      cursorStyle: 'bar',
       disableStdin: readOnly,
       convertEol: readOnly,
-      screenReaderMode: true,
-      fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "D2Coding", monospace',
-      fontSize: state.terminalFontSize,
-      letterSpacing: 0,
-      lineHeight: state.terminalFontSize >= 17 ? 1.32 : 1.28,
-      scrollback: 5_000,
       smoothScrollDuration: reduceMotion ? 0 : TERMINAL_SMOOTH_SCROLL_MS,
       theme: xtermTheme(),
     };
@@ -328,7 +270,7 @@
 
   function syncXtermTheme() {
     for (const entry of [...state.terminals.values(), state.remoteTerminal].filter(Boolean)) {
-      entry.terminal.options.theme = entry.host.dataset.groupTerminal ? window.WhiteboxTerminalEngine.workspaceTheme() : xtermTheme();
+      entry.terminal.options.theme = xtermTheme();
     }
   }
 
@@ -977,7 +919,7 @@
           entry.terminal.refresh();
         }
       };
-      const focusTerminal = event => { if (event.button === 0) entry.terminal.focus(); };
+      const focusTerminal = event => window.WhiteboxTerminalEngine.focusFromPointer(event, entry.terminal);
       mount.addEventListener('pointerdown', focusTerminal);
       document.addEventListener('focusin', syncCursor);
       document.addEventListener('focusout', syncCursor);

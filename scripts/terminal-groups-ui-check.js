@@ -77,7 +77,7 @@ app.whenReady().then(async () => {
     }
     assert.equal(await run("document.querySelector('#terminalGroupPanel').parentElement.id"), 'mainContent');
     assert.equal(await run("document.querySelector('[data-group-font-size]').textContent"), '15');
-    assert.equal(await run("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>t.options.cursorBlink===false && t.options.fontSize===15 && t.options.fontFamily===WhiteboxTerminalEngine.workspaceOptions().fontFamily)"), true);
+    assert.equal(await run("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>t.options.cursorBlink===WhiteboxTerminalEngine.workspaceOptions().cursorBlink && t.options.fontSize===15 && t.options.fontFamily===WhiteboxTerminalEngine.workspaceOptions().fontFamily)"), true);
     await run("document.querySelector('[data-group-font=\"1\"]').click()");
     assert.equal(await run("nativeGroupTerminals.filter(t=>!t.disposed).every(t=>t.options.fontSize===16)"), true);
     await run("document.querySelector('[data-group-font=\"-1\"]').click();document.querySelector('[data-group-columns]').value='1';document.querySelector('[data-group-columns]').dispatchEvent(new Event('change',{bubbles:true}))");
@@ -132,7 +132,22 @@ app.whenReady().then(async () => {
     await run("document.querySelector('#terminalGroupPanel [data-group-expand]').click()");
     const textarea = await run("Boolean(document.querySelector('#terminalGroupPanel textarea'))");
     assert.equal(textarea, true, 'actual terminal input must be mounted');
-    await run("document.querySelector('#terminalGroupPanel textarea').focus()");
+    // A click on the viewport padding must keep the native input focused.
+    const groupBlank = await run("(()=>{const r=document.querySelector('#terminalGroupPanel .terminal-group-viewport').getBoundingClientRect();return {x:Math.round(r.left+2),y:Math.round(r.top+2)}})()");
+    win.webContents.sendInputEvent({ type: 'mouseDown', ...groupBlank, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', ...groupBlank, button: 'left', clickCount: 1 });
+    assert.equal(await run("document.activeElement===document.querySelector('#terminalGroupPanel textarea')"), true, 'blank group space retains IME focus after the native mouse default');
+    const compose = async text => {
+      for (const value of ['ㅎ', text]) await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: value, selectionStart: value.length, selectionEnd: value.length });
+      await win.webContents.debugger.sendCommand('Input.insertText', { text });
+    };
+    await run("(()=>{const input=document.activeElement;input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));for(const text of ['ㅎ','한글']){input.value=text;input.setSelectionRange(text.length,text.length);input.dispatchEvent(new CompositionEvent('compositionupdate',{data:text,bubbles:true}));}input.dispatchEvent(new CompositionEvent('compositionend',{data:'한글',bubbles:true}));})()");
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    await until(`nativeGroupTerminals[0].element.querySelector('.whitebox-ime-view').style.display==='none'`, 'group Korean preedit commits');
+    for (let i = 0; i < 100 && !manager.get(before[0].id, true).replay.includes('한글'); i += 1) await wait(50);
+    assert.match(manager.get(before[0].id, true).replay, /한글/, 'Chromium Korean composition reaches the real grouped tmux PTY');
+    console.log('✓ 그룹 터미널: 빈 영역 클릭 포커스 유지 · 한글 조합 → 실제 tmux PTY');
     for (const character of "printf 'GROUP_UI_INPUT_OK\\n'") win.webContents.sendInputEvent({ type: 'char', keyCode: character });
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
@@ -253,7 +268,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'char', keyCode: 'x' });
     await until("interactionTest.getCalls().some(call=>call.name==='cmuxInput' && call.args[1]==='x')", 'terminal input reaches same cmux surface');
     await clickTerminal('cmux:codex');
-    assert.equal(await run("cmuxTestTerminals.every(t=>t.options.cursorBlink===false && t.options.cursorStyle==='bar')"), true, 'cmux panes never blink together or draw block cursors');
+    assert.equal(await run("cmuxTestTerminals.every(t=>t.options.cursorBlink===WhiteboxTerminalEngine.workspaceOptions().cursorBlink && t.options.cursorStyle==='bar')"), true, 'cmux panes use the single-session cursor settings');
     assert.equal(await run("cmuxTestTerminals.filter(t=>t.wasmTerm.getCursor().visible).length<=1 && !cmuxTestTerminals[0].wasmTerm.getCursor().visible"), true, 'inactive panel cursor is hidden after focus moves');
     const resizeCounts = await run("cmuxTestTerminals.map(t=>t.testResizeCount)");
     await run(`interactionTest.setCmuxFrame(${JSON.stringify({columns:80,rows:24,ansi:'\x1b[2J\x1b[HFRESH OUTPUT\x1b[?25h',cursor:{row:0,column:12,visible:true}})})`);
@@ -272,6 +287,10 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'char', keyCode: 'z' });
     await until("interactionTest.getCalls().some(call=>call.name==='cmuxInput' && call.args[0]==='cmux:codex' && call.args[1]==='z')", 'input still reaches the clicked pane after refresh');
     assert.equal(await run("document.querySelector('.cmux-pane.is-input-active').dataset.cmuxPane"), 'pane-b', 'input badge follows exact clicked pane');
+    const cmuxBlank = await run("(()=>{const r=document.querySelector('[data-cmux-member=\"cmux:codex\"]').getBoundingClientRect();return {x:Math.round(r.left+2),y:Math.round(r.top+2)}})()");
+    win.webContents.sendInputEvent({ type: 'mouseDown', ...cmuxBlank, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', ...cmuxBlank, button: 'left', clickCount: 1 });
+    await until("document.activeElement===document.querySelector('[data-cmux-member=\"cmux:codex\"] textarea')", 'blank cmux space retains IME focus');
     await run(`(()=>{const data=new DataTransfer();data.setData('text/plain','한글 붙여넣기');document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));})()`);
     await until("interactionTest.getCalls().some(call=>call.name==='cmuxInput' && call.args[0]==='cmux:codex' && call.args[1].includes('한글 붙여넣기'))", 'Korean paste reaches only the clicked pane');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
@@ -384,6 +403,16 @@ app.whenReady().then(async () => {
     assert.equal(await run("document.querySelector('.cmux-split').style.getPropertyValue('--cmux-ratio')"), '70%', 'failure restores native layout even if inventory is unchanged');
     await run("interactionTest.clearControls()");
     console.log('✓ cmux 경계선: 가로·세로 즉시 미리보기·1회 동기화·입력창 보존·취소·실패 복원');
+    await run("document.querySelector('[data-cmux-member=\"cmux:codex\"] textarea').focus()");
+    // Keep CDP composition scoped away from native pointer-capture checks.
+    if (!win.webContents.debugger.isAttached()) win.webContents.debugger.attach('1.3');
+    const inputStart = await run("interactionTest.getCalls().length");
+    await compose('한글');
+    await until(`interactionTest.getCalls().slice(${inputStart}).some(call=>call.name==='cmuxInput' && call.args[1]==='한글')`, 'cmux Korean composition commits exactly once');
+    const koreanCalls = await run(`interactionTest.getCalls().slice(${inputStart}).filter(call=>call.name==='cmuxInput').map(call=>call.args)`);
+    assert.deepEqual(koreanCalls, [['cmux:codex', '한글']], 'preedit never leaks or duplicates into another cmux pane');
+    win.webContents.debugger.detach();
+    console.log('✓ cmux 터미널: 빈 영역 클릭 포커스 유지 · 한글 조합 확정 1회 · 입력 대상 분리');
     cmuxGroup.members.pop();
     await run(`interactionTest.setCmuxInventory({installed:true,error:'',entries:${JSON.stringify(cmuxGroup.members)},groups:[${JSON.stringify(cmuxGroup)}]});window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'))`);
     await until("document.querySelectorAll('[data-cmux-member]').length===1", 'removed cmux member disappears');

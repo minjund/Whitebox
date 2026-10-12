@@ -49,7 +49,7 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
     assert(runner.resumeAfterUpdateFailure());
   }
 
-  for (const scenario of ['cancel', 'force', 'force-fails', 'verification-fails', 'old-host', 'external-host']) {
+  for (const scenario of ['cleanup-fails', 'verification-fails', 'old-host', 'external-host', 'active-terminal', 'active-direct']) {
     const events = [];
     let helpers = 0, quits = 0, prompts = 0, forceCalls = 0;
     class Host {
@@ -72,7 +72,7 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
       canInstallSilently: () => true,
       verifyDownloadedInstaller: async () => { if (scenario === 'verification-fails') throw new Error('digest mismatch'); },
       preflightAutomaticUpdate: async () => {},
-      updateWorkloadImpact: async () => ({ agentRuns: [], terminalSessions: [], externalHost: scenario === 'external-host' }),
+      updateWorkloadImpact: async () => ({ agentRuns: scenario === 'active-direct' ? [{ runId: 'live-run' }] : [], terminalSessions: scenario === 'active-terminal' ? [{ id: 'live', status: 'running' }] : [], externalHost: scenario === 'external-host' }),
       externalTerminalHost: async () => true, confirmActiveTerminalUpdate: async () => true,
       confirmForceTerminalUpdate: async () => { prompts += 1; return scenario !== 'cancel'; },
       runner: null, TerminalHostClient: Host, terminalManager: new Host(),
@@ -80,18 +80,14 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
       updateInstallPromise: null, setImmediate: fn => fn(), app: { quit() { quits += 1; } }, isQuitting: false };
     vm.createContext(lifecycle);
     vm.runInContext(main.slice(main.indexOf('function recordUpdateInstallEvent('), main.indexOf('async function setupAttentionRuntime()')), lifecycle);
-    if (['force', 'external-host'].includes(scenario)) await lifecycle.installDownloadedUpdate();
-    else await assert.rejects(lifecycle.installDownloadedUpdate(), /cleanup failed|exit remains unconfirmed|digest mismatch/);
-    assert.equal(helpers, ['force', 'external-host'].includes(scenario) ? 1 : 0, scenario);
+    if (scenario === 'external-host') await lifecycle.installDownloadedUpdate();
+    else await assert.rejects(lifecycle.installDownloadedUpdate(), /cleanup failed|digest mismatch|설치를 보류/);
+    assert.equal(helpers, scenario === 'external-host' ? 1 : 0, scenario);
     assert.equal(quits, helpers, scenario);
-    assert.equal(prompts, ['old-host', 'verification-fails', 'external-host'].includes(scenario) ? 0 : 1, scenario);
-    assert.equal(forceCalls, ['force', 'force-fails'].includes(scenario) ? 1 : 0, scenario);
-    if (scenario === 'force') {
-      assert.equal(new Set(events.map(event => event.attemptId)).size, 1);
-      const stages = events.map(event => event.stage);
-      assert(stages.indexOf('workload-force-confirmed') < stages.indexOf('workload-force-stopped'));
-      assert(stages.indexOf('workload-force-stopped') < stages.indexOf('helper-ready'));
-    }
+    assert.equal(prompts, 0, 'Updates must never offer to force-stop work');
+    assert.equal(forceCalls, 0, 'Updates must never force-stop work');
+    assert(!events.some(event => event.stage === 'workload-force-confirmed'));
+
   }
 
   let calls=0, resolveInstall;

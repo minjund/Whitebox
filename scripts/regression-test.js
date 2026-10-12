@@ -36,6 +36,9 @@ const fixtures = createRegressionFixtures(root);
 const harness = createTestHarness();
 const context = { ...fixtures, test: harness.test };
 require('./tests/update-workload-scope').registerUpdateWorkloadScopeTests(context);
+require('./tests/pty-recovery').registerPtyRecoveryTests(context);
+require('./tests/terminal-host-runtime').registerTerminalHostRuntimeTests(context);
+require('./tests/window-focus-policy').registerWindowFocusPolicyTests(context);
 require('./tests/monitor-state-latency').registerMonitorStateLatencyTests(context);
 require('./tests/performance-regressions').registerPerformanceRegressionTests(context);
 require('./tests/packaged-update-driver').registerPackagedUpdateDriverTests(context);
@@ -75,8 +78,8 @@ registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
 require('./tests/control-room-projects').registerControlRoomProjectTests(context);
 
-if (harness.count() !== 538) {
-  throw new Error(`회귀 테스트 등록 수가 538개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 549) {
+  throw new Error(`회귀 테스트 등록 수가 549개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

@@ -42,6 +42,9 @@ function isExternalWindowsHost(identity, appPath, canonicalize = value => path.w
   if (!path.win32.isAbsolute(appPath || '')) throw new Error('Invalid installed application path');
   const root = canonicalize(path.win32.dirname(appPath)).toLowerCase();
   const executable = canonicalize(identity.ExecutablePath).toLowerCase();
+  // The standard NSIS app-running check terminates matching image names
+  // across installation paths. Such a host cannot be preserved by relocation.
+  if (path.win32.basename(executable) === path.win32.basename(appPath).toLowerCase()) return false;
   const prefix = root.endsWith('\\') ? root : root + '\\';
   const command = String(identity.CommandLine).replaceAll('/', '\\').toLowerCase();
   const scripts = [...command.matchAll(/"([^"\r\n]*\\terminalhostdaemon\.js)"|(\S*\\terminalhostdaemon\.js)(?=\s|$)/g)]
@@ -54,18 +57,51 @@ function isExternalWindowsHost(identity, appPath, canonicalize = value => path.w
     && !script.startsWith(prefix) && !command.includes(prefix);
 }
 
+function isExternalDarwinHost(runtime, appPath, canonicalize = value => fs.realpathSync(value)) {
+  const bundle = String(appPath || '').match(/^(.*\.app)\/Contents\//)?.[1];
+  if (!bundle || !path.posix.isAbsolute(runtime?.executable || '')
+    || !path.posix.isAbsolute(runtime?.script || '')
+    || path.posix.basename(runtime.script) !== 'terminalHostDaemon.js') return false;
+  const root = canonicalize(bundle);
+  const outside = value => { const resolved = canonicalize(value); return resolved !== root && !resolved.startsWith(root + '/'); };
+  return outside(runtime.executable) && outside(runtime.script);
+}
+
+async function readDarwinHostProcess(pid, runtime, run = promisify(execFile)) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid terminal host PID');
+  try {
+    const [started, mapped] = await Promise.all([
+      run('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { timeout: 5000, maxBuffer: 64 * 1024 }),
+      run('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'], { timeout: 5000, maxBuffer: 256 * 1024 }),
+    ]);
+    const names = String(mapped.stdout).split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1));
+    if (!String(started.stdout).trim() || !names.includes(runtime.executable)) throw new Error('Host executable mismatch');
+    return { ProcessId: pid, Started: String(started.stdout).trim(), ExecutablePath: runtime.executable, CommandLine: runtime.script };
+  } catch (_error) {
+    throw new Error('업데이트 대상 명령창 연결 프로그램을 확인하지 못했습니다. 프로그램을 종료하지 않았습니다.');
+  }
+}
+
 async function externalTerminalHost(client, appPath, options = {}) {
-  if ((options.platform || process.platform) !== 'win32') return false;
+  const platform = options.platform || process.platform;
+  if (!['win32', 'darwin'].includes(platform)) return false;
   const discovery = client.discovery;
   if (!client.connected || !discovery) throw new Error('명령창 연결 상태를 확인하지 못했습니다.');
-  const inspect = options.inspect || readWindowsHostProcess;
+  const runtime = discovery.hostRuntime;
+  if (platform === 'darwin' && !runtime) return false; // Frozen hosts cannot prove independent launch paths.
+  const inspect = options.inspect || (platform === 'darwin'
+    ? pid => readDarwinHostProcess(pid, runtime) : readWindowsHostProcess);
   const before = await inspect(Number(discovery.pid));
-  await client.verifyHost(discovery);
+  const verified = await client.verifyHost(discovery);
+  if (platform === 'darwin' && (verified?.hostRuntime?.executable !== runtime.executable
+    || verified?.hostRuntime?.script !== runtime.script)) throw new Error('명령창 연결 프로그램의 실행 경로가 바뀌었습니다.');
   const after = await inspect(Number(discovery.pid));
   if (client.discovery !== discovery || !client.connected
     || before.Started !== after.Started || before.ExecutablePath !== after.ExecutablePath
     || before.CommandLine !== after.CommandLine) throw new Error('업데이트 준비 중 명령창 연결 프로그램이 바뀌었습니다.');
-  return isExternalWindowsHost(after, appPath, options.canonicalize || canonicalWindowsLaunchPath);
+  return platform === 'darwin'
+    ? isExternalDarwinHost(runtime, appPath, options.canonicalize)
+    : isExternalWindowsHost(after, appPath, options.canonicalize || canonicalWindowsLaunchPath);
 }
 
-module.exports = { readWindowsHostProcess, isExternalWindowsHost, externalTerminalHost };
+module.exports = { readWindowsHostProcess, isExternalWindowsHost, readDarwinHostProcess, isExternalDarwinHost, externalTerminalHost };

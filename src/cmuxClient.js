@@ -274,8 +274,12 @@ class CmuxClient {
   async input(id, data) {
     if (typeof data !== 'string' || !data || data.length > 32768) throw new Error('터미널 입력이 너무 큽니다.');
     const args = this.target(id);
-    // CLI send interprets backslash escapes. Escape literal backslashes first.
-    await this.call(['send', ...args, data.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')]);
+    // This is direct user keyboard/paste input from Whitebox's focused terminal,
+    // including edits to an existing draft and keys in permission dialogs.
+    // cmux's automation draft guard must not block those interactive edits.
+    // CLI send interprets backslash escapes. Escape literal backslashes first;
+    // terminate flags so typed text such as --paste stays literal.
+    await this.call(['send', ...args, '--force', '--', data.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')]);
     return { ok: true };
   }
   async arrange(id, options = {}) {

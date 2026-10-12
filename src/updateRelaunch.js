@@ -7,6 +7,7 @@ const READY_PATH_ENV = 'WHITEBOX_UPDATE_READY_PATH';
 const READY_TOKEN_ENV = 'WHITEBOX_UPDATE_READY_TOKEN';
 const LEGACY_READY_PATH_ENV = 'LOADTOAGENT_UPDATE_READY_PATH';
 const LEGACY_READY_TOKEN_ENV = 'LOADTOAGENT_UPDATE_READY_TOKEN';
+const PROFILE_PATH_ENV = 'WHITEBOX_UPDATE_PROFILE_PATH';
 const TOKEN_PATTERN = /^[0-9a-f]{48}$/;
 
 function lstatIfPresent(fileSystem, candidate) {
@@ -23,6 +24,37 @@ function canonicalPath(fileSystem, candidate) {
   return typeof nativeRealpath === 'function'
     ? nativeRealpath(candidate)
     : fileSystem.realpathSync(candidate);
+}
+
+function applyScopedUpdateRelaunchProfile(options = {}) {
+  if (!options.request) return { applied: false };
+  const fileSystem = options.fileSystem || fs;
+  const pathModule = options.pathModule || path;
+  const request = options.request;
+  // Official older helpers do not carry a profile variable. Their production
+  // ready file is still bound to that profile's updates directory. Standalone
+  // helper fixtures in other download directories keep the legacy default.
+  const readyDirectory = pathModule.dirname(request.readyPath || '');
+  const profile = String(options.profilePath || (pathModule.basename(readyDirectory) === 'updates'
+    ? pathModule.dirname(readyDirectory) : ''));
+  if (!profile) return { applied: false };
+  if (!pathModule.isAbsolute(profile) || !pathModule.isAbsolute(request.readyPath || '')
+    || !TOKEN_PATTERN.test(request.token || '')
+    || pathModule.basename(request.readyPath) !== `install-renderer-ready-${request.token}.json`) {
+    throw new Error('업데이트 재실행 프로필 요청이 올바르지 않습니다.');
+  }
+  const updates = pathModule.join(profile, 'updates');
+  for (const directory of [profile, updates]) {
+    const state = fileSystem.lstatSync(directory);
+    if (!state.isDirectory() || state.isSymbolicLink()) throw new Error('업데이트 재실행 프로필이 실제 디렉터리가 아닙니다.');
+  }
+  const normalize = value => options.platform === 'win32' ? value.toLowerCase() : value;
+  if (normalize(canonicalPath(fileSystem, pathModule.dirname(request.readyPath))) !== normalize(canonicalPath(fileSystem, updates))) {
+    throw new Error('업데이트 준비 신호가 재실행 프로필 밖에 있습니다.');
+  }
+  const userDataPath = canonicalPath(fileSystem, profile);
+  options.app.setPath('userData', userDataPath);
+  return { applied: true, userDataPath };
 }
 
 function applyWindowsUpdateRelaunchProfile(options = {}) {
@@ -147,6 +179,8 @@ module.exports = {
   LEGACY_READY_TOKEN_ENV,
   READY_PATH_ENV,
   READY_TOKEN_ENV,
+  PROFILE_PATH_ENV,
+  applyScopedUpdateRelaunchProfile,
   applyWindowsUpdateRelaunchProfile,
   readUpdateRelaunchRequest,
   signalRendererReady,

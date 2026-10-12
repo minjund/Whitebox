@@ -23,6 +23,7 @@ const { collectProviderUsage } = require('./src/providerUsage');
 const { TerminalManager, isInternalTerminalProjectionSessionId } = require('./src/terminalManager');
 const { TerminalHostClient, launchTerminalHost, resolveTerminalHostExecutable, requiresUpdateShutdown } = require('./src/terminalHost');
 const { externalTerminalHost } = require('./src/updateWorkloadScope');
+const { prepareTerminalHostRuntime } = require('./src/terminalHostRuntime');
 const { TmuxController } = require('./src/tmuxController');
 const { normalizeWslList } = require('./src/tmuxMonitor');
 const { UpdateManager } = require('./src/updateManager');
@@ -40,6 +41,8 @@ const {
   LEGACY_READY_TOKEN_ENV,
   READY_PATH_ENV,
   READY_TOKEN_ENV,
+  PROFILE_PATH_ENV,
+  applyScopedUpdateRelaunchProfile,
   applyWindowsUpdateRelaunchProfile,
   readUpdateRelaunchRequest,
   signalRendererReady,
@@ -79,6 +82,8 @@ const { ASIDE_MANIFEST } = require('./src/sourcePlugins/bundled');
 const { WINDOWS_APP_USER_MODEL_ID, registerWindowsShellIdentity } = require('./src/windowsShellIdentity');
 const packageMetadata = require('./package.json');
 const pendingUpdateRelaunch = readUpdateRelaunchRequest(process.env);
+const pendingUpdateProfile = process.env[PROFILE_PATH_ENV];
+delete process.env[PROFILE_PATH_ENV];
 delete process.env[READY_PATH_ENV];
 delete process.env[READY_TOKEN_ENV];
 delete process.env[LEGACY_READY_PATH_ENV];
@@ -98,7 +103,11 @@ const ALLOW_UNSIGNED_MAC_UPDATES = packageMetadata.whitebox?.distributionChannel
 app.setName(PRODUCT_NAME);
 process.title = PRODUCT_NAME;
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
-applyWindowsUpdateRelaunchProfile({
+const scopedUpdateProfile = applyScopedUpdateRelaunchProfile({
+  app, request: pendingUpdateRelaunch, profilePath: pendingUpdateProfile,
+  platform: process.platform,
+});
+if (!scopedUpdateProfile.applied) applyWindowsUpdateRelaunchProfile({
   app,
   environment: process.env,
   platform: process.platform,
@@ -613,9 +622,9 @@ function createWindow() {
   const allowedUrl = pathToFileURL(path.join(__dirname, 'renderer', 'index.html')).href;
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== allowedUrl) event.preventDefault(); });
   const showWindow = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.show();
-    mainWindow.focus();
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
+    if (pendingUpdateRelaunch) mainWindow.showInactive();
+    else { mainWindow.show(); mainWindow.focus(); }
   };
   const showFallback = setTimeout(showWindow, 2_000);
   mainWindow.once('ready-to-show', () => {
@@ -767,7 +776,6 @@ function publishTerminalPromptResolution(payload = {}) {
   while (pendingTerminalPromptResolutions.size > 48) {
     pendingTerminalPromptResolutions.delete(pendingTerminalPromptResolutions.keys().next().value);
   }
-  if (normalized.requiresText) showMainWindow();
   return flushTerminalPromptResolutions();
 }
 
@@ -1538,7 +1546,6 @@ async function markRendererReady() {
   reconcileAttentionActivations();
   attentionActivationCoordinator?.rendererReady();
   flushTerminalPromptResolutions();
-  if (pendingUpdateRelaunch) showMainWindow();
   if (pendingAttentionSessionId && mainWindow && !mainWindow.isDestroyed()) {
     const sessionId = pendingAttentionSessionId;
     const event = pendingAttentionEvent;
@@ -1580,11 +1587,8 @@ function createAttentionNotifier() {
       };
     },
     onOpen: openAttentionSession,
-    onFallback: (session, event) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(true);
-      if (event !== 'completed') return;
-      openAttentionSession(session, event);
-    },
+    // OS notification failure must never foreground or navigate the app.
+    onFallback: () => {},
   });
 }
 
@@ -1737,6 +1741,7 @@ async function performDownloadedUpdateInstall(attemptId) {
     appPath: installPlan.appPath,
     expectedVersion: downloaded.latestVersion,
     parentPid: process.pid,
+    environment: { WHITEBOX_UPDATE_PROFILE_PATH: userFile('') },
     shell,
     allowUnsignedWindowsUpdates: ALLOW_UNSIGNED_WINDOWS_UPDATES,
     allowUnsignedMacUpdates: ALLOW_UNSIGNED_MAC_UPDATES,
@@ -1746,6 +1751,12 @@ async function performDownloadedUpdateInstall(attemptId) {
   let prepareWorkload = null;
   if (canInstallSilently(launchOptions)) {
     const impact = await updateWorkloadImpact(installPlan.appPath);
+    if (impact.agentRuns.length) {
+      throw new Error('직접 실행 작업을 유지하기 위해 설치를 보류했습니다. 해당 작업이 완료된 뒤 다시 업데이트해 주세요. 작업을 강제 종료하지 않았습니다.');
+    }
+    if (!impact.externalHost && impact.terminalSessions.length) {
+      throw new Error('현재 명령창은 구버전 앱의 설치 폴더에서 실행 중입니다. 작업을 유지하기 위해 설치를 보류했습니다. 작업을 마친 뒤 업데이트하면 이후 명령창은 앱 재시작 중에도 계속 실행됩니다.');
+    }
     if (!await confirmActiveTerminalUpdate(impact)) {
       return { ...updateManager.getState(), installMode: 'automatic', installCanceled: true };
     }
@@ -1767,16 +1778,8 @@ async function performDownloadedUpdateInstall(attemptId) {
           terminalManager.updateShutdown = true;
           terminalManager.dispose({ preserveHost: true });
           recordUpdateInstallEvent(attemptId, 'external-terminal-host-preserved');
-        } else try {
+        } else {
           await terminalManager.shutdownForUpdate(impact.terminalSessions);
-        } catch (error) {
-          if (terminalManager.capabilities?.forceStopForUpdate !== 1
-            || !await confirmForceTerminalUpdate(error)) throw error;
-          recordUpdateInstallEvent(attemptId, 'workload-force-confirmed');
-          // Re-read the workload after the dialog: sessions created while it
-          // was open were not part of the user's original confirmation.
-          await terminalManager.shutdownForUpdate(impact.terminalSessions, 8_000, { force: true });
-          recordUpdateInstallEvent(attemptId, 'workload-force-stopped');
         }
       } else if (terminalManager) {
         await terminalManager.dispose({ preserveSessions: true });
@@ -1851,7 +1854,7 @@ function installDownloadedUpdate() {
 async function setupAttentionRuntime() {
   const preference = loadAttentionPopupPreference();
   attentionActivationCoordinator = new AttentionActivationCoordinator({
-    enabled: true,
+    enabled: false,
     // Incoming permission requests update status without stealing window focus.
     onShow: () => {},
     onDeliver: sendAttentionActivation,
@@ -1973,9 +1976,13 @@ async function setupRuntime() {
     })
     : new TerminalHostClient({
       discoveryFile: terminalHostFile,
-      spawnHost: () => launchTerminalHost({
-        executable: resolveTerminalHostExecutable({ isPackaged: app.isPackaged }),
-        script: path.join(__dirname, 'src', 'terminalHostDaemon.js'),
+      spawnHost: async () => launchTerminalHost({
+        ...await prepareTerminalHostRuntime({
+          isPackaged: app.isPackaged,
+          executable: resolveTerminalHostExecutable({ isPackaged: app.isPackaged }),
+          script: path.join(__dirname, 'src', 'terminalHostDaemon.js'),
+          runtimeRoot: userFile('terminal-runtimes'),
+        }),
         storeFile: terminalStoreFile,
         discoveryFile: terminalHostFile,
         bridgeHome,

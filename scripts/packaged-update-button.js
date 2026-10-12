@@ -143,32 +143,11 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   }
   if (options.retryAfterFailure) {
     await evaluate(`(() => {
-      const dialog = process.mainModule.require('electron').dialog;
-      const showMessageBox = dialog.showMessageBox;
-      globalThis.__whiteboxForceDialogResponses = [];
-      dialog.showMessageBox = async function(...args) {
-        const options = args.at(-1);
-        if (options.buttons?.some(button => /강제|Force-stop|强制/.test(button))) {
-          const response = globalThis.__whiteboxForceDialogResponses.length ? 1 : 0;
-          globalThis.__whiteboxForceDialogResponses.push(response);
-          if (options.defaultId !== 0 || options.cancelId !== 0) throw new Error('Force update must default to cancel');
-          return { response };
-        }
-        if (options.buttons?.some(button => /^(업데이트하고 다시 시작|Update and restart|更新并重新启动)$/.test(button))) {
-          return { response: 1 };
-        }
-        return showMessageBox.apply(this, args);
-      };
-      const Host = process.mainModule.require('./src/terminalHost').TerminalHostClient;
-      const shutdown = Host.prototype.shutdownForUpdate;
-      let failures = 0;
-      Host.prototype.shutdownForUpdate = async function(...args) {
-        if (!args[2]?.force && failures++ < ${options.forceRetry === true ? 2 : 1}) {
-          await this.listFresh();
-          throw new Error('update-button-fixture: shutdown failure');
-        }
-        Host.prototype.shutdownForUpdate = shutdown;
-        return shutdown.apply(this, args);
+      const Manager = process.mainModule.require('./src/updateManager').UpdateManager;
+      const download = Manager.prototype.download;
+      Manager.prototype.download = async function(...args) {
+        Manager.prototype.download = download;
+        throw new Error('update-button-fixture: download preparation failure');
       };
       return true;
     })()`);
@@ -182,22 +161,30 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     assert.equal(await renderer(`document.querySelector('#updateError').textContent.includes('update-button-fixture')`), true);
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
   }
-  if (options.forceRetry === true) {
-    assert.equal(options.retryAfterFailure, true, 'Force retry must first exercise cancellation');
+  let terminalIdForPreservation = '';
+  if (options.preserveTerminal === true) {
+    assert.equal(options.retryAfterFailure, true, 'Preservation must first exercise a failed preparation');
     const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
     const cwd = await evaluate(`process.mainModule.require('electron').app.getPath('userData')`);
     let terminal = await renderer(`window.whitebox.terminalCreate(${JSON.stringify({ type, cwd })})`);
     const pidDeadline = Date.now() + 10000;
     while (!Number.isSafeInteger(Number(terminal.pid)) || Number(terminal.pid) <= 0) {
-      if (Date.now() >= pidDeadline) throw new Error('Packaged force-update PTY PID was not ready');
+      if (Date.now() >= pidDeadline) throw new Error('Packaged preserved PTY PID was not ready');
       await new Promise(resolve => setTimeout(resolve, 100));
       terminal = await renderer(`window.whitebox.terminalGet(${JSON.stringify(terminal.id)})`);
     }
     terminalPid = Number(terminal.pid);
-    assert(Number.isSafeInteger(terminalPid) && terminalPid > 0, 'Packaged force update requires a live app-owned PTY');
+    terminalIdForPreservation = terminal.id;
+    assert(Number.isSafeInteger(terminalPid) && terminalPid > 0, 'Packaged update requires a live preserved PTY');
   }
+  const hostIdentity = options.preserveTerminal ? await evaluate(`(() => {
+    const req = process.mainModule.require.bind(process.mainModule);
+    const discoveryFile = req('path').join(req('electron').app.getPath('userData'), 'terminal-host.json');
+    const hostPid = JSON.parse(req('fs').readFileSync(discoveryFile, 'utf8')).pid;
+    return { discoveryFile, hostPid };
+  })()`) : null;
   await renderer(`document.querySelector('#installUpdateBtn').click(); true`);
-  return { renderer, asset, terminalPid };
+  return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 
 module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer };

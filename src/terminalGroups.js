@@ -60,6 +60,11 @@ class TerminalGroups {
 
   async list() {
     await this.queue;
+    // Empty groups have no runtime to inspect. A host awaiting safe recovery
+    // must not prevent the sidebar from displaying these saved groups.
+    if (!this.groups.some(group => group.members.length)) {
+      return this.groups.map(group => ({ ...group, members: [] }));
+    }
     const terminals = await this.terminals();
     return this.groups.map(group => ({ ...group, members: group.members.map(member => ({
       ...member,

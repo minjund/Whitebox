@@ -13,7 +13,8 @@ function registerUpdateWorkloadScopeTests({ test, temp }) {
     assert.equal(isExternalWindowsHost(external, appPath), true);
     assert.equal(isExternalWindowsHost({ ...external, ExecutablePath: 'c:\\apps\\whitebox\\Whitebox.exe' }, appPath), false);
     assert.equal(isExternalWindowsHost({ ...external, CommandLine: 'electron "C:/Apps/Whitebox/resources/app.asar/src/terminalHostDaemon.js"' }, appPath), false);
-    assert.equal(isExternalWindowsHost({ ...external, ExecutablePath: 'C:\\Apps\\Whitebox-old\\Whitebox.exe' }, appPath), true);
+    assert.equal(isExternalWindowsHost({ ...external, ExecutablePath: 'C:\\Apps\\Whitebox-old\\Whitebox.exe' }, appPath), false);
+    assert.equal(isExternalWindowsHost({ ...external, ExecutablePath: 'C:\\Profile\\runtime\\WhiteboxTerminalHost.exe' }, appPath), true);
     let verified = 0;
     const client = { connected: true, discovery: { pid: 123 }, verifyHost: async () => { verified += 1; } };
     assert.equal(await externalTerminalHost(client, appPath, { platform: 'win32', inspect: async () => external,

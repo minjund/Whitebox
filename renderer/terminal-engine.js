@@ -331,12 +331,82 @@
   class FitAddon {
     constructor() { return new ghosttyWeb.FitAddon(); }
   }
+  const TERMINAL_THEMES = Object.freeze({
+    dark: Object.freeze({
+      background: '#030304',
+      foreground: '#f0f0f2',
+      cursor: '#f4f4f5',
+      cursorAccent: '#09090b',
+      selectionBackground: '#3a3a40',
+      black: '#111113',
+      red: '#ff7b91',
+      green: '#4dd2a2',
+      yellow: '#f1b95f',
+      blue: '#76b7f3',
+      magenta: '#c69af4',
+      cyan: '#73c7d4',
+      white: '#d6d6da',
+      brightBlack: '#7f7f89',
+      brightRed: '#ffa0ae',
+      brightGreen: '#7be0b8',
+      brightYellow: '#f5d18a',
+      brightBlue: '#9bcbfa',
+      brightMagenta: '#dcb6fa',
+      brightCyan: '#98dee5',
+      brightWhite: '#ffffff',
+    }),
+    light: Object.freeze({
+      background: '#f3f0ea',
+      foreground: '#26221f',
+      cursor: '#6254d9',
+      cursorAccent: '#ffffff',
+      selectionBackground: '#ddd6fa',
+      black: '#24211f',
+      red: '#bc2f4a',
+      green: '#0b7658',
+      yellow: '#9a5a00',
+      blue: '#25669c',
+      magenta: '#7a4fa2',
+      cyan: '#24788c',
+      white: '#68616f',
+      brightBlack: '#6f6861',
+      brightRed: '#a42e49',
+      brightGreen: '#075f47',
+      brightYellow: '#794409',
+      brightBlue: '#254f82',
+      brightMagenta: '#643b8a',
+      brightCyan: '#1a6576',
+      brightWhite: '#24211f',
+    }),
+  });
+
   function workspaceTheme() {
-    const css = getComputedStyle(document.documentElement);
-    return { background: css.getPropertyValue('--terminal-bg').trim(), foreground: css.getPropertyValue('--terminal-fg').trim(), cursor: css.getPropertyValue('--terminal-fg').trim() };
+    const name = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+    return { ...TERMINAL_THEMES[name] };
   }
+
   function workspaceOptions(fontSize = 15) {
-    return { fontSize, fontFamily: 'Menlo, monospace', cursorBlink: false, cursorStyle: 'bar', screenReaderMode: true, theme: workspaceTheme() };
+    return { fontSize, fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "D2Coding", monospace',
+      cursorBlink: true, cursorStyle: 'bar', screenReaderMode: true, letterSpacing: 0,
+      lineHeight: fontSize >= 17 ? 1.32 : 1.28, scrollback: 5_000, theme: workspaceTheme() };
   }
-  window.WhiteboxTerminalEngine = { ready, Terminal, FitAddon, workspaceOptions, workspaceTheme, name: 'ghostty', get initialized() { return Boolean(ghostty); } };
+  function createView(host, options = {}) {
+    const engine = window.WhiteboxTerminalEngine;
+    const terminal = new engine.Terminal(options);
+    const fit = new engine.FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(host);
+    if (!options.disableStdin) terminal.loadAddon(window.WhiteboxTerminalIme.createAddon());
+    if (!options.disableStdin) host.addEventListener('pointerdown', event => focusFromPointer(event, terminal));
+    return { terminal, fit };
+  }
+  function focusFromPointer(event, terminal) {
+    if (event.button !== 0) return;
+    // Blank panel space otherwise runs Chromium's default focus change after
+    // focus(), immediately blurring the native IME textarea again. Preserve
+    // canvas mouse events for selection and terminal mouse reporting.
+    if (!terminal.element.contains(event.target)) event.preventDefault();
+    terminal.focus();
+  }
+  window.WhiteboxTerminalEngine = { ready, Terminal, FitAddon, createView, focusFromPointer, workspaceOptions, workspaceTheme, name: 'ghostty', get initialized() { return Boolean(ghostty); } };
 })();

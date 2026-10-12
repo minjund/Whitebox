@@ -128,10 +128,20 @@
     const epoch = inventoryEpoch;
     refreshing = (async () => {
       try {
-        const [managed, cmux] = await Promise.all([api.terminalGroups(), api.cmuxList?.() || { entries: [] }]);
+        const [managedResult, cmuxResult] = await Promise.allSettled([api.terminalGroups(), api.cmuxList?.() || { entries: [] }]);
         if (epoch !== inventoryEpoch || busy || resizing) return;
-        window.WhiteboxTerminalGroups?.updateInventory(managed);
-        await applyInventory(cmux, managed.map(group => ({ id: `group:${group.id}`, title: group.name, members: group.members, cwd: group.cwd, terminalGroupId: group.id, status: group.members.length ? 'running' : 'idle', provider: 'group' })));
+        const managed = managedResult.status === 'fulfilled' ? managedResult.value : null;
+        const cmux = cmuxResult.status === 'fulfilled' ? cmuxResult.value
+          : { installed: true, error: cmuxResult.reason?.message || 'cmux 연결을 확인하지 못했습니다.', entries: [], groups: [] };
+        if (managed) window.WhiteboxTerminalGroups?.updateInventory(managed);
+        await applyInventory(cmux, managed?.map(group => ({ id: `group:${group.id}`, title: group.name, members: group.members, cwd: group.cwd, terminalGroupId: group.id, status: group.members.length ? 'running' : 'idle', provider: 'group' })));
+        if (managedResult.status === 'rejected') {
+          notice.hidden = false;
+          const text = document.createElement('p');
+          text.textContent = managedResult.reason?.message || '관리형 PTY 연결을 확인하지 못했습니다.';
+          notice.append(text);
+          const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '다시 연결'; retry.onclick = () => refresh(); notice.append(retry);
+        }
       } catch (error) { notice.hidden = false; notice.textContent = error.message; }
       finally { refreshing = null; if (epoch !== inventoryEpoch && !busy && !resizing) void refresh(); }
     })();
@@ -207,11 +217,9 @@
       const node = document.createElement('section'); node.className = 'cmux-terminal'; node.dataset.cmuxMember = member.id;
       node.innerHTML = '<div class="cmux-terminal-viewport terminal-screen"></div>';
       const host = node.firstElementChild, engine = window.WhiteboxTerminalEngine;
-      const terminal = new engine.Terminal({ ...engine.workspaceOptions(terminalFontSize), scrollback: 0 });
+      const { terminal, fit } = engine.createView(host, { ...engine.workspaceOptions(terminalFontSize), scrollback: 0 });
       // Scroll the readable native grid instead of the replay emulator's empty history.
       host.addEventListener('wheel', event => event.stopPropagation(), { capture: true, passive: true });
-      const fit = new engine.FitAddon(); terminal.loadAddon(fit); terminal.open(host);
-      if (window.WhiteboxTerminalIme) terminal.loadAddon(window.WhiteboxTerminalIme.createAddon());
       const refit = () => {
         if (resizing) return;
         try {
@@ -238,7 +246,7 @@
       syncCursor(view);
       // The native-sized grid may leave blank space inside a panel. Clicking
       // anywhere in that terminal should acquire its input, not just the canvas.
-      node.addEventListener('pointerdown', event => { if (event.button === 0) terminal.focus(); });
+      node.addEventListener('pointerdown', event => engine.focusFromPointer(event, terminal));
       node.addEventListener('compositionstart', () => { view.composing = true; }, true);
       node.addEventListener('compositionend', () => {
         view.composing = false;

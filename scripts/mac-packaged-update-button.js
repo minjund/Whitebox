@@ -35,6 +35,18 @@ async function stopOwned(pid) {
   process.kill(pid, 'SIGTERM');
   await waitFor(() => !alive(pid), 'isolated app cleanup', 30000);
 }
+function ownedExecutablePids() {
+  const mappings = execFileSync('/usr/sbin/lsof', ['-d', 'txt', '-Fpn'], {
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  });
+  const pids = new Set();
+  let pid = 0;
+  for (const line of mappings.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1));
+    else if (line.startsWith('n' + root + '/') && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
 (async () => {
   fs.mkdirSync(path.dirname(app), {recursive:true});
   // Reproduce the reported installed macOS 1.7.3 cohort from official bytes.
@@ -111,9 +123,9 @@ async function stopOwned(pid) {
     execFileSync('/usr/bin/ditto', [path.resolve('release', process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Whitebox.app'), app]);
     driver = await openInspectedApp(executable, ['--user-data-dir=' + profile], env);
   }
-  const { terminalPid } = await clickPackagedUpdate(driver, installer, version, {
+  const { terminalPid, terminalId, hostIdentity } = await clickPackagedUpdate(driver, installer, version, {
     retryAfterFailure:true,
-    forceRetry: sourceVersion === '1.7.3',
+    preserveTerminal: sourceVersion === '1.7.3',
     currentVersion: sourceVersion === '1.7.3' ? version : sourceVersion,
     holdIncompleteHookRequest: sourceVersion === '1.7.3',
   });
@@ -129,10 +141,10 @@ async function stopOwned(pid) {
   await waitFor(() => !alive(driver.child.pid), 'production app quit');
   if (sourceVersion === '1.7.3') {
     const stages = events.filter(event => event.attemptId === launch.attemptId).map(event => event.stage);
-    assert.equal(stages.filter(stage => stage === 'workload-force-confirmed').length, 1);
-    assert.equal(stages.filter(stage => stage === 'workload-force-stopped').length, 1);
-    assert(stages.indexOf('workload-force-stopped') < stages.indexOf('helper-ready'));
-    assert(terminalPid > 0 && !alive(terminalPid), 'Candidate force update must stop its own PTY');
+    assert.equal(stages.filter(stage => stage === 'workload-force-confirmed').length, 0);
+    assert.equal(stages.filter(stage => stage === 'external-terminal-host-preserved').length, 1);
+    assert(terminalPid > 0 && alive(terminalPid), 'Candidate update must preserve its PTY');
+    assert(alive(hostIdentity.hostPid), 'Candidate update must preserve the original host');
   }
   let log = '';
   await waitFor(() => {
@@ -143,6 +155,8 @@ async function stopOwned(pid) {
     assert.equal(match[2], version); relaunchedPid = Number(match[1]); return true;
   }, 'packaged macOS replacement and renderer readiness');
   assert(alive(relaunchedPid));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'attention-hook-runtime.json'), 'utf8')).pid, relaunchedPid,
+    'The relaunched GUI must restore the same profile and terminal discovery');
   asar.uncache(path.join(app,'Contents','Resources','app.asar'));
   const metadata = JSON.parse(asar.extractFile(path.join(app,'Contents','Resources','app.asar'), 'package.json'));
   assert.equal(metadata.version, version);
@@ -150,6 +164,21 @@ async function stopOwned(pid) {
   assert.equal((log.match(/update installed and renderer ready;/g)||[]).length,1);
   await waitFor(() => !fs.existsSync(launch.readyPath) && !fs.existsSync(launch.rendererReadyPath)
     && fs.readdirSync(path.dirname(app)).every(name => !/\.update-|\.backup-|\.failed-/.test(name)), 'helper signals and staging cleanup');
+  if (hostIdentity) {
+    const { TerminalHostClient } = require('../src/terminalHost');
+    const host = new TerminalHostClient({ discoveryFile: hostIdentity.discoveryFile });
+    try {
+      await host.connect();
+      assert.equal(host.discovery.pid, hostIdentity.hostPid);
+      const terminal = await host.get(terminalId);
+      assert.equal(terminal.pid, terminalPid);
+      assert.equal(terminal.status, 'running');
+      await host.close(terminalId); // End only the test's own workload after preservation is proved.
+      // The relaunched GUI also pins the host while connected.
+      await stopOwned(relaunchedPid);
+    } finally { host.dispose({ shutdownIfIdle: true }); }
+    await waitFor(() => !alive(terminalPid) && !alive(hostIdentity.hostPid), 'preserved test PTY and host cleanup', 30000);
+  }
   console.log('PASS packaged macOS update button: persistent failure, retry, actual install, renderer-ready relaunch and cleanup');
 })().catch(error => {
   console.error(error.stack || error);process.exitCode=1;
@@ -165,6 +194,10 @@ async function stopOwned(pid) {
     if(driver) driver.close();
     await stopOwned(relaunchedPid);
     if(driver) await stopOwned(driver.child.pid);
+    // An idle cached host can outlive the GUI briefly. Prove its natural exit
+    // (and every mapped test executable's exit) before deleting its runtime.
+    await waitFor(() => ownedExecutablePids().length === 0, 'all isolated executable processes exited', 30000);
+    console.log('PASS all isolated GUI, helper and cached-host executable mappings absent before directory cleanup');
     assert.equal(path.dirname(root),fs.realpathSync(os.tmpdir()));
     if(!process.exitCode) fs.rmSync(root,{recursive:true,force:true});
     else console.error('Diagnostics preserved: ' + root);
