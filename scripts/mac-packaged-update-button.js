@@ -160,6 +160,8 @@ async function stopOwned(pid) {
       assert.equal(terminal.pid, terminalPid);
       assert.equal(terminal.status, 'running');
       await host.close(terminalId); // End only the test's own workload after preservation is proved.
+      // The relaunched GUI also pins the host while connected.
+      await stopOwned(relaunchedPid);
     } finally { host.dispose({ shutdownIfIdle: true }); }
     await waitFor(() => !alive(terminalPid) && !alive(hostIdentity.hostPid), 'preserved test PTY and host cleanup', 30000);
   }

@@ -1241,6 +1241,10 @@ async function main() {
     assert.equal(terminal.pid, buttonTerminalPid);
     assert.equal(terminal.status, 'running');
     await preserved.close(buttonTerminalId);
+    // The relaunched GUI is a host client too. End the isolated GUI before
+    // asserting idle-host cleanup; otherwise that live connection pins it.
+    closeInstalledAppGracefully(activeAppPid);
+    await waitForProcessExit(activeAppPid);
   } finally { preserved.dispose({ shutdownIfIdle: true }); }
   await waitForProcessExit(buttonTerminalPid);
   await waitForProcessExit(buttonHostIdentity.hostPid);
