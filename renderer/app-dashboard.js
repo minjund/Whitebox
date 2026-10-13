@@ -720,7 +720,13 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     };
     const sidebarProjectItem = (item, projectIndex) => {
       const projectSelected = state.workspace !== "all" && sidebarProjectKey(state.workspace) === item.key;
-      let sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({ ...session, sidebarCwd: sessionOriginPath(session) }));
+      // A multi-project conversation must keep its path within this tree's
+      // project. The main view's selected workspace can change independently.
+      let sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({
+        ...session,
+        sidebarCwd: sessionProjectPaths(session).find(path => projectContainsPath(item.path, path))
+          || sessionProjectPaths(session)[0] || "",
+      }));
       if (sidebarSearch && ![item.name, item.path, item.key].some(value => String(value || '').toLowerCase().includes(sidebarSearch))) {
         sessions = sessions.filter(session => session.terminalGroupId
           ? window.WhiteboxTerminalGroups?.matchesQuery(session, sidebarSearch)
