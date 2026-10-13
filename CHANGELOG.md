@@ -5,6 +5,13 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.31 - 2026-10-13
+
+- Keep sidebar folder paths stable when switching projects in conversations
+  connected to multiple workspaces; prevent project rows from jumping.
+- Verify sidebar selection with native clicks and retain the official 1.8.28
+  updater cohort while adding the published 1.8.30 installer to release checks.
+
 ## 1.8.30 - 2026-10-12
 
 - Keep new packaged terminal hosts outside the app installation so running PTY
