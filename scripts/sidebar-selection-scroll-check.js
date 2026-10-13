@@ -6,6 +6,7 @@ const path = require('path');
 const { app, BrowserWindow } = require('electron');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-sidebar-scroll-'));
 app.setPath('userData', profile);
+app.commandLine.appendSwitch('force-prefers-reduced-motion', 'reduce');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 app.whenReady().then(async () => {
@@ -24,13 +25,14 @@ app.whenReady().then(async () => {
     }
     await win.webContents.executeJavaScript(`(() => {
       const a = window.WhiteboxApp;
-      a.state.workspaces.push(...Array.from({length: 24}, (_, i) => ({ name: 'Scroll project ' + i, path: '/tmp/sidebar-scroll-' + i })));
+      a.state.workspaces = Array.from({length: 24}, (_, i) => ({ name: 'Scroll project ' + i, path: '/tmp/sidebar-scroll-' + i }));
       const base = a.state.snapshot.sessions.find(s => !s.parentId && s.status === 'running');
       if (!base) throw new Error('Missing running root session fixture');
       const multiRoot = { ...base, id: 'sidebar-multi-root', parentId: null, title: 'Multi-project conversation',
         workspaceRoots: ['/tmp/sidebar-scroll-0/Whitebox', '/tmp/sidebar-scroll-1'],
         cwd: '/tmp/sidebar-scroll-0/Whitebox', originCwd: '/tmp/sidebar-scroll-0/Whitebox' };
-      a.state.snapshot.sessions.push(multiRoot);
+      a.state.snapshot = { ...a.state.snapshot, sessions: [multiRoot], tmux: { distros: [] } };
+      a.state.sidebarTerminalEntries = [];
       a.renderWorkspaces();
       a.state.sidebarExpandedProjects = new Set([...document.querySelectorAll("[data-sidebar-project-key]")].map(e => e.dataset.sidebarProjectKey));
       a.renderWorkspaces();
@@ -38,7 +40,7 @@ app.whenReady().then(async () => {
     const results = [];
     for (const offset of ['/tmp/sidebar-scroll-0', '/tmp/sidebar-scroll-1', '/tmp/sidebar-scroll-0', 360, 0, 140, 99999]) {
       await win.webContents.executeJavaScript(typeof offset === 'string'
-        ? `document.querySelector('.project-sidebar-item[data-workspace="${offset}"]').scrollIntoView({block: 'center'})`
+        ? `document.querySelector('.project-sidebar-item[data-workspace="${offset}"]').scrollIntoView({block: 'center', behavior: 'instant'})`
         : `document.querySelector('#projectSidebarList').scrollTop = ${offset}`);
       await wait(100);
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -49,6 +51,7 @@ app.whenReady().then(async () => {
             const r = e.getBoundingClientRect(); return r.top >= b.top && r.bottom <= b.bottom;
           });
           const e = ${typeof offset === 'string' ? `l.querySelector('.project-sidebar-item[data-workspace="${offset}"]')` : `items[${attempt} % Math.min(3, items.length)]`};
+          if (!e) throw new Error('No visible project at scroll offset ' + l.scrollTop + ', viewport height ' + b.height);
           const r = e.getBoundingClientRect();
           return { folders: [...l.querySelectorAll('[data-path-tree-toggle]')].map(e => e.dataset.pathTreeToggle), scroll: l.scrollTop, path: e.dataset.workspace, top: r.top, x: Math.round(r.left + 60), y: Math.round(r.top + r.height / 2) };
         })()`);
