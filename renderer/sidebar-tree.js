@@ -73,15 +73,22 @@ window.WhiteboxSidebarTree = (() => {
     tree.assignments = tree.assignments.filter(item => item.folderId);
     tree.folders = tree.folders.filter(item => item.id !== id);
     tree.expanded = tree.expanded.filter(item => item !== id);
+    const filter = state.sidebarFolderFilter;
+    if (filter?.projectKey === folder.projectKey && filter.folderId === id) {
+      const parent = tree.folders.find(item => item.id === folder.parentId);
+      state.sidebarFolderFilter = filter.path
+        ? { ...filter, folderId: folder.parentId }
+        : parent ? { projectKey: parent.projectKey, folderId: parent.id, name: parent.name } : null;
+    }
     return true;
   }
-  function render(state, projectKey, sessions, renderSession, esc, groupPrefix) {
+  function render(state, projectKey, sessions, renderSession, esc, groupPrefix, startLevel = 2) {
     const tree = data(state);
     const folders = tree.folders.filter(folder => folder.projectKey === projectKey);
     const assignment = new Map(tree.assignments.filter(item => item.projectKey === projectKey).map(item => [item.sessionId, item.folderId]));
     const collapsed = state.sidebarPathCollapsed || (state.sidebarPathCollapsed = new Set());
     const norm = value => String(value || '').replace(/\\/g, '/').replace(/\/+$/, '').toLocaleLowerCase();
-    function renderPaths(items, level, parts = []) {
+    function renderPaths(items, level, parentId, parts = []) {
       const children = new Map(), leaves = [];
       for (const session of items) {
         const cwd = String(session.sidebarCwd || session.cwd || '').replace(/\\/g, '/').replace(/\/+$/, '');
@@ -92,16 +99,18 @@ window.WhiteboxSidebarTree = (() => {
       return [...children].sort(([a], [b]) => a.localeCompare(b)).map(([name, entries], index) => {
         const originalRoot = String(entries[0].sidebarCwd || entries[0].cwd || projectKey).replace(/\\/g, '/').slice(0, projectKey.length);
         const path = `${originalRoot}/${[...parts, name].join('/')}`;
-        const expanded = Boolean(state.sidebarProjectSearch?.trim()) || !collapsed.has(path), id = `${groupPrefix}Path${encodeURIComponent(path)}`;
-        return `<div class="sidebar-tree-folder"><div class="sidebar-tree-folder-row"><button type="button" class="sidebar-tree-folder-toggle" aria-selected="${!state.sidebarFolderFilter?.entryId && state.sidebarFolderFilter?.projectKey === projectKey && state.sidebarFolderFilter?.path === path}" data-path-tree-toggle="${esc(path)}" data-sidebar-project-ref="${esc(projectKey)}" role="treeitem" aria-level="${level}" aria-expanded="${expanded}" aria-controls="${esc(id)}" tabindex="-1"><span class="sidebar-tree-chevron">${expanded ? '⌄' : '›'}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><b>${esc(name)}</b></button></div><div id="${esc(id)}" class="sidebar-tree-children" role="group"${expanded ? '' : ' hidden'}>${renderPaths(entries, level + 1, [...parts, name])}</div></div>`;
-      }).join('') + leaves.map(session => `<div class="sidebar-tree-session-row">${renderSession(session, level)}</div>`).join('');
+        const nodeKey = JSON.stringify([projectKey, parentId, path]);
+        const expanded = Boolean(state.sidebarProjectSearch?.trim()) || !collapsed.has(nodeKey);
+        const id = `${groupPrefix}Path${encodeURIComponent(nodeKey)}`;
+        return `<div class="sidebar-tree-folder"><div class="sidebar-tree-folder-row" style="--sidebar-tree-level: ${level}"><button type="button" class="sidebar-tree-folder-toggle" aria-selected="${!state.sidebarFolderFilter?.entryId && state.sidebarFolderFilter?.projectKey === projectKey && state.sidebarFolderFilter?.path === path && state.sidebarFolderFilter?.folderId === parentId}" data-path-tree-toggle="${esc(path)}" data-path-tree-key="${esc(nodeKey)}" data-path-tree-folder="${esc(parentId)}" data-sidebar-project-ref="${esc(projectKey)}" role="treeitem" aria-level="${level}" aria-expanded="${expanded}" aria-controls="${esc(id)}" tabindex="-1"><span class="sidebar-tree-chevron">${expanded ? '⌄' : '›'}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><b>${esc(name)}</b></button></div><div id="${esc(id)}" class="sidebar-tree-children" role="group"${expanded ? '' : ' hidden'}>${renderPaths(entries, level + 1, parentId, [...parts, name])}</div></div>`;
+      }).join('') + leaves.map(session => `<div class="sidebar-tree-session-row" style="--sidebar-tree-level: ${level}">${renderSession(session, level)}</div>`).join('');
     }
     const renderGroup = (parentId, level) => folders.filter(folder => folder.parentId === parentId).map(folder => {
       const expanded = Boolean(state.sidebarProjectSearch?.trim()) || tree.expanded.includes(folder.id);
-      const groupId = `${groupPrefix}Folder${tree.folders.indexOf(folder)}`;
+      const groupId = `${groupPrefix}Folder${encodeURIComponent(folder.id)}`;
       return `<div class="sidebar-tree-folder" data-tree-folder="${esc(folder.id)}">
-        <div class="sidebar-tree-folder-row">
-          <button type="button" class="sidebar-tree-folder-toggle" aria-selected="${state.sidebarFolderFilter?.projectKey === projectKey && state.sidebarFolderFilter?.folderId === folder.id}" data-tree-toggle="${esc(folder.id)}" data-sidebar-folder-id="${esc(folder.id)}" data-sidebar-project-ref="${esc(projectKey)}"
+        <div class="sidebar-tree-folder-row" style="--sidebar-tree-level: ${level}">
+          <button type="button" class="sidebar-tree-folder-toggle" aria-selected="${!state.sidebarFolderFilter?.path && state.sidebarFolderFilter?.projectKey === projectKey && state.sidebarFolderFilter?.folderId === folder.id}" data-tree-toggle="${esc(folder.id)}" data-sidebar-folder-id="${esc(folder.id)}" data-sidebar-project-ref="${esc(projectKey)}"
             role="treeitem" aria-level="${level}" aria-expanded="${expanded}" aria-controls="${groupId}" aria-owns="${groupId}" tabindex="-1" draggable="true">
             <span class="sidebar-tree-chevron" aria-hidden="true">${expanded ? "⌄" : "›"}</span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
@@ -111,8 +120,8 @@ window.WhiteboxSidebarTree = (() => {
         </div>
         <div id="${groupId}" class="sidebar-tree-children" role="group"${expanded ? "" : " hidden"}>${renderGroup(folder.id, level + 1)}</div>
       </div>`;
-    }).join("") + renderPaths(sessions.filter(session => (assignment.get(session.id) || "") === parentId), level);
-    return renderGroup("", 2);
+    }).join("") + renderPaths(sessions.filter(session => (assignment.get(session.id) || "") === parentId), level, parentId);
+    return renderGroup("", startLevel);
   }
   function matchesFilter(state, session) {
     const filter = state.sidebarFolderFilter;
@@ -120,6 +129,10 @@ window.WhiteboxSidebarTree = (() => {
     if (!filter || norm(filter.projectKey) !== norm(state.workspace)) return true;
     if (filter.entryId) return session.id === filter.entryId;
     if (filter.path) {
+      // A path row contains only the sessions directly assigned to its virtual
+      // parent (including the project root), not every session with that cwd.
+      const assignment = data(state).assignments.find(item => norm(item.projectKey) === norm(filter.projectKey) && item.sessionId === session.id);
+      if ((assignment?.folderId || "") !== (filter.folderId || "")) return false;
       const path = norm(filter.path);
       const paths = session.workspaceRoots?.length ? session.workspaceRoots : [session.sidebarCwd || session.originCwd || session.cwd || session.workspace];
       return paths.some(value => norm(value) === path || norm(value).startsWith(`${path}/`));
@@ -127,7 +140,7 @@ window.WhiteboxSidebarTree = (() => {
     const tree = data(state), included = descendants(tree, filter.folderId);
     return tree.assignments.some(item => norm(item.projectKey) === norm(filter.projectKey) && item.sessionId === session.id && included.has(item.folderId));
   }
-  function bind({ state, list, renderWorkspaces, saveDashboardPreferences, announce, selectFolder = () => {} }) {
+  function bind({ state, list, renderWorkspaces, renderSessions = () => {}, saveDashboardPreferences, announce, selectFolder = () => {} }) {
     if (!list) return;
     let restoreFocus;
     const dialog = document.createElement("dialog");
@@ -141,8 +154,9 @@ window.WhiteboxSidebarTree = (() => {
         : kind === "session" ? [...(group?.querySelectorAll("[data-sidebar-session-id]") || [])].find(item => item.dataset.sidebarSessionId === id) : null;
       (target && !target.closest("[hidden]") ? target : group?.querySelector(".project-sidebar-item"))?.focus({ preventScroll: true });
     }
-    function commit(projectKey, kind, id) {
+    function commit(projectKey, kind, id, refreshSessions = true) {
       saveDashboardPreferences(); renderWorkspaces();
+      if (refreshSessions) renderSessions();
       focusNode(projectKey, kind, id);
     }
     function open(trigger, kind, id = "") {
@@ -177,7 +191,10 @@ window.WhiteboxSidebarTree = (() => {
           state.sidebarExpandedProjects.add(projectKey);
           dialog.close(); commit(projectKey, "folder", newId);
         } else {
-          if (kind === "folder") folder.name = name;
+          if (kind === "folder") {
+            folder.name = name;
+            if (state.sidebarFolderFilter?.folderId === id && !state.sidebarFolderFilter.path) state.sidebarFolderFilter.name = name;
+          }
           move(state, projectKey, kind, id, dialog.querySelector("select").value);
           dialog.close(); commit(projectKey, kind, id);
         }
@@ -206,13 +223,13 @@ window.WhiteboxSidebarTree = (() => {
       if (pathTrigger) {
         event.preventDefault(); event.stopImmediatePropagation();
         const collapsed = state.sidebarPathCollapsed || (state.sidebarPathCollapsed = new Set());
-        const path = pathTrigger.dataset.pathTreeToggle;
+        const path = pathTrigger.dataset.pathTreeToggle, nodeKey = pathTrigger.dataset.pathTreeKey;
         if (!event.target.closest('.sidebar-tree-chevron')) {
-          collapsed.delete(path);
-          selectFolder({ projectKey: pathTrigger.dataset.sidebarProjectRef, path, name: path.split('/').pop() });
-        } else if (collapsed.has(path)) collapsed.delete(path); else collapsed.add(path);
+          collapsed.delete(nodeKey);
+          selectFolder({ projectKey: pathTrigger.dataset.sidebarProjectRef, folderId: pathTrigger.dataset.pathTreeFolder, path, name: path.split('/').pop() });
+        } else if (collapsed.has(nodeKey)) collapsed.delete(nodeKey); else collapsed.add(nodeKey);
         renderWorkspaces();
-        [...list.querySelectorAll('[data-path-tree-toggle]')].find(item => item.dataset.pathTreeToggle === path)?.focus();
+        [...list.querySelectorAll('[data-path-tree-toggle]')].find(item => item.dataset.pathTreeKey === nodeKey)?.focus({ preventScroll: true });
         return;
       }
       const trigger = event.target.closest("[data-tree-toggle], [data-tree-manage], [data-tree-create]");
@@ -224,7 +241,7 @@ window.WhiteboxSidebarTree = (() => {
           if (!tree.expanded.includes(id)) tree.expanded.push(id);
           selectFolder({ projectKey: trigger.dataset.sidebarProjectRef, folderId: id, name: tree.folders.find(item => item.id === id)?.name });
         } else tree.expanded = tree.expanded.includes(id) ? tree.expanded.filter(value => value !== id) : [...tree.expanded, id];
-        commit(trigger.dataset.sidebarProjectRef, "folder", id);
+        commit(trigger.dataset.sidebarProjectRef, "folder", id, false);
       } else open(trigger, trigger.dataset.treeManage || "project", trigger.dataset.treeId);
     }, true);
     list.addEventListener("contextmenu", event => {

@@ -61,6 +61,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       const selector = ".project-sidebar-group[data-project-sortable]";
       let draggedProjectId = "";
       const projectId = (node) => String(node?.dataset.projectSortable || "");
+      const siblings = node => Array.from(container.querySelectorAll(selector))
+        .filter(candidate => candidate.dataset.sidebarParentProject === node?.dataset.sidebarParentProject);
       const clearDropState = () => {
         container.querySelectorAll(selector).forEach((group) => {
           group.classList.remove("project-sort-dragging");
@@ -75,6 +77,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         if (completedDrag) sidebarProjectDragEndedAt = Date.now();
       };
       const commitPosition = (sourceId, targetId, placeAfter, focusSource = false) => {
+        const source = [...container.querySelectorAll(selector)].find(node => projectId(node) === sourceId);
+        if (!siblings(source).some(node => projectId(node) === targetId)) return false;
         if (!moveProjectOrder(sourceId, targetId, placeAfter)) return false;
         saveDashboardPreferences();
         renderWorkspaces();
@@ -138,7 +142,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
         const item = event.target.closest(".project-sidebar-item[aria-grabbed]");
         if (!item || event.target !== item || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
         const group = item.closest(selector);
-        const groups = Array.from(container.querySelectorAll(selector));
+        const groups = siblings(group);
         const current = groups.indexOf(group);
         const offset = event.key === "ArrowUp" ? -1 : 1;
         const target = groups[current + offset];
@@ -172,7 +176,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       else renderSessions("filter");
       syncFilterResetButton();
     };
-    window.WhiteboxSidebarTree.bind({ state, list: $("#projectSidebarList"), renderWorkspaces, saveDashboardPreferences, announce,
+    window.WhiteboxSidebarTree.bind({ state, list: $("#projectSidebarList"), renderWorkspaces, renderSessions, saveDashboardPreferences, announce,
       selectFolder: filter => {
         state.sidebarFolderFilter = filter;
         state.workspace = state.workspaces.find(item => normalizedProjectPath(item.path) === normalizedProjectPath(filter.projectKey))?.path || filter.projectKey; state.workspaceSource = 'all';
@@ -190,7 +194,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       const group = trigger.closest(".project-sidebar-project");
       if (!group || !sidebarMenu) return;
       menuProjectKey = group.dataset.sidebarProjectKey;
-      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")];
+      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")]
+        .filter(candidate => candidate.dataset.sidebarParentProject === group.dataset.sidebarParentProject);
       const index = groups.indexOf(group);
       sidebarMenu.querySelector('[data-sidebar-menu-action="up"]').disabled = index <= 0;
       sidebarMenu.querySelector('[data-sidebar-menu-action="down"]').disabled = index < 0 || index === groups.length - 1;
@@ -208,7 +213,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       sidebarMenu.hidePopover();
       if (!group) return;
       if (action === "remove") { group.querySelector("[data-remove-workspace]")?.click(); return; }
-      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")];
+      const groups = [...$("#projectSidebarList").querySelectorAll("[data-project-sortable]")]
+        .filter(candidate => candidate.dataset.sidebarParentProject === group.dataset.sidebarParentProject);
       const index = groups.indexOf(group);
       const target = groups[index + (action === "up" ? -1 : 1)];
       if (index < 0 || !target || !moveProjectOrder(menuProjectKey, target.dataset.projectSortable, action === "down")) return;
@@ -384,7 +390,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       list.addEventListener("keydown", (event) => {
         if (event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) return;
         if (event.currentTarget.id === "projectSidebarList" && event.key === "Delete") {
-          const treeItem = event.target.closest('[role="treeitem"][aria-level="1"]');
+          const treeItem = event.target.closest('.project-sidebar-item[role="treeitem"]');
           const remove = treeItem?.closest(".project-sidebar-project")?.querySelector("[data-remove-workspace]");
           if (!remove) return;
           event.preventDefault();
@@ -414,7 +420,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
             sourceRef: String(treeItem.dataset.sidebarSourceRef || ""),
             sessionId: String(treeItem.dataset.sidebarSessionId || ""),
             folderId: String(treeItem.dataset.sidebarFolderId || ""),
-            pathId: String(treeItem.dataset.pathTreeToggle || ''),
+            pathId: String(treeItem.dataset.pathTreeKey || ''),
           });
           const focusRememberedTreeItem = (identity) => requestAnimationFrame(() => {
             const target = Array.from(tree.querySelectorAll('[role="treeitem"]')).find((candidate) => (
@@ -423,7 +429,7 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
               && String(candidate.dataset.sidebarSourceRef || "") === identity.sourceRef
               && String(candidate.dataset.sidebarSessionId || "") === identity.sessionId
               && String(candidate.dataset.sidebarFolderId || "") === identity.folderId
-              && String(candidate.dataset.pathTreeToggle || '') === identity.pathId
+              && String(candidate.dataset.pathTreeKey || '') === identity.pathId
             ));
             target?.focus({ preventScroll: true });
           });
@@ -453,9 +459,8 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
             if (!toggleOwnedGroup()) return;
           } else {
             const parentFolder = treeItem.parentElement.closest(".sidebar-tree-children")?.parentElement.querySelector("[data-sidebar-folder-id], [data-path-tree-toggle]");
-            const parent = parentFolder || (level === 2
-              ? treeItem.closest(".project-sidebar-project")?.querySelector('.project-sidebar-item[role="treeitem"]')
-              : null);
+            const parent = parentFolder || treeItem.parentElement.closest('.project-sidebar-sessions')
+              ?.closest('.project-sidebar-project')?.querySelector('.project-sidebar-item[role="treeitem"]');
             if (!parent) return;
             parent.focus({ preventScroll: true });
           }
@@ -799,6 +804,12 @@ window.WhiteboxAppFactories.createFilterEventBindings = function createFilterEve
       if ($("#sidebarProjectSearch")) $("#sidebarProjectSearch").value = "";
       state.workspace = selected.path;
       state.workspaceSource = "all";
+      state.sidebarFolderFilter = null;
+      if (!(state.sidebarExpandedProjects instanceof Set)) state.sidebarExpandedProjects = new Set();
+      for (const workspace of state.workspaces) {
+        const key = normalizedProjectPath(workspace.path);
+        if (key !== selectedKey && selectedKey.startsWith(`${key}/`)) state.sidebarExpandedProjects.add(key);
+      }
       state.visibleLimit = 30;
       if (state.view !== "all") selectViewFromUser("all", { motionKind: "filter" });
       else render();
