@@ -31,6 +31,7 @@ const realTerminalFixture = (() => {
 })();
 
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
+let addedWorkspaceResponse = null;
 const now = new Date().toISOString();
 const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 const lastDaily = (hour, minute = 0) => {
@@ -739,7 +740,7 @@ const api = {
     { name: '관련 작업 모음', path: '/mnt/c/Users/fixture/tmux-only-project' },
     { name: '다시 시작한 작업', path: 'D:\\unregistered-origin' },
   ],
-  addWorkspaces: async () => controlled('addWorkspaces', [], {
+  addWorkspaces: async () => controlled('addWorkspaces', [], addedWorkspaceResponse || {
     canceled: false,
     workspaces: [
       { name: '화면 개선', path: 'D:\\fixture' },
@@ -963,6 +964,7 @@ if (realTerminalFixture) {
 }
 
 const testApi = {
+  setAddedWorkspaceResponse: value => { addedWorkspaceResponse = clone(value); },
   setCmuxFrame: value => { cmuxFrameOverride = clone(value); },
   setCmuxInventory: value => { cmuxInventory = clone(value); },
   setProviderAvailability: value => { providerAvailability = clone(value); return true; },
