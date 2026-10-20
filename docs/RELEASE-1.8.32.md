@@ -11,6 +11,9 @@ Each row is a separate official packaged updater input. The exact repository, ta
 | 1.7.3 | Manual alias | [Whitebox-Setup-1.7.3.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.3/Whitebox-Setup-1.7.3.exe) | 85295741 | 6b14caec7baeca5d6048c32121b9d7361f2bd56828aa6228f2322bf32da6f574 |
 | 1.7.4 | Manual alias | [Whitebox-Setup-1.7.4.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.4/Whitebox-Setup-1.7.4.exe) | 85296425 | 4d940cf16425436922a37746417b419c7671c47642c0f24b8c79197af99c2135 |
 | 1.7.5 | Canonical automatic installer | [Whitebox-Setup-1.7.5.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.5/Whitebox-Setup-1.7.5.exe) | 85297926 | 3455b7c9aa9e7c520774995694dbcdb71678a0280a0fde2040693a00d38f2e68 |
+| 1.7.0 | Manual alias | [Whitebox-Setup-1.7.0.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.0/Whitebox-Setup-1.7.0.exe) | 85126771 | 169d5ae5a01ab3baa07700086d9527b1916c23fc0c6640a78e9b4612cc917c13 |
+| 1.7.1 | Manual alias | [Whitebox-Setup-1.7.1.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.1/Whitebox-Setup-1.7.1.exe) | 85126828 | b60464bd04ad77f93e79b3fbe073c17ca0a102021dc87f9845587476ea53c6b3 |
+| 1.7.2 | Manual alias | [Whitebox-Setup-1.7.2.exe](https://github.com/minjund/Whitebox/releases/download/v1.7.2/Whitebox-Setup-1.7.2.exe) | 85126852 | e932e606e590e31f0e91f68ebe49b26d4a7fcdc3681c92192d32da6e10f9d227 |
 | 1.8.30 | Canonical automatic installer | [Whitebox-Setup-1.8.30.exe](https://github.com/minjund/Whitebox/releases/download/v1.8.30/Whitebox-Setup-1.8.30.exe) | 95409618 | 46639eb2d2bc9c5593b77cd1f3a5cd5cd1411ae17eec60b911037a25af459e82 |
 | 1.8.28 | Canonical automatic installer | [Whitebox-Setup-1.8.28.exe](https://github.com/minjund/Whitebox/releases/download/v1.8.28/Whitebox-Setup-1.8.28.exe) | 95397289 | 7fc94cd9a60db6481873d49435dcd2801bdeca7a1ff78568e1fbb855cad46442 |
 | 1.8.27 | Canonical automatic installer | [Whitebox-Setup-1.8.27.exe](https://github.com/minjund/Whitebox/releases/download/v1.8.27/Whitebox-Setup-1.8.27.exe) | 95353762 | f2c6c5fdfeee7f395137f055597982e2dd8f9c4f813902da770a4edee6f5478a |
@@ -61,3 +64,14 @@ Published LoadToAgent 1.6.3–1.6.14 and 1.6.16–1.6.22 use the immutable offic
 - After publication, run EXPECTED_CURRENT_TAG=v1.8.32 npm run check:update:legacy and verify public latest, HEAD responses, names, sizes, SHA-256 digests, and draft/prerelease state.
 
 This is the planned verification matrix, not an approval. Final reviewed SHA, Actions URLs, per-cohort results, and public-channel evidence belong in the completed release record.
+
+## Additional official-package inspection
+
+On 2026-10-20, the official 1.7.0, 1.7.1, and 1.7.2 installers above were downloaded and verified against their API byte sizes and SHA-256 digests. Each NSIS app-64.7z payload was extracted, the app.asar package version matched its tag, and its own updateManager selected Whitebox-Manual-Setup-1.8.32-x64.exe from the complete seven-asset release fixture. These three packages contain byte-identical updateManager.js and updateInstaller.js files:
+
+| Packaged file | SHA-256 (all three versions) |
+| --- | --- |
+| src/updateManager.js | 68fa1ecef0dbf9b5d7736511f5160acc940d704ea8120d5f935403ecf91d7317 |
+| src/updateInstaller.js | 7aae441fcd2c21ee566974a39c68f5ed959fd0cc54c40dbd28c32164c46d57fe |
+
+All three are now separately pinned manual-path Windows E2E inputs; this static packaged inspection does not replace their full installed-client runs.
