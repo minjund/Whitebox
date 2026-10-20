@@ -72,6 +72,41 @@ app.whenReady().then(async () => {
       || Math.abs(before.scroll - after.scroll) > 1
       || Math.abs(before.top - after.top) > 1);
     if (failures.length) throw new Error('Project selection moved the sidebar rows: ' + JSON.stringify(failures));
+    await win.webContents.executeJavaScript(`(() => {
+      const a = window.WhiteboxApp;
+      const project = '/tmp/sidebar-pending-request';
+      const task = { id: 'sidebar-pending-request', provider: 'codex', status: 'waiting',
+        cwd: project, originCwd: project, title: '승인 대기 프로젝트', childIds: [],
+        workspaceRoots: [project, '/Users/test/.codex/visualizations/2026/10/14/sidebar-chat-id'],
+        updatedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+        attention: { category: 'required', required: true, source: 'input-tool', kind: 'approval',
+          requestId: 'sidebar-request-a', requestedAt: new Date().toISOString(), summary: '승인해 주세요' } };
+      a.state.snapshot = { ...a.state.snapshot, sessions: [task], tmux: { distros: [] } };
+      a.state.workspaces = [];
+      a.state.sidebarTerminalEntries = [];
+      a.state.controlRoomObservedIds.clear();
+      a.state.workspace = 'all';
+      a.state.sidebarExpandedProjects = new Set([project]);
+      if (a.isControlRoomSession(task)) throw new Error('Fixture must have no live runtime or retention');
+      const check = () => {
+        a.renderWorkspaces();
+        if (!document.querySelector('.project-sidebar-item[data-workspace="' + project + '"]'))
+          throw new Error('Pending request project disappeared');
+        if (!document.querySelector('[data-sidebar-session-id="' + task.id + '"]'))
+          throw new Error('Pending request task disappeared');
+        if (document.querySelectorAll('[data-sidebar-session-id="' + task.id + '"]').length !== 1)
+          throw new Error('Visualization output root duplicated the sidebar task');
+      };
+      check();
+      a.markProjectNoticeSeen('attention', task);
+      if (!a.isProjectNoticeSeen('attention', task)) throw new Error('Read receipt was not recorded');
+      for (let refresh = 0; refresh < 4; refresh++) check();
+      task.attention = { category: 'none', required: false };
+      a.renderWorkspaces();
+      if (document.querySelector('.project-sidebar-item[data-workspace="' + project + '"]'))
+        throw new Error('Resolved historical request project remained in live sidebar');
+    })()`);
+    console.log('Pending request project survives read receipts and repeated refreshes; resolved history removed');
     console.log('Sidebar selection scroll retention passed (' + results.length + ' native clicks)');
   } catch (error) {
     console.error(error);

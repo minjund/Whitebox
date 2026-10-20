@@ -198,9 +198,9 @@
 #sidebarProjects .project-sidebar-sessions {
   display: grid;
   gap: 2px;
-  margin: 3px 4px 8px 34px;
-  padding: 0 0 0 9px;
-  border-left: 1px solid var(--theme-border-soft);
+  margin: 3px 0 8px;
+  padding: 0;
+  border: 0;
 }
 #sidebarProjects .project-sidebar-sessions[hidden] { display: none; }
 #sidebarProjects .project-sidebar-session {
@@ -265,7 +265,12 @@
 #sidebarProjects .sidebar-tree-chevron { width: 8px; flex: none; color: var(--theme-text-muted); }
 #sidebarProjects .sidebar-tree-session-row > .project-sidebar-session { grid-template-columns: 8px 18px minmax(0, 1fr); }
 #sidebarProjects .sidebar-tree-folder-toggle svg { width: 18px; height: 18px; }
-#sidebarProjects .sidebar-tree-children { margin: 2px 0 4px 12px; padding-left: 8px; border-left: 1px solid var(--theme-border-soft); }
+#sidebarProjects .sidebar-tree-children { margin: 2px 0 4px; padding: 0; border: 0; }
+/* Indent each row by its depth instead of shrinking every nested container.
+ * Keep room for labels and actions even in deeply nested project/folder trees. */
+#sidebarProjects :is(.project-sidebar-row, .sidebar-tree-folder-row, .sidebar-tree-session-row) {
+  padding-left: clamp(0px, calc((var(--sidebar-tree-level, 1) - 1) * 12px), 48px);
+}
 #sidebarProjects .sidebar-tree-children[hidden] { display: none; }
 #sidebarProjects [data-tree-drop] { outline: 2px solid var(--theme-accent); outline-offset: -2px; }
 #sidebarTreeDialog { box-sizing: border-box; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 24px; overflow: auto; border: 1px solid var(--theme-border); border-radius: 12px; background: var(--theme-surface); color: var(--theme-text); font: inherit; box-shadow: var(--theme-shadow); color-scheme: inherit; }

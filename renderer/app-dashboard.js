@@ -52,6 +52,15 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     || Boolean(window.WhiteboxRendererUtils?.appOwnedBridgeTerminalIdentity?.(session))
   );
 
+  // Reading a notice clears its badge, but does not answer the request.
+  const hasPendingSidebarResponse = session => Boolean(
+    (typeof context.needsUserResponse === "function"
+      ? context.needsUserResponse(session)
+      : (session?.attention?.category === "required" || session?.attention?.required)
+        && ["execution-approval", "input-tool"].includes(session?.attention?.source))
+    || window.WhiteboxTerminal?.pendingPromptForSession?.(session),
+  );
+
   function latestSessionSort(sessions = []) {
     return [...sessions].sort((left, right) =>
       Date.parse(right.updatedAt || right.startedAt || 0) - Date.parse(left.updatedAt || left.startedAt || 0)
@@ -102,7 +111,11 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const roots = Array.isArray(session?.workspaceRoots) ? session.workspaceRoots : [];
     return roots.filter(value => typeof value === "string")
       .map(value => value.trim())
-      .filter(value => /^(?:[a-z]:[\\/]|\/|\\\\)/iu.test(value));
+      .filter(value => /^(?:[a-z]:[\\/]|\/|\\\\)/iu.test(value))
+      // Codex grants access to a per-chat visualization output directory.
+      // That writable output root is not another project for the conversation.
+      .filter(value => !/(?:^|\/)\.codex\/visualizations\/\d{4}\/\d{2}\/\d{2}\/[^/]+(?:\/|$)/iu
+        .test(value.replace(/\\/g, "/")));
   }
 
   function sessionProjectPaths(session) {
@@ -115,6 +128,22 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
   function sessionOriginPath(session) {
     const paths = sessionProjectPaths(session);
     return paths.find(path => projectContainsPath(state.workspace, path)) || paths[0] || "";
+  }
+
+  // Generated tool state is not a user-facing sidebar project. Match complete
+  // components only; legitimate dot folders such as .github remain visible.
+  function isSidebarPath(path) {
+    return !/(?:^|\/)(?:\.specflow|\.git|\.cache)(?:\/|$)/iu.test(String(path || "").replace(/\\/g, "/"));
+  }
+
+  function isSidebarSession(session) {
+    if (![session.originCwd, session.cwd].every(isSidebarPath)) return false;
+    const paths = sessionProjectPaths(session);
+    return !paths.length || paths.some(isSidebarPath);
+  }
+
+  function sidebarSessionPaths(session) {
+    return sessionProjectPaths(session).filter(isSidebarPath);
   }
 
   const normalizedPaths = new Map();
@@ -175,9 +204,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return sourceId === "builtin.opencode" ? "OpenCode" : sourceId === "builtin.aside" ? "Aside Browser" : sourceId;
   }
 
-  function observedProjects(sessions = displaySessions().filter((session) => !session.parentId)) {
+  function observedProjects(sessions = displaySessions().filter((session) => !session.parentId), includePath = () => true) {
     const projects = new Map();
-    const saved = state.workspaces.map((item, index) => ({ ...item, key: normalizedProjectPath(item.path), order: index }));
+    const saved = state.workspaces.filter(item => includePath(item.path)).map((item, index) => ({ ...item, key: normalizedProjectPath(item.path), order: index }));
     saved.forEach((item) => projects.set(item.key, {
       path: item.path,
       name: item.name || projectName(item.path),
@@ -189,6 +218,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     sessions.filter((session) => !session.parentId && !isProjectlessSession(session)).forEach((session) => {
       const counted = new Set();
       for (const originPath of sessionProjectPaths(session)) {
+        if (!includePath(originPath)) continue;
         const owner = saved
           .filter((item) => projectContainsPath(item.path, originPath))
           .sort((a, b) => b.key.length - a.key.length)[0];
@@ -344,8 +374,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return [...roots.values()];
   }
 
-  function projectNoticeModel() {
-    const rootSessions = displaySessions().filter((session) => !session.parentId);
+  function projectNoticeModel(includeSession = () => true) {
+    const rootSessions = displaySessions().filter((session) => !session.parentId && includeSession(session));
     const allVisibleSessions = visibleSessions();
     const allSessionsById = new Map(allVisibleSessions.map((session) => [String(session.id || ""), session]));
     const rootSessionFor = (session) => {
@@ -367,7 +397,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         const session = queue.shift();
         if (!session?.id || seen.has(String(session.id))) continue;
         seen.add(String(session.id));
-        actors.push(session);
+        if (includeSession(session)) actors.push(session);
         queue.push(...(session.childIds || []).map(id => allSessionsById.get(String(id))).filter(Boolean));
       }
       return actors;
@@ -379,6 +409,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const resultEntries = (root) => {
       if (controlRoomStatus(root) !== "completed" || typeof context.resultReviewTargets !== "function") return [];
       return context.resultReviewTargets(root)
+        .filter(includeSession)
         .filter(session => !context.isProjectNoticeSeen?.("result", session))
         .map(session => ({ kind: "result", session }));
     };
@@ -431,7 +462,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
 
   function renderWorkspaces() {
     const rootSessions = displaySessions().filter((session) => !session.parentId);
-    const sidebarRootSessions = displaySessions().filter(session => !session.parentId);
+    const sidebarRootSessions = rootSessions.filter(isSidebarSession);
     const liveRootSessions = controlRoomRootSessions();
     const tmuxRootSessions = unlinkedLiveTmuxSessions();
     const allLiveRootSessions = [...liveRootSessions, ...tmuxRootSessions];
@@ -459,7 +490,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       });
       return [...roots.values()];
     };
-    const noticeModel = projectNoticeModel();
+    const noticeModel = projectNoticeModel(isSidebarSession);
     const sourceIds = [
       "direct",
       ...(state.sourcePlugins || [])
@@ -468,8 +499,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       ...rootSessions.map(sessionProjectSource).filter((id) => id !== "direct"),
     ].filter((id, index, values) => values.indexOf(id) === index);
     const sidebarGroups = sourceIds.map((sourceId) => {
-      const scopedSessions = rootSessions.filter((session) => sessionProjectSource(session) === sourceId);
-      const scopedProjects = observedProjects(scopedSessions)
+      const scopedSessions = sidebarRootSessions.filter((session) => sessionProjectSource(session) === sourceId);
+      const scopedProjects = observedProjects(scopedSessions, isSidebarPath)
         .filter((project) => Number(project.count || 0) > 0)
         .map((project) => ({ ...project, sourceId }));
       const projectlessCount = scopedSessions.filter(isProjectlessSession).length;
@@ -554,12 +585,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (!(state.sidebarExpandedProjects instanceof Set)) state.sidebarExpandedProjects = new Set();
     const sidebarSourceOrder = new Map(sourceIds.map((sourceId, index) => [sourceId, index]));
     const sourceState = (item, sourceId, projectless = false) => {
-      const rootMatches = (root) => sessionProjectSource(root) === sourceId
+      const rootMatches = (root) => isSidebarSession(root) && sessionProjectSource(root) === sourceId
         && (projectless
           ? isProjectlessSession(root)
           : !isProjectlessSession(root)
             && matchesControlRoomProject(root, item.path));
-      const relatedSessions = allVisibleSessions.filter((session) => rootMatches(rootSessionFor(session)));
+      const relatedSessions = allVisibleSessions.filter((session) => isSidebarSession(session) && rootMatches(rootSessionFor(session)));
       const observedLive = uniqueRootSessions(relatedSessions.filter(isControlRoomSession).map(rootSessionFor));
       // Conversation history is not an inventory of open terminal sessions.
       const liveIds = new Set(observedLive.map(session => String(session.id)));
@@ -571,9 +602,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       const inCmux = session => session.environment?.kind !== 'wsl' && (Boolean(session.cmux) || cmuxSessionIds.has(session.id)
         || (session.runtimePresence || []).some(runtime => runtime.kind !== 'wsl' && cmuxProcessIds.has(Number(runtime.pid))));
       const live = observedLive.filter(session => !inCmux(session) && !window.WhiteboxTerminalGroups?.containsSession(session));
-      const sessions = latestSessionSort(sidebarRootSessions.filter(session => rootMatches(session)
-        && (liveIds.has(String(session.id)) || placedIds.has(session.id)) && !inCmux(session) && !window.WhiteboxTerminalGroups?.containsSession(session)));
       const notices = noticeModel.signalsForProject(item.path, sourceId).filter(signal => !inCmux(signal.root) && !window.WhiteboxTerminalGroups?.containsSession(signal.root));
+      const noticeIds = new Set(notices.map(signal => String(signal.root.id)));
+      const sessions = latestSessionSort(sidebarRootSessions.filter(session => rootMatches(session)
+        && (liveIds.has(String(session.id)) || placedIds.has(session.id) || noticeIds.has(String(session.id))
+          || noticeModel.actorsForRoot(session).some(hasPendingSidebarResponse))
+        && !inCmux(session) && !window.WhiteboxTerminalGroups?.containsSession(session)));
       const attention = notices.filter(signal => signal.attention.length).map(signal => signal.root);
       const resultReady = notices.filter(signal => signal.result.length).map(signal => signal.root);
       return {
@@ -586,7 +620,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     };
     // Keep saved projects selectable before their first task without
     // manufacturing an empty Whitebox/program row for them.
-    const sidebarProjectNodes = new Map(projects.map((item) => [sidebarProjectKey(item.path), {
+    const sidebarProjectNodes = new Map(observedProjects(sidebarRootSessions, isSidebarPath).map((item) => [sidebarProjectKey(item.path), {
       key: sidebarProjectKey(item.path),
       path: item.path,
       name: item.name,
@@ -644,6 +678,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     });
     // Include independent live terminal/group records without importing history.
     for (const session of state.sidebarTerminalEntries || []) {
+      if (!isSidebarSession(session)) continue;
       if (session.terminalGroupId && !window.WhiteboxTerminalGroups?.matchesProvider(session)) continue;
       const project = controlRoomProject(session);
       const key = sidebarProjectKey(project.path);
@@ -679,12 +714,35 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (projectlessSidebarProject) sortedSidebarProjects.push(projectlessSidebarProject);
     const canReorderSidebarProjects = defaultSidebarProjects.length > 1;
     const sidebarSearch = String(state.sidebarProjectSearch || "").trim().toLocaleLowerCase(uiLocale());
-    const filteredSidebarProjects = sortedSidebarProjects.filter(item => !sidebarSearch
+    const sidebarParents = new Map();
+    for (const item of sortedSidebarProjects) {
+      const parent = sortedSidebarProjects.filter(candidate => candidate.saved && candidate.key !== item.key
+        && candidate.key !== PROJECTLESS_WORKSPACE && projectContainsPath(candidate.path, item.path))
+        .sort((a, b) => b.key.length - a.key.length)[0];
+      if (parent) sidebarParents.set(item.key, parent.key);
+    }
+    const matchingSidebarProjects = sortedSidebarProjects.filter(item => !sidebarSearch
       || [item.name, item.path, item.key].some(value => String(value || "").toLocaleLowerCase(uiLocale()).includes(sidebarSearch))
       || item.sources.some(source => source.sessions.some(session => session.terminalGroupId && window.WhiteboxTerminalGroups?.matchesQuery(session, sidebarSearch))));
+    const includedSidebarKeys = new Set(matchingSidebarProjects.map(item => item.key));
+    for (const item of matchingSidebarProjects) {
+      for (let parent = sidebarParents.get(item.key); parent; parent = sidebarParents.get(parent)) includedSidebarKeys.add(parent);
+    }
+    const filteredSidebarProjects = sortedSidebarProjects.filter(item => includedSidebarKeys.has(item.key));
+    const sidebarChildren = new Map();
+    for (const item of filteredSidebarProjects) {
+      const parent = sidebarParents.get(item.key) || '';
+      if (!sidebarChildren.has(parent)) sidebarChildren.set(parent, []);
+      sidebarChildren.get(parent).push(item);
+    }
     const selectedSidebarProjectKey = sidebarProjectKey(state.workspace);
-    const sidebarTabStopProjectKey = filteredSidebarProjects.find(item => item.key === selectedSidebarProjectKey)?.key
+    let sidebarTabStopProjectKey = filteredSidebarProjects.find(item => item.key === selectedSidebarProjectKey)?.key
       || filteredSidebarProjects[0]?.key || "";
+    if (!sidebarSearch) {
+      for (let parent = sidebarParents.get(sidebarTabStopProjectKey); parent; parent = sidebarParents.get(parent)) {
+        if (!state.sidebarExpandedProjects.has(parent)) sidebarTabStopProjectKey = parent;
+      }
+    }
     const sidebarSessionItem = (session, item, level = 2) => {
       if (session.terminalGroupId || session.cmuxWorkspace) {
         const action = session.terminalGroupId ? `data-terminal-group-id="${esc(session.terminalGroupId)}"` : `data-cmux-workspace="${esc(session.id)}"`;
@@ -692,7 +750,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         return `<button type="button" class="project-sidebar-session project-sidebar-cmux live" ${action} role="treeitem" aria-level="${level}" aria-selected="${state.sidebarFolderFilter?.entryId === session.id}" tabindex="-1" title="${esc(session.cwd)}"><i></i><span class="project-sidebar-agent">group</span><b>${esc(session.title)}</b><small class="project-sidebar-cmux-count" title="세션 수">${session.members.length}</small></button>`;
       }
       const live = isControlRoomSession(session);
-      const attention = Boolean(context.needsManagementInbox?.(session));
+      const attention = noticeModel.actorsForRoot(session).some(hasPendingSidebarResponse)
+        || Boolean(context.needsManagementInbox?.(session));
       const ready = item.resultReady.some(root => root.id === session.id);
       const status = attention ? t("studio.sidebar.needs_review")
         : ready ? t("studio.sidebar.result_ready")
@@ -718,23 +777,24 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         <i aria-hidden="true"></i><span class="project-sidebar-agent" aria-hidden="true">${esc(mark)}</span><b>${esc(summary.text || title)}</b>
       </button>`;
     };
-    const sidebarProjectItem = (item, projectIndex) => {
+    const sidebarProjectItem = (item, level = 1) => {
+      const children = sidebarChildren.get(item.key) || [];
       const projectSelected = state.workspace !== "all" && sidebarProjectKey(state.workspace) === item.key;
       // A multi-project conversation must keep its path within this tree's
       // project. The main view's selected workspace can change independently.
       let sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({
         ...session,
-        sidebarCwd: sessionProjectPaths(session).find(path => projectContainsPath(item.path, path))
-          || sessionProjectPaths(session)[0] || "",
+        sidebarCwd: sidebarSessionPaths(session).find(path => projectContainsPath(item.path, path))
+          || sidebarSessionPaths(session)[0] || "",
       }));
       if (sidebarSearch && ![item.name, item.path, item.key].some(value => String(value || '').toLowerCase().includes(sidebarSearch))) {
         sessions = sessions.filter(session => session.terminalGroupId
           ? window.WhiteboxTerminalGroups?.matchesQuery(session, sidebarSearch)
           : [session.title, session.provider, session.cwd].join(' ').toLowerCase().includes(sidebarSearch));
       }
-      const hasTasks = sessions.length > 0 || (state.sidebarTree?.folders || []).some(folder => folder.projectKey === item.key);
+      const hasTasks = children.length > 0 || sessions.length > 0 || (state.sidebarTree?.folders || []).some(folder => folder.projectKey === item.key);
       const projectExpanded = hasTasks && (state.sidebarExpandedProjects.has(item.key) || Boolean(sidebarSearch));
-      const sessionsId = `projectSidebarSessions${projectIndex}`;
+      const sessionsId = `projectSidebarSessions${encodeURIComponent(item.key)}`;
       const canReorder = item.key !== PROJECTLESS_WORKSPACE && canReorderSidebarProjects;
       const canRemove = item.saved && item.key !== PROJECTLESS_WORKSPACE;
       const projectKeyboardShortcuts = [canReorder ? "Alt+ArrowUp Alt+ArrowDown" : "", canRemove ? "Delete" : "", "Shift+F10"]
@@ -746,8 +806,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       ].filter(Boolean).join(" · ") || t("studio.sidebar.no_active_tasks");
       const accessibleLabel = `${item.name}. ${summary}`;
       return `<section class="project-sidebar-group project-sidebar-project ${projectSelected ? "selected" : ""} ${item.attention.length ? "has-attention" : ""} ${item.resultReady.length ? "has-result-ready" : ""}"
-        data-sidebar-project-key="${esc(item.key)}" ${canReorder ? `data-project-sortable="${esc(item.key)}"` : ""} role="none">
-        <div class="project-sidebar-row">
+        data-sidebar-project-key="${esc(item.key)}" data-sidebar-parent-project="${esc(sidebarParents.get(item.key) || '')}" ${canReorder ? `data-project-sortable="${esc(item.key)}"` : ""} role="none">
+        <div class="project-sidebar-row" style="--sidebar-tree-level: ${level}">
           ${hasTasks ? `<button type="button" class="project-sidebar-project-toggle" data-sidebar-project-toggle="${esc(item.key)}" tabindex="-1"
             aria-expanded="${projectExpanded}" aria-controls="${sessionsId}"
             aria-label="${esc(t(projectExpanded ? "studio.sidebar.collapse_project" : "studio.sidebar.expand_project", { project: item.name }))}">
@@ -759,7 +819,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             ${canReorder ? 'aria-grabbed="false" aria-describedby="projectReorderHelp"' : ""}
             aria-keyshortcuts="${esc(projectKeyboardShortcuts)}" aria-label="${esc(accessibleLabel)}" aria-selected="${projectSelected}"
             ${hasTasks ? `aria-expanded="${projectExpanded}" aria-owns="${sessionsId}"` : ""}
-            role="treeitem" aria-level="1" tabindex="${item.key === sidebarTabStopProjectKey ? "0" : "-1"}">
+            role="treeitem" aria-level="${level}" tabindex="${item.key === sidebarTabStopProjectKey ? "0" : "-1"}">
             <span class="project-sidebar-icon ${canReorder ? "project-sidebar-drag-handle" : ""}" ${canReorder ? `draggable="${canReorder ? "true" : "false"}"` : ""} aria-hidden="true"
               title="${esc(canReorder ? t("project.reorder_hint") : item.name)}"><svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></span>
             <span class="project-sidebar-copy"><strong>${esc(item.name)}</strong><span class="project-sidebar-summary">${esc(summary)}</span></span>
@@ -775,10 +835,10 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
             ${canRemove ? `<button type="button" class="project-sidebar-remove" data-remove-workspace="${esc(item.path)}" tabindex="-1" hidden aria-label="${esc(t("workspace.remove_named", { name: item.name }))}">×</button>` : ""}
           </span>
         </div>
-        ${hasTasks ? `<div id="${sessionsId}" class="project-sidebar-sessions" role="group"${projectExpanded ? "" : " hidden"}>${window.WhiteboxSidebarTree.render(state, item.key, sessions, (session, level) => sidebarSessionItem(session, item, level), esc, sessionsId)}</div>` : ""}
+        ${hasTasks ? `<div id="${sessionsId}" class="project-sidebar-sessions" role="group"${projectExpanded ? "" : " hidden"}>${children.map(child => sidebarProjectItem(child, level + 1)).join('')}${window.WhiteboxSidebarTree.render(state, item.key, sessions, (session, depth) => sidebarSessionItem(session, item, depth), esc, sessionsId, level + 1)}</div>` : ""}
       </section>`;
     };
-    const sidebarHtml = filteredSidebarProjects.map(sidebarProjectItem).join("")
+    const sidebarHtml = (sidebarChildren.get('') || []).map(item => sidebarProjectItem(item)).join("")
       || `<div class="workspace-empty">${esc(t(sidebarSearch ? "studio.sidebar.no_matches" : "project.empty"))}</div>`;
     const sidebarCount = $("#sidebarProjectCount");
     if (sidebarCount) sidebarCount.textContent = sidebarSearch

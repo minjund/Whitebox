@@ -5,6 +5,15 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+## 1.8.32 - 2026-10-20
+
+- Hide internal .specflow, .git, and .cache work folders and their sessions from
+  the sidebar, including attention, active-work, and result counts.
+- Preserve ordinary project folders and .github work, with stable nested-folder
+  selection, deletion, keyboard navigation, and focus during refresh.
+- Verify updates from the official 1.8.31 installer while retaining the pinned
+  1.8.30 and earlier compatibility cohorts.
+
 ## 1.8.31 - 2026-10-13
 
 - Keep sidebar folder paths stable when switching projects in conversations
