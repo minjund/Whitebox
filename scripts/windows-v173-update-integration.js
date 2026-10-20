@@ -673,8 +673,21 @@ async function waitForUpdateArtifactCleanup(launched, timeoutMs = 20_000) {
   }
 }
 
-async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000) {
+async function waitForRelaunchLog(logPath, expectedVersion, timeoutMs = 120_000, helperPid = null) {
   const startedAt = Date.now();
+  if (helperPid !== null) {
+    assert(Number.isSafeInteger(helperPid) && helperPid > 0,
+      'Relaunch observation requires the authenticated helper PID.');
+    // Old official helpers use Add-Content and silently drop write failures.
+    // Do not open their log repeatedly while they are still writing it. Wait
+    // for two successful PID-absence probes, then require the complete original
+    // evidence under the SAME deadline; helper exit alone is never success.
+    await waitForOwnedProcessIdsExit([helperPid], {
+      probe: pids => probeWindowsProcessIds(pids, { powershell }),
+      timeoutMs,
+      pollMs: 200,
+    });
+  }
   let lastReadableLog = '';
   let lastTransientReadError = null;
   while (Date.now() - startedAt < timeoutMs) {
@@ -1109,7 +1122,7 @@ async function main() {
     }
     assert(firstLaunch, 'The fixed official cohort did not launch the automatic installer helper.');
     await waitForProcessExit(v173ParentPid);
-    activeAppPid = await waitForRelaunchLog(firstLaunch.logPath, targetVersion);
+    activeAppPid = await waitForRelaunchLog(firstLaunch.logPath, targetVersion, 120_000, firstLaunch.integrationHelperPid);
     await waitForInstalledPackage(targetVersion, 120_000, 8);
     await waitForUpdateArtifactCleanup(firstLaunch);
     assertCompletedInstall(firstLaunch.logPath, { parentPid: v173ParentPid, expectedVersion: targetVersion });
@@ -1179,7 +1192,7 @@ async function main() {
   assert(reinstallLaunch, 'The target packaged updater did not launch its acknowledged helper.');
   await waitForProcessExit(reinstallParentPid);
 
-  activeAppPid = await waitForRelaunchLog(reinstallLaunch.logPath, targetVersion);
+  activeAppPid = await waitForRelaunchLog(reinstallLaunch.logPath, targetVersion, 120_000, reinstallLaunch.integrationHelperPid);
   await waitForInstalledPackage(targetVersion);
   await waitForUpdateArtifactCleanup(reinstallLaunch);
   const reinstallLines = assertCompletedInstall(reinstallLaunch.logPath, {

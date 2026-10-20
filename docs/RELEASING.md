@@ -204,3 +204,12 @@ process in the subsequent path scan remain failures. All packaged source attempt
 cleanup, macOS checks, draft byte validation and public-channel checks still
 run on fresh state. A failed original run remains failed and is not evidence
 of success; publication requires a complete successful run after the fix.
+
+For automatic source upgrades and candidate self-reinstallation, the packaged
+Windows driver waits for the authenticated helper PID to be absent in two
+successful process queries before reading its final relaunch log. This avoids
+competing with immutable helpers whose `Add-Content` logger silently drops write
+errors. Helper exit and log inspection share the original 120-second deadline.
+Process-query failure, missing or duplicate markers, incomplete renderer/window
+evidence, or cleanup failure remain fatal. A previous run with missing records
+remains failed; this observation change does not reconstruct or waive evidence.
