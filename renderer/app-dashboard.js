@@ -130,6 +130,22 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return paths.find(path => projectContainsPath(state.workspace, path)) || paths[0] || "";
   }
 
+  // Generated tool state is not a user-facing sidebar project. Match complete
+  // components only; legitimate dot folders such as .github remain visible.
+  function isSidebarPath(path) {
+    return !/(?:^|\/)(?:\.specflow|\.git|\.cache)(?:\/|$)/iu.test(String(path || "").replace(/\\/g, "/"));
+  }
+
+  function isSidebarSession(session) {
+    if (![session.originCwd, session.cwd].every(isSidebarPath)) return false;
+    const paths = sessionProjectPaths(session);
+    return !paths.length || paths.some(isSidebarPath);
+  }
+
+  function sidebarSessionPaths(session) {
+    return sessionProjectPaths(session).filter(isSidebarPath);
+  }
+
   const normalizedPaths = new Map();
   function normalizedProjectPath(value) {
     const input = String(value ?? "");
@@ -188,9 +204,9 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return sourceId === "builtin.opencode" ? "OpenCode" : sourceId === "builtin.aside" ? "Aside Browser" : sourceId;
   }
 
-  function observedProjects(sessions = displaySessions().filter((session) => !session.parentId)) {
+  function observedProjects(sessions = displaySessions().filter((session) => !session.parentId), includePath = () => true) {
     const projects = new Map();
-    const saved = state.workspaces.map((item, index) => ({ ...item, key: normalizedProjectPath(item.path), order: index }));
+    const saved = state.workspaces.filter(item => includePath(item.path)).map((item, index) => ({ ...item, key: normalizedProjectPath(item.path), order: index }));
     saved.forEach((item) => projects.set(item.key, {
       path: item.path,
       name: item.name || projectName(item.path),
@@ -202,6 +218,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     sessions.filter((session) => !session.parentId && !isProjectlessSession(session)).forEach((session) => {
       const counted = new Set();
       for (const originPath of sessionProjectPaths(session)) {
+        if (!includePath(originPath)) continue;
         const owner = saved
           .filter((item) => projectContainsPath(item.path, originPath))
           .sort((a, b) => b.key.length - a.key.length)[0];
@@ -357,8 +374,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     return [...roots.values()];
   }
 
-  function projectNoticeModel() {
-    const rootSessions = displaySessions().filter((session) => !session.parentId);
+  function projectNoticeModel(includeSession = () => true) {
+    const rootSessions = displaySessions().filter((session) => !session.parentId && includeSession(session));
     const allVisibleSessions = visibleSessions();
     const allSessionsById = new Map(allVisibleSessions.map((session) => [String(session.id || ""), session]));
     const rootSessionFor = (session) => {
@@ -380,7 +397,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
         const session = queue.shift();
         if (!session?.id || seen.has(String(session.id))) continue;
         seen.add(String(session.id));
-        actors.push(session);
+        if (includeSession(session)) actors.push(session);
         queue.push(...(session.childIds || []).map(id => allSessionsById.get(String(id))).filter(Boolean));
       }
       return actors;
@@ -392,6 +409,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     const resultEntries = (root) => {
       if (controlRoomStatus(root) !== "completed" || typeof context.resultReviewTargets !== "function") return [];
       return context.resultReviewTargets(root)
+        .filter(includeSession)
         .filter(session => !context.isProjectNoticeSeen?.("result", session))
         .map(session => ({ kind: "result", session }));
     };
@@ -444,7 +462,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
 
   function renderWorkspaces() {
     const rootSessions = displaySessions().filter((session) => !session.parentId);
-    const sidebarRootSessions = displaySessions().filter(session => !session.parentId);
+    const sidebarRootSessions = rootSessions.filter(isSidebarSession);
     const liveRootSessions = controlRoomRootSessions();
     const tmuxRootSessions = unlinkedLiveTmuxSessions();
     const allLiveRootSessions = [...liveRootSessions, ...tmuxRootSessions];
@@ -472,7 +490,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       });
       return [...roots.values()];
     };
-    const noticeModel = projectNoticeModel();
+    const noticeModel = projectNoticeModel(isSidebarSession);
     const sourceIds = [
       "direct",
       ...(state.sourcePlugins || [])
@@ -481,8 +499,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       ...rootSessions.map(sessionProjectSource).filter((id) => id !== "direct"),
     ].filter((id, index, values) => values.indexOf(id) === index);
     const sidebarGroups = sourceIds.map((sourceId) => {
-      const scopedSessions = rootSessions.filter((session) => sessionProjectSource(session) === sourceId);
-      const scopedProjects = observedProjects(scopedSessions)
+      const scopedSessions = sidebarRootSessions.filter((session) => sessionProjectSource(session) === sourceId);
+      const scopedProjects = observedProjects(scopedSessions, isSidebarPath)
         .filter((project) => Number(project.count || 0) > 0)
         .map((project) => ({ ...project, sourceId }));
       const projectlessCount = scopedSessions.filter(isProjectlessSession).length;
@@ -567,12 +585,12 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     if (!(state.sidebarExpandedProjects instanceof Set)) state.sidebarExpandedProjects = new Set();
     const sidebarSourceOrder = new Map(sourceIds.map((sourceId, index) => [sourceId, index]));
     const sourceState = (item, sourceId, projectless = false) => {
-      const rootMatches = (root) => sessionProjectSource(root) === sourceId
+      const rootMatches = (root) => isSidebarSession(root) && sessionProjectSource(root) === sourceId
         && (projectless
           ? isProjectlessSession(root)
           : !isProjectlessSession(root)
             && matchesControlRoomProject(root, item.path));
-      const relatedSessions = allVisibleSessions.filter((session) => rootMatches(rootSessionFor(session)));
+      const relatedSessions = allVisibleSessions.filter((session) => isSidebarSession(session) && rootMatches(rootSessionFor(session)));
       const observedLive = uniqueRootSessions(relatedSessions.filter(isControlRoomSession).map(rootSessionFor));
       // Conversation history is not an inventory of open terminal sessions.
       const liveIds = new Set(observedLive.map(session => String(session.id)));
@@ -602,7 +620,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     };
     // Keep saved projects selectable before their first task without
     // manufacturing an empty Whitebox/program row for them.
-    const sidebarProjectNodes = new Map(projects.map((item) => [sidebarProjectKey(item.path), {
+    const sidebarProjectNodes = new Map(observedProjects(sidebarRootSessions, isSidebarPath).map((item) => [sidebarProjectKey(item.path), {
       key: sidebarProjectKey(item.path),
       path: item.path,
       name: item.name,
@@ -660,6 +678,7 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
     });
     // Include independent live terminal/group records without importing history.
     for (const session of state.sidebarTerminalEntries || []) {
+      if (!isSidebarSession(session)) continue;
       if (session.terminalGroupId && !window.WhiteboxTerminalGroups?.matchesProvider(session)) continue;
       const project = controlRoomProject(session);
       const key = sidebarProjectKey(project.path);
@@ -765,8 +784,8 @@ window.WhiteboxAppFactories.createDashboard = function createDashboard(context =
       // project. The main view's selected workspace can change independently.
       let sessions = latestSessionSort(uniqueRootSessions(item.sources.flatMap(source => source.sessions))).map(session => ({
         ...session,
-        sidebarCwd: sessionProjectPaths(session).find(path => projectContainsPath(item.path, path))
-          || sessionProjectPaths(session)[0] || "",
+        sidebarCwd: sidebarSessionPaths(session).find(path => projectContainsPath(item.path, path))
+          || sidebarSessionPaths(session)[0] || "",
       }));
       if (sidebarSearch && ![item.name, item.path, item.key].some(value => String(value || '').toLowerCase().includes(sidebarSearch))) {
         sessions = sessions.filter(session => session.terminalGroupId
