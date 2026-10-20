@@ -882,15 +882,30 @@ function registerCliAndUpdateTests(context) {
       'candidate=fixture;version=1.8.1', 'relaunchStarted=true;attempt=1;pid=42',
       'rendererReady=true;pid=42', 'relaunchReady=true;attempt=1;pid=42',
     ].join('\r\n');
-    function relaunchPollingFixture(reads) {
+    function relaunchPollingFixture(reads, { helperPid = null, exitDelay = 0, exitError = null } = {}) {
       let now = 0;
       let readCount = 0;
       let profileChecks = 0;
+      let helperExited = helperPid === null;
+      let exitChecks = 0;
       const sandbox = {
         assert, readWindowsUpdateLogForPolling,
         Date: { now: () => now },
         setTimeout(resolve, delay) { now += delay; resolve(); },
+        powershell: 'powershell.exe',
+        probeWindowsProcessIds() { throw new Error('Unexpected real process probe in fixture'); },
+        async waitForOwnedProcessIdsExit(pids, options) {
+          assert.deepStrictEqual(Array.from(pids), [helperPid]);
+          assert.equal(options.timeoutMs, 600);
+          assert.equal(options.pollMs, 200);
+          assert.equal(typeof options.probe, 'function');
+          exitChecks += 1;
+          now += exitDelay;
+          if (exitError) throw exitError;
+          helperExited = true;
+        },
         readLog() {
+          assert(helperExited, 'The observer must not open the log while the helper can still write.');
           const value = reads[Math.min(readCount++, reads.length - 1)];
           if (value instanceof Error) throw value;
           return value;
@@ -902,8 +917,26 @@ function registerCliAndUpdateTests(context) {
         installedExecutable: 'fixture.exe', inheritedUserDataDir: 'fixture-profile',
       };
       const wait = require('vm').runInNewContext(`${waiterSource}\nwaitForRelaunchLog`, sandbox);
-      return { run: () => wait('fixture.log', '1.8.1', 600), checks: () => profileChecks };
+      return {
+        run: () => wait('fixture.log', '1.8.1', 600, helperPid),
+        checks: () => profileChecks, reads: () => readCount, exits: () => exitChecks,
+      };
     }
+    const afterExit = relaunchPollingFixture([readyLog], { helperPid: 123, exitDelay: 200 });
+    assert.equal(await afterExit.run(), 42);
+    assert.equal(afterExit.exits(), 1);
+    assert.equal(afterExit.checks(), 2);
+    const exitFailure = new Error('Helper exit could not be verified');
+    const ambiguousExit = relaunchPollingFixture([readyLog], { helperPid: 123, exitError: exitFailure });
+    await assert.rejects(ambiguousExit.run(), error => error === exitFailure);
+    assert.equal(ambiguousExit.reads(), 0);
+    const expiredExit = relaunchPollingFixture([readyLog], { helperPid: 123, exitDelay: 600 });
+    await assert.rejects(expiredExit.run(), /Timed out waiting for updater relaunch/);
+    assert.equal(expiredExit.reads(), 0, 'Waiting for helper exit must not reset the relaunch deadline.');
+    await assert.rejects(relaunchPollingFixture([''], { helperPid: 123 }).run(), /Timed out waiting for updater relaunch/);
+    await assert.rejects(relaunchPollingFixture([readyLog], { helperPid: 0 }).run(), /authenticated helper PID/);
+    await assert.rejects(relaunchPollingFixture([readyLog.replace('rendererReady=true;pid=42', '')],
+      { helperPid: 123 }).run(), /renderer-ready handshake/);
     for (const code of ['EBUSY', 'EPERM']) {
       const locked = Object.assign(new Error('log writer holds the file'), { code });
       const recovered = relaunchPollingFixture([locked, readyLog]);
