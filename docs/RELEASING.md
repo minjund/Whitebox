@@ -28,6 +28,14 @@ exactly the expected platform artifacts; every downloaded draft asset must be
 byte-identical to its verified build artifact, and the canonical Windows Setup
 and frozen-client manual alias must be byte-identical before npm publication.
 
+Recovery may overlay the reviewed workspace E2E driver from the validation
+commit while exercising the immutable tag's application sources. It must
+restore that test file and prove a clean tracked tree before packaging. The
+driver waits for rendered review states and retries only an explicit stale-frame
+rejection that occurs before any PTY write; unknown or accepted deliveries are
+never replayed. Product, dependencies, package metadata and updater checks keep
+the immutable tag's bytes and all compatibility gates still run in full.
+
 ## Updater compatibility review contract
 
 This section is normative for release reviewers and review agents. Apply it to

@@ -413,11 +413,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     reviewState = 'collecting';
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석중/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting review rendered after the previous selection refresh');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석중/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false');
     reviewState = 'reviewing'; startedAt = Date.now() - 31000;
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return document.querySelector("#wbReviewActivity").textContent === "분석중…" && document.querySelector("#wbReviewContent").getAttribute("aria-busy") === "true"; })()', 'reviewing state rendered');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
     assert.equal(await evaluate('document.querySelector(".wb-review-preview")'), null, 'no redundant observed-facts preview');
     if (process.env.WHITEBOX_REVIEW_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_REVIEW_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
@@ -665,7 +665,23 @@ app.whenReady().then(async () => {
       const before = await client.get(id, false);
       const opts = { directory: control.directory };
       const commandText = process.platform === 'win32' ? 'Write-Output "PANEL_ENV=$env:WHITEBOX_SURFACE_ID"' : 'printf "PANEL_ENV=%s\\n" "$WHITEBOX_SURFACE_ID"';
-      await panelCommand(['send', '--source', id, '--surface', id, '--', commandText + '\n'], opts);
+      // Shell startup/resize output can invalidate a captured frame. Only this
+      // explicit pre-write rejection is safe to retry; unknown delivery, lost
+      // acknowledgement, identity errors and accepted sends are never replayed.
+      let submitted = false, rejectedFrame;
+      for (let attempt = 0; attempt < 150 && !submitted; attempt++) {
+        await evaluate('WhiteboxWorkspace.captureReviews(true)');
+        await control.sync(collaborationPayload);
+        try {
+          await panelCommand(['send', '--source', id, '--surface', id, '--', commandText + '\n'], opts);
+          submitted = true;
+        } catch (error) {
+          if (error.message !== 'Terminal state changed; retry after the next frame.') throw error;
+          rejectedFrame = error;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      if (!submitted) throw rejectedFrame;
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env');
       await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
       const screen = await panelCommand(['read-screen', '--source', id, '--surface', id, '--json'], opts);
