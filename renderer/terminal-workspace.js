@@ -513,6 +513,10 @@
       const session = await api.terminalCreate({ type: bootstrap.platform.localShell, cwd: owner.cwd, cols: 100, rows: 30, creationId: `workspace:${uuid()}` });
       sessions.set(session.id, session);
       await ensurePane(session);
+      // Mounting reads the host after creation; reconcile any PID that became
+      // ready before this renderer registered the session's state events.
+      const mounted = await api.terminalGet(session.id);
+      if (mounted?.creationId === session.creationId) sessions.set(session.id, mounted);
       if (axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected)) {
         previousTab.layout = layout.split(previousTab.layout, selected, session.id, axis);
         previousTab.activePane = session.id;

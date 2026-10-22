@@ -3808,7 +3808,12 @@ class TerminalManager extends EventEmitter {
         if (session.generation !== generation) return;
         if (trackCodexResume) codexResumeOutputTail = `${codexResumeOutputTail}${String(data || '')}`.slice(-16 * 1024);
         const readyPid = Number(processHandle.pid);
-        if (Number.isSafeInteger(readyPid) && readyPid > 0) session.pid = readyPid;
+        if (Number.isSafeInteger(readyPid) && readyPid > 0 && session.pid !== readyPid) {
+          session.pid = readyPid;
+          // ConPTY can publish its PID only with the first output. Notify
+          // clients once so they do not retain a null creation identity.
+          this.emitState('updated', session);
+        }
         let text = this.consumeExactProxyFrames(session, String(data || ''));
         if (session.spec.readyMarker && !session.startupReady) {
           session.startupBuffer = unicodeSafeReplayTail(`${session.startupBuffer}${text}`);

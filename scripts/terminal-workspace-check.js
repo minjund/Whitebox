@@ -50,7 +50,12 @@ app.whenReady().then(async () => {
     ipcMain.handle('agents:snapshot', () => ({ sessions: [] }));
     for (const op of ['list', 'get', 'create', 'write', 'resize', 'close', 'reconnect']) ipcMain.handle(`terminals:${op}`, (_event, ...args) => manager[op](...args));
     ipcMain.removeHandler('terminals:create');
-    ipcMain.handle('terminals:create', (_event, options) => providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory));
+    ipcMain.handle('terminals:create', async (_event, options) => {
+      const session = await providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
+      // Reproduce a pre-ready create reply even on hosts with synchronous PIDs.
+      // The real host inventory and terminalGet retain the actual process.
+      return { ...session, pid: null };
+    });
     ipcMain.removeHandler('terminals:close');
     ipcMain.handle('terminals:close', (_event, id) => { if (id === rejectedCloseId) throw new Error('fixture close failure'); return manager.close(id); });
     ipcMain.removeHandler('terminals:get');
@@ -155,6 +160,7 @@ app.whenReady().then(async () => {
     assert.equal(suggestionProbe.draftReady, false, 'real text remains a draft even with cursor at the start');
     assert.equal(manager.list().length, 1, 'opens a plain shell with no provider wizard');
     const first = manager.list()[0];
+    assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.find(session => session.id === ${JSON.stringify(first.id)}).pid`), first.pid, 'mount reconciles the live PID after a pre-ready create reply');
     assert.equal(await evaluate('document.querySelectorAll(".wb-space-icon svg").length'), 2, 'folder icons are SVG, independent of font glyphs');
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 0, 'project terminals never appear as independent instances');

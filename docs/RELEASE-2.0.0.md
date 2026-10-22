@@ -70,6 +70,13 @@ Published LoadToAgent 1.6.3–1.6.14 and 1.6.16–1.6.22 use the immutable offic
 
 ## Candidate validation record
 
+The low-level Windows reinstall case closes only authenticated startup shells
+inside the fresh attempt profiles before requesting a native window close.
+Closing a window with a live 2.0 shell intentionally keeps the app in its tray;
+that is not a quit failure. The separate packaged-button scenario still keeps
+its live workspace PTY through the actual production update and verifies its
+unchanged identity, then closes that exact session and proves host cleanup.
+
 Status: pending. This document is a compatibility plan, not release approval.
 Before tagging, retain the exact 40-character candidate SHA and successful
 main/PR Actions runs. Before publication, the tag Release must independently

@@ -5,6 +5,8 @@ GitHub release notes remain the authoritative version history.
 
 ## 2.0.0 - 2026-10-22
 
+- Publish asynchronously ready terminal process identities so Windows review
+  history remains bound to the same live shell through trash and restoration.
 - Introduce a terminal-first workspace: ordinary shells, terminal tabs,
   horizontal/vertical splits, resizable panes, keyboard navigation, and layout
   restoration without restarting the underlying shell processes.

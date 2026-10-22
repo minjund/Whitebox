@@ -4142,20 +4142,82 @@ function registerTerminalLifecycleTests(context) {
     manager.dispose();
   });
 
+  test('첫 출력에서 준비된 PTY PID를 상태 이벤트로 한 번 알린다', async () => {
+    let output, exited;
+    const handle = {
+      pid: null, onData: callback => { output = callback; },
+      onExit: callback => { exited = callback; }, write() {}, resize() {},
+      kill() { exited?.({ exitCode: 0 }); },
+    };
+    const manager = new TerminalManager({
+      storeFile: path.join(temp, 'terminal-late-pid.json'), killTree: () => {},
+      ptyModule: { spawn: () => handle },
+    });
+    try {
+      const created = manager.create({ type: 'shell', cwd: root });
+      assert.equal(created.pid, null);
+      const states = [];
+      manager.on('state', event => states.push(event.session?.pid));
+      handle.pid = 654321;
+      output('first output');
+      assert.equal(manager.get(created.id).pid, 654321);
+      assert.deepStrictEqual(states, [654321], 'Clients receive the newly available PID');
+      output('later output');
+      assert.deepStrictEqual(states, [654321], 'Unchanged PIDs do not cause output-frequency state events');
+    } finally { handle.kill(); await manager.dispose(); }
+  });
+
+  test('패키지 유휴 검사는 인증된 시작 셸만 닫고 외부 세션과 호스트는 거절한다', async () => {
+    const profile = path.join(temp, 'idle-workspace-fixture');
+    fs.mkdirSync(profile, { recursive: true });
+    const discoveryFile = path.join(profile, 'terminal-host.json');
+    const startup = { id: 'startup-shell', creationId: 'workspace:idle-fixture', type: 'shell', pid: 654321, status: 'running' };
+    let rows = [startup];
+    const closed = [], exited = [];
+    const manager = Object.assign(new EventEmitter(), {
+      list: () => rows.map(row => ({ ...row })),
+      get: id => rows.find(row => row.id === id),
+      close: id => { closed.push(id); rows = rows.filter(row => row.id !== id); return { ok: true }; },
+    });
+    const server = new TerminalHostServer({ manager, discoveryFile });
+    await server.start();
+    const { idleCandidateWorkspace } = require('../packaged-workspace-idle');
+    const options = { profiles: [profile], roots: [profile],
+      assertHostOwned: pid => assert.equal(pid, process.pid), waitForExit: async pid => { exited.push(pid); } };
+    try {
+      await idleCandidateWorkspace(options);
+      assert.deepStrictEqual(closed, [startup.id]);
+      assert.deepStrictEqual(exited, [startup.pid]);
+      rows = [{ ...startup, creationId: 'foreign-session' }];
+      await assert.rejects(idleCandidateWorkspace(options), /only its workspace startup shells/);
+      rows = [startup];
+      await assert.rejects(idleCandidateWorkspace({ ...options, assertHostOwned: () => { throw new Error('foreign host'); } }), /foreign host/);
+      assert.deepStrictEqual(closed, [startup.id], 'Rejected identities must never be closed');
+    } finally { server.dispose(); }
+  });
+
   test('독립 실행 환경 준비가 느려도 실제 호스트 시작 후 연결 준비 시간을 보장한다', async () => {
     let spawned = false;
     let spawnCalls = 0;
+    let clock = 0;
     const client = new TerminalHostClient({
       discoveryFile: path.join(temp, 'terminal-host-slow-runtime.json'),
       connectTimeoutMs: 180,
+      now: () => clock,
       processExists: () => true,
       spawnHost: async () => {
         spawnCalls += 1;
-        await new Promise(resolve => setTimeout(resolve, 260));
+        clock += 260;
         spawned = true;
         return { pid: 54_001 };
       },
     });
+    // Exercise the production loop with a controlled clock. A busy CI event
+    // loop must not consume the short simulated post-spawn readiness budget.
+    client.connectLoop = require('vm').runInNewContext(
+      '(' + client.connectLoop.toString().replace(/^async connectLoop/, 'async function connectLoop') + ')',
+      { Date: { now: () => clock }, setTimeout: (callback, delay) => { clock += delay; queueMicrotask(callback); } },
+    );
     client.connectExisting = async () => {
       if (!spawned) throw new Error('runtime preparation pending');
       client.connected = true;

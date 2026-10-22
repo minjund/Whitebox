@@ -2099,6 +2099,15 @@ async function installCandidateWithManualBridge(options) {
 }
 
 async function reinstallCandidateWithPackagedUpdater(options) {
+  if (Number(CURRENT_VERSION.split('.')[0]) >= 2) {
+    const roots = [isolatedAppDataRoot, isolatedLocalAppDataRoot];
+    await require('./packaged-workspace-idle').idleCandidateWorkspace({
+      profiles: [directUserDataDir, inheritedUserDataDir], roots,
+      assertHostOwned: pid => assert(roots.some(root => runningProcessesUnderDirectory(root).some(record => record.pid === pid)),
+        'Candidate workspace host must map to this fresh legacy attempt runtime'),
+      waitForExit: waitForProcessExit,
+    });
+  }
   assert.equal(typeof options.updaterModule.selectReleaseAsset, 'function', 'The candidate package lacks its release selector.');
   assertReleaseAssetSelections(options.releaseAssets, CURRENT_VERSION, options.updaterModule.selectReleaseAsset);
 
