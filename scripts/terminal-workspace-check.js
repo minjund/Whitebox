@@ -77,7 +77,11 @@ app.whenReady().then(async () => {
         if (await evaluate(expression)) return;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      throw new Error(`${label}: ${JSON.stringify(errors)}`);
+      const geometry = await evaluate(`(() => {
+        const bounds = selector => { const r = document.querySelector(selector)?.getBoundingClientRect(); return r && { width: r.width, height: r.height }; };
+        return { viewport: innerWidth, main: bounds('.wb-main'), screen: bounds('#wbCanvas .terminal-screen'), canvas: bounds('#wbCanvas canvas') };
+      })()`);
+      throw new Error(`${label}: ${JSON.stringify({ errors, geometry })}`);
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
@@ -437,7 +441,15 @@ app.whenReady().then(async () => {
     const initialPids = manager.list().map(item => item.pid).sort();
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
-    await waitFor(`document.querySelector('.wb-main').getBoundingClientRect().width === innerWidth && document.querySelector('#wbCanvas canvas').getBoundingClientRect().width >= innerWidth - 32`, 'expanded terminal fits the actual viewport width');
+    await waitFor(`(() => {
+      const main = document.querySelector('.wb-main').getBoundingClientRect();
+      const screen = document.querySelector('#wbCanvas .terminal-screen').getBoundingClientRect();
+      const canvas = document.querySelector('#wbCanvas canvas').getBoundingClientRect();
+      const fontSize = parseFloat(getComputedStyle(document.querySelector('#wbCanvas .ghostty-terminal')).fontSize) || 14;
+      // Ghostty reserves 15px for its scrollbar and rounds down to whole cells.
+      return Math.abs(main.width - innerWidth) <= 1 && screen.width >= innerWidth - 16
+        && canvas.width <= screen.width + 1 && canvas.width >= screen.width - 15 - 2 * fontSize;
+    })()`, 'expanded terminal fits the actual viewport and whole-cell grid');
     assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids);
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
@@ -468,7 +480,8 @@ app.whenReady().then(async () => {
     const lastPid = manager.get(last).pid;
     await manager.write(last, command('TRASH_KEPT'));
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'trash output fixture');
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`WhiteboxWorkspace.getState().sessions.some(session => session.id === ${JSON.stringify(last)} && session.pid === ${lastPid})`, 'trash review records the live PTY identity');
+    await waitFor(`WhiteboxWorkspace.captureReviews(true).then(() => document.querySelector('#wbReviewContent').textContent.includes('TRASH_KEPT') && Boolean(document.querySelector('.wb-analysis-tokens')))`, 'trash analysis is rendered before preservation');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
     const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
     await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
@@ -495,6 +508,7 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore project terminal');
     assert.equal(manager.get(last).pid, lastPid);
+    await waitFor('Boolean(document.querySelector(".wb-analysis-tokens"))', 'restored review and token usage are rendered');
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
     assert.ok(restoredReview.includes(reviewBeforeTrash), 'original review cards and observation time survive trash and renderer restart');
@@ -699,7 +713,10 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error);
-    console.error('Fixture terminal output:', await win.webContents.executeJavaScript('WhiteboxTerminal.readTerminal(' + JSON.stringify(manager.list()[0]?.id) + ')')); 
+    if (win && !win.isDestroyed()) {
+      console.error('Fixture terminal output:', await win.webContents.executeJavaScript('WhiteboxTerminal.readTerminal(' + JSON.stringify(manager.list()[0]?.id) + ')'));
+      console.error('Fixture review persistence:', await win.webContents.executeJavaScript('JSON.stringify({ saved: localStorage.getItem("whitebox:workspace:v2"), review: document.querySelector("#wbReviewContent")?.textContent })'));
+    }
     clearTimeout(deadline);
     await manager.dispose();
     win?.destroy();
