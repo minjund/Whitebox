@@ -43,6 +43,13 @@ remains unchanged. A run interrupted by the former 90-minute batch limit is a
 failure and contributes no approval evidence. Recovery also permits the reviewed
 compatibility workflow change; it never overlays that workflow into product bytes.
 
+Recovery may also overlay the reviewed core updater regression fixture before
+tests, then restore its immutable tag bytes before packaging. Its Windows log
+contention test owns an in-process PowerShell runspace instead of an external
+background job. It still requires an actual exclusive file lock, successful
+transient-lock retry, permanent-lock rejection and exact log bytes. The original
+40-second fixture deadline remains fatal; no helper or relaunch deadline changes.
+
 ## Updater compatibility review contract
 
 This section is normative for release reviewers and review agents. Apply it to
