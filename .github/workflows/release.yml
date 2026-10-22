@@ -48,7 +48,7 @@ jobs:
             git diff --name-only --no-renames "$tag_commit" "$GITHUB_SHA" > "$RUNNER_TEMP/validation-changes.txt"
             while IFS= read -r file; do
               case "$file" in
-                .github/workflows/release.yml|scripts/terminal-workspace-check.js|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
+                .github/workflows/release.yml|.github/workflows/v173-update-compatibility.yml|scripts/terminal-workspace-check.js|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
                 *) echo "Recovery changes a file outside the verification allowlist: $file"; exit 1 ;;
               esac
             done < "$RUNNER_TEMP/validation-changes.txt"
@@ -332,7 +332,8 @@ jobs:
       - name: Verify frozen and recent packaged Whitebox compatibility cohorts
         if: runner.os == 'Windows'
         shell: pwsh
-        timeout-minutes: 90
+        # All 45 cohorts run serially; individual installer/relaunch deadlines stay strict.
+        timeout-minutes: 150
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
           if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
