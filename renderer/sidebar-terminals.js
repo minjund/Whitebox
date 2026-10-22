@@ -104,6 +104,11 @@
     const entries = [...(managedEntries || (app.state.sidebarTerminalEntries || []).filter(entry => !entry.cmuxWorkspace)), ...(cmux.groups || [])];
     const changed = JSON.stringify(entries) !== JSON.stringify(app.state.sidebarTerminalEntries);
     app.state.sidebarTerminalEntries = entries;
+    const selectedId = app.state.sidebarFolderFilter?.entryId;
+    if (String(selectedId || '').startsWith('cmux-workspace:') && !entries.some(entry => entry.id === selectedId)) {
+      app.state.sidebarFolderFilter = null;
+      app.state.cmuxSidebarSelectedId = '';
+    }
     const active = entries.find(entry => entry.id === current);
     // Reconcile even an unchanged native ratio after a rejected/clamped resize.
     if (active) await renderDetail(active);

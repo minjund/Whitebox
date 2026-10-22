@@ -15,12 +15,17 @@
     open: '<whitebox-comprehension-contract version="1">',
     close: "</whitebox-comprehension-contract>",
   });
-  const CONTRACT_ENVELOPE = Object.freeze({
+  const V2_CONTRACT_ENVELOPE = Object.freeze({
     kind: "contract",
     open: '<whitebox-comprehension-contract version="2">',
     close: "</whitebox-comprehension-contract>",
   });
-  const RESERVED_ENVELOPES = Object.freeze([LEGACY_CONTRACT_ENVELOPE, CONTRACT_ENVELOPE, PACKET_ENVELOPE]);
+  const CONTRACT_ENVELOPE = Object.freeze({
+    kind: "contract",
+    open: '<whitebox-comprehension-contract version="3">',
+    close: "</whitebox-comprehension-contract>",
+  });
+  const RESERVED_ENVELOPES = Object.freeze([LEGACY_CONTRACT_ENVELOPE, V2_CONTRACT_ENVELOPE, CONTRACT_ENVELOPE, PACKET_ENVELOPE]);
   const MAX_PACKET_PAYLOAD_BYTES = 64 * 1024;
   const DEFAULT_MAX_CANDIDATE_PRINTABLE = MAX_PACKET_PAYLOAD_BYTES
     + PACKET_ENVELOPE.open.length

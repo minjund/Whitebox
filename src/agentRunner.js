@@ -14,6 +14,7 @@ const {
   MAX_RESPONSE_BYTES,
 } = require('./comprehensionPacket');
 const { questionnaireCommand } = require('./questionnaireCommand');
+const { terminalReviewUsage } = require('./terminalReviewUsage');
 const INTERNAL_QUESTIONNAIRE = Symbol('internal-questionnaire');
 
 const DEFAULT_TERMINATION_GRACE_MS = 1_000;
@@ -383,6 +384,7 @@ function handleClaude(state, event) {
     state.statusDetail = event.is_error ? (event.result || '실행 실패') : '작업 완료';
     state.endedAt = new Date().toISOString();
     state.usage = usageFrom(event.usage || event);
+    state.completionUsage = terminalReviewUsage('claude', event.usage);
     if (event.is_error) clearManagedComprehension(state);
     else finalizeManagedComprehension(state, event.result || lastAssistantResponse(state));
     addLifecycle(state, state.status === 'failed' ? 'error' : 'session-end', state.status === 'failed' ? '실행 실패' : '작업 완료', { id: 'session-end', status: state.status === 'failed' ? 'failed' : 'done' });
@@ -445,6 +447,7 @@ function handleCodex(state, event) {
     state.statusDetail = '작업 완료';
     state.endedAt = new Date().toISOString();
     state.usage = usageFrom(event.usage);
+    state.completionUsage = terminalReviewUsage('codex', event.usage);
     state.turnUsage = state.usage;
     finalizeManagedComprehension(state, lastAssistantResponse(state));
     addLifecycle(state, 'turn-complete', '턴 완료', { id: 'turn-complete', status: 'done' });
@@ -678,9 +681,13 @@ class AgentRunner extends EventEmitter {
       || (session.cwd && path.resolve(session.cwd) === path.resolve(this.questionnaireCwd))));
   }
 
-  generateQuestionnaire({ provider, prompt, model = '' }) {
+  generateTerminalReview(options) {
+    return this.generateQuestionnaire({ ...options, terminalReview: true });
+  }
+
+  generateQuestionnaire({ provider, prompt, model = '', terminalReview = false }) {
     if ([...this.active.values()].some(run => run.internalQuestionnaire)) {
-      return Promise.reject(new Error('이전 질문지 요청이 아직 종료되지 않았습니다.'));
+      return Promise.reject(new Error(terminalReview ? '이전 검토 요청이 아직 종료되지 않았습니다.' : '이전 질문지 요청이 아직 종료되지 않았습니다.'));
     }
     ensureDir(this.questionnaireCwd);
     return new Promise((resolve, reject) => {
@@ -692,12 +699,14 @@ class AgentRunner extends EventEmitter {
         this.removeListener('changed', onChanged);
         if (event.state.status !== 'completed' || !event.state.completionObserved) {
           reject(new Error(event.state.statusDetail));
-        } else resolve(lastAssistantResponse(event.state));
+        } else resolve(terminalReview
+          ? { text: lastAssistantResponse(event.state), usage: event.state.completionUsage ?? null, model: event.state.model || model }
+          : lastAssistantResponse(event.state));
       };
       this.on('changed', onChanged);
       let result;
       try {
-        result = this.start({ provider, prompt, model, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: true });
+        result = this.start({ provider, prompt, model, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: terminalReview ? 'terminal-review' : true });
       } catch (error) {
         this.removeListener('changed', onChanged);
         reject(error);
@@ -711,7 +720,7 @@ class AgentRunner extends EventEmitter {
       id = result.runId;
       timeout = setTimeout(() => {
         this.removeListener('changed', onChanged);
-        reject(new Error('질문지 생성 시간이 초과되었습니다.'));
+        reject(new Error(terminalReview ? '검토 시간이 초과되었습니다.' : '질문지 생성 시간이 초과되었습니다.'));
         this.stop(id);
       }, this.questionnaireTimeoutMs);
       timeout.unref?.();
@@ -751,7 +760,7 @@ class AgentRunner extends EventEmitter {
     const executable = findExecutable(PROVIDERS[provider].command);
     if (!executable) return { ok: false, error: `${PROVIDERS[provider].label} AI 프로그램이 설치되어 있지 않습니다.` };
 
-    const internalQuestionnaire = raw[INTERNAL_QUESTIONNAIRE] === true;
+    const internalQuestionnaire = Boolean(raw[INTERNAL_QUESTIONNAIRE]);
     const comprehensionContractInjected = false;
     const id = runId();
     const dir = path.join(this.runsDir, id);
@@ -776,7 +785,7 @@ class AgentRunner extends EventEmitter {
     let child;
     try {
       const spec = internalQuestionnaire
-        ? questionnaireCommand(provider, cwd, raw.model || '', this.platform)
+        ? questionnaireCommand(provider, cwd, raw.model || '', this.platform, raw[INTERNAL_QUESTIONNAIRE] === 'terminal-review')
         : commandSpec(provider, opts, executable);
       child = this.spawn(spec.command, spec.args, {
         cwd,

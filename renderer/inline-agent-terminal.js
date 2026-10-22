@@ -1,6 +1,7 @@
 "use strict";
 
 (() => {
+  if (document.documentElement?.dataset?.workspace === 'terminal') return;
   const local = {
     generation: 0,
     targetIds: new Map(),

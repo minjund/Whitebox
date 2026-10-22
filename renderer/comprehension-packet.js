@@ -35,7 +35,7 @@
   }
 })(typeof window !== "undefined" ? window : globalThis, function createComprehensionPacketApi(root) {
   const SCHEMA_VERSION = 1;
-  const CONTRACT_OPEN = '<whitebox-comprehension-contract version="2">';
+  const CONTRACT_OPEN = '<whitebox-comprehension-contract version="3">';
   const LEGACY_CONTRACT_OPEN = '<whitebox-comprehension-contract version="1">';
   const CONTRACT_CLOSE = "</whitebox-comprehension-contract>";
   const ENVELOPE_OPEN = '<whitebox-comprehension-packet version="1">';
@@ -83,7 +83,7 @@
     status_variant_correct: "변형 문제 정답",
     status_excluded: "문제 오류 · 평가 제외",
     history_label: "풀었던 문제 목록",
-    summary_hint: "AI가 답한 핵심 내용입니다. 이 요약을 참고해 문제를 풀어보세요.",
+    summary_hint: "제목 아래 내용을 읽으며 오른쪽 문제를 풀어보세요.",
     no_questions_review: "문제 오류로 제외된 문항은 점수 분모와 이해 부채에 포함되지 않습니다.",
     all_understood_title: "모든 문제를 이해했습니다.",
     explanation_reviewed_title: "해설 확인을 마쳤습니다.",
@@ -114,6 +114,10 @@
     closed: "이해 패킷을 닫았습니다.",
     closed_debt: "이해 부채가 이 노드에만 남았습니다.",
     badge_open: "패킷 열기",
+    packet_history: "히스토리 {count}",
+    packet_history_label: "설문지 히스토리",
+    packet_history_debt: "이해 부채 · {count}개 설문지",
+    packet_history_complete: "모든 설문지 확인 완료",
     header_eyebrow: "이해 패킷 · 완료 즉시 생성됨",
     header_title: "다음 작업을 맡기기 전에 확인하세요",
     difficulty_aria: "난이도 {difficulty}",
@@ -150,7 +154,7 @@ The JSON must use schemaVersion 1 and exactly these fields:
 
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question and its pre-generated variant must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.`;
   const LEGACY_CONTRACT_BLOCK = `${LEGACY_CONTRACT_OPEN}\n${LEGACY_CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
-  const CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
+  const V2_CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
 
 Write the normal user-visible final answer first. Then append exactly one ${ENVELOPE_OPEN}...${ENVELOPE_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
 
@@ -160,11 +164,28 @@ The JSON must use schemaVersion 1 and exactly these fields:
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. A grounded variant question is optional; when included it must use the same multiple-choice shape with 2-6 choices, one valid answerId, and an explanation. Omit variant when it adds little value or cannot be grounded. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
 
 The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Divide it into a few short, relevant sections separated by blank lines. Each section must use exactly this plain-text shape: a concise subheading on its own line prefixed with "### ", one or two short body sentences, then a final hint line prefixed with "힌트: " (or the equivalent word for hint in the user's language). The hint must point to the fact or reasoning in that section that helps with one or more questions, without giving away the answer. Keep the whole summary within 6000 characters and self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
+  const V2_CONTRACT_BLOCK = `<whitebox-comprehension-contract version="2">\n${V2_CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
+  const CONTRACT_BODY = `You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
+
+Write the normal user-visible final answer first. Then append exactly one ${ENVELOPE_OPEN}...${ENVELOPE_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
+
+The JSON must use schemaVersion 1 and exactly these fields:
+{"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","sections":[{"id":"s1","title":"...","body":"...","questionIds":["q1"]}],"evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"..."}}]}
+
+Select only the most important concepts, actual behavior changes, decision reasons, and meaningful constraints. Omit long introductions, generic background, file-by-file walkthroughs, repeated facts, and filler. Use the user's language and choose difficulty 1-5 (default 3 when unspecified and the material supports it).
+
+The sections array is the learning material. Each section has exactly id, title, body, and questionIds. Give each a short descriptive title that does not reveal the answer. The app displays each title on the left with its body hidden behind a hint toggle, and only its referenced questions on the right. Each question ID must appear in exactly one section; every section must reference at least one question. Every question and optional variant must be answerable from its own section body. Teach the relevant concept without option IDs or an answer key. Do not assume that merely adjacent paragraphs correspond to questions. Keep summary to a one-sentence overview; do not duplicate all section bodies there.
+
+Scale content with difficulty: levels 1-2 use 2-3 sections, 1 question per section, and 1-2 short body sentences; level 3 uses 3-5 sections, 1-2 questions per section, and 2-4 body sentences; levels 4-5 use 5-7 sections, 2 questions per section, and 4-6 body sentences. Use fewer sections or questions when the source has fewer distinct concepts, even just one. Never invent or repeat content to meet a count. Maximum 7 sections and 14 questions. Harder questions require application, interacting conditions, exceptions, or cause-and-effect reasoning; add necessary context, not verbosity or obscure vocabulary. Keep each section body within 1600 characters and all section bodies together within 6000 characters.
+
+Each question has 3-4 distinct, plausible choices with exactly one correct answer and a concise explanation (at most two sentences). Match option length, specificity, and tone so these do not reveal the answer; vary correct-answer position. Cover change, decision, and constraint-risk across the quiz. A grounded variant is optional; omit it unless it adds useful practice. Packet, section, evidence, and question IDs must be unique ASCII identifiers. Option IDs need only be unique within their list. Reference defined evidence IDs for traceability. All text is plain text without HTML or executable URLs. Never invent work, decisions, evidence, checks, risks, or results.
+
+If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.`;
   const CONTRACT_BLOCK = `${CONTRACT_OPEN}\n${CONTRACT_BODY}\n${CONTRACT_CLOSE}`;
 
   function stripContract(value) {
     const prompt = typeof value === "string" ? value : String(value == null ? "" : value);
-    for (const contract of [CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK]) {
+    for (const contract of [CONTRACT_BLOCK, V2_CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK]) {
       const prefix = `${contract}\n\n`;
       if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
       if (prompt === contract) return "";
@@ -174,7 +195,7 @@ The summary is the user's open-book reading material, displayed beside the quest
 
   function hasContract(value) {
     const prompt = typeof value === "string" ? value : String(value == null ? "" : value);
-    return [CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK].some(contract => (
+    return [CONTRACT_BLOCK, V2_CONTRACT_BLOCK, LEGACY_CONTRACT_BLOCK].some(contract => (
       prompt === contract || prompt.startsWith(`${contract}\n\n`)
     ));
   }
@@ -226,7 +247,7 @@ The summary is the user's open-book reading material, displayed beside the quest
       || !Array.isArray(packet.evidence)
       || !Array.isArray(packet.questions)
       || packet.questions.length < 1
-      || packet.questions.length > 5) return false;
+      || packet.questions.length > (packet.sections === undefined ? 5 : 14)) return false;
 
     const evidenceIds = new Set();
     for (const evidence of packet.evidence) {
@@ -254,6 +275,25 @@ The summary is the user's open-book reading material, displayed beside the quest
         || !isText(question.variant.explanation)
         || !optionListIsRenderable(question.variant.options, question.variant.answerId))) return false;
       questionIds.add(question.id);
+    }
+    if (packet.sections !== undefined) {
+      if (!Array.isArray(packet.sections) || !packet.sections.length || packet.sections.length > 7) return false;
+      const sectionIds = new Set([packet.id, ...evidenceIds, ...questionIds]);
+      const assigned = new Set();
+      let bodyLength = 0;
+      for (const section of packet.sections) {
+        if (!isRecord(section) || !isText(section.id) || sectionIds.has(section.id)
+          || !isText(section.title) || section.title.length > 180
+          || !isText(section.body) || section.body.length > 1600
+          || !Array.isArray(section.questionIds) || !section.questionIds.length) return false;
+        sectionIds.add(section.id);
+        bodyLength += section.body.length;
+        for (const id of section.questionIds) {
+          if (!questionIds.has(id) || assigned.has(id)) return false;
+          assigned.add(id);
+        }
+      }
+      if (bodyLength > 6000 || assigned.size !== questionIds.size) return false;
     }
     return true;
   }
@@ -346,6 +386,8 @@ The summary is the user's open-book reading material, displayed beside the quest
     const localeEventTarget = context.localeEventTarget || doc?.defaultView || root || null;
     const instanceId = `whitebox-comprehension-${++instanceSequence}`;
     const memoryProgress = new Map();
+    const sessionHistory = new Map();
+    const deferredPresentations = new Set();
     const timers = new Set();
     let currentSession = null;
     let currentPacket = null;
@@ -518,6 +560,150 @@ The summary is the user's open-book reading material, displayed beside the quest
       }
     }
 
+    function historyIdentity(session) {
+      return JSON.stringify([session.comprehensionOrigin?.generation || completionGenerationIdentity(session),
+        packetContentFingerprint(session.comprehension.packet)]);
+    }
+
+    function historyFor(sessionId) {
+      const id = String(sessionId || "");
+      if (!sessionHistory.has(id)) {
+        const saved = storageRead(`${context.storagePrefix || STORAGE_PREFIX}:history:${encodeURIComponent(id)}`);
+        const entries = new Map();
+        for (const entry of Array.isArray(saved) ? saved : []) {
+          if (String(entry?.id) === id && isEligibleSession(entry)) entries.set(historyIdentity(entry), entry);
+        }
+        sessionHistory.set(id, entries);
+      }
+      return sessionHistory.get(id);
+    }
+
+    function rememberSession(session) {
+      if (destroyed || !session?.id || session.parentId || Number(session.depth || 0)) return;
+      const entries = historyFor(session.id);
+      let changed = false;
+      const remember = candidate => {
+        if (!isEligibleSession(candidate)) return;
+        const key = historyIdentity(candidate);
+        if (entries.has(key)) return;
+        // Archive only quiz identity and content, never conversation or terminal output.
+        const entry = { id: String(candidate.id), status: "completed", completionObserved: true,
+          comprehensionContractInjected: candidate.comprehensionContractInjected === true,
+          comprehensionOrigin: candidate.comprehensionOrigin,
+          comprehensionGenerationId: candidate.comprehensionGenerationId,
+          completionId: candidate.completionId, lastCompletedTurnId: candidate.lastCompletedTurnId,
+          completedAt: candidate.completedAt, endedAt: candidate.endedAt,
+          comprehension: candidate.comprehension };
+        entries.set(key, JSON.parse(JSON.stringify(entry)));
+        changed = true;
+      };
+      for (const item of Array.isArray(session.comprehensionHistory) ? session.comprehensionHistory : []) {
+        if (!/^[a-f0-9]{64}$/u.test(item?.generation || "") || !isRenderablePacket(item.packet)) continue;
+        if (entries.has(JSON.stringify([item.generation, packetContentFingerprint(item.packet)]))) continue;
+        // Preserve the original progress key when importing the current turn.
+        if (isEligibleSession(session) && item.generation === session.comprehensionOrigin?.generation) {
+          remember(session);
+        } else {
+          remember({ id: session.id, status: "completed", completionObserved: true,
+            completedAt: item.completedAt || legacyHistoryCompletion(session, item) || item.generation,
+            comprehensionOrigin: { authority: "background-questionnaire-v1", generation: item.generation },
+            comprehension: { status: "ready", schemaVersion: SCHEMA_VERSION, packet: item.packet } });
+        }
+      }
+      remember(session);
+      if (!changed) return;
+      while (entries.size > 200) entries.delete(entries.keys().next().value);
+      const key = `${context.storagePrefix || STORAGE_PREFIX}:history:${encodeURIComponent(String(session.id))}`;
+      const saved = [...entries.values()];
+      memoryProgress.set(key, saved);
+      try { storage?.setItem?.(key, JSON.stringify(saved)); }
+      catch (error) { report("comprehension-packet-history-write", error); }
+    }
+
+    function legacyHistoryCompletion(session, item) {
+      // Older background caches did not store completion times. Recover the
+      // existing answer key only when both the packet and progress match uniquely.
+      const fingerprint = packetContentFingerprint(item.packet);
+      if (session.comprehensionHistory.filter(entry => packetContentFingerprint(entry.packet) === fingerprint).length !== 1) return "";
+      const prefix = `${context.storagePrefix || STORAGE_PREFIX}:${encodeURIComponent(String(session.id))}:`;
+      const matches = new Set();
+      try {
+        for (let index = 0; index < (storage?.length || 0); index += 1) {
+          const key = storage.key(index);
+          if (!key?.startsWith(prefix)) continue;
+          const saved = storageRead(key);
+          if (saved?.schemaVersion === SCHEMA_VERSION && saved.sessionId === String(session.id)
+            && saved.packetId === item.packet.id && saved.packetFingerprint === fingerprint
+            && (!saved.backgroundGeneration || saved.backgroundGeneration === item.generation)
+            && saved.completionGeneration) matches.add(saved.completionGeneration);
+        }
+      } catch (error) { report("comprehension-packet-history-migration", error); }
+      return matches.size === 1 ? [...matches][0] : "";
+    }
+
+    function historyStatus(entry) {
+      const packet = entry.comprehension.packet;
+      const key = progressStorageKey(entry, packet, context.storagePrefix || STORAGE_PREFIX);
+      const saved = key === currentStorageKey ? serializableProgress() : storageRead(key);
+      const valid = saved?.schemaVersion === SCHEMA_VERSION && saved.sessionId === entry.id
+        && saved.packetId === packet.id && saved.packetFingerprint === packetContentFingerprint(packet)
+        && saved.completionGeneration === completionGenerationIdentity(entry);
+      const excluded = new Set(valid && Array.isArray(saved.excluded) ? saved.excluded : []);
+      const active = packet.questions.filter(question => !excluded.has(question.id));
+      const submitted = valid && saved.submitted === true;
+      const score = submitted ? active.filter(question => saved.answers?.[question.id] === question.answerId).length : 0;
+      const complete = !active.length || (submitted && score === active.length);
+      return { complete, text: complete ? translate("badge_complete", { score, total: active.length })
+        : submitted ? `${score}/${active.length} · ${translate("retries_remaining", { count: active.length - score })}`
+          : translate("not_submitted") };
+    }
+
+    function updatePacketHistory() {
+      if (!badge || !currentSession) return;
+      const entries = [...historyFor(currentSession.id).values()];
+      if (!entries.length) return;
+      const rows = entries.slice().reverse().map(entry => ({ entry, ...historyStatus(entry) }));
+      const remaining = rows.filter(row => !row.complete).length;
+      if (entries.length > 1 || !currentPacket) {
+        const status = badge.dataset.generationLabel;
+        badgeText.textContent = (status ? `${status} · ` : "")
+          + translate(remaining ? "packet_history_debt" : "packet_history_complete", { count: remaining });
+        badge.classList.toggle("is-resolved", !remaining);
+      }
+      let history = badge.querySelector(".comprehension-packet-archive");
+      if (!history) {
+        history = createElement("details", "comprehension-packet-archive");
+        const summary = createElement("summary", "comprehension-packet-badge-button");
+        const list = createElement("nav", "comprehension-packet-archive-list");
+        append(history, summary, list);
+        history.addEventListener("keydown", event => {
+          if (event.key === "Escape") { event.stopPropagation(); history.open = false; summary.focus(); }
+        });
+        badge.append(history);
+      }
+      history.querySelector("summary").textContent = translate("packet_history", { count: entries.length });
+      const list = history.querySelector("nav");
+      list.setAttribute("aria-label", translate("packet_history_label"));
+      const signature = JSON.stringify(rows.map(row => [historyIdentity(row.entry), row.text]));
+      if (list.dataset.signature === signature) return;
+      list.dataset.signature = signature;
+      list.replaceChildren();
+      for (const { entry, text } of rows) {
+        const button = createElement("button", "comprehension-packet-archive-item", { type: "button" });
+        const date = new Date(entry.completedAt || entry.endedAt || "");
+        const time = Number.isFinite(date.getTime()) ? date.toLocaleString() : "";
+        append(button, createElement("b", "", { text: entry.comprehension.packet.title }),
+          createElement("span", "", { text }), createElement("small", "", { text: time }));
+        button.addEventListener("click", () => {
+          const surface = currentSurface;
+          history.open = false;
+          mountPacket(entry, { surface, autoPresent: false });
+          openPacket({ auto: false, trigger: badge.querySelector("summary") });
+        });
+        list.append(button);
+      }
+    }
+
     function serializableProgress() {
       if (!progress || !currentSession || !currentPacket) return null;
       return {
@@ -526,6 +712,7 @@ The summary is the user's open-book reading material, displayed beside the quest
         packetId: currentPacket.id,
         packetFingerprint: currentPacketFingerprint,
         completionGeneration: currentCompletionGeneration,
+        backgroundGeneration: currentSession.comprehensionOrigin?.generation || "",
         autoPresented: progress.autoPresented,
         submitted: progress.submitted,
         answers: Object.fromEntries(progress.answers),
@@ -1002,14 +1189,40 @@ The summary is the user's open-book reading material, displayed beside the quest
       return overview;
     }
 
+    function renderSectionRows(questions, makeCard) {
+      questionList.replaceChildren();
+      // Historical packets have no reliable paragraph-to-question mapping.
+      // Keep their complete reading material together instead of guessing one.
+      const sections = currentPacket.sections || [{
+        id: "legacy-summary", title: currentPacket.title, body: currentPacket.summary,
+        questionIds: currentPacket.questions.map(question => question.id),
+      }];
+      const byId = new Map(questions.map(question => [question.id, question]));
+      sections.forEach((section, index) => {
+        const sectionQuestions = section.questionIds.map(id => byId.get(id)).filter(Boolean);
+        if (!sectionQuestions.length) return;
+        const titleId = `${instanceId}-section-${index}`;
+        const row = createElement("section", "comprehension-packet-topic-row", {
+          "data-comprehension-section": section.id, "aria-labelledby": titleId,
+        });
+        const reading = createElement("div", "comprehension-packet-topic-reading");
+        append(reading,
+          createElement("h3", "", { id: titleId, text: section.title }),
+          createElement("p", "comprehension-packet-summary-section-copy", { text: section.body }));
+        const cards = createElement("div", "comprehension-packet-topic-questions");
+        sectionQuestions.forEach(question => cards.append(makeCard(question, questionIndex(question))));
+        append(row, reading, cards);
+        questionList.append(row);
+      });
+    }
+
     function renderInitial() {
       questionNodes.clear();
       modeEyebrow.textContent = translate("initial_eyebrow");
       const active = activeQuestions();
       modeTitle.textContent = translate("initial_title", { count: active.length });
       questionList.className = "comprehension-packet-question-list";
-      questionList.replaceChildren();
-      active.forEach(question => questionList.append(makeInitialCard(question, questionIndex(question))));
+      renderSectionRows(active, makeInitialCard);
       if (!active.length) {
         questionList.append(makeEmptyState(
           translate("no_questions_title"),
@@ -1025,10 +1238,8 @@ The summary is the user's open-book reading material, displayed beside the quest
       modeEyebrow.textContent = translate("review_eyebrow");
       modeTitle.textContent = translate("review_title");
       questionList.className = "comprehension-packet-question-list is-remediation";
-      questionList.replaceChildren();
       const active = activeQuestions();
-      questionList.append(makeHistoryOverview());
-      for (const question of currentPacket.questions) {
+      renderSectionRows(currentPacket.questions, question => {
         if (progress.excluded.has(question.id)) {
           const excluded = createElement("article", "comprehension-packet-question-card is-excluded", {
             "data-comprehension-excluded-question": question.id,
@@ -1037,12 +1248,13 @@ The summary is the user's open-book reading material, displayed beside the quest
           append(excluded,
             createElement("span", "comprehension-packet-result-status", { text: translate("status_excluded") }),
             createElement("p", "comprehension-packet-original-prompt", { text: `${questionIndex(question) + 1}. ${question.prompt}` }));
-          questionList.append(excluded);
           questionNodes.set(question.id, excluded);
+          return excluded;
         } else {
-          questionList.append(makeReviewCard(question, questionIndex(question)));
+          return makeReviewCard(question, questionIndex(question));
         }
-      }
+      });
+      questionList.prepend(makeHistoryOverview());
       if (!active.length) {
         questionList.prepend(makeEmptyState(
           translate("no_questions_title"),
@@ -1094,6 +1306,7 @@ The summary is the user's open-book reading material, displayed beside the quest
       badgeText.textContent = resolved
         ? translate("badge_complete", { score, total: denominator })
         : translate("badge_debt");
+      updatePacketHistory();
       badgeButton.setAttribute("aria-label", translate("badge_open_aria", { status: badgeText.textContent }));
     }
 
@@ -1315,6 +1528,7 @@ The summary is the user's open-book reading material, displayed beside the quest
         "input:not([disabled]):not([type=hidden])",
         "select:not([disabled])",
         "textarea:not([disabled])",
+        "summary",
         "[tabindex]:not([tabindex='-1'])",
       ].join(","))].filter(isFocusable);
     }
@@ -1573,25 +1787,6 @@ The summary is the user's open-book reading material, displayed beside the quest
         createElement("p", "comprehension-packet-section-label", { text: translate("briefing_eyebrow") }),
         createElement("h2", "", { id: `${suffix}-briefing-title`, text: currentPacket.title }),
         createElement("p", "comprehension-packet-summary-hint", { id: summaryId, text: translate("summary_hint") }));
-      const summary = createElement("div", "comprehension-packet-summary");
-      const summaryBlocks = currentPacket.summary.trim().split(/\n\s*\n/u);
-      const sectionPattern = /^###\s+([^\n]+)\n([\s\S]*?)\n(?:힌트|提示|Hint)[:：]\s*(.+)$/iu;
-      for (const block of summaryBlocks) {
-        const section = sectionPattern.exec(block.trim());
-        if (!section) {
-          summary.append(createElement("p", "", { text: block.trim() }));
-          continue;
-        }
-        const article = createElement("section", "comprehension-packet-summary-section");
-        const hintLabel = section[0].match(/(?:힌트|提示|Hint)[:：]/iu)[0];
-        article.append(
-          createElement("h3", "", { text: section[1].trim() }),
-          createElement("p", "comprehension-packet-summary-section-copy", { text: section[2].trim() }),
-          createElement("p", "comprehension-packet-summary-section-hint", { text: `${hintLabel} ${section[3].trim()}` }),
-        );
-        summary.append(article);
-      }
-      briefing.append(summary);
 
       const quizForm = createElement("form", "comprehension-packet-quiz", {
         id: `${suffix}-form`,
@@ -1611,9 +1806,9 @@ The summary is the user's open-book reading material, displayed beside the quest
         id: "comprehensionPacketQuestionList",
         tabindex: "-1",
       });
-      append(quizForm, quizHeading, questionList);
+      append(quizForm, briefing, quizHeading, questionList);
       quizForm.addEventListener("submit", handleInitialSubmit);
-      append(body, briefing, quizForm);
+      body.append(quizForm);
 
       const footer = createElement("footer", "comprehension-packet-actions");
       scoreNode = createElement("span", "comprehension-packet-score", {
@@ -1705,10 +1900,10 @@ The summary is the user's open-book reading material, displayed beside the quest
     }
 
     function onLocaleChanged() {
-      if (currentSession && !currentPacket) { mount(currentSession); return; }
+      if (currentSession && !currentPacket) { mount(currentSession, { refresh: true }); return; }
       if (destroyed || !currentPacket || !overlay) return;
       const focusDescriptor = describeDynamicFocus(doc.activeElement);
-      const scrollSnapshot = [overlay, dialog, quizPanel, questionList]
+      const scrollSnapshot = [overlay, dialog, overlay.querySelector(".comprehension-packet-body"), quizPanel, questionList]
         .filter(Boolean)
         .map(node => ({ node, top: node.scrollTop, left: node.scrollLeft }));
       const ptyScroll = capturePtyScroll();
@@ -1783,6 +1978,55 @@ The summary is the user's open-book reading material, displayed beside the quest
     }
 
     function mount(session = context.session, options = {}) {
+      if (destroyed || !doc) return false;
+      rememberSession(session);
+      const surface = options.surface || resolveSurface();
+      // A newly completed turn must not replace the quiz the user is reading.
+      if (openState && currentSession?.id === session?.id && currentSurface === surface && !options.forceOpen) {
+        if (isEligibleSession(session)) {
+          const saved = historyFor(session.id).get(historyIdentity(session));
+          const key = progressStorageKey(saved, saved.comprehension.packet, context.storagePrefix || STORAGE_PREFIX);
+          if (key !== currentStorageKey) deferredPresentations.add(key);
+        }
+        return true;
+      }
+      if (isEligibleSession(session)) {
+        const saved = historyFor(session.id).get(historyIdentity(session));
+        const key = progressStorageKey(saved, saved.comprehension.packet, context.storagePrefix || STORAGE_PREFIX);
+        return mountPacket(saved, deferredPresentations.has(key) ? { ...options, autoPresent: false } : options);
+      }
+      const hasHistory = session?.id && !session.parentId && !Number(session.depth || 0) && historyFor(session.id).size;
+      if (hasHistory && surface) {
+        const status = session.comprehension?.status || session.status;
+        if (!options.refresh && currentSession?.id === session.id && currentSurface === surface && !currentPacket
+          && badge?.dataset.generationStatus === status
+          && !(session.status === "completed" && hasBackgroundOrigin(session) && ["queued", "generating", "failed"].includes(status))) {
+          updatePacketHistory();
+          return true;
+        }
+        const mounted = mountPacket(session, options);
+        if (!mounted) {
+          currentSession = session;
+          currentSurface = surface;
+          badge = createElement("div", "comprehension-packet-badge", {
+            id: "comprehensionPacketBadge", "data-whitebox-comprehension-badge": "", "data-generation-status": status,
+          });
+          badgeText = createElement("span");
+          badgeButton = createElement("button", "comprehension-packet-badge-button", { type: "button", text: translate("badge_open") });
+          badgeButton.addEventListener("click", () => {
+            const entry = [...historyFor(session.id).values()].at(-1);
+            mountPacket(entry, { surface, forceOpen: true });
+          });
+          append(badge, createElement("i", "", { "aria-hidden": "true" }), badgeText, badgeButton);
+          surface.append(badge);
+        }
+        updatePacketHistory();
+        return true;
+      }
+      return mountPacket(session, options);
+    }
+
+    function mountPacket(session = context.session, options = {}) {
       const generationStatus = session?.comprehension?.status;
       if (!destroyed && doc && hasBackgroundOrigin(session) && session.status === "completed"
         && session.completionObserved === true && !session.parentId && !Number(session.depth || 0)
@@ -1797,6 +2041,7 @@ The summary is the user's open-book reading material, displayed beside the quest
         if (currentSession?.id === session.id && currentSurface === surface && !currentPacket && badge
           && badge.dataset.generationStatus === generationStatus) {
           badgeText.textContent = statusText;
+          badge.dataset.generationLabel = statusText;
           if (badgeButton) badgeButton.textContent = translate("generation_retry");
           return true;
         }
@@ -1806,6 +2051,7 @@ The summary is the user's open-book reading material, displayed beside the quest
         badge = createElement("div", "comprehension-packet-badge", {
           id: "comprehensionPacketBadge", role: "status", "data-whitebox-comprehension-badge": "",
           "data-generation-status": generationStatus,
+          "data-generation-label": statusText,
         });
         badgeText = createElement("span", "", { text: statusText });
         append(badge, createElement("i", "", { "aria-hidden": "true" }), badgeText);
@@ -1846,8 +2092,8 @@ The summary is the user's open-book reading material, displayed beside the quest
         && currentPacketFingerprint === packetFingerprint
         && currentCompletionGeneration === completionGeneration
         && currentSurface === surface;
-      currentSession = session;
       if (samePacket) {
+        currentSession = session;
         updateSummary();
         if (options.forceOpen) return openPacket({ auto: false });
         if (options.autoPresent !== false) presentIfNeeded();
@@ -1902,6 +2148,7 @@ The summary is the user's open-book reading material, displayed beside the quest
       getProgress: () => serializableProgress(),
       getSessionId: () => currentSession ? String(currentSession.id) : "",
       getSurface: () => currentSurface,
+      rememberSession,
     };
   }
 

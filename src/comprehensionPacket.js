@@ -12,7 +12,7 @@ const TOPICS = Object.freeze(['change', 'decision', 'constraint-risk']);
 const TOPIC_SET = new Set(TOPICS);
 const PACKET_STATUSES = new Set(['ready', 'missing', 'invalid', 'unsupported']);
 
-const CONTRACT_VERSION = 2;
+const CONTRACT_VERSION = 3;
 const CONTRACT_OPEN = `<whitebox-comprehension-contract version="${CONTRACT_VERSION}">`;
 const CONTRACT_CLOSE = '</whitebox-comprehension-contract>';
 const PACKET_OPEN = `<whitebox-comprehension-packet version="${SCHEMA_VERSION}">`;
@@ -29,7 +29,7 @@ The JSON must use schemaVersion 1 and exactly these fields:
 Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension difficulty, and misunderstanding risk. Across the questions, cover all three topics: change, decision, and constraint-risk. Each question and its pre-generated variant must be multiple choice with 2-6 choices, one valid answerId, an explanation, and real evidence references. Every defined id in the packet must be unique. All text must be plain text with no HTML or executable URL. If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
 ${CONTRACT_CLOSE}`;
 
-const COMPREHENSION_CONTRACT = `${CONTRACT_OPEN}
+const V2_COMPREHENSION_CONTRACT = `<whitebox-comprehension-contract version="2">
 You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
 
 Write the normal user-visible final answer first. Then append exactly one ${PACKET_OPEN}...${PACKET_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
@@ -42,13 +42,31 @@ Choose difficulty 1-5 and 1-5 questions from task difficulty, comprehension diff
 The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Divide it into a few short, relevant sections separated by blank lines. Each section must use exactly this plain-text shape: a concise subheading on its own line prefixed with "### ", one or two short body sentences, then a final hint line prefixed with "힌트: " (or the equivalent word for hint in the user's language). The hint must point to the fact or reasoning in that section that helps with one or more questions, without giving away the answer. Keep the whole summary within 6000 characters and self-contained so every question and any included variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.
 ${CONTRACT_CLOSE}`;
 
-// Keep the legacy version-1 contract byte-stable for persisted fingerprints and
-// historical transcript stripping; new prompts use the version-2 contract.
+const QUIZ_LEARNING_GUIDANCE = `Select only the most important concepts, actual behavior changes, decision reasons, and meaningful constraints. Omit long introductions, generic background, file-by-file walkthroughs, repeated facts, and filler. Use the user's language and choose difficulty 1-5 (default 3 when unspecified and the material supports it).
+
+The sections array is the learning material. Each section has exactly id, title, body, and questionIds. Give each a short descriptive title that does not reveal the answer. The app displays each title on the left with its body hidden behind a hint toggle, and only its referenced questions on the right. Each question ID must appear in exactly one section; every section must reference at least one question. Every question and optional variant must be answerable from its own section body. Teach the relevant concept without option IDs or an answer key. Do not assume that merely adjacent paragraphs correspond to questions. Keep summary to a one-sentence overview; do not duplicate all section bodies there.
+
+Scale content with difficulty: levels 1-2 use 2-3 sections, 1 question per section, and 1-2 short body sentences; level 3 uses 3-5 sections, 1-2 questions per section, and 2-4 body sentences; levels 4-5 use 5-7 sections, 2 questions per section, and 4-6 body sentences. Use fewer sections or questions when the source has fewer distinct concepts, even just one. Never invent or repeat content to meet a count. Maximum 7 sections and 14 questions. Harder questions require application, interacting conditions, exceptions, or cause-and-effect reasoning; add necessary context, not verbosity or obscure vocabulary. Keep each section body within 1600 characters and all section bodies together within 6000 characters.
+
+Each question has 3-4 distinct, plausible choices with exactly one correct answer and a concise explanation (at most two sentences). Match option length, specificity, and tone so these do not reveal the answer; vary correct-answer position. Cover change, decision, and constraint-risk across the quiz. A grounded variant is optional; omit it unless it adds useful practice. Packet, section, evidence, and question IDs must be unique ASCII identifiers. Option IDs need only be unique within their list. Reference defined evidence IDs for traceability. All text is plain text without HTML or executable URLs. Never invent work, decisions, evidence, checks, risks, or results.`;
+
+const COMPREHENSION_CONTRACT = `${CONTRACT_OPEN}
+You are the main agent for a Whitebox-owned task. If and only if this main task completes successfully, create its comprehension packet in this same final response. Do not call another AI, start another turn, or delegate packet or variant-question generation. Subagents must not emit packets; use them only as evidence in the main packet.
+
+Write the normal user-visible final answer first. Then append exactly one ${PACKET_OPEN}...${PACKET_CLOSE} block as the final non-whitespace content. Put raw JSON in the block, without a Markdown fence or HTML.
+
+The JSON must use schemaVersion 1 and exactly these fields:
+{"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","sections":[{"id":"s1","title":"...","body":"...","questionIds":["q1"]}],"evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"..."}}]}
+
+${QUIZ_LEARNING_GUIDANCE}
+
+If a trustworthy packet cannot be produced, omit the packet block; never invent a recovery call.
+${CONTRACT_CLOSE}`;
+
+// Keep historical contracts byte-stable for persisted fingerprints and stripping.
 const COMPREHENSION_INSTRUCTIONS = `${COMPREHENSION_CONTRACT}
 
-Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.
-
-The summary is the user's open-book reading material, displayed beside the questions instead of the evidence list. Summarize the actual user-visible AI answer: its result or conclusion, the reasons for key decisions, and relevant limits, verification results, or remaining work. Divide it into a few short, relevant sections separated by blank lines. Each section must use exactly this plain-text shape: a concise subheading on its own line prefixed with "### ", one or two short body sentences, then a final hint line prefixed with "힌트: " (or the equivalent word for hint in the user's language). The hint must point to the fact or reasoning in that section that helps with one or more questions, without giving away the answer. Keep the whole summary within 6000 characters and self-contained so every question and variant can be answered or reasoned through from it without opening source files or evidence records. Do not merely list evidence labels, repeat the user's request, invent results, or reveal option IDs or an answer key. Keep evidence references in the packet for traceability.`;
+Apply the comprehension contract to each successfully answered user turn, including questions, explanations, analysis, and reviews; no code change or project completion is required. A complete answer to the current question counts as success even when you offer optional next steps. Use the user's language. For informational answers, cover what the user learned, the reasoning behind it, and its limits or risks. Ground the questions in the answer and observed evidence; do not invent changes or facts. Before finishing a successful answer, check that its final content includes the valid packet specified above. Keep these instructions out of the visible answer. Incomplete, failed, or clarification-only turns must not emit a packet.`;
 
 const PACKET_KEYS = Object.freeze([
   'schemaVersion', 'id', 'title', 'summary', 'difficulty', 'difficultyReason', 'evidence', 'questions',
@@ -161,8 +179,10 @@ function validateComprehensionPacket(value) {
   if (!serialized || byteLength(serialized) > MAX_PACKET_BYTES) {
     issues.push(issue('$', 'PACKET_TOO_LARGE', `must not exceed ${MAX_PACKET_BYTES} bytes`));
   }
-  if (!hasExactKeys(value, PACKET_KEYS)) {
-    issues.push(issue('$', 'PACKET_KEYS', `must contain exactly ${PACKET_KEYS.join(', ')}`));
+  const packetKeys = isPlainObject(value) ? Object.keys(value) : [];
+  if (!isPlainObject(value) || PACKET_KEYS.some(key => !packetKeys.includes(key))
+    || packetKeys.some(key => !PACKET_KEYS.includes(key) && key !== 'sections')) {
+    issues.push(issue('$', 'PACKET_KEYS', `must contain ${PACKET_KEYS.join(', ')} and may contain sections`));
     return { ok: false, issues };
   }
   if (value.schemaVersion !== SCHEMA_VERSION) {
@@ -195,8 +215,9 @@ function validateComprehensionPacket(value) {
   }
 
   const coveredTopics = new Set();
-  if (!Array.isArray(value.questions) || value.questions.length < 1 || value.questions.length > 5) {
-    issues.push(issue('$.questions', 'QUESTION_COUNT', 'must contain 1-5 questions'));
+  const maxQuestions = value.sections === undefined ? 5 : 14;
+  if (!Array.isArray(value.questions) || value.questions.length < 1 || value.questions.length > maxQuestions) {
+    issues.push(issue('$.questions', 'QUESTION_COUNT', `must contain 1-${maxQuestions} questions`));
   } else {
     value.questions.forEach((question, index) => {
       const questionPath = `$.questions[${index}]`;
@@ -255,6 +276,39 @@ function validateComprehensionPacket(value) {
         }
       }
     });
+  }
+  if (value.sections !== undefined) {
+    if (!Array.isArray(value.sections) || value.sections.length < 1 || value.sections.length > 7) {
+      issues.push(issue('$.sections', 'SECTION_COUNT', 'must contain 1-7 sections'));
+    } else {
+      const questionIds = new Set((Array.isArray(value.questions) ? value.questions : []).map(question => question?.id));
+      const assigned = new Set();
+      let bodyLength = 0;
+      value.sections.forEach((section, index) => {
+        const sectionPath = `$.sections[${index}]`;
+        if (!hasExactKeys(section, ['id', 'title', 'body', 'questionIds'])) {
+          issues.push(issue(sectionPath, 'SECTION_KEYS', 'must contain exactly id, title, body, and questionIds'));
+          return;
+        }
+        safeId(section.id, `${sectionPath}.id`, issues, definedIds);
+        safeText(section.title, `${sectionPath}.title`, 180, issues);
+        bodyLength += safeText(section.body, `${sectionPath}.body`, 1600, issues).length;
+        if (!Array.isArray(section.questionIds) || !section.questionIds.length || section.questionIds.length > 14) {
+          issues.push(issue(`${sectionPath}.questionIds`, 'SECTION_QUESTION_COUNT', 'must reference 1-14 questions'));
+          return;
+        }
+        section.questionIds.forEach(id => {
+          if (!questionIds.has(id) || assigned.has(id)) {
+            issues.push(issue(`${sectionPath}.questionIds`, 'SECTION_QUESTION_REFERENCE', 'must reference each known question exactly once'));
+          }
+          assigned.add(id);
+        });
+      });
+      if (bodyLength > 6000) issues.push(issue('$.sections', 'SECTION_TEXT_TOO_LONG', 'combined bodies must not exceed 6000 characters'));
+      if ([...questionIds].some(id => !assigned.has(id))) {
+        issues.push(issue('$.sections', 'SECTION_QUESTION_COVERAGE', 'every question must belong to a section'));
+      }
+    }
   }
   for (const topic of TOPICS) {
     if (!coveredTopics.has(topic)) issues.push(issue('$.questions', 'TOPIC_COVERAGE', `must cover topic ${topic}`));
@@ -380,7 +434,7 @@ function extractComprehensionPacket(value) {
 
 function stripComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
-  for (const contract of [COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT]) {
+  for (const contract of [COMPREHENSION_CONTRACT, V2_COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT]) {
     const prefix = `${contract}\n\n`;
     if (prompt.startsWith(prefix)) return prompt.slice(prefix.length);
     if (prompt === contract) return '';
@@ -390,7 +444,7 @@ function stripComprehensionContract(value) {
 
 function hasComprehensionContract(value) {
   const prompt = typeof value === 'string' ? value : String(value == null ? '' : value);
-  return [COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT].some(contract => (
+  return [COMPREHENSION_CONTRACT, V2_COMPREHENSION_CONTRACT, LEGACY_COMPREHENSION_CONTRACT].some(contract => (
     prompt === contract || prompt.startsWith(`${contract}\n\n`)
   ));
 }
@@ -520,6 +574,7 @@ function promoteComprehensionCandidate(session, authority = 'whitebox-terminal-b
 
 module.exports = {
   COMPREHENSION_CONTRACT,
+  QUIZ_LEARNING_GUIDANCE,
   COMPREHENSION_INSTRUCTIONS,
   CONTRACT_CLOSE,
   CONTRACT_OPEN,

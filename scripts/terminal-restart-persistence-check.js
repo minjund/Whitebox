@@ -235,13 +235,21 @@ function processExists(pid) {
   let terminalId = '';
   let outcome = null;
   try {
+    fs.mkdirSync(userData, { recursive: true });
+    fs.writeFileSync(path.join(userData, 'workspaces.json'), JSON.stringify([{ path: root, name: 'Restart project' }]));
     firstApp = launchApp(firstPort, userData, bridgeHome);
     firstPage = await connectPage(firstPort, firstApp);
     const bootstrap = await evaluate(firstPage.send, 'window.whitebox.bootstrap()');
     const command = bootstrap.platform.id === 'win32'
       ? `Write-Output "${beforeMarker}"`
       : `printf '${beforeMarker}\\n'`;
-    const created = await evaluate(firstPage.send, `(async () => window.whitebox.terminalCreate({ type: ${javascriptLiteral(bootstrap.platform.localShell)}, cwd: ${javascriptLiteral(root)}, title: '앱 재시작 유지 검증' }))()`);
+    await waitFor(firstPage.send, 'Boolean(window.WhiteboxWorkspace)', '첫 앱의 프로젝트 터미널 화면이 준비되지 않았습니다.');
+    // Create a nested project layout through the renderer, not just a backend
+    // terminal. Backend PID survival alone cannot prove sidebar restoration.
+    await evaluate(firstPage.send, 'WhiteboxWorkspace.createTerminal("column")');
+    const created = await evaluate(firstPage.send, 'window.whitebox.terminalGet(WhiteboxWorkspace.getState().activeId)');
+    const savedLayout = await evaluate(firstPage.send, 'JSON.stringify(WhiteboxWorkspace.getState().spaces)');
+    const savedSelection = await evaluate(firstPage.send, 'WhiteboxWorkspace.getState().selectedSpace');
     terminalId = created.id;
     await evaluate(firstPage.send, `window.whitebox.terminalCommand(${javascriptLiteral(terminalId)}, ${javascriptLiteral(command)})`);
     const liveTerminal = await waitFor(firstPage.send, `(async () => { const item = await window.whitebox.terminalGet(${javascriptLiteral(terminalId)}); return item?.replay?.includes(${javascriptLiteral(beforeMarker)}) && item.pid > 0 ? item : null; })()`, '첫 앱에서 터미널 출력 표식과 PID를 받지 못했습니다.');
@@ -261,6 +269,11 @@ function processExists(pid) {
 
     secondApp = launchApp(secondPort, userData, bridgeHome);
     secondPage = await connectPage(secondPort, secondApp);
+    await waitFor(secondPage.send, 'Boolean(window.WhiteboxWorkspace)', '두 번째 앱의 프로젝트 터미널 화면이 준비되지 않았습니다.');
+    const restoredLayout = await evaluate(secondPage.send, 'JSON.stringify(WhiteboxWorkspace.getState().spaces)');
+    if (restoredLayout !== savedLayout) throw new Error(`프로젝트 패널 배치가 재시작 중 바뀌었습니다: ${savedLayout} -> ${restoredLayout}`);
+    if (await evaluate(secondPage.send, 'WhiteboxWorkspace.getState().selectedSpace') !== savedSelection) throw new Error('선택한 프로젝트가 복원되지 않았습니다.');
+    if (!(await evaluate(secondPage.send, `Boolean(document.querySelector('#wbSpaces [data-instance="${terminalId}"]'))`))) throw new Error('실행 중인 터미널이 프로젝트 아래에서 사라졌습니다.');
     const restored = await waitFor(secondPage.send, `(async () => (await window.whitebox.terminalList()).find(item => item.id === ${javascriptLiteral(terminalId)} && item.status === 'running') || null)()`, '두 번째 앱이 실행 중인 터미널 세션에 다시 연결하지 못했습니다.');
     if (restored.pid !== terminalPid) throw new Error(`PTY PID가 바뀌었습니다: ${terminalPid} -> ${restored.pid}`);
     const afterCommand = bootstrap.platform.id === 'win32'
@@ -325,6 +338,7 @@ function processExists(pid) {
     terminalId = '';
     outcome = {
       ok: true,
+      projectLayoutRestored: true,
       hostPid,
       crashedHostPid,
       terminatedHostPid,

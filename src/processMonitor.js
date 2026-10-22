@@ -112,8 +112,14 @@ function providerFromWindowsProcess(processInfo = {}) {
 }
 
 function providerFromPosixProcess(processInfo = {}) {
-  const name = String(processInfo.name || processInfo.command || '').toLowerCase().split('/').pop();
+  const rawName = String(processInfo.name || processInfo.command || '').toLowerCase();
   const args = String(processInfo.commandLine || processInfo.args || '').toLowerCase();
+  // macOS ps can truncate the comm column even with -ww. Recover only the
+  // executable token whose path agrees with that column, never a later arg.
+  const executable = args.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/u);
+  const executablePath = executable?.[1] || executable?.[2] || executable?.[3] || '';
+  const name = (rawName.startsWith('/') && executablePath.startsWith(rawName)
+    ? executablePath : rawName).split('/').pop();
   if (name === 'claude') return /--type=|\/applications\/claude\.app|\bdaemon\s+run\b/.test(args) ? null : 'claude';
   if (name === 'codex' || /^codex-/.test(name)) return /\bapp-server\b|\/applications\/(?:chatgpt|codex)\.app/.test(args) ? null : 'codex';
   if (name === 'gemini') return 'gemini';
@@ -464,7 +470,7 @@ function utilityProcess(processInfo = {}) {
   const commandLine = String(processInfo.commandLine || processInfo.args || '');
   // Non-persistent questionnaire workers have no user conversation to attach.
   // Exclude before runtime matching so they cannot revive an unrelated card.
-  if (commandLine.includes('Whitebox internal comprehension questionnaire.')
+  if ((commandLine.includes('Whitebox internal comprehension questionnaire.') || commandLine.includes('Whitebox internal terminal review.'))
     && /--(?:ephemeral|no-session-persistence)\b/u.test(commandLine)) return true;
   return /(?:^|\s)(?:-p|--print)\s+["']?(?:Extract durable memory candidates from this Claude Code transcript tail|Reply with exactly OK\. Do not use tools\.?|You are a memory extraction)/i.test(commandLine);
 }

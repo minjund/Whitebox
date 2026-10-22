@@ -135,6 +135,40 @@ function setOptionCount(target, prefix, count) {
 }
 
 function registerComprehensionPacketTests({ test, root = path.resolve(__dirname, '..', '..') }) {
+  test('제목별 학습 패킷은 최대 7개 단락과 14개 문제를 정확히 연결한다', () => {
+    const value = packet(14);
+    value.difficulty = 5;
+    value.sections = Array.from({ length: 7 }, (_, index) => ({
+      id: `section-${index}`, title: `핵심 ${index + 1}`, body: '해당 조건과 결과를 설명합니다.',
+      questionIds: value.questions.slice(index * 2, index * 2 + 2).map(question => question.id),
+    }));
+    const { parseResult } = require('../../src/backgroundQuestionnaire');
+    assert.equal(validateComprehensionPacket(value).ok, true);
+    assert.equal(rendererComprehension.isRenderablePacket(value), true);
+    assert.deepEqual(parseResult(JSON.stringify({ kind: 'quiz', packet: value })).packet.sections, value.sections);
+    for (const mutate of [
+      p => { p.sections[1].questionIds[0] = p.sections[0].questionIds[0]; },
+      p => { p.sections[0].questionIds[0] = 'missing'; },
+      p => { p.sections[0].questionIds.pop(); },
+      p => { p.sections[0].questionIds = []; },
+      p => { p.sections[0].id = p.sections[1].id; },
+      p => { p.sections[0].body = ''; },
+      p => { p.sections[0].body = 'x'.repeat(1601); },
+      p => { p.sections.forEach(section => { section.body = 'x'.repeat(1000); }); },
+      p => { p.sections.push({ ...p.sections[0], id: 'eighth' }); },
+      p => { p.questions.push(question(15)); p.sections[6].questionIds.push('q15'); },
+    ]) {
+      const invalid = JSON.parse(JSON.stringify(value));
+      mutate(invalid);
+      assert.equal(validateComprehensionPacket(invalid).ok, false);
+      assert.equal(rendererComprehension.isRenderablePacket(invalid), false);
+    }
+    const unsafe = JSON.parse(JSON.stringify(value));
+    unsafe.sections[0].body = '<script>alert(1)</script>';
+    assert.equal(validateComprehensionPacket(unsafe).ok, false);
+    assert.equal(validateComprehensionPacket(packet(3)).ok, true, '기존 패킷도 계속 지원한다');
+  });
+
   test('이해 패킷 스키마는 1개부터 5개까지 문항을 허용한다', () => {
     for (let count = 1; count <= 5; count += 1) {
       assert.equal(validateComprehensionPacket(packet(count)).ok, true, `${count}개 문항`);

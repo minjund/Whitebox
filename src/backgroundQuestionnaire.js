@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
-const { validateComprehensionPacket, MAX_PACKET_BYTES, stripComprehensionContract } = require('./comprehensionPacket');
+const { validateComprehensionPacket, QUIZ_LEARNING_GUIDANCE, MAX_PACKET_BYTES, stripComprehensionContract } = require('./comprehensionPacket');
 const { reportRecoverableError } = require('./diagnostics');
 
 const AUTHORITY = 'background-questionnaire-v1';
@@ -68,11 +68,11 @@ First classify ONLY the latest user request and its answer. An explicitly reques
 Only an actual completed implementation, fix, artifact, executed check, or explicitly requested completed analysis, investigation, diagnosis, audit, or review can receive a quiz. The app has already observed successful completion; use the supplied answer as the report of what was done. Independent file or tool verification is neither required nor available. Even a short completed change report is eligible when it supports a grounded question. This is a comprehension quiz with correct answers, NOT a requirements questionnaire: do not ask the user to make decisions or supply missing requirements. If eligible, return {"kind":"quiz","packet":PACKET}. Output exactly one JSON object, without markdown or tags.
 
 PACKET must have exactly these fields:
-{"schemaVersion":1,"id":"packet-1","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"comprehension","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."}],"answerId":"a","explanation":"..."}}]}
+{"schemaVersion":1,"id":"...","title":"...","summary":"...","difficulty":1,"difficultyReason":"...","sections":[{"id":"s1","title":"...","body":"...","questionIds":["q1"]}],"evidence":[{"id":"e1","label":"...","detail":"..."}],"questions":[{"id":"q1","kind":"...","topics":["change","decision","constraint-risk"],"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"...","evidenceIds":["e1"],"variant":{"prompt":"...","options":[{"id":"a","label":"..."},{"id":"b","label":"..."},{"id":"c","label":"..."}],"answerId":"a","explanation":"..."}}]}
 
-Use the user's language. Choose difficulty 1-5 and 1-5 multiple-choice questions appropriate to the work. Each question must have 2-6 distinct choices, exactly one correct answer, and a grounded explanation. A grounded variant is optional; include it only when it adds meaningful practice and can be supported by the answer. Cover change, decision, and constraint-risk across the questions. IDs must be ASCII letters/digits/hyphens; packet, evidence, and question IDs are unique; option IDs need only be unique within their list. Reference defined evidence IDs. All text is plain text without HTML or executable URLs. Never invent work, decisions, evidence, tests, risks, or results.
+${QUIZ_LEARNING_GUIDANCE}
 
-The summary is the reading material displayed beside the quiz. In a few short paragraphs separated by blank lines (at most 6000 characters), summarize the actual result, reasons, and known limits or verification. Every question and any included variant must be answerable from this summary alone. Do not expose an answer key. If the supplied answer cannot support these requirements, return {"kind":"skip"}.
+If the supplied answer cannot support a grounded quiz, return {"kind":"skip"}.
 
 INPUT:
 ${JSON.stringify(source)}`;
@@ -182,7 +182,8 @@ class BackgroundQuestionnaire extends EventEmitter {
 
   enqueue(session, key) {
     if (!this.enabled) return null;
-    const record = { sessionId: session.id, generation: key, status: 'queued', schemaVersion: 1 };
+    const record = { sessionId: session.id, generation: key, status: 'queued', schemaVersion: 1,
+      completedAt: session.completedAt || session.endedAt || '' };
     // A card only contains a clipped prompt. It can suppress a premature
     // spinner, but only the full detail can decide to skip the request.
     if (explanationOnly(lastUser(session)?.text)) record.status = 'checking';
@@ -241,6 +242,14 @@ class BackgroundQuestionnaire extends EventEmitter {
   }
 
   project(session) {
+    // Completed quizzes belong to their original turn, including while a later
+    // turn is running, skipped, or failed. Never project one as its new result.
+    const history = [...this.records.values()]
+      .filter(record => record.sessionId === session.id && record.status === 'ready')
+      .map(record => ({ generation: record.generation, completedAt: record.completedAt || '', packet: record.packet }));
+    if (history.length && !session.parentId && !Number(session.depth || 0)) {
+      session = { ...session, comprehensionHistory: history };
+    }
     if (!completedMain(session)) return session;
     const record = this.records.get(generation(session));
     if (!record || record.sessionId !== session.id) return session;

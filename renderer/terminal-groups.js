@@ -1,6 +1,7 @@
 'use strict';
 
 (() => {
+  if (document.documentElement?.dataset?.workspace === 'terminal') return;
   const api = window.whitebox;
   const panel = document.querySelector('#terminalGroupPanel');
   if (!panel || !api?.terminalGroups) return;

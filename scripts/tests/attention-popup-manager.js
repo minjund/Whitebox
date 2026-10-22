@@ -136,20 +136,22 @@ async function flush() {
 const tests = [];
 function test(name, run) { tests.push({ name, run }); }
 
-test('preference defaults off, discards legacy automatic opt-in, and persists an explicit preference atomically', () => {
+test('preference defaults on, restores legacy opt-in, and preserves an explicit off preference atomically', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-popup-pref-'));
   try {
     const file = path.join(temp, 'nested', 'attention-popup.json');
     const errors = [];
     const store = new AttentionPopupPreferenceStore(file, { onError: error => errors.push(error) });
-    assert.deepStrictEqual(store.load(), { enabled: false });
+    assert.deepStrictEqual(store.load(), { enabled: true });
     assert.equal(errors.length, 0);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{}', 'utf8');
-    assert.deepStrictEqual(store.load(), { enabled: false });
+    assert.deepStrictEqual(store.load(), { enabled: true });
     fs.writeFileSync(file, '{"enabled":true}', 'utf8');
-    assert.deepStrictEqual(store.load(), { enabled: false });
+    assert.deepStrictEqual(store.load(), { enabled: true });
     fs.writeFileSync(file, '{"enabled":"false"}', 'utf8');
+    assert.deepStrictEqual(store.load(), { enabled: false });
+    fs.writeFileSync(file, '{"enabled":false}', 'utf8');
     assert.deepStrictEqual(store.load(), { enabled: false });
     assert.deepStrictEqual(store.setEnabled(false), { enabled: false });
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { version: 2, enabled: false });

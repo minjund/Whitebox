@@ -5,6 +5,34 @@ GitHub release notes remain the authoritative version history.
 
 ## Unreleased
 
+- Prepare 2.0.0 as a terminal-first workspace: ordinary shells, terminal tabs,
+  horizontal/vertical splits, resizable panes, keyboard navigation, and layout
+  restoration without restarting the underlying shell processes.
+- Follow the selected terminal with understanding and semantic review. Bind
+  Claude/Codex by the actual PTY process ancestry and creation identity; never
+  combine conversations based on a shared working directory.
+- Compare observed user requests with reported work using original evidence,
+  separate multiple requests, and distinguish AI claims from verified output.
+  Reviews use bounded terminal screen history, not an independent code audit.
+  Unknown ownership or missing evidence remains unverified.
+- Remove quizzes from the default experience. Automatic review can be disabled
+  in settings and uses the corresponding CLI account's model usage.
+- Add Korean, English and Simplified Chinese workspace settings, a separate
+  analysis model selector, and account-wide subscription usage with timestamps.
+- Preserve live terminal sessions and their understanding/review results in
+  trash, including across app restarts. Verify the original host identity when
+  restoring; never silently replace a missing session with a blank shell.
+  Label each restore action with its AI and terminal identity.
+  Separate trash from settings and shortcuts in the sidebar.
+- Start automatic analysis only after a newly submitted terminal request has
+  a recognized completed answer and returned input prompt; do not analyze idle
+  screens, temporary output pauses, approvals, or timed intermediate progress.
+- Show analysis elapsed time, stop automatic retries for unchanged failures,
+  clear stale in-progress state across AI process changes, and ignore clock-only
+  updates in recognized CLI status bars.
+- This version is local development only. No release artifacts or tags have
+  been published; packaged Windows updater compatibility gates are not yet run.
+
 ## 1.8.31 - 2026-10-13
 
 - Keep sidebar folder paths stable when switching projects in conversations

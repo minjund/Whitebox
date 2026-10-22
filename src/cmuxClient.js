@@ -12,6 +12,10 @@ function entriesFromTree(tree) {
   for (const window of tree.windows || []) for (const workspace of window.workspaces || []) {
     for (const pane of workspace.panes || []) for (const surface of pane.surfaces || []) {
       if (surface.type !== 'terminal') continue;
+      // Opening a document can leave a lazy terminal placeholder in the tree.
+      // It has never launched a PTY and must not become a running sidebar task.
+      // A real TTY still wins, and older cmux versions may omit render_health.
+      if (surface.render_health === 'not_started' && !surface.tty) continue;
       const target = { window: handle(window), workspace: handle(workspace), surface: handle(surface) };
       if (Object.values(target).some(value => !/^(?:[a-f\d-]{36}|(?:window|workspace|surface):\d+)$/i.test(value))) continue;
       result.push({ id: `cmux:${target.surface}`, title: surface.title || surface.name || workspace.title || workspace.name || 'cmux 터미널',

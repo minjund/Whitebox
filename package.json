@@ -1,7 +1,7 @@
 {
   "name": "whitebox-ai",
-  "version": "1.8.31",
-  "description": "A local-first desktop control room for seeing and steering Claude, Codex, Gemini, and Grok at work.",
+  "version": "2.0.0",
+  "description": "A terminal workspace that connects every AI task to its own understanding and review.",
   "main": "main.js",
   "author": "wincube AX",
   "license": "MIT",
@@ -110,7 +110,8 @@
     "dist:win:legacy-bridge": "electron-builder --win --publish never --config scripts/legacy-update-bridge.config.js",
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
-    "prepublishOnly": "npm run check:source && npm test && npm run check:package"
+    "prepublishOnly": "npm run check:source && npm test && npm run check:package",
+    "test:workspace": "node scripts/terminal-review-test.js && electron scripts/terminal-workspace-check.js"
   },
   "publishConfig": {
     "access": "public",

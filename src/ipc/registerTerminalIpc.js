@@ -1,6 +1,6 @@
 'use strict';
 
-function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, groupStoreFile, isCmuxEnabled = () => false, cmuxClient, onCmuxInventory = () => {}, isProviderVisible = () => true, listWslDistros, sendError }) {
+function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, groupStoreFile, isCmuxEnabled = () => false, cmuxClient, onCmuxInventory = () => {}, isProviderVisible = () => true, listWslDistros, sendError, createTerminal = null }) {
   const { CmuxClient } = require('../cmuxClient');
   const cmux = cmuxClient || new CmuxClient();
   for (const operation of ['list', 'read', 'frame', 'focus', 'input', 'arrange']) {
@@ -49,9 +49,14 @@ function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, man
       return operation === 'list' ? result.then(presentGroups) : result;
     });
   }
-  ipcMain.handle('terminals:list', event => {
+  ipcMain.handle('terminals:list', async event => {
     requireTrustedSender(event);
-    return manager() ? manager().list().filter(session => !session.transient && (session.type !== 'agent' || isProviderVisible(session.provider))) : [];
+    const host = requireManager(manager);
+    // Startup may still be connecting to the persistent host. Its local cache
+    // starts empty; treating that as inventory permanently prunes saved layouts.
+    // Propagate connection failures so the renderer leaves saved state intact.
+    const sessions = await (host.listFresh ? host.listFresh() : host.list());
+    return sessions.filter(session => !session.transient && (session.type !== 'agent' || isProviderVisible(session.provider)));
   });
   ipcMain.handle('wsl:list-distros', event => {
     requireTrustedSender(event);
@@ -65,7 +70,7 @@ function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, man
   ipcMain.handle('terminals:create', (event, options) => {
     requireTrustedSender(event);
     if (options && options.type === 'agent' && !isProviderVisible(options.provider)) throw new Error('설정에서 숨긴 AI는 실행할 수 없습니다.');
-    return requireManager(manager).create(options || {});
+    return createTerminal ? createTerminal(options || {}) : requireManager(manager).create(options || {});
   });
   ipcMain.handle('terminals:write', async (event, id, data, options) => {
     requireTrustedSender(event);

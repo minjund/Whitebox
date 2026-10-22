@@ -13,6 +13,7 @@ const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const { AgentRunner, probeProviders } = require('./src/agentRunner');
 const { BackgroundQuestionnaire } = require('./src/backgroundQuestionnaire');
+const { TerminalReview } = require('./src/terminalReview');
 const { CmuxClient } = require('./src/cmuxClient');
 const { CmuxMembership } = require('./src/cmuxMembership');
 const { QuestionnairePreferenceStore } = require('./src/questionnairePreferenceStore');
@@ -137,6 +138,8 @@ let monitorWorkerRestartTimer = null;
 let monitorWorkerRestartAttempts = 0;
 let runner = null;
 let backgroundQuestionnaire = null;
+let terminalReview = null;
+let terminalCollaboration = null;
 const cmuxClient = new CmuxClient();
 let cmuxMembership = null;
 let questionnairePreferenceStore = null;
@@ -376,6 +379,7 @@ function installBridgeLauncher(home = bridgeHome) {
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'bin', 'whitebox.js')
     : path.join(__dirname, 'bin', 'whitebox.js');
   const launcher = writeBridgeLauncher({ directory, command: 'whitebox', script });
+  require('./bin/panel-provider').install({ directory, runtime: process.execPath, script: path.join(path.dirname(script), 'panel-provider.js') });
   let legacyPath = '';
   try {
     legacyPath = writeBridgeLauncher({
@@ -596,6 +600,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Terminal completion polling must continue when another app covers this
+      // window; otherwise a finished answer can remain waiting until focus returns.
+      backgroundThrottling: false,
     },
   });
   mainWindow.setMenuBarVisibility(false);
@@ -936,7 +943,7 @@ function questionnairePreferences() {
 
 function saveQuestionnairePreference(value) {
   const saved = questionnairePreferences().save(value);
-  backgroundQuestionnaire?.setEnabled(saved.enabled);
+  backgroundQuestionnaire?.setEnabled(false);
   return saved;
 }
 
@@ -1105,6 +1112,14 @@ function terminalPromptDismissalKey(sessionId, targetId) {
   return `${popupText(sessionId, 512)}\u0000${popupText(targetId, 512)}`;
 }
 
+function isWorkspaceAttentionTerminal(terminal, identity = {}) {
+  return Boolean(terminal && ['shell', 'powershell', 'cmd'].includes(terminal.type)
+    && !terminal.transient && terminal.status === 'running' && terminal.backend === 'direct'
+    && String(terminal.creationId || '').startsWith('workspace:')
+    && terminal.creationId === identity.creationId && terminal.pid === identity.pid
+    && Number.isSafeInteger(terminal.pid) && terminal.pid > 0);
+}
+
 function normalizeTerminalAttentionPrompts(value) {
   const requests = Array.isArray(value) ? value.slice(0, 48) : [];
   const normalized = new Map();
@@ -1115,13 +1130,14 @@ function normalizeTerminalAttentionPrompts(value) {
     const targetId = popupText(raw?.target?.id, 512);
     const terminalId = popupText(raw?.target?.terminalId, 512);
     const session = (lastSnapshot.sessions || []).find(item => String(item.id || '') === sessionId);
-    if (!session || session.parentId || !isProviderVisible(session.provider)
-      || raw?.target?.kind !== 'terminal' || !targetId || targetId !== terminalId || !fingerprint) continue;
+    if (raw?.target?.kind !== 'terminal' || !targetId || targetId !== terminalId || !fingerprint) continue;
     const terminal = terminalManager?.list?.().find(item => String(item.id || '') === terminalId);
-    if (!terminal || terminal.type !== 'agent' || terminal.status !== 'running'
+    const workspaceTerminal = sessionId === terminalId && isWorkspaceAttentionTerminal(terminal, raw);
+    if (!workspaceTerminal && (!session || session.parentId || !isProviderVisible(session.provider)
+      || !terminal || terminal.type !== 'agent' || terminal.status !== 'running'
       || terminal.backend !== 'direct' || terminal.conversationBound !== true
       || String(terminal.bridgeId || '') !== sessionId
-      || String(terminal.provider || '').toLowerCase() !== String(session.provider || '').toLowerCase()) continue;
+      || String(terminal.provider || '').toLowerCase() !== String(session.provider || '').toLowerCase())) continue;
     const dismissalKey = terminalPromptDismissalKey(sessionId, targetId);
     observedTargets.add(dismissalKey);
     const dismissedFingerprint = terminalAttentionDismissals.get(dismissalKey);
@@ -1147,8 +1163,12 @@ function normalizeTerminalAttentionPrompts(value) {
       body: popupText(raw?.question, 1_000),
       detail: popupText(raw?.detail, 4_000),
       choices,
-      ...popupSessionCopy(session),
-      context: { kind: 'terminal', promptId: id, sessionId, terminalId, targetId, fingerprint },
+      ...(workspaceTerminal ? {
+        provider: popupProviderLabel('codex'),
+        ...attentionProject(null, { terminalCwd: terminal.cwd, workspaces: listWorkspaces() }),
+      } : popupSessionCopy(session)),
+      context: { kind: 'terminal', promptId: id, sessionId, terminalId, targetId, fingerprint,
+        ...(workspaceTerminal ? { workspaceTerminal: true, creationId: terminal.creationId, pid: terminal.pid, provider: 'codex' } : {}) },
     });
   }
   for (const key of terminalAttentionDismissals.keys()) {
@@ -1320,10 +1340,12 @@ async function respondToTerminalAttention(request, decision, callback = {}) {
   if (!pending || decision.action !== 'choice') throw new Error('현재 승인 요청을 찾을 수 없습니다.');
   const session = (lastSnapshot.sessions || []).find(item => String(item.id || '') === pending.sessionId);
   const terminal = terminalManager ? await terminalManager.get(pending.terminalId, true) : null;
-  if (!session || !terminal || terminal.type !== 'agent' || terminal.status !== 'running'
+  const workspaceTerminal = context.workspaceTerminal === true
+    && pending.sessionId === pending.terminalId && isWorkspaceAttentionTerminal(terminal, context);
+  if (!workspaceTerminal && (context.workspaceTerminal === true || !session || !terminal || terminal.type !== 'agent' || terminal.status !== 'running'
     || terminal.backend !== 'direct' || terminal.conversationBound !== true
     || String(terminal.bridgeId || '') !== String(session.id || '')
-    || String(terminal.provider || '').toLowerCase() !== String(session.provider || '').toLowerCase()) {
+    || String(terminal.provider || '').toLowerCase() !== String(session.provider || '').toLowerCase())) {
     terminalAttentionPrompts.delete(pending.id);
     reconcileAttentionActivations();
     throw new Error('승인 요청의 실제 AI 명령창 연결이 더 이상 유효하지 않습니다.');
@@ -1339,6 +1361,8 @@ async function respondToTerminalAttention(request, decision, callback = {}) {
   const deliveryId = `attention:${crypto.createHash('sha256').update(JSON.stringify([
     pending.sessionId,
     pending.terminalId,
+    terminal.creationId,
+    terminal.pid,
     context.fingerprint,
     selected.id,
   ])).digest('hex')}`;
@@ -1396,7 +1420,10 @@ function handleAttentionPopupOpenMain(_request, callback = {}) {
     context.provider,
     context.agentId,
   );
-  if (session) {
+  if (context.workspaceTerminal === true && context.terminalId) {
+    openAttentionSession({ id: context.sessionId }, 'terminal', { terminalId: context.terminalId, targetId: context.terminalId });
+  }
+  else if (session) {
     const terminalId = context.terminalId || popupTerminalSession(session)?.id || '';
     openAttentionSession(session, 'terminal', { terminalId, targetId: context.targetId || terminalId });
   }
@@ -1963,11 +1990,12 @@ async function setupRuntime() {
   if (!demoCapture) {
     backgroundQuestionnaire = new BackgroundQuestionnaire({
       file: userFile('questionnaires.json'), runner, requestDetail: requestAgentDetail,
-      enabled: questionnairePreferences().snapshot().enabled,
+      enabled: false,
     });
     backgroundQuestionnaire.on('changed', () => sendSnapshot(visibleSnapshotSessions(lastSnapshot)));
   }
   const terminalStoreFile = userFile('terminal-sessions.json');
+  terminalReview = new TerminalReview({ manager: () => terminalManager, runner, file: userFile('terminal-reviews.json'), records: () => [...(terminalCollaboration?.jobs?.values() || [])] });
   const terminalHostFile = userFile('terminal-host.json');
   terminalManager = demoCapture
     ? new TerminalManager({
@@ -1991,6 +2019,7 @@ async function setupRuntime() {
   if (!demoCapture) {
     terminalManager.on('data', payload => sendTerminal('terminals:data', payload));
     terminalManager.on('state', payload => {
+      if (payload.change === 'removed') terminalReview?.forget(payload.session?.id);
       if (!payload.session || (!payload.session.transient && (payload.session.type !== 'agent' || isProviderVisible(payload.session.provider)))) {
         sendTerminal('terminals:state', { ...payload, sessions: visibleTerminalSessions(payload.sessions) });
       }
@@ -2223,6 +2252,7 @@ function bootstrapState() {
     snapshot: visibleSnapshotSessions(lastSnapshot),
     activeRuns: runner ? runner.listVisibleActive() : [],
     versions: { app: app.getVersion(), electron: process.versions.electron, node: process.versions.node },
+    terminalWorkspace: { defaultCwd: os.homedir() },
     platform: {
       id: process.platform,
       label: process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux'),
@@ -2396,7 +2426,16 @@ function registerIpcHandlers() {
     },
   });
   handleTrusted('providers:usage', options => collectProviderUsage(options || {}));
+  handleTrusted('terminals:review', payload => terminalReview.capture(payload));
+  handleTrusted('terminals:collaboration', async payload => {
+    if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, directory: userFile('terminal-collaboration') });
+    if (payload?.operation === 'sync') return terminalCollaboration.sync(payload);
+    if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
+    throw new Error('지원하지 않는 터미널 협업 요청입니다.');
+  });
+  handleTrusted('terminals:review-models', () => require('./src/terminalReviewSettings').reviewModelCatalog());
   registerTerminalIpc({
+    createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),
     cmuxClient,
     onCmuxInventory: inventory => {
       monitorWorker?.postMessage({ type: 'cmux-sessions', sessions: cmuxObservedSessions() });

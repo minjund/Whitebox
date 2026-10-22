@@ -865,7 +865,7 @@ function numericDimension(value, fallback, min, max) {
 }
 
 // A new Whitebox PTY never owns the launching app's terminal/surface identity.
-const FOREIGN_TERMINAL_ENV = Object.freeze(['TMUX', 'TMUX_PANE', 'CMUX_WORKSPACE_ID', 'CMUX_SURFACE_ID', 'CMUX_WINDOW_ID', 'CMUX_TAB_ID', 'CMUX_PANEL_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']);
+const FOREIGN_TERMINAL_ENV = Object.freeze(['TMUX', 'TMUX_PANE', 'CMUX_WORKSPACE_ID', 'CMUX_SURFACE_ID', 'CMUX_WINDOW_ID', 'CMUX_TAB_ID', 'CMUX_PANEL_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'WHITEBOX_SURFACE_ID', 'WHITEBOX_PANEL_DIRECTORY']);
 function terminalEnvironment(extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries({ ...process.env, ...extra })) {
@@ -3781,6 +3781,11 @@ class TerminalManager extends EventEmitter {
         env: terminalEnvironment(session.spec.env || {}),
         useConpty: this.platform === 'win32',
       };
+      const panelCliDirectory = path.join(os.homedir(), '.whitebox', 'bin');
+      const pathKey = Object.keys(spawnOptions.env).find(key => key.toUpperCase() === 'PATH') || 'PATH';
+      spawnOptions.env[pathKey] = [panelCliDirectory, spawnOptions.env[pathKey] || ''].join(path.delimiter);
+      spawnOptions.env.WHITEBOX_SURFACE_ID = session.id;
+      if (this.storeFile) spawnOptions.env.WHITEBOX_PANEL_DIRECTORY = path.join(path.dirname(this.storeFile), 'terminal-collaboration');
       assertCodexWriterAvailable(session.options, { platform: this.platform, env: spawnOptions.env });
       if (this.platform !== 'win32') spawnOptions.encoding = 'utf8';
       processHandle = session.spec?.exactPaneProxy

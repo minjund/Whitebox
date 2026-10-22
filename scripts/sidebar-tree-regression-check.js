@@ -49,6 +49,46 @@ app.whenReady().then(async () => {
       const visibleIds = () => a.filteredSessions().map(session => session.id).sort().join(',');
       const renderedIds = () => [...document.querySelectorAll('#liveSessionGrid [data-control-session]')].map(node => node.dataset.controlSession).sort().join(',');
 
+      for (const project of ['/audit', 'C:/audit']) {
+        const ordinary = [task('ordinary', project + '/src'), task('dot-folder', project + '/.github')];
+        const workspaces = [{ path: project, name: 'Audit' }];
+        reset(ordinary, workspaces);
+        const summary = () => [...list.querySelectorAll('.project-sidebar-item')].map(node => [
+          node.dataset.workspace, node.dataset.liveSessionCount, node.dataset.attentionSessionCount,
+          node.dataset.resultReadyCount, node.dataset.projectPriority,
+        ]);
+        const baseline = JSON.stringify(summary());
+        const hidden = [
+          task('specflow', project + '/.specflow/runs/run-id/planning-after'),
+          task('git-internal', project + '/.git/worktrees/temp'),
+          task('cache-internal', project + '/.cache/agent'),
+          { ...task('declared-parent', project + '/.specflow/runs/child'), workspaceRoots: [project] },
+          { ...task('internal-root', project), workspaceRoots: [project + '/.specflow/runs/child'] },
+          task('unsaved-internal', '/other/.specflow/runs/temp'),
+          task('windows-internal', ['C:', 'audit', '.SPECFLOW', 'runs', 'temp'].join(String.fromCharCode(92))),
+        ];
+        reset([...ordinary, ...hidden], [...workspaces, { path: project + '/.specflow', name: 'Internal saved folder' }]);
+        state.sidebarTree = model.normalize({ folders: [{ id: 'manual', projectKey: project.toLowerCase(), name: 'Manual', parentId: '' }],
+          assignments: [{ projectKey: project.toLowerCase(), sessionId: 'specflow', folderId: 'manual' }] });
+        state.sidebarTerminalEntries = [{ ...task('internal-terminal', project + '/.specflow/runs/terminal'),
+          cmuxWorkspace: true, members: [] }];
+        a.renderWorkspaces();
+        check(JSON.stringify(summary()) === baseline, 'internal sessions do not change sidebar projects, counts or priority');
+        check(hidden.every(session => !list.querySelector('[data-sidebar-session-id="' + session.id + '"]')), 'internal sessions stay hidden, including manually assigned ones');
+        check(!list.querySelector('[data-cmux-workspace="internal-terminal"]'), 'internal terminal entry stays hidden');
+        check(list.querySelector('[data-sidebar-session-id="ordinary"]') && list.querySelector('[data-sidebar-session-id="dot-folder"]'), 'ordinary subfolders and .github stay visible');
+        check(!list.textContent.includes('.specflow') && !list.textContent.includes('planning-after'), 'internal path folders stay hidden');
+        check(state.snapshot.sessions.length === ordinary.length + hidden.length, 'sidebar filtering preserves source sessions');
+        state.sidebarProjectSearch = 'specflow'; a.renderWorkspaces();
+        check(!list.querySelector('[data-sidebar-session-id]'), 'search does not reveal internal sessions');
+      }
+      reset([task('similar-name', '/audit/.specflow-notes'), {
+        ...task('mixed-roots', '/audit'), workspaceRoots: ['/audit/.specflow/runs/temp', '/audit/src'],
+      }]);
+      check(list.querySelector('[data-sidebar-session-id="similar-name"]'), 'internal names match complete path components only');
+      check(list.querySelector('[data-sidebar-session-id="mixed-roots"]'), 'conversation with an ordinary project root stays visible');
+      check(![...list.querySelectorAll('[data-path-tree-toggle]')].some(node => node.dataset.pathTreeToggle.includes('/.specflow/')), 'mixed project roots never render the internal path');
+
       reset([task('delete-session', '/audit')]);
       state.sidebarTree = model.normalize({ folders: [
         { id: 'parent', projectKey: '/audit', name: 'Parent', parentId: '' },
