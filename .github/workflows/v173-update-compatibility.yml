@@ -222,7 +222,8 @@ jobs:
           Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
       - name: Verify frozen and recent packaged Whitebox compatibility cohorts
         shell: pwsh
-        timeout-minutes: 90
+        # All 45 cohorts run serially; individual installer/relaunch deadlines stay strict.
+        timeout-minutes: 150
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
           if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {

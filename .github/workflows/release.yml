@@ -48,7 +48,7 @@ jobs:
             git diff --name-only --no-renames "$tag_commit" "$GITHUB_SHA" > "$RUNNER_TEMP/validation-changes.txt"
             while IFS= read -r file; do
               case "$file" in
-                .github/workflows/release.yml|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
+                .github/workflows/release.yml|.github/workflows/v173-update-compatibility.yml|scripts/terminal-workspace-check.js|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
                 *) echo "Recovery changes a file outside the verification allowlist: $file"; exit 1 ;;
               esac
             done < "$RUNNER_TEMP/validation-changes.txt"
@@ -127,6 +127,26 @@ jobs:
       - run: npm ci
       - if: runner.os == 'macOS'
         run: brew install tmux
+      - name: Use reviewed workspace verification against the immutable source
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          VALIDATION_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const sha = process.env.VALIDATION_SOURCE_SHA;
+          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
+          const file = 'scripts/terminal-workspace-check.js';
+          fs.writeFileSync(file, cp.execFileSync('git', ['show', sha + ':' + file]));
+          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
+          if (changed && changed !== file) throw new Error('Workspace recovery changed non-test source: ' + changed);
+          console.log('Reviewed workspace test ' + sha + '; SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+          NODE
       - run: npm test
       - run: npm run test:terminal
       - run: npm run test:terminal:startup
@@ -164,6 +184,13 @@ jobs:
           if-no-files-found: ignore
       - if: runner.os == 'macOS'
         run: npm run test:terminal:mac-stress
+      - name: Restore and verify the immutable source before packaging
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- scripts/terminal-workspace-check.js
+          git diff --exit-code
       - run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -305,7 +332,8 @@ jobs:
       - name: Verify frozen and recent packaged Whitebox compatibility cohorts
         if: runner.os == 'Windows'
         shell: pwsh
-        timeout-minutes: 90
+        # All 45 cohorts run serially; individual installer/relaunch deadlines stay strict.
+        timeout-minutes: 150
         run: |
           $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
           if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
