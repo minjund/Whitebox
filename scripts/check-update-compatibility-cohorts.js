@@ -110,6 +110,7 @@ function readCohortManifest(manifestPath = COHORT_MANIFEST_PATH) {
 function cohortList(manifest) {
   const validated = validateCohortManifest(manifest);
   const recent = [
+    {"version":"1.8.30","size":95409618,"sha256":"46639eb2d2bc9c5593b77cd1f3a5cd5cd1411ae17eec60b911037a25af459e82"},
     { version: '1.8.28', size: 95397289, sha256: '7fc94cd9a60db6481873d49435dcd2801bdeca7a1ff78568e1fbb855cad46442' },
     { version: '1.8.27', size: 95353762, sha256: 'f2c6c5fdfeee7f395137f055597982e2dd8f9c4f813902da770a4edee6f5478a' },
     {'version': '1.8.25', 'size': 95355956, 'sha256': '57d47a488352d1058397549f860fe496af9a8f311b1db8d9a1aa1aafaa64510c'},
@@ -150,7 +151,33 @@ function cohortList(manifest) {
     url: `https://github.com/minjund/Whitebox/releases/download/v${value.version}/Whitebox-Setup-${value.version}.exe`,
     env: `WHITEBOX_V${value.version.replaceAll('.', '')}_INSTALLER`, installMode: 'automatic',
   }, { expectedInstallMode: 'automatic', label: `recent ${value.version}` }));
-  const cohorts = [...validated.frozen, ...recent];
+  const earlyManual = [
+    {
+      "version": "1.7.0",
+      "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.0/Whitebox-Setup-1.7.0.exe",
+      "size": 85126771,
+      "sha256": "169d5ae5a01ab3baa07700086d9527b1916c23fc0c6640a78e9b4612cc917c13",
+      "env": "WHITEBOX_V170_INSTALLER",
+      "installMode": "manual"
+    },
+    {
+      "version": "1.7.1",
+      "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.1/Whitebox-Setup-1.7.1.exe",
+      "size": 85126828,
+      "sha256": "b60464bd04ad77f93e79b3fbe073c17ca0a102021dc87f9845587476ea53c6b3",
+      "env": "WHITEBOX_V171_INSTALLER",
+      "installMode": "manual"
+    },
+    {
+      "version": "1.7.2",
+      "url": "https://github.com/minjund/Whitebox/releases/download/v1.7.2/Whitebox-Setup-1.7.2.exe",
+      "size": 85126852,
+      "sha256": "e932e606e590e31f0e91f68ebe49b26d4a7fcdc3681c92192d32da6e10f9d227",
+      "env": "WHITEBOX_V172_INSTALLER",
+      "installMode": "manual"
+    }
+  ].map(value => validateCohort(value, { expectedInstallMode: 'manual', label: `early manual ${value.version}` }));
+  const cohorts = [...validated.frozen, ...earlyManual, ...recent];
   const duplicate = cohorts.find(value => value.version === validated.previousFixed.version);
   if (duplicate) {
     for (const key of COHORT_KEYS) {

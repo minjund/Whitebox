@@ -3,9 +3,9 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
-## Unreleased
+## 2.0.0 - 2026-10-22
 
-- Prepare 2.0.0 as a terminal-first workspace: ordinary shells, terminal tabs,
+- Introduce a terminal-first workspace: ordinary shells, terminal tabs,
   horizontal/vertical splits, resizable panes, keyboard navigation, and layout
   restoration without restarting the underlying shell processes.
 - Follow the selected terminal with understanding and semantic review. Bind
@@ -30,8 +30,17 @@ GitHub release notes remain the authoritative version history.
 - Show analysis elapsed time, stop automatic retries for unchanged failures,
   clear stale in-progress state across AI process changes, and ignore clock-only
   updates in recognized CLI status bars.
-- This version is local development only. No release artifacts or tags have
-  been published; packaged Windows updater compatibility gates are not yet run.
+- Clarify the project → panel → terminal sidebar hierarchy and retain the
+  original flat terminal canvas beside the selected terminal understanding and
+  review. Keep panel creation in the sidebar and remove redundant canvas tools.
+## 1.8.32 - 2026-10-20
+
+- Hide internal .specflow, .git, and .cache work folders and their sessions from
+  the sidebar, including attention, active-work, and result counts.
+- Preserve ordinary project folders and .github work, with stable nested-folder
+  selection, deletion, keyboard navigation, and focus during refresh.
+- Verify updates from the official 1.8.31 installer while retaining the pinned
+  1.8.30 and earlier compatibility cohorts.
 
 ## 1.8.31 - 2026-10-13
 
