@@ -127,7 +127,7 @@ jobs:
       - run: npm ci
       - if: runner.os == 'macOS'
         run: brew install tmux
-      - name: Use reviewed workspace verification against the immutable source
+      - name: Use reviewed verification fixtures against the immutable source
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
@@ -141,11 +141,13 @@ jobs:
           const cp = require('child_process');
           const sha = process.env.VALIDATION_SOURCE_SHA;
           if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
-          const file = 'scripts/terminal-workspace-check.js';
-          fs.writeFileSync(file, cp.execFileSync('git', ['show', sha + ':' + file]));
-          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim();
-          if (changed && changed !== file) throw new Error('Workspace recovery changed non-test source: ' + changed);
-          console.log('Reviewed workspace test ' + sha + '; SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+          const files = ['scripts/terminal-workspace-check.js', 'scripts/tests/core-update-workspace.js'];
+          for (const file of files) {
+            fs.writeFileSync(file, cp.execFileSync('git', ['show', sha + ':' + file]));
+            console.log('Reviewed test ' + file + ' at ' + sha + '; SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+          }
+          const changed = cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          if (changed.some(file => !files.includes(file))) throw new Error('Recovery changed non-test source: ' + changed.join(', '));
           NODE
       - run: npm test
       - run: npm run test:terminal
@@ -189,7 +191,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git restore --source=HEAD -- scripts/terminal-workspace-check.js
+          git restore --source=HEAD -- scripts/terminal-workspace-check.js scripts/tests/core-update-workspace.js
           git diff --exit-code
       - run: ${{ matrix.command }}
         env:
