@@ -4154,7 +4154,7 @@ function registerTerminalLifecycleTests(context) {
       ptyModule: { spawn: () => handle },
     });
     try {
-      const created = manager.create({ type: 'shell', cwd: root });
+      const created = manager.create({ type: process.platform === 'win32' ? 'powershell' : 'shell', cwd: root });
       assert.equal(created.pid, null);
       const states = [];
       manager.on('state', event => states.push(event.session?.pid));

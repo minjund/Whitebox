@@ -143,6 +143,31 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   await automatic.sync(moved);
   assert.equal((await control(args('list-panels'), socketOptions)).workspace_id, 'panel-b');
   assert.equal(autoWrites.length, beforeSocketMove, 'moving a panel performs no terminal write');
+  // A plain shell's actual VT mode controls paste encoding. Older Bash and
+  // cmd must receive no bracketed-paste delimiters or executable extra lines.
+  uncertain = false;
+  const shell = new TerminalCollaboration({ ...autoOptions, directory: path.join(directory, 'plain-shell'), monitor: { scan: () => ({ available: true, processes: [] }) } });
+  controls.push(shell.control);
+  const shellPayload = bracketedPaste => ({ groups: [{ id: 'shell-panel', cwd: directory, members: autoSessions.slice(0, 1) }], frames: [{ ...autoSessions[0], text: '$ ', inputDraft: '', bracketedPaste }] });
+  const shellOptions = { directory: shell.directory };
+  await shell.sync(shellPayload(false));
+  await control([...args('send'), '--', 'echo plain\n'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, 'echo plain\r');
+  const beforeRejectedPaste = autoWrites.length;
+  for (const text of ['echo first\necho second\n', 'echo\tcompletion\n']) {
+    await assert.rejects(control([...args('send'), '--', text], shellOptions), /requires bracketed paste/);
+  }
+  assert.equal(autoWrites.length, beforeRejectedPaste, 'unsupported paste never writes partial text');
+  await shell.sync(shellPayload(true));
+  await control([...args('send'), '--', 'echo first\necho second\n'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, '\x1b[200~echo first\necho second\x1b[201~\r');
+  await shell.sync(shellPayload(false));
+  await control([...args('send'), '--', 'echo pending'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, 'echo pending');
+  const pendingShell = shellPayload(false); pendingShell.frames[0].text = '$ echo pending';
+  await shell.sync(pendingShell);
+  await control([...args('send-key'), 'enter'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, '\r');
   console.log('Panel control: real socket/CLI, source ancestry, same-panel routing, paste/Enter, edited draft protection, moves, no instruction injection passed');
   console.log('Terminal collaboration: scoped delivery, drafts, busy targets, exact replies, deduplication, timeout, restart and creation passed');
  } finally { await Promise.all(controls.map(control => control.close())); fs.rmSync(directory,{recursive:true,force:true}); }

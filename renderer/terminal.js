@@ -1035,7 +1035,7 @@
     readTerminalSnapshot: id => {
       const entry = state.terminals.get(id);
       const buffer = !entry?.outputHydrating && !entry?.terminal?.disposed && entry?.terminal?.buffer?.active;
-      return { inputDraft: entry?.terminal?.textarea?.value || '', text: window.WhiteboxTerminal.readTerminal(id), readinessText: buffer ? window.WhiteboxTerminalReviewTurns?.readinessText(buffer) : '', outputSequence: entry?.outputHydrating ? null : entry?.outputSequence };
+      return { inputDraft: entry?.terminal?.textarea?.value || '', text: window.WhiteboxTerminal.readTerminal(id), readinessText: buffer ? window.WhiteboxTerminalReviewTurns?.readinessText(buffer) : '', bracketedPaste: Boolean(buffer && entry.terminal.wasmTerm?.hasBracketedPaste()), outputSequence: entry?.outputHydrating ? null : entry?.outputSequence };
     },
     focusTerminal: id => state.terminals.get(id)?.terminal.focus(),
   };

@@ -55,7 +55,10 @@ whitebox ask codex "ㅎㅇ"
 whitebox wait <returned-job-id> 60
 ```
 
-`send` pastes text; a trailing newline submits it atomically. `send-key enter`
+`send` pastes text; a trailing newline submits it atomically. Shell delivery
+uses the shell's current paste mode. Shells without bracketed paste accept only
+single-line text without tabs; multiline/tabbed pastes are rejected before any
+input is written. `send-key enter`
 submits only a matching, unchanged paste made by the same source. AI targets must
 be idle with no existing draft or approval prompt. `ask` submits one request and
 `wait` returns only its matched completion; reading a screen alone does not prove

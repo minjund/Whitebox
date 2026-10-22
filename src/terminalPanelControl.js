@@ -76,7 +76,11 @@ class TerminalPanelControl {
         const text = String(params.text || '');
         if (!text || text.length > 8000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text)) throw new Error('Invalid terminal text');
         const submit = /[\r\n]$/u.test(text), body = text.replace(/[\r\n]+$/u, '');
-        data = `\x1b[200~${body}\x1b[201~${submit ? '\r' : ''}`;
+        // Old Bash/readline and cmd do not enable bracketed paste. Match the
+        // current emulator mode; never turn a multiline paste into keystrokes
+        // that could execute its individual lines on an unsupported shell.
+        if (!frame.bracketedPaste && /[\r\n\t]/u.test(body)) throw new Error('This terminal requires bracketed paste for multiline or tabbed text');
+        data = frame.bracketedPaste ? `\x1b[200~${body}\x1b[201~${submit ? '\r' : ''}` : `${body}${submit ? '\r' : ''}`;
         this.pending.delete(target.id);
         await c.manager().write(target.id, data, { deliveryId: `panel-shell:${randomUUID()}`, expectedOutputSequence: frame.outputSequence });
         if (!submit) this.pending.set(target.id, { text: body, creationId: live.creationId, sourceId: member.id, groupId: group.id });
