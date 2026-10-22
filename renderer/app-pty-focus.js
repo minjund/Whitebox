@@ -18,6 +18,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
 
   let returnState = null;
   let focusIdentity = null;
+  let lastFocusedRoot = null;
   let pendingFocus = null;
   let focusSyncPromise = Promise.resolve({ ok: false, reason: "not-open" });
   let focusOpenGeneration = 0;
@@ -356,10 +357,31 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     if (activeFocusMode === "transcript") {
       return canOpenResponsibleFocus(current) ? current : null;
     }
-    if (canOpenPtyFocus(current)) return current;
-    if (!focusIdentity) return null;
-    const replacement = sessionForTerminal(focusIdentity.terminalId, focusIdentity.creationId);
-    return canOpenPtyFocus(replacement) ? migrateFocusedSession(replacement) : null;
+    if (canOpenPtyFocus(current)) {
+      lastFocusedRoot = current;
+      return current;
+    }
+    const replacement = focusIdentity
+      ? sessionForTerminal(focusIdentity.terminalId, focusIdentity.creationId)
+      : null;
+    if (canOpenPtyFocus(replacement)) {
+      lastFocusedRoot = migrateFocusedSession(replacement);
+      return lastFocusedRoot;
+    }
+    // Monitor discovery is independent of the mounted PTY's lifetime. An idle
+    // task can temporarily disappear from a scan; keep only the exact already
+    // mounted host, never use cached metadata to open or reconnect a terminal.
+    // An explicit eligibility change in a present card must still take effect.
+    const terminal = window.WhiteboxTerminal;
+    const embedded = terminal?.embeddedState?.();
+    if (!current && lastFocusedRoot?.id === state.ptyFocusSessionId
+      && embedded?.connected === true
+      && embedded.agentSessionId === state.ptyFocusSessionId
+      && embedded.terminalId === state.ptyFocusTargetId
+      && terminal.hasTerminalSession?.(embedded.terminalId) === true) {
+      return lastFocusedRoot;
+    }
+    return null;
   }
 
   function renderPtyFocus() {
@@ -504,6 +526,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
       return false;
     }
     focusIdentity = options.identity || runtimeTerminalIdentity(root);
+    lastFocusedRoot = root;
     focusOpenGeneration += 1;
     state.ptyFocusTargetId = String(options.targetId || focusIdentity?.terminalId || "").trim();
     const surface = focusSurface();
@@ -551,6 +574,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     rememberDialogTrigger("ptyFocusSurface", { refresh: true });
     activeFocusMode = "transcript";
     focusIdentity = null;
+    lastFocusedRoot = null;
     focusOpenGeneration += 1;
     focusSyncPromise = Promise.resolve({ ok: false, reason: "read-only-focus" });
     state.ptyFocusSessionId = id;
@@ -738,6 +762,7 @@ window.WhiteboxAppFactories.createPtyFocusMode = function createPtyFocusMode(con
     else if (!restoreDialogTrigger("ptyFocusSurface") && saved?.trigger?.isConnected) saved.trigger.focus({ preventScroll: true });
     returnState = null;
     focusIdentity = null;
+    lastFocusedRoot = null;
     if (options.clearPending !== false) pendingFocus = null;
     if (saved?.inlineSessionId && state.inlineTerminalSessionId === saved.inlineSessionId) requestAnimationFrame(() => window.WhiteboxInlineTerminal?.sync?.({ force: true }));
     if (options.reason !== "missing") announce(t("pty_focus.closed"));

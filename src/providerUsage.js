@@ -11,6 +11,7 @@ let cached = null;
 let cachedAt = 0;
 
 function clampPercent(value) {
+  if (value === null || value === undefined || typeof value === 'boolean' || (typeof value === 'string' && !value.trim())) return null;
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : null;
 }
@@ -65,7 +66,7 @@ async function readTail(file, size) {
   }
 }
 
-function codexRateLimitsFromText(text) {
+function codexRateLimitObservation(text) {
   const lines = String(text || '').split(/\r?\n/);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
@@ -74,9 +75,23 @@ function codexRateLimitsFromText(text) {
     try { event = JSON.parse(line); } catch { continue; }
     const limits = event?.payload?.rate_limits || event?.rate_limits;
     if (!limits) continue;
-    return limits;
+    return { limits, observedAt: event.timestamp || event.payload?.timestamp || '' };
   }
   return null;
+}
+
+function codexRateLimitsFromText(text) { return codexRateLimitObservation(text)?.limits || null; }
+
+function codexUsageWindows(limits) {
+  const windows = { shortWindow: null, weekly: null };
+  for (const [index, value] of [limits?.primary, limits?.secondary].entries()) {
+    if (!value) continue;
+    const minutes = Number(value.window_minutes);
+    const long = minutes >= 10080 || (!minutes && index === 1);
+    const label = minutes === 10080 ? '주간 한도' : minutes === 300 ? '5시간 한도' : long ? '장기 한도' : '단기 한도';
+    windows[long ? 'weekly' : 'shortWindow'] = windowValue(label, value.used_percent, value.resets_at, minutes);
+  }
+  return windows;
 }
 
 async function collectCodexUsage(home) {
@@ -89,27 +104,17 @@ async function collectCodexUsage(home) {
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .slice(0, 24);
   for (const item of files) {
-    let limits;
-    try { limits = codexRateLimitsFromText(await readTail(item.file, item.size)); } catch { limits = null; }
-    if (!limits) continue;
+    let observation;
+    try { observation = codexRateLimitObservation(await readTail(item.file, item.size)); } catch { observation = null; }
+    if (!observation) continue;
+    const { limits } = observation;
     return {
       provider: 'codex',
       available: true,
       source: 'codex-session',
       plan: String(limits.plan_type || ''),
-      shortWindow: windowValue(
-        Number(limits.primary?.window_minutes) === 300 ? '5시간 한도' : '단기 한도',
-        limits.primary?.used_percent,
-        limits.primary?.resets_at,
-        limits.primary?.window_minutes,
-      ),
-      weekly: windowValue(
-        Number(limits.secondary?.window_minutes) === 10080 ? '주간 한도' : '장기 한도',
-        limits.secondary?.used_percent,
-        limits.secondary?.resets_at,
-        limits.secondary?.window_minutes,
-      ),
-      updatedAt: new Date(item.mtimeMs).toISOString(),
+      ...codexUsageWindows(limits),
+      updatedAt: observation.observedAt && Number.isFinite(Date.parse(observation.observedAt)) ? new Date(observation.observedAt).toISOString() : '',
     };
   }
   return { provider: 'codex', available: false, source: 'codex-session', reason: 'usage-not-observed' };
@@ -193,5 +198,6 @@ module.exports = {
   clampPercent,
   windowValue,
   codexRateLimitsFromText,
+  codexUsageWindows,
   collectProviderUsage,
 };

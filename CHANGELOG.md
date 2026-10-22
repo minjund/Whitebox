@@ -3,8 +3,38 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
-## Unreleased
+## 2.0.0 - 2026-10-22
 
+- Publish asynchronously ready terminal process identities so Windows review
+  history remains bound to the same live shell through trash and restoration.
+- Introduce a terminal-first workspace: ordinary shells, terminal tabs,
+  horizontal/vertical splits, resizable panes, keyboard navigation, and layout
+  restoration without restarting the underlying shell processes.
+- Follow the selected terminal with understanding and semantic review. Bind
+  Claude/Codex by the actual PTY process ancestry and creation identity; never
+  combine conversations based on a shared working directory.
+- Compare observed user requests with reported work using original evidence,
+  separate multiple requests, and distinguish AI claims from verified output.
+  Reviews use bounded terminal screen history, not an independent code audit.
+  Unknown ownership or missing evidence remains unverified.
+- Remove quizzes from the default experience. Automatic review can be disabled
+  in settings and uses the corresponding CLI account's model usage.
+- Add Korean, English and Simplified Chinese workspace settings, a separate
+  analysis model selector, and account-wide subscription usage with timestamps.
+- Preserve live terminal sessions and their understanding/review results in
+  trash, including across app restarts. Verify the original host identity when
+  restoring; never silently replace a missing session with a blank shell.
+  Label each restore action with its AI and terminal identity.
+  Separate trash from settings and shortcuts in the sidebar.
+- Start automatic analysis only after a newly submitted terminal request has
+  a recognized completed answer and returned input prompt; do not analyze idle
+  screens, temporary output pauses, approvals, or timed intermediate progress.
+- Show analysis elapsed time, stop automatic retries for unchanged failures,
+  clear stale in-progress state across AI process changes, and ignore clock-only
+  updates in recognized CLI status bars.
+- Clarify the project → panel → terminal sidebar hierarchy and retain the
+  original flat terminal canvas beside the selected terminal understanding and
+  review. Keep panel creation in the sidebar and remove redundant canvas tools.
 ## 1.8.32 - 2026-10-20
 
 - Hide internal .specflow, .git, and .cache work folders and their sessions from

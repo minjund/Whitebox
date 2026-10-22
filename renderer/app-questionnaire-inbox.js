@@ -61,6 +61,7 @@ window.WhiteboxAppFactories.createQuestionnaireInbox = function createQuestionna
     const sessions = state.snapshot.sessions || [];
     const ids = new Set(sessions.map(session => session.id));
     for (const session of sessions) {
+      controller.rememberSession?.(session);
       if (!api.isEligibleSession(session)) continue;
       const key = JSON.stringify([session.id,
         session.comprehensionOrigin?.generation || api.completionGenerationIdentity(session),

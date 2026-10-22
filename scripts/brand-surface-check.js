@@ -46,8 +46,8 @@ async function run() {
 
   const win = await waitForMainWindow();
   const brand = await win.webContents.executeJavaScript(`(() => {
-    const icon = document.querySelector('#brandIcon');
-    const label = document.querySelector('.brand-copy strong');
+    const icon = document.querySelector('#terminalWorkspace .wb-brand img');
+    const label = document.querySelector('#terminalWorkspace .wb-brand strong');
     const rect = icon?.getBoundingClientRect();
     const style = icon && getComputedStyle(icon);
     return {
@@ -67,17 +67,17 @@ async function run() {
 
   assert.match(win.getTitle(), /Whitebox/, 'The native window title does not contain Whitebox');
   assert.match(brand.windowTitle, /Whitebox/, 'The document title does not contain Whitebox');
-  assert.equal(brand.label, 'Whitebox', 'The in-app product name is missing');
+  assert.equal(brand.label, 'whitebox', 'The in-app product name is missing');
   assert.equal(brand.source, '../build/icon.png', 'The in-app brand mark must share the native application icon');
   assert.equal(brand.complete, true, 'The in-app brand mark did not finish loading');
   assert.ok(brand.naturalWidth >= 32 && brand.naturalHeight >= 32, 'The in-app brand mark has no readable intrinsic size');
-  assert.ok(brand.width >= 31 && brand.height >= 31, 'The in-app brand mark is not visibly sized');
+  assert.ok(brand.width >= 25 && brand.height >= 25, 'The in-app brand mark is not visibly sized');
   assert.notEqual(brand.display, 'none', 'The in-app brand mark is hidden');
   assert.notEqual(brand.visibility, 'hidden', 'The in-app brand mark is invisible');
   assert.ok(brand.opacity > 0, 'The in-app brand mark is transparent');
 
   const bounds = await win.webContents.executeJavaScript(`(() => {
-    const rect = document.querySelector('.sidebar > .brand')?.getBoundingClientRect();
+    const rect = document.querySelector('#terminalWorkspace .wb-brand')?.getBoundingClientRect();
     return rect ? {
       x: Math.max(0, Math.floor(rect.x)),
       y: Math.max(0, Math.floor(rect.y)),

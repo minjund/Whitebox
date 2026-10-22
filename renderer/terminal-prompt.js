@@ -27,7 +27,10 @@
   }
 
   function detectCodexEditApproval(value) {
-    const text = stripTerminalControls(value);
+    // Full-screen CLI redraws leave earlier approval screens in the PTY replay.
+    // Only inspect the frame after the most recent clear-screen sequence.
+    const frame = String(value || '').split(/\x1b\[(?:2|3)J/u).at(-1);
+    const text = stripTerminalControls(frame);
     const question = 'Would you like to make the following edits?';
     const start = text.toLowerCase().lastIndexOf(question.toLowerCase());
     if (start < 0 || text.length - start > 6_000) return null;

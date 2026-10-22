@@ -15,6 +15,7 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'interaction-fixture-preload.js'), sandbox: false, backgroundThrottling: false } });
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
   try {
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(__dirname, '../renderer/index.html'));
     for (let i = 0; i < 100; i++) {
       if (await win.webContents.executeJavaScript('Boolean(window.WhiteboxApp?.initialized)')) break;
@@ -113,7 +114,8 @@ app.whenReady().then(async () => {
     exitCode = 1;
   } finally {
     win.destroy();
-    fs.rmSync(profile, { recursive: true, force: true });
+    await require('electron').session.defaultSession.clearStorageData();
+    await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
     app.exit(exitCode);
   }
-});
+}).catch(error => { console.error(error); app.exit(1); });

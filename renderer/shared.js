@@ -6,6 +6,11 @@
  * without introducing a bundler or changing Electron's preload boundary.
  */
 let bootstrapPromise = null;
+// Terminal initialization can request bootstrap before the workspace mounts.
+// Retain update events from that window so consumers do not miss discovery.
+let latestUpdateState = null;
+const unsubscribeEarlyUpdates = window.whitebox?.onUpdateState?.(update => { latestUpdateState = update; });
+window.addEventListener('beforeunload', () => unsubscribeEarlyUpdates?.(), { once: true });
 const dateTimeFormatCache = new Map();
 let dateTimeFormatTimeZone = "";
 let dateTimeFormatOffset = Number.NaN;
@@ -179,6 +184,7 @@ window.WhiteboxRendererUtils = Object.freeze({
     }
     return bootstrapPromise;
   },
+  latestUpdateState() { return latestUpdateState; },
   reportRecoverableError(operation, error) {
     const message = error && error.message ? error.message : String(error || 'unknown error');
     console.warn(`[Whitebox:${operation}] ${message}`);

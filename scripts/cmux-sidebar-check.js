@@ -10,6 +10,26 @@ const uuid = number => `00000000-0000-0000-0000-${String(number).padStart(12, '0
     { id: uuid(3), type: 'terminal', title: 'Claude' }, { id: uuid(4), type: 'browser' }, { id: '--flag', type: 'terminal' },
   ] }] }] }] };
   const entries = entriesFromTree(tree);
+  const documentOnly = JSON.parse(JSON.stringify(tree));
+  const surfaces = documentOnly.windows[0].workspaces[0].panes[0].surfaces;
+  surfaces[0] = { id: uuid(3), type: 'terminal', title: 'Terminal', render_health: 'not_started', tty: null, selected_in_pane: false };
+  surfaces[1] = { id: uuid(4), type: 'markdown', title: 'N8N-MIGRATION-PROMPT.md', selected_in_pane: true };
+  assert.deepEqual(entriesFromTree(documentOnly), [], 'opening only a document does not start a cmux task');
+  assert.deepEqual(groupsFromEntries(entriesFromTree(documentOnly)), [], 'unstarted placeholders cannot create a running workspace');
+  const placeholderClient = new CmuxClient({ platform: 'darwin', exists: () => true,
+    execute: async () => ({ stdout: JSON.stringify(documentOnly) }) });
+  assert.equal((await placeholderClient.list()).groups.length, 0);
+  assert.equal((await placeholderClient.layoutInventory()).groups.length, 0, 'layout refresh must not restore a placeholder');
+  surfaces[0].tty = '/dev/ttys001';
+  assert.equal(entriesFromTree(documentOnly).length, 1, 'a live PTY is retained even before its renderer starts');
+  surfaces[0].tty = null;
+  surfaces[0].render_health = 'healthy';
+  assert.equal(entriesFromTree(documentOnly).length, 1, 'rendered terminals remain visible');
+  delete surfaces[0].render_health;
+  assert.equal(entriesFromTree(documentOnly).length, 1, 'older cmux inventory without health metadata remains supported');
+  surfaces[0].render_health = 'not_started';
+  surfaces.push({ id: uuid(20), type: 'terminal', title: 'Running shell', tty: '/dev/ttys002', render_health: 'healthy' });
+  assert.deepEqual(entriesFromTree(documentOnly).map(entry => entry.title), ['Running shell'], 'mixed workspaces retain only started terminals');
   const target = entries[0].cmuxTarget;
   const binding = { window_id: target.window, workspace_id: target.workspace, surface_id: target.surface, resume_binding: { kind: 'claude', checkpoint_id: uuid(10) } };
   assert.equal(boundSessionId(binding, target), `claude:${uuid(10)}`, 'updated provider binding follows a cleared/resumed conversation');

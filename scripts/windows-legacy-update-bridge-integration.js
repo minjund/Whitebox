@@ -2091,6 +2091,10 @@ async function installCandidateWithManualBridge(options) {
   closeInstalledAppGracefully(options.parentPid);
   await waitForProcessExit(options.parentPid);
   assert.deepStrictEqual(runningProcessIds(legacyExecutable), [], 'LoadToAgent remained live before manual installation.');
+  if (Number(CURRENT_VERSION.split('.')[0]) >= 2) {
+    delete process.env.WHITEBOX_DEMO_CAPTURE;
+    delete process.env.LOADTOAGENT_DEMO_CAPTURE;
+  }
   run(downloadedInstaller, ['/S', '/currentuser', `/D=${installDir}`]);
   await waitForInstalledPackage(currentExecutable, CURRENT_VERSION);
   const pid = await startInstalledAppWithRendererReady(currentExecutable, CURRENT_VERSION);
@@ -2099,6 +2103,15 @@ async function installCandidateWithManualBridge(options) {
 }
 
 async function reinstallCandidateWithPackagedUpdater(options) {
+  if (Number(CURRENT_VERSION.split('.')[0]) >= 2) {
+    const roots = [isolatedAppDataRoot, isolatedLocalAppDataRoot];
+    await require('./packaged-workspace-idle').idleCandidateWorkspace({
+      profiles: [directUserDataDir, inheritedUserDataDir], roots,
+      assertHostOwned: pid => assert(roots.some(root => runningProcessesUnderDirectory(root).some(record => record.pid === pid)),
+        'Candidate workspace host must map to this fresh legacy attempt runtime'),
+      waitForExit: waitForProcessExit,
+    });
+  }
   assert.equal(typeof options.updaterModule.selectReleaseAsset, 'function', 'The candidate package lacks its release selector.');
   assertReleaseAssetSelections(options.releaseAssets, CURRENT_VERSION, options.updaterModule.selectReleaseAsset);
 

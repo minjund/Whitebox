@@ -1,6 +1,7 @@
 "use strict";
 
 (() => {
+  if (document.documentElement?.dataset?.workspace === 'terminal') return;
   const factories = window.WhiteboxAppFactories || {};
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const app = {};

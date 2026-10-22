@@ -579,6 +579,32 @@ function registerTerminalInteractionTests(context) {
     return handlers.get('terminals:write');
   }
 
+  test('터미널 목록 IPC는 호스트 연결을 기다리고 초기 빈 캐시를 반환하지 않는다', async () => {
+    const handlers = new Map();
+    let resolveList;
+    const fresh = new Promise(resolve => { resolveList = resolve; });
+    let host = { list: () => [], listFresh: () => fresh };
+    let trusted = 0;
+    require(path.join(root, 'src', 'ipc', 'registerTerminalIpc')).registerTerminalIpc({
+      ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+      requireTrustedSender() { trusted++; }, manager: () => host,
+      isProviderVisible: provider => provider !== 'hidden', listWslDistros: () => [],
+    });
+    const list = handlers.get('terminals:list');
+    let settled = false;
+    const pending = Promise.resolve(list({})).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    assert.equal(settled, false, 'a cold cache must not erase saved project layouts');
+    const shell = { id: 'project-shell', type: 'shell' };
+    resolveList([shell, { id: 'internal', transient: true }, { id: 'hidden', type: 'agent', provider: 'hidden' }]);
+    assert.deepStrictEqual(await pending, [shell]);
+    assert.equal(trusted, 1);
+    host = { listFresh: async () => { throw new Error('host unavailable'); }, list: () => [] };
+    await assert.rejects(() => list({}), /host unavailable/, 'a connection failure is not an empty inventory');
+    host = { list: () => [shell] };
+    assert.deepStrictEqual(await list({}), [shell], 'in-process manager remains supported');
+  });
+
   test('늦은 터미널 목록 응답이 더 최신 state 이벤트를 덮어쓰지 않는다', async () => {
     let resolveList;
     const pendingList = new Promise(resolve => { resolveList = resolve; });

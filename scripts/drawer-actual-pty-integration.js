@@ -320,6 +320,7 @@ async function run() {
       },
     });
 
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     await waitForRenderer(win,
       `Boolean(window.WhiteboxApp?.initialized && window.WhiteboxTerminal && window.WhiteboxInlineTerminal && window.interactionTest)`,
@@ -522,7 +523,7 @@ async function run() {
     })()`, '서브노드 상세 패널을 닫은 뒤 실제 root PTY가 유지되지 않았습니다.');
     assert(!(await rendererValue(win, `window.interactionTest.getCalls().some(call => call.name === 'terminalCreate')`)),
       '서브노드 상세 패널이 별도 PTY를 생성했습니다.');
-    assert(ipcCalls.some(call => call.operation === 'list')
+    assert(ipcCalls.some(call => call.operation === 'listFresh')
       && ipcCalls.some(call => call.operation === 'get' && call.args[0] === terminalId)
       && ipcCalls.filter(call => call.operation === 'write' && call.args[0] === terminalId)
         .map(call => String(call.args[1] || '')).join('').endsWith(`${liveCommand}\r`),

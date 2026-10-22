@@ -116,6 +116,7 @@ async function run() {
   });
 
   try {
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     await waitFor(win, 'Boolean(window.WhiteboxApp?.initialized && window.interactionTest && window.WhiteboxTerminal)',
       '앱과 PTY fixture 초기화를 기다리다 시간이 초과되었습니다.');

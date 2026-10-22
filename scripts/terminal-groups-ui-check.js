@@ -242,6 +242,15 @@ app.whenReady().then(async () => {
     await run("document.querySelector('[data-cmux-workspace]').click()");
     assert.equal(await run("window.WhiteboxApp.graphFilteredSessions().length"), 0, 'selecting cmux excludes every unrelated ordinary session from the actual graph');
     assert.equal(await run("window.WhiteboxApp.filteredSessions().length"), 0, 'selecting cmux also excludes ordinary session history');
+    await run("interactionTest.setCmuxInventory({installed:true,error:'',entries:[],groups:[]});window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'))");
+    await until("!document.querySelector('[data-cmux-workspace]')", 'no ghost sidebar entry after placeholder-only inventory');
+    assert.equal(await run('WhiteboxApp.state.sidebarFolderFilter'), null, 'removed cmux selection cannot hide ordinary sessions');
+    assert.equal(await run('WhiteboxApp.state.cmuxSidebarSelectedId'), '');
+    assert.equal(await run(`Boolean(document.querySelector('[data-sidebar-session-id="${represented}"]'))`), true, 'ordinary session returns after the cmux group disappears');
+    assert.equal(await run("Boolean(document.querySelector('[data-cmux-detail]'))"), false, 'no connected-workspace card for an empty inventory');
+    await run(`interactionTest.setCmuxInventory({installed:true,error:'',entries:${JSON.stringify(cmuxGroup.members)},groups:[${JSON.stringify(cmuxGroup)}]});window.dispatchEvent(new CustomEvent('whitebox-terminal-inventory-changed'))`);
+    await until("Boolean(document.querySelector('[data-cmux-workspace]'))", 'started cmux workspace returns');
+    await run("document.querySelector('[data-cmux-workspace]').click()");
     assert.equal(await run("document.querySelector('#projectTaskProjectName').textContent"), 'TAW', 'selected group owns the toolbar title');
     assert.equal(await run("document.querySelector('.cmux-detail').classList.contains('hidden')"), true, 'overview must not open terminals automatically');
     await until("Boolean(document.querySelector('[data-cmux-detail]'))", 'overview detail button');

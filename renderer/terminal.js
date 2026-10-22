@@ -553,6 +553,8 @@
       provider: String(prompt?.provider || ''),
       fingerprint: String(prompt?.fingerprint || ''),
       kind: String(prompt?.kind || ''),
+      creationId: prompt?.creationId,
+      pid: prompt?.pid,
       title: String(prompt?.title || ''),
       question: String(prompt?.question || ''),
       detail: String(prompt?.detail || ''),
@@ -585,19 +587,30 @@
 
   async function scanPendingPrompts() {
     const detector = window.WhiteboxTerminalPrompts?.detectPendingPrompt;
-    if (typeof detector !== 'function' || !state.snapshot?.sessions) {
+    if (typeof detector !== 'function') {
       return { prompts: new Map(), observedTargets: new Map(), failedTargets: new Set() };
     }
     const mappings = [];
-    for (const agent of state.snapshot.sessions) {
+    for (const agent of state.snapshot?.sessions || []) {
       for (const target of agentTargets(agent)) {
         if (!mappings.some(item => item.target.id === target.id)) mappings.push({ agent, target });
       }
     }
+    // 2.0 starts providers inside ordinary workspace shells, without a bridge session.
+    if (document.documentElement?.dataset?.workspace === 'terminal') {
+      for (const session of state.sessions) {
+        if (!['shell', 'powershell', 'cmd'].includes(session.type) || session.status !== 'running'
+          || session.transient || !session.creationId?.startsWith('workspace:')) continue;
+        if (!mappings.some(item => item.target.id === session.id)) mappings.push({
+          agent: { id: session.id, provider: 'codex' },
+          target: { id: session.id, kind: 'terminal', terminalId: session.id },
+        });
+      }
+    }
     const detected = await Promise.all(mappings.map(async ({ agent, target }) => {
       try {
-        const output = (await window.whitebox.terminalGet(target.terminalId))?.replay;
-        const prompt = detector(output);
+        const live = await window.whitebox.terminalGet(target.terminalId);
+        const prompt = live?.status === 'running' ? detector(live.replay) : null;
         if (!prompt) return { targetId: target.id, sessionId: agent.id, prompt: null, failed: false };
         return {
           targetId: target.id,
@@ -606,6 +619,8 @@
           prompt: {
             ...prompt,
             provider: agent.provider,
+            creationId: live.creationId,
+            pid: live.pid,
             target: {
               id: target.id,
               kind: target.kind,
@@ -640,7 +655,7 @@
 
   function schedulePendingPromptRefresh(force = false) {
     if (!state.initialized) return;
-    if (!state.snapshot?.sessions?.length) {
+    if (!state.snapshot?.sessions?.length && document.documentElement?.dataset?.workspace !== 'terminal') {
       if (state.pendingPrompts.size) {
         state.pendingPrompts = new Map();
         window.dispatchEvent(new CustomEvent('whitebox:terminal-prompts-changed'));
@@ -880,6 +895,10 @@
       state.platform = bootstrap.platform || state.platform;
       state.initialized = true;
       schedulePendingPromptRefresh(true);
+      if (document.documentElement?.dataset?.workspace === 'terminal') {
+        // Flush a prompt whose last output arrived during the scan throttle.
+        setInterval(() => schedulePendingPromptRefresh(), 2_500);
+      }
       // WSL discovery may start the subsystem and take seconds on Windows. It
       // should update the optional Linux controls, not hold the PTY screen open.
       Promise.resolve(window.whitebox.wslDistros()).then(environments => {
@@ -900,7 +919,12 @@
     mountGroupTerminal: async (id, mount, options = {}) => {
       await init();
       const session = await window.whitebox.terminalGet(id);
-      if (!session || session.backend !== 'managed-tmux') throw new Error('tmux AI 세션을 찾을 수 없습니다.');
+      if (!session) throw new Error('터미널 세션을 찾을 수 없습니다.');
+      if (options.requireSessionIdentity && (session.status !== 'running'
+        || session.creationId !== options.requireSessionIdentity.creationId
+        || session.pid !== options.requireSessionIdentity.pid)) {
+        throw new Error('The original terminal session is no longer running.');
+      }
       if (session.status === 'detached') await window.whitebox.terminalReconnect(id);
       const entry = await ensureSessionTerminal(session);
       if (!mount.isConnected) return () => {};
@@ -926,6 +950,7 @@
       window.addEventListener('focus', syncCursor);
       window.addEventListener('blur', syncCursor);
       const cursorRender = entry.terminal.onRender(syncCursor);
+      const inputObserver = entry.terminal.onData(data => options.onUserInput?.(data));
       mount.appendChild(entry.host);
       entry.host.classList.remove('hidden');
       let fitTimer;
@@ -941,6 +966,7 @@
         clearTimeout(fitTimer);
         observer.disconnect();
         cursorRender.dispose();
+        inputObserver.dispose();
         mount.removeEventListener('pointerdown', focusTerminal);
         document.removeEventListener('focusin', syncCursor);
         document.removeEventListener('focusout', syncCursor);
@@ -996,7 +1022,24 @@
     respondToPrompt,
     refreshPendingPrompts: () => schedulePendingPromptRefresh(true),
     scrollTerminalToLine,
+    readTerminal: id => {
+      const entry = state.terminals.get(id);
+      if (!entry || entry.terminal.disposed || entry.outputHydrating) return '';
+      const buffer = entry.terminal.buffer.active;
+      const lines = [];
+      for (let row = Math.max(0, buffer.length - 400); row < buffer.length; row += 1) {
+        lines.push(buffer.getLine(row)?.translateToString(true) || '');
+      }
+      return lines.join('\n').slice(-24000);
+    },
+    readTerminalSnapshot: id => {
+      const entry = state.terminals.get(id);
+      const buffer = !entry?.outputHydrating && !entry?.terminal?.disposed && entry?.terminal?.buffer?.active;
+      return { inputDraft: entry?.terminal?.textarea?.value || '', text: window.WhiteboxTerminal.readTerminal(id), readinessText: buffer ? window.WhiteboxTerminalReviewTurns?.readinessText(buffer) : '', bracketedPaste: Boolean(buffer && entry.terminal.wasmTerm?.hasBracketedPaste()), outputSequence: entry?.outputHydrating ? null : entry?.outputSequence };
+    },
+    focusTerminal: id => state.terminals.get(id)?.terminal.focus(),
   };
+  window.WhiteboxTerminal.mountTerminal = window.WhiteboxTerminal.mountGroupTerminal;
   window.addEventListener('whitebox:theme-changed', syncXtermTheme);
   init().catch(error => notice(t('terminal.error.initialization_failed', { message: errorMessage(error) }), 'error'));
 })();

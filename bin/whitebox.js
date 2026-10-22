@@ -20,6 +20,13 @@ function usage() {
     '  whitebox open                                      데스크톱 앱 열기',
     '  whitebox run <claude|codex|gemini|grok> [-- 옵션]  앱 브리지에서 AI 실행',
     '  whitebox codex-endpoint                              공유 Codex 서버 주소 확인',
+    '  whitebox list-panels [--json]                      같은 패널의 터미널 목록',
+    '  whitebox send --surface <ID> <text>                 텍스트 입력 (끝에 개행을 넣으면 제출)',
+    '  whitebox send-key --surface <ID> enter              입력한 텍스트 제출',
+    '  whitebox read-screen --surface <ID> [--lines 100]   터미널 출력 읽기',
+    '  whitebox ask <ID|claude|codex> <request>             요청 전송',
+    '  whitebox wait <job ID> [seconds]                    요청의 실제 응답 조회',
+    '  whitebox identify                                  현재 패널·터미널 ID',
     '  whitebox --version                                 버전 확인',
     '',
     '예시:',
@@ -38,6 +45,7 @@ function parseCliArguments(argv) {
   if (command === '--help' || command === '-h' || command === 'help') return { action: 'help' };
   if (command === '--version' || command === '-v' || command === 'version') return { action: 'version' };
   if (command === 'codex-endpoint') return { action: 'codex-endpoint' };
+  if (require('./panel-control').COMMANDS.has(command)) return { action: 'panel', args };
   if (command === 'run') return { action: 'run', ...parseArguments(args) };
   throw new Error(usage());
 }
@@ -445,6 +453,7 @@ if (require.main === module) {
     else if (command.action === 'help') process.stdout.write(`${usage()}\n`);
     else if (command.action === 'version') process.stdout.write(`${require('../package.json').version}\n`);
     else if (command.action === 'codex-endpoint') process.stdout.write(`${readCodexEndpoint()}\n`);
+    else if (command.action === 'panel') require('./panel-control').main(command.args).then(result => process.stdout.write((typeof result === 'string' ? result : JSON.stringify(result)) + '\n')).catch(error => { process.stderr.write(error.message + '\n'); process.exitCode = 1; });
     else run(process.argv.slice(2));
   } catch (error) {
     process.stderr.write(`${error.message}\n`);

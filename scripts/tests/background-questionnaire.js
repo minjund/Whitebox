@@ -39,6 +39,29 @@ function session(id = 'task', turn = 1, prompt = '버튼을 파란색으로 바�
 }
 
 function registerBackgroundQuestionnaireTests({ test, temp }) {
+  test('설문지 히스토리는 다음 턴과 재시작 후에도 원래 세션과 완료 시점으로 복구된다', async () => {
+    let task = session('quiz-history');
+    let calls = 0;
+    const service = new BackgroundQuestionnaire({ file: path.join(temp, 'quiz-history.json'), now: () => 1000,
+      requestDetail: async () => task, runner: { generateQuestionnaire: async () => { calls += 1; return quiz(); } } });
+    service.observe([]); service.observe([task]); await settled(service);
+    const first = service.project(task).comprehensionHistory[0];
+    assert.equal(first.completedAt, task.completedAt);
+    task = session('quiz-history', 2);
+    service.observe([task]); await settled(service);
+    assert.equal(service.project(task).comprehensionHistory.length, 2, 'same packet ID and content in different turns must remain separate');
+    const running = { ...session('quiz-history', 3), status: 'running', completionObserved: false };
+    const reloaded = new BackgroundQuestionnaire({ file: service.file, now: () => 9000,
+      requestDetail: async () => running, runner: service.runner });
+    reloaded.observe([running]); await settled(reloaded);
+    const projected = reloaded.project(running);
+    assert.equal(projected.comprehension, undefined, 'history must not be presented as the running turn result');
+    assert.equal(projected.comprehensionHistory.length, 2);
+    assert.deepEqual(projected.comprehensionHistory[0], first);
+    assert.equal(reloaded.project(session('unrelated')).comprehensionHistory, undefined);
+    assert.equal(calls, 2, 'restoring history must not generate another quiz');
+  });
+
   test('cmux 소속은 정확한 대화 ID로 유지하며 재시작 후에도 작업자와 오케스트레이터를 구분한다', () => {
     const processes = selectAgentProcesses([
       { pid: 1, parentPid: 0, name: '/Applications/cmux.app/Contents/MacOS/cmux' },
@@ -258,7 +281,12 @@ function registerBackgroundQuestionnaireTests({ test, temp }) {
       child.emit('close', 0, null);
       assert.equal(parseResult(await promise).status, 'ready');
       assert.equal(runner.listActive().length, 0); assert.deepEqual(fs.readdirSync(runner.runsDir), []);
-      const timedOut = runner.generateQuestionnaire({ provider: 'codex', prompt: 'timeout fixture' });
+      const review = runner.generateTerminalReview({ provider: 'codex', prompt: 'review usage fixture', model: 'fixture-model' });
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '{"tasks":[]}' } }) + '\n'));
+      child.stdout.emit('data', Buffer.from('{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":900,"output_tokens":200}}\n'));
+      child.emit('close', 0, null);
+      assert.deepEqual(await review, { text: '{"tasks":[]}', usage: { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 }, model: 'fixture-model' });
+      const timedOut = runner.generateTerminalReview({ provider: 'codex', prompt: 'timeout fixture' });
       await Promise.all([assert.rejects(timedOut, /시간이 초과/), new Promise(resolve => setTimeout(resolve, 30))]);
       assert.equal(runner.listenerCount('changed'), 0);
       assert.equal(runner.listActive().length, 1, 'unconfirmed child must remain tracked');

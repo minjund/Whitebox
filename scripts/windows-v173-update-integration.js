@@ -517,6 +517,16 @@ function processCommandReferences(pid, file) {
   return output === 'match';
 }
 
+async function idleWorkspaceParent() {
+  const roots = [isolatedAppDataRoot, isolatedLocalAppDataRoot];
+  await require('./packaged-workspace-idle').idleCandidateWorkspace({
+    profiles: [directUserDataDir, inheritedUserDataDir], roots,
+    assertHostOwned: pid => assert(roots.some(root => runningProcessesUnderDirectory(root).some(record => record.pid === pid)),
+      'Workspace host must map to this fresh attempt runtime'),
+    waitForExit: waitForProcessExit,
+  });
+}
+
 function closeInstalledAppGracefully(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Invalid app PID for graceful close: ${pid}`);
   const script = [
@@ -1060,6 +1070,10 @@ async function main() {
 
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;
+  // Historical sources keep their existing idle fixture. The 2.0 renderer
+  // opens a real shell even in capture mode, so the candidate must use its
+  // production authenticated host for the scoped idle preparation below.
+  if (Number(targetVersion.split('.')[0]) >= 2) delete process.env.WHITEBOX_DEMO_CAPTURE;
   if (sourceCohort.installMode === 'manual') {
     let openedInstaller = '';
     try {
@@ -1168,6 +1182,7 @@ async function main() {
   assert.equal(sha256(reinstallInstaller), sha256(targetInstaller), 'The no-delay reinstall did not use the same target installer bytes.');
 
   const reinstallParentPid = activeAppPid;
+  if (Number(targetVersion.split('.')[0]) >= 2) await idleWorkspaceParent();
   let reinstallLaunch = null;
   try {
     reinstallLaunch = await launchPackagedInstaller(targetInstallerModule, {
@@ -1207,6 +1222,7 @@ async function main() {
 
   // Exercise the packaged renderer -> preload -> IPC -> real main lifecycle.
   // Preserve the existing low-level handshake assertions above as well.
+  if (Number(targetVersion.split('.')[0]) >= 2) await idleWorkspaceParent();
   closeInstalledAppGracefully(activeAppPid);
   await waitForProcessExit(activeAppPid);
   const buttonProfile = path.join(isolatedAppDataRoot, 'button-profile');
