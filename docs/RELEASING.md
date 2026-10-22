@@ -36,6 +36,13 @@ rejection that occurs before any PTY write; unknown or accepted deliveries are
 never replayed. Product, dependencies, package metadata and updater checks keep
 the immutable tag's bytes and all compatibility gates still run in full.
 
+The serial 45-cohort Windows step has a 150-minute aggregate budget in both
+compatibility CI and Release. This only budgets the complete batch; every
+individual installer, ACK, first renderer-ready relaunch and cleanup deadline
+remains unchanged. A run interrupted by the former 90-minute batch limit is a
+failure and contributes no approval evidence. Recovery also permits the reviewed
+compatibility workflow change; it never overlays that workflow into product bytes.
+
 ## Updater compatibility review contract
 
 This section is normative for release reviewers and review agents. Apply it to
