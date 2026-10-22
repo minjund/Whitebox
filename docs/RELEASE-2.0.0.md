@@ -72,6 +72,10 @@ Published LoadToAgent 1.6.3–1.6.14 and 1.6.16–1.6.22 use the immutable offic
 
 The low-level Windows reinstall case closes only authenticated startup shells
 inside the fresh attempt profiles before requesting a native window close.
+The candidate runs without the historical capture-mode environment so its
+production host is present. A missing authenticated host fails this preparation;
+only the explicit profiles and their product-defined legacy runtime siblings
+inside the fresh roots may be inspected.
 Closing a window with a live 2.0 shell intentionally keeps the app in its tray;
 that is not a quit failure. The separate packaged-button scenario still keeps
 its live workspace PTY through the actual production update and verifies its

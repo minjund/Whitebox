@@ -6,10 +6,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { TerminalHostClient } = require('../src/terminalHost');
+const { resolveLegacyUserDataPaths } = require('../src/brandMigration');
 
 async function idleCandidateWorkspace({ profiles, roots, assertHostOwned, waitForExit }) {
-  let closed = 0;
-  for (const profile of profiles) {
+  let closed = 0, hosts = 0;
+  // Product migration can retain the sibling legacy runtime while Chromium
+  // uses the explicit Whitebox profile. Search only these exact known paths.
+  const runtimeProfiles = [...new Set(profiles.flatMap(profile => [profile, ...resolveLegacyUserDataPaths(profile)])
+    .map(profile => process.platform === 'win32' ? profile.toLowerCase() : profile))];
+  const active = session => ['starting', 'running', 'stopping', 'detached'].includes(session.status);
+  for (const profile of runtimeProfiles) {
     const discoveryFile = path.join(profile, 'terminal-host.json');
     if (!fs.existsSync(discoveryFile)) continue;
     assert(!fs.lstatSync(discoveryFile).isSymbolicLink(), 'Test host discovery must not be a link');
@@ -22,7 +28,8 @@ async function idleCandidateWorkspace({ profiles, roots, assertHostOwned, waitFo
     try {
       await host.connect();
       assertHostOwned(host.discovery.pid);
-      const sessions = (await host.listFresh()).filter(session => ['starting', 'running', 'stopping'].includes(session.status));
+      hosts++;
+      const sessions = (await host.listFresh()).filter(active);
       for (const session of sessions) {
         assert(['shell', 'powershell', 'cmd'].includes(session.type)
           && session.creationId?.startsWith('workspace:'), 'Idle fixture may close only its workspace startup shells');
@@ -36,11 +43,12 @@ async function idleCandidateWorkspace({ profiles, roots, assertHostOwned, waitFo
         await waitForExit(session.pid);
         closed++;
       }
-      assert.equal((await host.listFresh()).filter(session => ['starting', 'running', 'stopping'].includes(session.status)).length, 0,
+      assert.equal((await host.listFresh()).filter(active).length, 0,
         'Low-level updater parent must actually be idle before the graceful window-close scenario');
     } finally { host.dispose(); }
   }
-  console.log(`PASS idle-parent fixture closed ${closed} authenticated workspace startup shells; live-PTY preservation remains a separate packaged-button scenario`);
+  assert(hosts > 0, 'Idle candidate fixture requires an authenticated production terminal host; capture mode is not valid');
+  console.log(`PASS idle-parent fixture checked ${hosts} authenticated hosts and closed ${closed} workspace startup shells; live-PTY preservation remains a separate packaged-button scenario`);
 }
 
 module.exports = { idleCandidateWorkspace };

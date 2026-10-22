@@ -4193,6 +4193,7 @@ function registerTerminalLifecycleTests(context) {
       rows = [startup];
       await assert.rejects(idleCandidateWorkspace({ ...options, assertHostOwned: () => { throw new Error('foreign host'); } }), /foreign host/);
       assert.deepStrictEqual(closed, [startup.id], 'Rejected identities must never be closed');
+      await assert.rejects(idleCandidateWorkspace({ ...options, profiles: [path.join(temp, 'missing-idle-profile')] }), /requires an authenticated production terminal host/);
     } finally { server.dispose(); }
   });
 

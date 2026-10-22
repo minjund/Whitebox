@@ -1070,6 +1070,10 @@ async function main() {
 
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;
+  // Historical sources keep their existing idle fixture. The 2.0 renderer
+  // opens a real shell even in capture mode, so the candidate must use its
+  // production authenticated host for the scoped idle preparation below.
+  if (Number(targetVersion.split('.')[0]) >= 2) delete process.env.WHITEBOX_DEMO_CAPTURE;
   if (sourceCohort.installMode === 'manual') {
     let openedInstaller = '';
     try {

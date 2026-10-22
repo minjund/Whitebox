@@ -2091,6 +2091,10 @@ async function installCandidateWithManualBridge(options) {
   closeInstalledAppGracefully(options.parentPid);
   await waitForProcessExit(options.parentPid);
   assert.deepStrictEqual(runningProcessIds(legacyExecutable), [], 'LoadToAgent remained live before manual installation.');
+  if (Number(CURRENT_VERSION.split('.')[0]) >= 2) {
+    delete process.env.WHITEBOX_DEMO_CAPTURE;
+    delete process.env.LOADTOAGENT_DEMO_CAPTURE;
+  }
   run(downloadedInstaller, ['/S', '/currentuser', `/D=${installDir}`]);
   await waitForInstalledPackage(currentExecutable, CURRENT_VERSION);
   const pid = await startInstalledAppWithRendererReady(currentExecutable, CURRENT_VERSION);

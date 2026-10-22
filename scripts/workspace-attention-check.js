@@ -129,11 +129,12 @@ app.whenReady().then(async () => {
     console.log('PASS: workspace shell → bottom-right popup → exact PTY response; stale identity/output rejected; cleared prompts removed; settings persist; exact terminal navigation');
   } catch (error) { console.error(error.stack, errors); process.exitCode = 1; }
   finally {
-    clearTimeout(deadline);
     popups?.dispose();
     await manager.dispose();
     win?.destroy();
-    fs.rmSync(profile, { recursive: true, force: true });
+    await require('electron').session.defaultSession.clearStorageData();
+    await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
+    clearTimeout(deadline);
     app.exit(process.exitCode || 0);
   }
-});
+}).catch(error => { console.error(error); app.exit(1); });
