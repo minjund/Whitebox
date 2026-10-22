@@ -1,0 +1,61 @@
+name: Immutable v2.0.0 log writer diagnosis
+on:
+  push:
+    branches: [codex/release-v2.0.0-log-diagnostic]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: 3646615e35dbd4657a437cf7ffd4e886ab19ac63
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22
+      - name: Diagnose exact immutable helper and bootstrap log writers
+        shell: pwsh
+        run: |
+          @'
+          const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto'),cp=require('child_process');
+          const {WINDOWS_UPDATE_HELPER:h,WINDOWS_UPDATE_BOOTSTRAP:b}=require('./src/updateInstaller');
+          const helper=h.slice(h.indexOf('function Write-UpdateLog('),h.indexOf('function Add-LaunchCandidate('));
+          const bootstrap=b.slice(b.indexOf('function Write-BootstrapLog('),b.indexOf('function Quote-ProcessArgument('));
+          const root=fs.mkdtempSync(path.join(os.tmpdir(),'whitebox-log-diagnosis-'));
+          fs.writeFileSync(path.join(root,'helper.txt'),helper);fs.writeFileSync(path.join(root,'bootstrap.txt'),bootstrap);
+          console.log(JSON.stringify({immutableProduct:'3646615e35dbd4657a437cf7ffd4e886ab19ac63',helperSha256:crypto.createHash('sha256').update(helper).digest('hex'),bootstrapSha256:crypto.createHash('sha256').update(bootstrap).digest('hex')}));
+          const script=[
+            "$ErrorActionPreference='Stop'",
+            '$root=$env:WHITEBOX_LOG_DIAG_ROOT',
+            '$helper=[IO.File]::ReadAllText((Join-Path $root "helper.txt"))',
+            '$bootstrap=[IO.File]::ReadAllText((Join-Path $root "bootstrap.txt"))',
+            '$LogPath=Join-Path $root "control.log"',
+            '. ([scriptblock]::Create($helper)); . ([scriptblock]::Create($bootstrap))',
+            'for($i=0;$i -lt 100;$i++){ Write-UpdateLog ("H:"+$i); Write-BootstrapLog ("B:"+$i) }',
+            '$control=@([IO.File]::ReadAllLines($LogPath) | ForEach-Object { $_.TrimStart([char]0xfeff) })',
+            'if($control.Count -ne 200){throw "Sequential control lost records"}',
+            'for($i=0;$i -lt 100;$i++){if($control -cnotcontains ("H:"+$i) -or $control -cnotcontains ("B:"+$i)){throw "Sequential control changed bytes"}}',
+            'Write-Host "PASS sequential exact-writer control: 200/200"',
+            '$writer={param($source,$file,$gate,$prefix,$count) $ErrorActionPreference="Stop"; $LogPath=$file; . ([scriptblock]::Create($source)); [void]$gate.WaitOne(); for($i=0;$i -lt $count;$i++){ if($prefix -eq "H"){Write-UpdateLog ($prefix+":"+$i)}else{Write-BootstrapLog ($prefix+":"+$i)} }}',
+            '$bad=0',
+            'for($round=1;$round -le 3;$round++){',
+            ' $file=Join-Path $root ("concurrent-"+$round+".log"); $gate=[Threading.ManualResetEvent]::new($false); $jobs=@(); $pending=@()',
+            ' try {',
+            '  foreach($pair in @(@($helper,"H"),@($bootstrap,"B"))){$ps=[PowerShell]::Create(); [void]$ps.AddScript($writer.ToString()).AddArgument($pair[0]).AddArgument($file).AddArgument($gate).AddArgument($pair[1]).AddArgument(2000); $jobs+=$ps; $pending+=$ps.BeginInvoke()}',
+            '  [void]$gate.Set()',
+            '  for($j=0;$j -lt 2;$j++){if(-not $pending[$j].AsyncWaitHandle.WaitOne(40000)){throw "Diagnostic writer timeout"}; $jobs[$j].EndInvoke($pending[$j])|Out-Null; if($jobs[$j].Streams.Error.Count){throw ($jobs[$j].Streams.Error|Out-String)}}',
+            '  $lines=@([IO.File]::ReadAllLines($file)|ForEach-Object {$_.TrimStart([char]0xfeff)}); $missing=@(); for($i=0;$i -lt 2000;$i++){foreach($prefix in @("H","B")){if($lines -cnotcontains ($prefix+":"+$i)){$missing+=($prefix+":"+$i)}}}; $invalid=@($lines|Where-Object {$_ -cnotmatch "^[HB]:[0-9]+$"}); $unique=@($lines|Sort-Object -Unique)',
+            '  @{round=$round;expected=4000;lines=$lines.Count;unique=$unique.Count;missing=$missing.Count;invalid=$invalid.Count;missingSample=@($missing|Select-Object -First 12);invalidSample=@($invalid|Select-Object -First 12)}|ConvertTo-Json -Compress|Write-Host',
+            '  if($missing.Count -or $invalid.Count -or $lines.Count -ne 4000 -or $unique.Count -ne 4000){$bad++}',
+            ' } finally {for($j=0;$j -lt $jobs.Count;$j++){if(-not $pending[$j].IsCompleted){$jobs[$j].Stop()}; $pending[$j].AsyncWaitHandle.Dispose(); $jobs[$j].Dispose()};$gate.Dispose()}',
+            '}',
+            'if($bad){throw "Immutable writers lost/corrupted concurrent evidence; diagnostic failure, no release approval"}',
+            'Write-Host "PASS concurrent exact-writer diagnostic: all records intact"'
+          ].join('\n');
+          const ps1=path.join(root,'diagnose.ps1');fs.writeFileSync(ps1,'\ufeff'+script);
+          try {cp.execFileSync(path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',ps1],{stdio:'inherit',timeout:180000,env:{...process.env,WHITEBOX_LOG_DIAG_ROOT:root}});}
+          finally {fs.rmSync(root,{recursive:true,force:true});}
+          '@ | node
