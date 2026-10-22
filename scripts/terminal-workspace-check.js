@@ -198,6 +198,7 @@ app.whenReady().then(async () => {
     })()`);
     // Chromium's native drag initiation must work too, including draggable buttons.
     const nativeDrag = async (id, selector) => {
+      win.show(); win.focus();
       win.webContents.debugger.attach('1.3');
       const send = (method, params) => win.webContents.debugger.sendCommand(method, params);
       let intercepted;
@@ -215,8 +216,18 @@ app.whenReady().then(async () => {
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...points.target, button: 'left', buttons: 1 });
         for (let attempt = 0; !intercepted && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
         assert.ok(intercepted, 'native drag starts from sidebar terminal');
-        for (const type of ['dragEnter', 'dragOver', 'drop']) await send('Input.dispatchDragEvent', { type, ...points.target, data: intercepted });
-        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...points.target, button: 'left', buttons: 0, clickCount: 1 });
+        // Drag help expands the sidebar. Use the live drop target after that
+        // layout change, rather than coordinates from before dragstart.
+        const target = await evaluate(`(() => {
+          const node = document.querySelector(${JSON.stringify(selector)});
+          node.scrollIntoView({ block: 'nearest' });
+          const r = node.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        })()`);
+        for (const type of ['dragEnter', 'dragOver']) await send('Input.dispatchDragEvent', { type, ...target, data: intercepted });
+        await waitFor(`document.querySelector(${JSON.stringify(selector)}).dataset.dropDirection === 'new'`, 'native drag reaches the live panel drop target');
+        await send('Input.dispatchDragEvent', { type: 'drop', ...target, data: intercepted });
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, button: 'left', buttons: 0, clickCount: 1 });
       } finally {
         await send('Input.setInterceptDrags', { enabled: false });
         win.webContents.debugger.removeListener('message', listener);
@@ -426,7 +437,7 @@ app.whenReady().then(async () => {
     const initialPids = manager.list().map(item => item.pid).sort();
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
-    await waitFor(`document.querySelector('#wbCanvas canvas').getBoundingClientRect().width > 1300`, 'expanded terminal fits full available width');
+    await waitFor(`document.querySelector('.wb-main').getBoundingClientRect().width === innerWidth && document.querySelector('#wbCanvas canvas').getBoundingClientRect().width >= innerWidth - 32`, 'expanded terminal fits the actual viewport width');
     assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids);
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
@@ -437,7 +448,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbReview").getBoundingClientRect().left >= document.querySelector(".wb-main").getBoundingClientRect().right - 1'), true, 'review does not cover terminal panes at 1000px');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'no horizontal page overflow');
     win.setContentSize(1450, 900);
-    await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width > 850', 'desktop layout restored');
+    await waitFor('Math.abs(document.querySelector(".wb-main").getBoundingClientRect().width - (innerWidth - document.querySelector(".wb-sidebar").getBoundingClientRect().width - document.querySelector("#wbReview").getBoundingClientRect().width)) <= 1', 'desktop three-column layout restored');
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     await evaluate('WhiteboxWorkspace.captureReviews(true)');
     const screenshot = process.env.WHITEBOX_WORKSPACE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-v2-workspace.png');

@@ -178,6 +178,29 @@ function ownedExecutablePids() {
       await stopOwned(relaunchedPid);
     } finally { host.dispose({ shutdownIfIdle: true }); }
     await waitFor(() => !alive(terminalPid) && !alive(hostIdentity.hostPid), 'preserved test PTY and host cleanup', 30000);
+  } else if (Number(version.split('.')[0]) >= 2) {
+    // The newly installed workspace opens its first shell automatically.
+    // It belongs to this mkdtemp profile, and its private host executable must
+    // map inside this same test root before we close any session.
+    const { TerminalHostClient } = require('../src/terminalHost');
+    const host = new TerminalHostClient({ discoveryFile: path.join(profile, 'terminal-host.json') });
+    let workspaceHostPid = 0;
+    try {
+      await host.connect();
+      workspaceHostPid = host.discovery.pid;
+      assert(ownedExecutablePids().includes(workspaceHostPid), 'Workspace host must belong to this isolated test root');
+      const sessions = await host.listFresh();
+      for (const session of sessions) {
+        const current = await host.get(session.id);
+        assert.equal(current.creationId, session.creationId, 'Cleanup must retain exact session identity');
+        assert.equal(current.pid, session.pid, 'Cleanup must retain the same test PTY');
+        await host.close(session.id);
+        if (session.pid) await waitFor(() => !alive(session.pid), 'isolated workspace PTY cleanup', 30000);
+      }
+      await stopOwned(relaunchedPid);
+    } finally { host.dispose({ shutdownIfIdle: true }); }
+    await waitFor(() => !alive(workspaceHostPid), 'isolated workspace host cleanup', 30000);
+    console.log('PASS newly installed workspace shell and authenticated private host cleanup');
   }
   console.log('PASS packaged macOS update button: persistent failure, retry, actual install, renderer-ready relaunch and cleanup');
 })().catch(error => {

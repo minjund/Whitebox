@@ -114,7 +114,8 @@ app.whenReady().then(async () => {
     exitCode = 1;
   } finally {
     win.destroy();
-    fs.rmSync(profile, { recursive: true, force: true });
+    await require('electron').session.defaultSession.clearStorageData();
+    await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
     app.exit(exitCode);
   }
-});
+}).catch(error => { console.error(error); app.exit(1); });

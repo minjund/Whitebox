@@ -176,7 +176,11 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     assert.equal(options.retryAfterFailure, true, 'Preservation must first exercise a failed preparation');
     const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
     const cwd = await evaluate(`process.mainModule.require('electron').app.getPath('userData')`);
-    let terminal = await renderer(`window.whitebox.terminalCreate(${JSON.stringify({ type, cwd })})`);
+    // 2.0 already opens a real shell in this fresh profile. Preserve that
+    // visible session instead of creating an untracked second test workload.
+    let terminal = workspace
+      ? await renderer('window.whitebox.terminalGet(WhiteboxWorkspace.getState().activeId)')
+      : await renderer(`window.whitebox.terminalCreate(${JSON.stringify({ type, cwd })})`);
     const pidDeadline = Date.now() + 10000;
     while (!Number.isSafeInteger(Number(terminal.pid)) || Number(terminal.pid) <= 0) {
       if (Date.now() >= pidDeadline) throw new Error('Packaged preserved PTY PID was not ready');
