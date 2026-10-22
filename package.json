@@ -111,7 +111,7 @@
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package",
-    "test:workspace": "node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && electron scripts/workspace-attention-check.js"
+    "test:workspace": "node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && node scripts/workspace-attention-runner.js"
   },
   "publishConfig": {
     "access": "public",

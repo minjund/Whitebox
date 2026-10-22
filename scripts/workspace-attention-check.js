@@ -4,7 +4,6 @@
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
@@ -13,7 +12,10 @@ const { AttentionPopupManager } = require('../src/attentionPopupManager');
 const { AttentionPopupPreferenceStore } = require('../src/attentionPopupPreferenceStore');
 const { attentionProject } = require('../src/attentionProject');
 const root = path.resolve(__dirname, '..');
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-workspace-attention-'));
+const fixtureRoot = require('./workspace-attention-runner').ownedRoot(process.env.WHITEBOX_ATTENTION_TEST_ROOT,
+  process.env.WHITEBOX_ATTENTION_TEST_TOKEN, process.ppid);
+const profile = path.join(fixtureRoot, 'profile');
+fs.mkdirSync(profile);
 app.setPath('userData', profile);
 app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
@@ -132,8 +134,8 @@ app.whenReady().then(async () => {
     popups?.dispose();
     await manager.dispose();
     win?.destroy();
-    await require('electron').session.defaultSession.clearStorageData();
-    await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 100 });
+    // The Node parent removes and verifies this profile after Electron exits,
+    // when Chromium has released its Windows file handles.
     clearTimeout(deadline);
     app.exit(process.exitCode || 0);
   }
