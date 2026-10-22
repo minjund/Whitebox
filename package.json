@@ -63,7 +63,7 @@
     "test": "node scripts/regression-test.js && node scripts/execution-activity-test.js && node scripts/conversation-layout-test.js && node scripts/update-restart-regression.js && node scripts/electron-asar-cleanup-check.js",
     "test:accuracy": "node scripts/accuracy-evaluation.js",
     "test:performance": "node --expose-gc scripts/performance-monitor-check.js && electron scripts/performance-renderer-check.js",
-    "test:terminal": "electron scripts/terminal-integration-test.js && electron scripts/ghostty-terminal-check.js",
+    "test:terminal": "electron scripts/terminal-integration-test.js && electron scripts/ghostty-terminal-check.js && npm run test:workspace",
     "test:terminal:engine": "electron scripts/ghostty-terminal-check.js",
     "test:terminal:ime": "electron scripts/terminal-ime-check.js",
     "test:terminal:startup": "electron scripts/comprehension-startup-pty-check.js",
@@ -111,7 +111,7 @@
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package",
-    "test:workspace": "node scripts/terminal-review-test.js && electron scripts/terminal-workspace-check.js"
+    "test:workspace": "node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && electron scripts/workspace-attention-check.js"
   },
   "publishConfig": {
     "access": "public",

@@ -1320,6 +1320,7 @@ async function run() {
     if (Number(level) >= 3) rendererErrors.push(message);
   });
   try {
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     await waitFor(win,
       "Boolean(window.WhiteboxApp?.initialized&&window.WhiteboxApp?.openPtyFocus"

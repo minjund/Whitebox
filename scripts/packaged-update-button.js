@@ -109,20 +109,30 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     return true;
   })()`);
   const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
-  while (!await renderer(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(options.currentVersion || version)}`)) {
+  const workspace = await renderer(`document.documentElement.dataset.workspace === 'terminal'`);
+  const controls = workspace ? {
+    version: '#wbVersion', settings: '[data-action="settings"]',
+    check: '[data-action="update-check"]', install: '[data-action="update-install"]', error: '#wbUpdateError',
+  } : {
+    version: '#currentVersion', settings: '#sidebarSettingsBtn',
+    check: '#checkUpdateBtn', install: '#installUpdateBtn', error: '#updateError',
+  };
+  const select = name => `document.querySelector(${JSON.stringify(controls[name])})`;
+  const installAvailable = `${select('install')} && !${select('install')}.hidden && !${select('install')}.classList.contains('hidden') && !${select('install')}.disabled`;
+  while (!await renderer(`${workspace ? 'Boolean(window.WhiteboxWorkspace) && ' : ''}${select('version')}?.textContent.trim().replace(/^v/, '') === ${JSON.stringify(options.currentVersion || version)}`)) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`document.querySelector('#sidebarSettingsBtn').click(); true`);
+  await renderer(`${select('settings')}.click(); true`);
   // Native .click() is ignored while the startup check disables this button.
   // Wait for the same enabled state a person needs, then click exactly once.
-  while (!await renderer(`!document.querySelector('#checkUpdateBtn').disabled`)) {
-    if (Date.now() >= deadline) throw new Error('Startup update check did not settle: ' + await renderer(`document.querySelector('#updateError').textContent`));
+  while (!await renderer(`!${select('check')}.disabled`)) {
+    if (Date.now() >= deadline) throw new Error('Startup update check did not settle: ' + await renderer(`${select('error')}.textContent`));
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`document.querySelector('#checkUpdateBtn').click(); true`);
-  while (!await renderer(`!document.querySelector('#installUpdateBtn').classList.contains('hidden') && !document.querySelector('#installUpdateBtn').disabled`)) {
-    if (Date.now() >= deadline) throw new Error('Packaged update button did not become available: ' + await renderer(`JSON.stringify({error:document.querySelector('#updateError').textContent,checkDisabled:document.querySelector('#checkUpdateBtn').disabled})`));
+  await renderer(`${select('check')}.click(); true`);
+  while (!await renderer(installAvailable)) {
+    if (Date.now() >= deadline) throw new Error('Packaged update button did not become available: ' + await renderer(`JSON.stringify({error:${select('error')}.textContent,checkDisabled:${select('check')}.disabled})`));
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   if (options.beforeClick) await options.beforeClick({ evaluate, renderer });
@@ -151,14 +161,14 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       };
       return true;
     })()`);
-    await renderer(`document.querySelector('#installUpdateBtn').click(); true`);
+    await renderer(`${select('install')}.click(); true`);
     const retryDeadline = Date.now() + 90000;
-    while (!await renderer(`document.querySelector('#updateError').textContent.includes('update-button-fixture') && !document.querySelector('#installUpdateBtn').disabled`)) {
+    while (!await renderer(`${select('error')}.textContent.includes('update-button-fixture') && !${select('install')}.disabled`)) {
       if (Date.now() >= retryDeadline) throw new Error('Failed install did not expose a persistent error and retry button: ' + driver.diagnostics());
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     await new Promise(resolve => setTimeout(resolve, 3600));
-    assert.equal(await renderer(`document.querySelector('#updateError').textContent.includes('update-button-fixture')`), true);
+    assert.equal(await renderer(`${select('error')}.textContent.includes('update-button-fixture')`), true);
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
   }
   let terminalIdForPreservation = '';
@@ -183,7 +193,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     const hostPid = JSON.parse(req('fs').readFileSync(discoveryFile, 'utf8')).pid;
     return { discoveryFile, hostPid };
   })()`) : null;
-  await renderer(`document.querySelector('#installUpdateBtn').click(); true`);
+  await renderer(`${select('install')}.click(); true`);
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 

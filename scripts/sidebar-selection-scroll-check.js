@@ -15,6 +15,7 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'interaction-fixture-preload.js'), sandbox: false, backgroundThrottling: false } });
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
   try {
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(__dirname, '../renderer/index.html'));
     for (let i = 0; i < 100; i++) {
       if (await win.webContents.executeJavaScript('Boolean(window.WhiteboxApp?.initialized)')) break;

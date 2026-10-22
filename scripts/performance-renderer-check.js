@@ -19,6 +19,7 @@ app.whenReady().then(async () => {
   const errors = [];
   win.webContents.on('console-message', (_event, level, message) => { if (level >= 3) errors.push(message); });
   try {
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(root, 'renderer/index.html'));
     const deadline = Date.now() + 15000;
     while (!(await win.webContents.executeJavaScript('Boolean(window.WhiteboxApp?.state?.snapshot)'))) {

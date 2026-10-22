@@ -320,6 +320,7 @@ async function run() {
       },
     });
 
+    require('./legacy-renderer-fixture').installLegacyRendererFixture();
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     await waitForRenderer(win,
       `Boolean(window.WhiteboxApp?.initialized && window.WhiteboxTerminal && window.WhiteboxInlineTerminal && window.interactionTest)`,
