@@ -1,87 +1,20 @@
-name: Windows Frozen-Client Update Compatibility
-
-on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+name: Windows 2.0.1 stall diagnostic (not a release gate)
+'on':
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full SHA to verify frozen 1.7.3-1.7.5, previous fixed, legacy bridge, and candidate self-reinstall paths
+        description: Exact immutable main commit to diagnose; no release approval
         required: true
         type: string
-
 permissions:
   contents: read
-
-concurrency:
-  group: windows-frozen-update-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  classify:
-    name: Classify updater-sensitive changes
-    runs-on: ubuntu-latest
-    outputs:
-      cohort_manifest: ${{ steps.public_latest.outputs.cohort_manifest }}
-      sensitive: ${{ steps.changes.outputs.sensitive }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22
-      - name: Verify previousFixed matches the public latest stable release
-        id: public_latest
-        shell: bash
-        run: |
-          npm run check:update:cohorts
-          cohort_manifest="$(node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")"
-          if [ -z "$cohort_manifest" ]; then
-            echo "Validated cohort manifest attestation was empty."
-            exit 1
-          fi
-          printf 'cohort_manifest=%s\n' "$cohort_manifest" >> "$GITHUB_OUTPUT"
-      - name: Classify the complete event diff before path filtering
-        id: changes
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "sensitive=true" >> "$GITHUB_OUTPUT"
-            echo "Manual verification always runs the full compatibility gate."
-            exit 0
-          fi
-
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            range="$BASE_SHA...$HEAD_SHA"
-          elif [[ "$BEFORE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] && [[ ! "$BEFORE_SHA" =~ ^0+$ ]]; then
-            range="$BEFORE_SHA..$HEAD_SHA"
-          else
-            range="$HEAD_SHA^..$HEAD_SHA"
-          fi
-
-          git diff --name-status --no-renames "$range" > "$RUNNER_TEMP/whitebox-changed-files.txt"
-          node scripts/updater-review-scope.js < "$RUNNER_TEMP/whitebox-changed-files.txt" > "$RUNNER_TEMP/whitebox-updater-scope.json"
-          sensitive="$(node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(typeof value.sensitive!=='boolean')process.exit(2);process.stdout.write(String(value.sensitive));" "$RUNNER_TEMP/whitebox-updater-scope.json")"
-          echo "sensitive=$sensitive" >> "$GITHUB_OUTPUT"
-          echo "Updater-sensitive: $sensitive"
-          cat "$RUNNER_TEMP/whitebox-updater-scope.json"
-
-  verify_windows_update:
-    name: Frozen-client packaged E2E
-    needs: classify
-    if: ${{ needs.classify.outputs.sensitive == 'true' }}
+  diagnostic:
+    name: Diagnostic only - official1.7.5 and candidate
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
@@ -93,35 +26,21 @@ jobs:
           if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full 40-character commit SHA' }
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -cne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw "Checked out $actual instead of $env:EXPECTED_SOURCE_SHA" }
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Bind the selected commit to the unauthenticated public-latest attestation
-        shell: pwsh
-        env:
-          EXPECTED_COHORT_MANIFEST: ${{ needs.classify.outputs.cohort_manifest }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_COHORT_MANIFEST)) {
-            throw 'The unauthenticated public-latest cohort attestation was missing'
-          }
-          $actualManifest = (& node -e "const {readCohortManifest}=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(readCohortManifest()));")
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to validate the selected compatibility cohort manifest' }
-          if ($actualManifest -cne $env:EXPECTED_COHORT_MANIFEST) {
-            throw 'The selected compatibility cohort manifest differs from the public-latest validated manifest'
-          }
-          Write-Host 'Selected cohort manifest matches the unauthenticated public-latest attestation.'
       - run: npm run check:source
       - run: npm test
       - name: Build the exact Windows release candidate
         run: npm run dist:win
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Verify Windows release artifacts
         run: npm run test:artifacts:win
         env:
-          WHITEBOX_ALLOW_UNSIGNED: "true"
+          WHITEBOX_ALLOW_UNSIGNED: 'true'
       - name: Verify packaged Windows Authenticode checks
         run: node scripts/windows-signature-verification-check.js
       - name: Download every installer pinned by the compatibility cohort manifest
@@ -166,111 +85,144 @@ jobs:
           "WHITEBOX_CURRENT_INSTALLER_SIZE=$targetSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Download and verify the official legacy update inputs
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Add test-only stage traces after packaging immutable product bytes
+        shell: bash
         run: |
-          $fixtureDir = Join-Path $env:RUNNER_TEMP 'whitebox-legacy-update-inputs'
-          New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
-          function Get-VerifiedReleaseAsset(
-            [string]$Repository,
-            [string]$Tag,
-            [string]$Name,
-            [long]$ExpectedSize,
-            [string]$ExpectedSha256,
-            [bool]$RequireImmutable,
-            [bool]$RequireSoleAsset,
-            [string]$EnvironmentName
-          ) {
-            $release = gh api "repos/$Repository/releases/tags/$Tag" | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0) { throw "Unable to read $Repository $Tag" }
-            if ($release.tag_name -cne $Tag -or $release.draft -ne $false -or $release.prerelease -ne $false) {
-              throw "Official release state mismatch for $Repository $Tag"
-            }
-            if ($RequireImmutable -and [bool]$release.immutable -ne $true) {
-              throw "Official release is not immutable: $Repository $Tag"
-            }
-            if ($release.html_url -cne "https://github.com/$Repository/releases/tag/$Tag") {
-              throw "Official release URL mismatch for $Repository $Tag"
-            }
-            if ($RequireSoleAsset -and @($release.assets).Count -ne 1) {
-              throw "Official bridge release must contain exactly one asset"
-            }
-            $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
-            if ($matches.Count -ne 1) { throw "Expected exactly one official $Name asset" }
-            $asset = $matches[0]
-            $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$Name"
-            if ($asset.state -cne 'uploaded' -or $asset.browser_download_url -cne $expectedUrl) {
-              throw "Official asset state or URL mismatch for $Name"
-            }
-            if ([long]$asset.size -ne $ExpectedSize -or [string]$asset.digest -cne "sha256:$ExpectedSha256") {
-              throw "Official asset API size or digest mismatch for $Name"
-            }
-            $destination = Join-Path $fixtureDir $Name
-            Invoke-WebRequest -Uri $expectedUrl -OutFile $destination
-            if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize) {
-              throw "Downloaded official asset size mismatch for $Name"
-            }
-            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
-            if ($actualSha256 -cne $ExpectedSha256) {
-              throw "Downloaded official asset SHA-256 mismatch for $Name`: $actualSha256"
-            }
-            "$EnvironmentName=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const file = process.env.WHITEBOX_DIAGNOSTIC_DRIVER_PATH || 'scripts/windows-v173-update-integration.js';
+          let source = fs.readFileSync(file, 'utf8');
+          const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+          console.log('DIAG original driver sha256=' + digest(source));
+          console.log('DIAG unchanged product updater sha256=' + digest(fs.readFileSync('src/updateInstaller.js')));
+          function once(before, after) {
+            if (source.split(before).length !== 2) throw new Error('Diagnostic patch was not unique: ' + before);
+            source = source.replace(before, after);
           }
-          Get-VerifiedReleaseAsset 'minjund/Whitebox' 'v1.6.3' 'LoadToAgent-Setup-1.6.3.exe' 92488826 'e38c38698335c2eec4aef8c6da6f1629470addaff1b881fe961172644c86db0f' $false $false 'WHITEBOX_V163_INSTALLER'
-          Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
-      - name: Verify frozen and recent packaged Whitebox compatibility cohorts
+          once("function run(command, args, options = {}) {", `function run(command, args, options = {}) {
+            console.log('DIAG_SYNC_BEGIN', new Date().toISOString(), path.basename(command), new Error().stack.split('\\n').slice(2, 5).join(' | '));`);
+          once("    ...options,\n  });\n  if (result.error || result.status !== 0) {", `    ...options,
+            });
+            console.log('DIAG_SYNC_END', new Date().toISOString(), path.basename(command), result.status, result.error?.code || '');
+            if (result.error || result.status !== 0) {`);
+          once("async function launchPackagedInstaller(installerModule, options) {", `async function launchPackagedInstaller(installerModule, options) {
+            console.log('DIAG_LAUNCH_BEGIN', new Date().toISOString(), options.downloadsDir, options.parentPid);`);
+          once("  assert.equal(helperCallbackCount, 1, 'The packaged updater did not cross its helper-ready boundary exactly once.');", `  console.log('DIAG_LAUNCH_RETURNED', new Date().toISOString(), helperPid);
+            assert.equal(helperCallbackCount, 1, 'The packaged updater did not cross its helper-ready boundary exactly once.');`);
+          once("    bootstrapChild = spawn(command, args, spawnOptions);", `    console.log('DIAG_BOOTSTRAP_SPAWN_BEGIN', new Date().toISOString());
+              bootstrapChild = spawn(command, args, spawnOptions);
+              console.log('DIAG_BOOTSTRAP_SPAWN_RETURNED', new Date().toISOString(), bootstrapChild.pid);`);
+          once("      helperCallbackCount += 1;", `      console.log('DIAG_HELPER_CALLBACK_BEGIN', new Date().toISOString());
+                helperCallbackCount += 1;`);
+          once("  const reinstallParentPid = activeAppPid;", `  console.log('DIAG_REINSTALL_STAGE', new Date().toISOString(), activeAppPid);
+            const reinstallParentPid = activeAppPid;`);
+          once("    closeInstalledAppGracefully(reinstallParentPid);", `    console.log('DIAG_CLOSE_PARENT_BEGIN', new Date().toISOString());
+              closeInstalledAppGracefully(reinstallParentPid);
+              console.log('DIAG_CLOSE_PARENT_END', new Date().toISOString());`);
+          once("  activeAppPid = await waitForRelaunchLog(reinstallLaunch.logPath, targetVersion, 120_000, reinstallLaunch.integrationHelperPid);", `  console.log('DIAG_RELAUNCH_WAIT_BEGIN', new Date().toISOString());
+            activeAppPid = await waitForRelaunchLog(reinstallLaunch.logPath, targetVersion, 120_000, reinstallLaunch.integrationHelperPid);
+            console.log('DIAG_RELAUNCH_WAIT_END', new Date().toISOString(), activeAppPid);`);
+          once("const isolatedProfileRoot = path.join(testRoot, 'isolated-profile');", `console.log('DIAG_ROOT=' + testRoot);
+          const diagnosticTick = setInterval(() => console.log('DIAG_TICK', new Date().toISOString(), process.getActiveResourcesInfo()), 15000);
+          diagnosticTick.unref();
+          const isolatedProfileRoot = path.join(testRoot, 'isolated-profile');`);
+          fs.writeFileSync(file, source);
+          console.log('DIAG instrumented test driver sha256=' + digest(source));
+          console.log('DIAG diagnostic only: no release approval; no product/helper/deadline changes');
+          const probeFile = process.env.WHITEBOX_DIAGNOSTIC_PROBE_PATH || 'scripts/windows-process-exit-check.js';
+          let probe = fs.readFileSync(probeFile, 'utf8');
+          const beforeProbe = "  const result = spawn(powershell,";
+          if (probe.split(beforeProbe).length !== 2) throw new Error('Diagnostic process probe anchor was not unique');
+          probe = probe.replace(beforeProbe, "  console.log('DIAG_PROBE_BEGIN', new Date().toISOString(), pids);\n" + beforeProbe);
+          const afterProbe = "  if (result.error) throw result.error;";
+          if (probe.split(afterProbe).length !== 2) throw new Error('Diagnostic process result anchor was not unique');
+          probe = probe.replace(afterProbe, "  console.log('DIAG_PROBE_END', new Date().toISOString(), result.status, result.error?.code || '');\n" + afterProbe);
+          fs.writeFileSync(probeFile, probe);
+          NODE
+          node --check scripts/windows-v173-update-integration.js
+          node --check scripts/windows-process-exit-check.js
+          git diff --name-only
+          git diff --exit-code -- src package.json package-lock.json main.js preload.js renderer
+      - name: Diagnose one exact official1.7.5 attempt with an external strict watchdog
         shell: pwsh
-        # All 45 cohorts run serially; individual installer/relaunch deadlines stay strict.
-        timeout-minutes: 150
-        run: |
-          $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
-            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
+        timeout-minutes: 15
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'whitebox-v201-stall-diagnostic'
+          New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
+          $stdout = Join-Path $output 'driver.stdout.log'
+          $stderr = Join-Path $output 'driver.stderr.log'
+          $env:WHITEBOX_FROZEN_VERSION = '1.7.5'
+          $env:TEMP = $env:RUNNER_TEMP
+          $env:TMP = $env:RUNNER_TEMP
+          $node = (Get-Command node.exe -ErrorAction Stop).Source
+          $child = Start-Process -FilePath $node -ArgumentList @('scripts/windows-v173-update-integration.js') -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $creation = $child.StartTime.ToUniversalTime()
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $outOffset = 0
+          $errOffset = 0
+          $timedOut = $false
+          function Read-LiveText([string]$Path) {
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            $reader = [IO.StreamReader]::new($stream)
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
           }
-          $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
-          if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
-          $attempt = 0
-          foreach ($cohort in $cohorts) {
-            $attempt += 1
-            $env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version
-            Write-Host "Running packaged cohort $attempt/$($cohorts.Count): $env:WHITEBOX_FROZEN_VERSION ($($cohort.installMode))"
-            & npm.cmd run test:update:win:frozen
-            if ($LASTEXITCODE -ne 0) {
-              throw "Packaged cohort $env:WHITEBOX_FROZEN_VERSION failed with exit code $LASTEXITCODE"
+          function Forward-Output {
+            if (Test-Path -LiteralPath $stdout) {
+              $value = Read-LiveText $stdout
+              if ($value.Length -gt $script:outOffset) { [Console]::Out.Write($value.Substring($script:outOffset)); $script:outOffset = $value.Length }
+            }
+            if (Test-Path -LiteralPath $stderr) {
+              $value = Read-LiveText $stderr
+              if ($value.Length -gt $script:errOffset) { [Console]::Error.Write($value.Substring($script:errOffset)); $script:errOffset = $value.Length }
             }
           }
-          if ($attempt -ne $cohorts.Count) { throw "Expected $($cohorts.Count) packaged attempts, ran $attempt" }
-      - name: Verify the official v1.6.3 to bridge to candidate path
-        shell: pwsh
-        timeout-minutes: 30
-        run: npm run test:update:win:legacy-bridge
-
-  compatibility_gate:
-    name: Updater compatibility gate
-    needs: [classify, verify_windows_update]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the packaged E2E for every sensitive diff
-        env:
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          SENSITIVE: ${{ needs.classify.outputs.sensitive }}
-          VERIFY_RESULT: ${{ needs.verify_windows_update.result }}
-        run: |
-          if [ "$CLASSIFY_RESULT" != "success" ]; then
-            echo "Change classification failed."
-            exit 1
-          fi
-          case "$SENSITIVE" in
-            true|false) ;;
-            *)
-              echo "Change classification returned an invalid sensitivity value: ${SENSITIVE:-<empty>}"
-              exit 1 ;;
-          esac
-          if [ "$SENSITIVE" = "true" ] && [ "$VERIFY_RESULT" != "success" ]; then
-            echo "Updater-sensitive changes require the frozen-client packaged E2E. Result: $VERIFY_RESULT"
-            exit 1
-          fi
-          echo "Updater compatibility gate passed (sensitive=$SENSITIVE, packaged-e2e=$VERIFY_RESULT)."
+          try {
+            while (-not $child.HasExited) {
+              Forward-Output
+              Write-Host "DIAG_WATCHDOG elapsed=$([int]$clock.Elapsed.TotalSeconds)s; node=$($child.Id); cpu=$($child.TotalProcessorTime)"
+              if ($clock.Elapsed.TotalSeconds -ge 600) { $timedOut = $true; break }
+              Start-Sleep -Seconds 10
+              $child.Refresh()
+            }
+            Forward-Output
+          } finally {
+            $child.Refresh()
+            if (-not $child.HasExited) {
+              $live = Get-Process -Id $child.Id -ErrorAction Stop
+              if ($live.StartTime.ToUniversalTime() -ne $creation -or $live.Path -cne $node) { throw 'Diagnostic child identity changed; refusing termination' }
+              & taskkill.exe /PID $child.Id /T /F
+              if ($LASTEXITCODE -ne 0) { throw 'Owned diagnostic tree termination failed' }
+              if (-not $child.WaitForExit(10000)) { throw 'Owned diagnostic process remained after termination' }
+            }
+            Forward-Output
+            $raw = if (Test-Path -LiteralPath $stdout) { Read-LiveText $stdout } else { '' }
+            $match = [regex]::Match($raw, '(?m)^DIAG_ROOT=(.+)\r?$')
+            if ($match.Success) {
+              $root = [IO.Path]::GetFullPath($match.Groups[1].Value.Trim())
+              $parent = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+              if ([IO.Path]::GetDirectoryName($root) -ine $parent -or [IO.Path]::GetFileName($root) -notmatch '^whitebox-v173-update-integration-[a-zA-Z0-9]+$') { throw 'Diagnostic root is not the exact owned temporary child' }
+              if (Test-Path -LiteralPath $root) {
+                if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Diagnostic root is a reparse point' }
+                $index = 0
+                Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop | Where-Object { $_.Name -in @('install-update.log','install-attempts.jsonl','main.log','renderer.log') -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
+                  $index += 1
+                  $destination = Join-Path $output ("owned-" + $index + '-' + $_.Name)
+                  Copy-Item -LiteralPath $_.FullName -Destination $destination -ErrorAction Stop
+                  Write-Host "DIAG retained $destination"
+                }
+              }
+            }
+          }
+          if ($timedOut) { throw 'Diagnostic 600-second total deadline exceeded; this is a failed diagnostic, never release approval' }
+          if (-not $child.WaitForExit(1000)) { throw 'Diagnostic child exit was not stable' }
+          if ($child.ExitCode -ne 0) { throw "Diagnostic driver failed with exit code $($child.ExitCode)" }
+          Write-Host 'Diagnostic completed on a fresh runner; this is not the full45+legacy release gate.'
+      - name: Retain diagnostic-only logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: whitebox-v201-stall-diagnostic
+          path: ${{ runner.temp }}/whitebox-v201-stall-diagnostic
+          if-no-files-found: error
