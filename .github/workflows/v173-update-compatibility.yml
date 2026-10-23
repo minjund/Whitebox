@@ -1,4 +1,4 @@
-name: Windows 2.0.1 stall diagnostic (not a release gate)
+name: Windows 2.0.1 serial stall diagnostic (not a release gate)
 'on':
   workflow_dispatch:
     inputs:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 jobs:
   diagnostic:
-    name: Diagnostic only - official1.7.5 and candidate
+    name: Diagnostic only - original first3 serial cohorts
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -145,18 +145,19 @@ jobs:
           node --check scripts/windows-process-exit-check.js
           git diff --name-only
           git diff --exit-code -- src package.json package-lock.json main.js preload.js renderer
-      - name: Diagnose one exact official1.7.5 attempt with an external strict watchdog
+      - name: Diagnose original serial cohort 1.7.3 with inherited TEMP and strict watchdog
         shell: pwsh
         timeout-minutes: 15
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.3
         run: |-
           $ErrorActionPreference = 'Stop'
-          $output = Join-Path $env:RUNNER_TEMP 'whitebox-v201-stall-diagnostic'
+          $output = Join-Path (Join-Path $env:RUNNER_TEMP 'whitebox-v201-stall-diagnostic') $env:WHITEBOX_FROZEN_VERSION
           New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
           $stdout = Join-Path $output 'driver.stdout.log'
           $stderr = Join-Path $output 'driver.stderr.log'
-          $env:WHITEBOX_FROZEN_VERSION = '1.7.5'
-          $env:TEMP = $env:RUNNER_TEMP
-          $env:TMP = $env:RUNNER_TEMP
+          $originalTempParent = [IO.Path]::GetTempPath()
+          if ($env:WHITEBOX_FROZEN_VERSION -notin @('1.7.3','1.7.4','1.7.5')) { throw 'Unexpected diagnostic cohort' }
           $node = (Get-Command node.exe -ErrorAction Stop).Source
           $child = Start-Process -FilePath $node -ArgumentList @('scripts/windows-v173-update-integration.js') -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           $creation = $child.StartTime.ToUniversalTime()
@@ -202,7 +203,159 @@ jobs:
             $match = [regex]::Match($raw, '(?m)^DIAG_ROOT=(.+)\r?$')
             if ($match.Success) {
               $root = [IO.Path]::GetFullPath($match.Groups[1].Value.Trim())
-              $parent = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+              $parent = [IO.Path]::GetFullPath($originalTempParent).TrimEnd('\')
+              if ([IO.Path]::GetDirectoryName($root) -ine $parent -or [IO.Path]::GetFileName($root) -notmatch '^whitebox-v173-update-integration-[a-zA-Z0-9]+$') { throw 'Diagnostic root is not the exact owned temporary child' }
+              if (Test-Path -LiteralPath $root) {
+                if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Diagnostic root is a reparse point' }
+                $index = 0
+                Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop | Where-Object { $_.Name -in @('install-update.log','install-attempts.jsonl','main.log','renderer.log') -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
+                  $index += 1
+                  $destination = Join-Path $output ("owned-" + $index + '-' + $_.Name)
+                  Copy-Item -LiteralPath $_.FullName -Destination $destination -ErrorAction Stop
+                  Write-Host "DIAG retained $destination"
+                }
+              }
+            }
+          }
+          if ($timedOut) { throw 'Diagnostic 600-second total deadline exceeded; this is a failed diagnostic, never release approval' }
+          if (-not $child.WaitForExit(1000)) { throw 'Diagnostic child exit was not stable' }
+          if ($child.ExitCode -ne 0) { throw "Diagnostic driver failed with exit code $($child.ExitCode)" }
+          Write-Host 'Diagnostic completed on a fresh runner; this is not the full45+legacy release gate.'
+      - name: Diagnose original serial cohort 1.7.4 with inherited TEMP and strict watchdog
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.4
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path (Join-Path $env:RUNNER_TEMP 'whitebox-v201-stall-diagnostic') $env:WHITEBOX_FROZEN_VERSION
+          New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
+          $stdout = Join-Path $output 'driver.stdout.log'
+          $stderr = Join-Path $output 'driver.stderr.log'
+          $originalTempParent = [IO.Path]::GetTempPath()
+          if ($env:WHITEBOX_FROZEN_VERSION -notin @('1.7.3','1.7.4','1.7.5')) { throw 'Unexpected diagnostic cohort' }
+          $node = (Get-Command node.exe -ErrorAction Stop).Source
+          $child = Start-Process -FilePath $node -ArgumentList @('scripts/windows-v173-update-integration.js') -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $creation = $child.StartTime.ToUniversalTime()
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $outOffset = 0
+          $errOffset = 0
+          $timedOut = $false
+          function Read-LiveText([string]$Path) {
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            $reader = [IO.StreamReader]::new($stream)
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+          }
+          function Forward-Output {
+            if (Test-Path -LiteralPath $stdout) {
+              $value = Read-LiveText $stdout
+              if ($value.Length -gt $script:outOffset) { [Console]::Out.Write($value.Substring($script:outOffset)); $script:outOffset = $value.Length }
+            }
+            if (Test-Path -LiteralPath $stderr) {
+              $value = Read-LiveText $stderr
+              if ($value.Length -gt $script:errOffset) { [Console]::Error.Write($value.Substring($script:errOffset)); $script:errOffset = $value.Length }
+            }
+          }
+          try {
+            while (-not $child.HasExited) {
+              Forward-Output
+              Write-Host "DIAG_WATCHDOG elapsed=$([int]$clock.Elapsed.TotalSeconds)s; node=$($child.Id); cpu=$($child.TotalProcessorTime)"
+              if ($clock.Elapsed.TotalSeconds -ge 600) { $timedOut = $true; break }
+              Start-Sleep -Seconds 10
+              $child.Refresh()
+            }
+            Forward-Output
+          } finally {
+            $child.Refresh()
+            if (-not $child.HasExited) {
+              $live = Get-Process -Id $child.Id -ErrorAction Stop
+              if ($live.StartTime.ToUniversalTime() -ne $creation -or $live.Path -cne $node) { throw 'Diagnostic child identity changed; refusing termination' }
+              & taskkill.exe /PID $child.Id /T /F
+              if ($LASTEXITCODE -ne 0) { throw 'Owned diagnostic tree termination failed' }
+              if (-not $child.WaitForExit(10000)) { throw 'Owned diagnostic process remained after termination' }
+            }
+            Forward-Output
+            $raw = if (Test-Path -LiteralPath $stdout) { Read-LiveText $stdout } else { '' }
+            $match = [regex]::Match($raw, '(?m)^DIAG_ROOT=(.+)\r?$')
+            if ($match.Success) {
+              $root = [IO.Path]::GetFullPath($match.Groups[1].Value.Trim())
+              $parent = [IO.Path]::GetFullPath($originalTempParent).TrimEnd('\')
+              if ([IO.Path]::GetDirectoryName($root) -ine $parent -or [IO.Path]::GetFileName($root) -notmatch '^whitebox-v173-update-integration-[a-zA-Z0-9]+$') { throw 'Diagnostic root is not the exact owned temporary child' }
+              if (Test-Path -LiteralPath $root) {
+                if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Diagnostic root is a reparse point' }
+                $index = 0
+                Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop | Where-Object { $_.Name -in @('install-update.log','install-attempts.jsonl','main.log','renderer.log') -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
+                  $index += 1
+                  $destination = Join-Path $output ("owned-" + $index + '-' + $_.Name)
+                  Copy-Item -LiteralPath $_.FullName -Destination $destination -ErrorAction Stop
+                  Write-Host "DIAG retained $destination"
+                }
+              }
+            }
+          }
+          if ($timedOut) { throw 'Diagnostic 600-second total deadline exceeded; this is a failed diagnostic, never release approval' }
+          if (-not $child.WaitForExit(1000)) { throw 'Diagnostic child exit was not stable' }
+          if ($child.ExitCode -ne 0) { throw "Diagnostic driver failed with exit code $($child.ExitCode)" }
+          Write-Host 'Diagnostic completed on a fresh runner; this is not the full45+legacy release gate.'
+      - name: Diagnose original serial cohort 1.7.5 with inherited TEMP and strict watchdog
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          WHITEBOX_FROZEN_VERSION: 1.7.5
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path (Join-Path $env:RUNNER_TEMP 'whitebox-v201-stall-diagnostic') $env:WHITEBOX_FROZEN_VERSION
+          New-Item -ItemType Directory -Path $output -ErrorAction Stop | Out-Null
+          $stdout = Join-Path $output 'driver.stdout.log'
+          $stderr = Join-Path $output 'driver.stderr.log'
+          $originalTempParent = [IO.Path]::GetTempPath()
+          if ($env:WHITEBOX_FROZEN_VERSION -notin @('1.7.3','1.7.4','1.7.5')) { throw 'Unexpected diagnostic cohort' }
+          $node = (Get-Command node.exe -ErrorAction Stop).Source
+          $child = Start-Process -FilePath $node -ArgumentList @('scripts/windows-v173-update-integration.js') -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $creation = $child.StartTime.ToUniversalTime()
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $outOffset = 0
+          $errOffset = 0
+          $timedOut = $false
+          function Read-LiveText([string]$Path) {
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            $reader = [IO.StreamReader]::new($stream)
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+          }
+          function Forward-Output {
+            if (Test-Path -LiteralPath $stdout) {
+              $value = Read-LiveText $stdout
+              if ($value.Length -gt $script:outOffset) { [Console]::Out.Write($value.Substring($script:outOffset)); $script:outOffset = $value.Length }
+            }
+            if (Test-Path -LiteralPath $stderr) {
+              $value = Read-LiveText $stderr
+              if ($value.Length -gt $script:errOffset) { [Console]::Error.Write($value.Substring($script:errOffset)); $script:errOffset = $value.Length }
+            }
+          }
+          try {
+            while (-not $child.HasExited) {
+              Forward-Output
+              Write-Host "DIAG_WATCHDOG elapsed=$([int]$clock.Elapsed.TotalSeconds)s; node=$($child.Id); cpu=$($child.TotalProcessorTime)"
+              if ($clock.Elapsed.TotalSeconds -ge 600) { $timedOut = $true; break }
+              Start-Sleep -Seconds 10
+              $child.Refresh()
+            }
+            Forward-Output
+          } finally {
+            $child.Refresh()
+            if (-not $child.HasExited) {
+              $live = Get-Process -Id $child.Id -ErrorAction Stop
+              if ($live.StartTime.ToUniversalTime() -ne $creation -or $live.Path -cne $node) { throw 'Diagnostic child identity changed; refusing termination' }
+              & taskkill.exe /PID $child.Id /T /F
+              if ($LASTEXITCODE -ne 0) { throw 'Owned diagnostic tree termination failed' }
+              if (-not $child.WaitForExit(10000)) { throw 'Owned diagnostic process remained after termination' }
+            }
+            Forward-Output
+            $raw = if (Test-Path -LiteralPath $stdout) { Read-LiveText $stdout } else { '' }
+            $match = [regex]::Match($raw, '(?m)^DIAG_ROOT=(.+)\r?$')
+            if ($match.Success) {
+              $root = [IO.Path]::GetFullPath($match.Groups[1].Value.Trim())
+              $parent = [IO.Path]::GetFullPath($originalTempParent).TrimEnd('\')
               if ([IO.Path]::GetDirectoryName($root) -ine $parent -or [IO.Path]::GetFileName($root) -notmatch '^whitebox-v173-update-integration-[a-zA-Z0-9]+$') { throw 'Diagnostic root is not the exact owned temporary child' }
               if (Test-Path -LiteralPath $root) {
                 if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Diagnostic root is a reparse point' }
