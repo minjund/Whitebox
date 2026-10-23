@@ -3,7 +3,16 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
-## 2.0.0 - 2026-10-22
+## 2.0.1 - 2026-10-23
+
+- Serialize Windows updater helper and bootstrap log writes so concurrent
+  appends cannot overwrite required installation and relaunch records.
+- Persist the helper start record before acknowledging readiness. Logging
+  failures remain fatal while failure cleanup still stops the owned helper.
+- Include the terminal workspace features documented below. The v2.0.0
+  candidate was never published; its immutable tag is retained for audit.
+
+## 2.0.0 - 2026-10-22 (unpublished candidate)
 
 - Publish asynchronously ready terminal process identities so Windows review
   history remains bound to the same live shell through trash and restoration.

@@ -68,11 +68,18 @@ function ownedExecutablePids() {
   const pinned = pins[sourceVersion]; assert(pinned, 'Unsupported official Mac cohort');
   const sourceName = `Whitebox-${sourceVersion}-${process.arch}.dmg`;
   const sourceUrl = `https://github.com/minjund/Whitebox/releases/download/v${sourceVersion}/${sourceName}`;
-  const sourceResponse = await fetch(sourceUrl); assert(sourceResponse.ok);
-  const sourceBytes = Buffer.from(await sourceResponse.arrayBuffer());
+  const sourceDmg = path.join(root,sourceName);
+  // Retry only acquisition of the immutable input, before any packaged attempt.
+  // curl retries transient transport/HTTP failures within a finite budget;
+  // missing assets and mismatched bytes still fail closed below.
+  execFileSync('/usr/bin/curl', [
+    '--fail', '--location', '--retry', '2', '--retry-delay', '1',
+    '--connect-timeout', '15', '--max-time', '90', '--retry-max-time', '180',
+    '--output', sourceDmg, sourceUrl,
+  ], { stdio: 'inherit', timeout: 240000 });
+  const sourceBytes = fs.readFileSync(sourceDmg);
   assert.equal(sourceBytes.length,pinned.size);
   assert.equal(crypto.createHash('sha256').update(sourceBytes).digest('hex'),pinned.sha256);
-  const sourceDmg = path.join(root,sourceName); fs.writeFileSync(sourceDmg,sourceBytes);
   const mount = path.join(root,'source-mount');
   execFileSync('/usr/bin/hdiutil',['attach',sourceDmg,'-nobrowse','-readonly','-mountpoint',mount]);
   try {execFileSync('/usr/bin/ditto',[path.join(mount,'Whitebox.app'),app]);}

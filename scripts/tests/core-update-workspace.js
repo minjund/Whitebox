@@ -1934,6 +1934,11 @@ function registerCliAndUpdateTests(context) {
     assert.deepStrictEqual([...fs.readFileSync(automatic.helperPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
     assert.deepStrictEqual([...fs.readFileSync(automatic.bootstrapPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
     const helperSource = fs.readFileSync(automatic.helperPath, 'utf8');
+    const helperWriter = helperSource.slice(helperSource.indexOf('function Write-UpdateLog('), helperSource.indexOf('function Add-LaunchCandidate(')).trim();
+    const bootstrapWriter = WINDOWS_UPDATE_BOOTSTRAP.slice(WINDOWS_UPDATE_BOOTSTRAP.indexOf('function Write-UpdateLog('), WINDOWS_UPDATE_BOOTSTRAP.indexOf('function Write-BootstrapLog(')).trim();
+    assert.equal(bootstrapWriter, helperWriter, 'Both concurrent writers must use the same exclusive-writer append implementation.');
+    assert.match(helperWriter, /\[IO\.FileShare\]::Read\)/);
+    assert(helperSource.indexOf("Write-UpdateLog ('helperStarted=") < helperSource.indexOf('Move-Item -LiteralPath $readyTemporary'), 'Helper evidence must be persisted before readiness can be acknowledged.');
     assert.match(helperSource, /Set-Content -LiteralPath \$readyTemporary/);
     assert.match(helperSource, /Move-Item -LiteralPath \$readyTemporary -Destination \$ReadyPath -Force/);
     assert.match(helperSource, /helperPid = \$PID; token = \$RendererReadyToken/);
@@ -2014,35 +2019,87 @@ function registerCliAndUpdateTests(context) {
     assert.match(helperSource, /versionMismatch=true/);
     if (process.platform === 'win32') {
       const logWriter = helperSource.slice(helperSource.indexOf('function Write-UpdateLog('), helperSource.indexOf('function Add-LaunchCandidate('));
+      const bootstrapLogWriter = WINDOWS_UPDATE_BOOTSTRAP.slice(WINDOWS_UPDATE_BOOTSTRAP.indexOf('function Write-BootstrapLog('), WINDOWS_UPDATE_BOOTSTRAP.indexOf('# Only failure cleanup'));
       const contentionScript = [
         "$ErrorActionPreference = 'Stop'",
         logWriter,
+        bootstrapLogWriter,
         '$LogPath = $env:WHITEBOX_LOG_TEST_PATH',
         '$signal = $LogPath + ".locked"',
-        '$locker = Start-Job -ArgumentList $LogPath,$signal -ScriptBlock {',
+        '$locker = [PowerShell]::Create()',
+        '$lockScript = {',
         '  param($file,$signal)',
+        '  $ErrorActionPreference = "Stop"',
         '  $handle = [IO.File]::Open($file,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,[IO.FileShare]::None)',
         '  try { [IO.File]::WriteAllText($signal,"locked"); Start-Sleep -Milliseconds 1000 } finally { $handle.Dispose() }',
         '}',
+        '[void]$locker.AddScript($lockScript.ToString()).AddArgument($LogPath).AddArgument($signal)',
+        '$pending = $locker.BeginInvoke()',
         'try {',
         '  $deadline = [DateTime]::UtcNow.AddSeconds(15)',
         '  while (-not (Test-Path -LiteralPath $signal)) { if ([DateTime]::UtcNow -ge $deadline) { throw "Lock holder never became ready" }; Start-Sleep -Milliseconds 20 }',
+        '  Write-Host "PASS contention fixture acquired exclusive file lock"',
         '  Write-UpdateLog "relaunchStarted=true;attempt=1;pid=123"',
-        '  if (-not (Wait-Job $locker -Timeout 10)) { throw "Lock holder did not exit" }',
-        '  Receive-Job $locker -ErrorAction Stop | Out-Null',
+        '  if (-not $pending.AsyncWaitHandle.WaitOne(10000)) { throw "Lock holder did not exit" }',
+        '  $locker.EndInvoke($pending) | Out-Null',
+        '  if ($locker.Streams.Error.Count) { throw ($locker.Streams.Error | Out-String) }',
         '  $handle = [IO.File]::Open($LogPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)',
         '  try {',
         '    $failed = $false',
         '    try { Write-UpdateLog "must-not-appear" } catch [IO.IOException] { $failed = $true }',
         '    if (-not $failed) { throw "Permanent log lock was silently accepted" }',
+        '    $bootstrapFailed = $false',
+        '    try { Write-BootstrapLog "must-not-appear-bootstrap" } catch [IO.IOException] { $bootstrapFailed = $true }',
+        '    if (-not $bootstrapFailed) { throw "Bootstrap silently accepted a permanent log lock" }',
         '  } finally { $handle.Dispose() }',
         '  $expected = "relaunchStarted=true;attempt=1;pid=123" + [Environment]::NewLine',
         '  if ([IO.File]::ReadAllText($LogPath) -cne $expected) { throw "Lost or duplicated helper evidence" }',
-        '} finally { Stop-Job $locker -ErrorAction SilentlyContinue; Remove-Job $locker -Force -ErrorAction SilentlyContinue }',
+        '  Write-Host "PASS helper contention retry, permanent lock rejection and exact log bytes"',
+        '} finally {',
+        '  if (-not $pending.IsCompleted) { $locker.Stop() }',
+        '  $pending.AsyncWaitHandle.Dispose()',
+        '  $locker.Dispose()',
+        '}',
       ].join('\n');
       execFileSync(path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', contentionScript,
-      ], { windowsHide: true, timeout: 40000, env: { ...process.env, WHITEBOX_LOG_TEST_PATH: path.join(temp, 'helper-log-contention.log') } });
+      ], { windowsHide: true, stdio: 'inherit', timeout: 40000, env: { ...process.env, WHITEBOX_LOG_TEST_PATH: path.join(temp, 'helper-log-contention.log') } });
+      const writerSource = Buffer.from(logWriter + '\n' + bootstrapLogWriter).toString('base64');
+      const concurrentScript = [
+        "$ErrorActionPreference = 'Stop'",
+        `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${writerSource}'))`,
+        '$writer = { param($source,$file,$gate,$prefix) $ErrorActionPreference="Stop"; $LogPath=$file; . ([scriptblock]::Create($source)); [void]$gate.WaitOne(); for($i=0;$i -lt 2000;$i++) { if($prefix -eq "H") { Write-UpdateLog ($prefix+":"+$i) } else { Write-BootstrapLog ($prefix+":"+$i) } } }',
+        'for($round=1;$round -le 3;$round++) {',
+        '  $file = $env:WHITEBOX_LOG_TEST_PATH + "." + $round',
+        '  $gate = [Threading.ManualResetEvent]::new($false)',
+        '  $writers = @(); $pending = @()',
+        '  try {',
+        '    foreach($prefix in @("H","B")) {',
+        '      $ps = [PowerShell]::Create()',
+        '      [void]$ps.AddScript($writer.ToString()).AddArgument($source).AddArgument($file).AddArgument($gate).AddArgument($prefix)',
+        '      $writers += $ps; $pending += $ps.BeginInvoke()',
+        '    }',
+        '    [void]$gate.Set()',
+        '    for($j=0;$j -lt 2;$j++) {',
+        '      if(-not $pending[$j].AsyncWaitHandle.WaitOne(10000)) { throw "Concurrent log writer did not finish" }',
+        '      $writers[$j].EndInvoke($pending[$j]) | Out-Null',
+        '      if($writers[$j].Streams.Error.Count) { throw ($writers[$j].Streams.Error | Out-String) }',
+        '    }',
+        '    $lines = @([IO.File]::ReadAllLines($file))',
+        '    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)',
+        '    foreach($line in $lines) { if($line -cnotmatch "^[HB]:[0-9]+$" -or -not $seen.Add($line)) { throw "Corrupted or duplicate log record: $line" } }',
+        '    if($lines.Count -ne 4000) { throw "Expected 4000 complete concurrent log records; found $($lines.Count)" }',
+        '    for($i=0;$i -lt 2000;$i++) { foreach($prefix in @("H","B")) { if(-not $seen.Contains($prefix+":"+$i)) { throw "Lost concurrent log record: $prefix/$i" } } }',
+        '    Write-Host "PASS concurrent exact helper/bootstrap log writers: round=$round; records=4000/4000; no missing, duplicate or corrupted records"',
+        '  } finally {',
+        '    for($j=0;$j -lt $writers.Count;$j++) { if(-not $pending[$j].IsCompleted) { $writers[$j].Stop() }; $pending[$j].AsyncWaitHandle.Dispose(); $writers[$j].Dispose() }',
+        '    $gate.Dispose()',
+        '  }',
+        '}',
+      ].join('\n');
+      execFileSync(path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', concurrentScript,
+      ], { windowsHide: true, stdio: 'inherit', timeout: 40000, env: { ...process.env, WHITEBOX_LOG_TEST_PATH: path.join(temp, 'helper-bootstrap-concurrent.log') } });
       const parserScript = [
         '$helperErrors = $null',
         '$bootstrapErrors = $null',

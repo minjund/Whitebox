@@ -15,26 +15,12 @@ const WINDOWS_UPDATE_BOOTSTRAP_READY_TIMEOUT_MS = 60_000;
 const WINDOWS_UPDATE_HELPER_READY_TIMEOUT_MS = 75_000;
 const WINDOWS_UPDATE_BOOTSTRAP_ACK_TIMEOUT_MS = 15_000;
 
-const WINDOWS_UPDATE_HELPER = `param(
-  [Parameter(Mandatory = $true)][string]$InstallerPath,
-  [Parameter(Mandatory = $true)][int]$ParentPid,
-  [Parameter(Mandatory = $true)][string]$AppPath,
-  [Parameter(Mandatory = $true)][string]$ExpectedVersion,
-  [Parameter(Mandatory = $true)][string]$LogPath,
-  [Parameter(Mandatory = $true)][string]$ReadyPath,
-  [Parameter(Mandatory = $true)][string]$RendererReadyPath,
-  [Parameter(Mandatory = $true)][string]$RendererReadyToken
-)
-
-$ErrorActionPreference = 'Stop'
-$exitCode = -1
-$launchPath = ''
-
-function Write-UpdateLog([string]$Message) {
+// Serialize append offsets across the helper and bootstrap. Readers remain allowed.
+const WINDOWS_UPDATE_LOG_WRITER = `function Write-UpdateLog([string]$Message) {
   $stream = $null
   for ($logAttempt = 0; $logAttempt -lt 40; $logAttempt++) {
     try {
-      $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+      $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
       break
     } catch [IO.IOException] {
       $ioError = $_.Exception
@@ -51,7 +37,24 @@ function Write-UpdateLog([string]$Message) {
   } finally {
     if ($null -ne $stream) { $stream.Dispose() }
   }
-}
+}`;
+
+const WINDOWS_UPDATE_HELPER = `param(
+  [Parameter(Mandatory = $true)][string]$InstallerPath,
+  [Parameter(Mandatory = $true)][int]$ParentPid,
+  [Parameter(Mandatory = $true)][string]$AppPath,
+  [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+  [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$ReadyPath,
+  [Parameter(Mandatory = $true)][string]$RendererReadyPath,
+  [Parameter(Mandatory = $true)][string]$RendererReadyToken
+)
+
+$ErrorActionPreference = 'Stop'
+$exitCode = -1
+$launchPath = ''
+
+${WINDOWS_UPDATE_LOG_WRITER}
 
 function Add-LaunchCandidate([System.Collections.Generic.List[string]]$Candidates, [string]$Candidate) {
   if ([string]::IsNullOrWhiteSpace($Candidate)) { return }
@@ -188,6 +191,7 @@ function Find-InstalledApp([string]$OriginalPath, [string]$Version) {
 }
 
 try {
+  Write-UpdateLog ('helperStarted=true;parentPid=' + $ParentPid + ';expectedVersion=' + $ExpectedVersion)
   $readyTemporary = $ReadyPath + '.' + $PID + '.tmp'
   @{ helperPid = $PID; token = $RendererReadyToken } | ConvertTo-Json -Compress | Set-Content -LiteralPath $readyTemporary -Encoding UTF8
   Move-Item -LiteralPath $readyTemporary -Destination $ReadyPath -Force
@@ -198,7 +202,6 @@ try {
 }
 
 try {
-  Write-UpdateLog ('helperStarted=true;parentPid=' + $ParentPid + ';expectedVersion=' + $ExpectedVersion)
   for ($attempt = 0; $attempt -lt 240; $attempt++) {
     if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
     Start-Sleep -Milliseconds 250
@@ -316,8 +319,15 @@ $ErrorActionPreference = 'Stop'
 $helperProcess = $null
 $helperPidTemporary = ''
 
+${WINDOWS_UPDATE_LOG_WRITER}
+
 function Write-BootstrapLog([string]$Message) {
-  try { $Message | Add-Content -LiteralPath $LogPath -Encoding UTF8 } catch {}
+  Write-UpdateLog $Message
+}
+
+# Only failure cleanup may continue after a log failure; it always exits 42.
+function Write-BootstrapCleanupLog([string]$Message) {
+  try { Write-BootstrapLog $Message } catch { [Console]::Error.WriteLine($_.Exception.Message) }
 }
 
 function Quote-ProcessArgument([string]$Value) {
@@ -339,7 +349,7 @@ function Confirm-HelperExited {
     $helperProcess.Refresh()
     return $helperProcess.HasExited
   } catch {
-    Write-BootstrapLog ('helperExitProbeError=' + $_.Exception.Message)
+    Write-BootstrapCleanupLog ('helperExitProbeError=' + $_.Exception.Message)
     return $false
   }
 }
@@ -349,14 +359,14 @@ function Stop-HelperTree {
   try {
     $taskkillPath = Join-Path $env:SystemRoot 'System32\\taskkill.exe'
     $treeStop = Start-Process -FilePath $taskkillPath -ArgumentList @('/PID', [string]$helperProcess.Id, '/T', '/F') -WindowStyle Hidden -PassThru -Wait
-    Write-BootstrapLog ('helperTreeStopExitCode=' + $treeStop.ExitCode + ';helperPid=' + $helperProcess.Id)
+    Write-BootstrapCleanupLog ('helperTreeStopExitCode=' + $treeStop.ExitCode + ';helperPid=' + $helperProcess.Id)
   } catch {
-    Write-BootstrapLog ('helperTreeStopError=' + $_.Exception.Message)
+    Write-BootstrapCleanupLog ('helperTreeStopError=' + $_.Exception.Message)
   }
   try { [void]$helperProcess.WaitForExit(5000) } catch {}
   if (Confirm-HelperExited) { return $true }
   try { Stop-Process -Id $helperProcess.Id -Force -ErrorAction Stop } catch {
-    Write-BootstrapLog ('helperStopFallbackError=' + $_.Exception.Message)
+    Write-BootstrapCleanupLog ('helperStopFallbackError=' + $_.Exception.Message)
   }
   try { [void]$helperProcess.WaitForExit(5000) } catch {}
   return (Confirm-HelperExited)
@@ -409,7 +419,7 @@ try {
   Write-BootstrapLog ('bootstrapReadyTimeout=true;timeoutMs=${WINDOWS_UPDATE_BOOTSTRAP_READY_TIMEOUT_MS};helperPid=' + $helperProcess.Id)
   throw '업데이트 설치 도우미가 60초 안에 준비되지 않았습니다.'
 } catch {
-  Write-BootstrapLog ('bootstrapError=' + $_.Exception.Message)
+  Write-BootstrapCleanupLog ('bootstrapError=' + $_.Exception.Message)
   if (-not [string]::IsNullOrWhiteSpace($helperPidTemporary)) {
     Remove-Item -LiteralPath $helperPidTemporary -Force -ErrorAction SilentlyContinue
   }
