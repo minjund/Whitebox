@@ -95,6 +95,7 @@ jobs:
           let source = fs.readFileSync(file, 'utf8');
           const digest = value => crypto.createHash('sha256').update(value).digest('hex');
           console.log('DIAG original driver sha256=' + digest(source));
+          source = source.replace(/\r\n/g, '\n');
           console.log('DIAG unchanged product updater sha256=' + digest(fs.readFileSync('src/updateInstaller.js')));
           function once(before, after) {
             if (source.split(before).length !== 2) throw new Error('Diagnostic patch was not unique: ' + before);
@@ -131,7 +132,7 @@ jobs:
           console.log('DIAG instrumented test driver sha256=' + digest(source));
           console.log('DIAG diagnostic only: no release approval; no product/helper/deadline changes');
           const probeFile = process.env.WHITEBOX_DIAGNOSTIC_PROBE_PATH || 'scripts/windows-process-exit-check.js';
-          let probe = fs.readFileSync(probeFile, 'utf8');
+          let probe = fs.readFileSync(probeFile, 'utf8').replace(/\r\n/g, '\n');
           const beforeProbe = "  const result = spawn(powershell,";
           if (probe.split(beforeProbe).length !== 2) throw new Error('Diagnostic process probe anchor was not unique');
           probe = probe.replace(beforeProbe, "  console.log('DIAG_PROBE_BEGIN', new Date().toISOString(), pids);\n" + beforeProbe);
