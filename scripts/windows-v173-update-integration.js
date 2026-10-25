@@ -1069,6 +1069,11 @@ async function main() {
   updateInstallerPaths.add(downloadedTarget);
 
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
+  // Official 2.0.1 opens a workspace shell on first launch and intentionally
+  // keeps a window close in the tray while that shell is active. Prepare the
+  // same authenticated idle-parent fixture used for candidate reinstalls.
+  // Only this pinned source gets this preparation; deadlines remain strict.
+  if (SOURCE_VERSION === '2.0.1') await idleWorkspaceParent();
   activeAppPid = v173ParentPid;
   // Historical sources keep their existing idle fixture. The 2.0 renderer
   // opens a real shell even in capture mode, so the candidate must use its

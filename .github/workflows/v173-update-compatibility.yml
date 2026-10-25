@@ -232,7 +232,9 @@ jobs:
           $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
           if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
           $attempt = 0
-          foreach ($cohort in $cohorts) {
+          $orderedCohorts = @($cohorts | Where-Object { $_.version -ceq $manifest.previousFixed.version }) + @($cohorts | Where-Object { $_.version -cne $manifest.previousFixed.version })
+          if ($orderedCohorts.Count -ne $cohorts.Count) { throw 'Compatibility ordering changed the source cohort count' }
+          foreach ($cohort in $orderedCohorts) {
             $attempt += 1
             $env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version
             Write-Host "Running packaged cohort $attempt/$($cohorts.Count): $env:WHITEBOX_FROZEN_VERSION ($($cohort.installMode))"

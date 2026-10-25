@@ -84,6 +84,20 @@ The full bridge path runs separately for this candidate with fresh state:
 
 ## Required evidence
 
+The latest installed source runs first without dropping any other cohort.
+The official 2.0.1 installer above was downloaded and verified before extracting
+its app.asar (package version 2.0.1). Its main.js SHA-256 is
+2c1ddd10e1172ffff1a9e7c4af68f8a10c4791fd6d9dd6009c03cf8616424bea;
+its renderer/terminal-workspace.js SHA-256 is
+49bd93e7049f3cdf07d2ca56ba0660db2253d639a3a7fa29143e71e96e7b3387.
+The packaged renderer creates a startup shell, and the packaged window-close
+handler retains the app in its tray while background work remains. The
+low-level idle-parent fixture therefore closes only that authenticated source
+workspace's startup shells before requesting graceful window close. This is
+the same preparation used for candidate reinstall; host and shell identity,
+30-second graceful shutdown, relaunch and cleanup requirements remain strict.
+The separate packaged-button scenario continues to preserve a live PTY.
+
 The release record must identify the exact 40-character candidate SHA and Actions
 URLs. The Updater compatibility gate must pass on that candidate, including
 v1.7.3, v1.7.4, v1.7.5 and the official legacy bridge, with no skipped attempts.
