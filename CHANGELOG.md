@@ -3,6 +3,23 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.3 - 2026-10-26
+
+- Lead terminal analyses with a concise conclusion, cited reasons, material
+  uncertainty and one recommended next action. Keep actual alternatives and
+  detailed work records available through disclosures.
+- Apply ASD-STE100 clarity principles in the selected language and enforce
+  task-dependent summary budgets of 220, 450 or 600 characters.
+- Retry an invalid decision brief once, count both calls' usage, and suppress
+  invalid follow-up recommendations. Preserve interruption and session identity
+  checks while a replacement analysis is running.
+- Increase current-request evidence to 12,000 characters, mark long-answer
+  omissions, and improve analysis readability with 15px body text.
+- Verify updates from the official 2.0.1 installer while retaining the pinned
+  1.8.32 and earlier supported compatibility cohorts.
+- Update the locked Electron runtime to 44.9.3 and patch vulnerable undici and
+  fast-uri dependencies; the full dependency audit reports zero vulnerabilities.
+
 ## 2.0.1 - 2026-10-23
 
 - Serialize Windows updater helper and bootstrap log writes so concurrent

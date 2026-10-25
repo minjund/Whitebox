@@ -84,7 +84,7 @@ module.exports = async function budgetChecks() {
   assert.equal(calls.length, 1, 'substantive change receives an explanation');
   assert.match(calls[0].prompt, /"understanding"/);
   assert.match(calls[0].prompt, /omitted/);
-  assert.ok(calls[0].prompt.length < 8500, 'basic evidence plus context-aware instructions is bounded');
+  assert.ok(calls[0].prompt.length < 20000, 'expanded evidence and decision instructions remain bounded');
   assert.equal(tasks.length, 3);
   assert.equal(tasks[2].analysisUsage.total, 120);
   assert.equal(snapshots, 0, 'all explanations use collected evidence only');

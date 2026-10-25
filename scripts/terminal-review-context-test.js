@@ -64,7 +64,7 @@ module.exports = async function contextChecks() {
   assert.match(prompt, /롤백했습니다/);
   assert.match(prompt, /순서대로 진행해줘/);
   assert.match(prompt, /latest restriction overrides/);
-  assert.ok(prompt.length < 16000, 'separate context and execution budgets remain bounded');
+  assert.ok(prompt.length < 27000, 'expanded evidence, separate context and decision instructions remain bounded');
   assert.deepEqual(task.reviewContext, completion.context);
   assert.deepEqual(task.assistantUpdates, completion.updates);
   completion.context = { items: [{ request: 'UNRELATED_FUTURE_CONTEXT' }] };

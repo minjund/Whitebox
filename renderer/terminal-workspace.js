@@ -790,15 +790,16 @@
         const checks = task.reviewSchema === 3
           ? `${task.verification ? `<div class="wb-task-section"><h3>${t('확인된 근거')}</h3><p>${esc(task.verification)}</p></div>` : ''}${task.unverified?.length ? `<div class="wb-remaining"><h3>${t('완료 판단에 필요한 확인')}</h3>${task.unverified.map(item => `<p><strong>${esc(item.item)}</strong><br/>${esc(item.reason)}</p>`).join('')}</div>` : ''}`
           : `${task.verification ? `<div class="wb-task-section"><h3>${t('기록에서 확인한 범위')}</h3><p>${esc(task.verification)}</p></div>` : ''}`;
+        const brief = window.WhiteboxReviewDecision.render(task, { t, esc, taskKey });
         const card = msg`<article class="wb-task">
           <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(task.summary || task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
           ${lifecycle}
-          <div class="wb-request-comparison"><div class="wb-comparison-row"><h3>요청한 일</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>실제로 한 일</h3><p>${esc(task.actual)}</p></div></div>
-          ${task.why ? msg`<div class="wb-task-section"><h3>왜 이렇게 바꿨나요?</h3><p>${esc(task.why)}</p></div>` : ''}
-          ${checks}
+          ${brief || `<div class="wb-request-comparison"><div class="wb-comparison-row"><h3>${t('요청한 일')}</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}`}
+          ${task.decisionIssues?.length ? `<p class="wb-evidence-limit">${t('판단 요약을 확인하지 못해 작업 기록을 표시합니다.')}</p>` : ''}
           ${task.nextStep ? msg`<button class="wb-next-request" data-followup="${esc(taskKey)}">확인할 내용으로 다음 요청 준비</button>` : ''}
           <details class="wb-task-details" data-review-request="${esc(`details:${taskKey}`)}"><summary>요청과 분석 기록</summary>
             <div class="wb-task-section"><h3>내가 보낸 요청</h3><p>${esc(task.request)}</p></div>
+            ${brief ? `<div class="wb-task-section"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}<div class="wb-task-section"><h3>${t('판단의 근거 기록')}</h3>${task.decision.reasons.map(reason => `<blockquote>${esc(reason.evidenceQuote)}</blockquote>`).join('')}</div>` : ''}
             <div class="wb-verdict ${alignment}"><span class="wb-check-label">요청 충족 여부</span><strong>${label}</strong><p>${esc(task.explanation)}</p></div>
             ${task.understanding ? msg`<div class="wb-task-section"><h3>어떻게 동작하나요?</h3><p>${esc(task.understanding)}</p></div>` : ''}
             ${task.impact ? msg`<div class="wb-task-section"><h3>사용자에게 어떤 영향이 있나요?</h3><p>${esc(task.impact)}</p></div>` : ''}
