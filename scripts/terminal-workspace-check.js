@@ -30,6 +30,7 @@ app.whenReady().then(async () => {
   let workspaces = [{ name: 'Whitebox test', path: profile }, { name: 'Other project', path: otherProject }];
   let analysisStamp = 'first', analysisRevision = 1, accountUsageCalls = 0;
   let reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
+  let forcedReviewCalls = 0;
   const initialAvailableUpdate = { status: 'available', currentVersion: '2.0.0', latestVersion: '2.0.1', installMode: 'automatic', asset: { name: 'fixture-installer' }, notes: '<script>release notes stay text</script>', checkedAt: '2026-10-22T08:00:00Z' };
   let bootstrapUpdate = { status: 'checking', currentVersion: '2.0.0' }, bootstrapPush = initialAvailableUpdate;
   let updateCheckCalls = 0, updateInstallCalls = 0, releasePageCalls = 0, updateCheckFailure = '', finishUpdateInstall;
@@ -61,6 +62,7 @@ app.whenReady().then(async () => {
     ipcMain.removeHandler('terminals:get');
     ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
     ipcMain.handle('terminals:review', (_event, payload) => {
+      if (payload.force) forcedReviewCalls++;
       if (payload.enabled === false) return { state: 'paused', provider: 'claude' };
       analysisOptions = payload.analysis;
       if (payload.detail) lastDetail = payload.detail;
@@ -76,6 +78,17 @@ app.whenReady().then(async () => {
     const evaluate = async expression => {
       try { return await win.webContents.executeJavaScript(expression, true); }
       catch (error) { throw new Error(`${expression}: ${error.message}; console=${JSON.stringify(errors)}`); }
+    };
+    const forceCapture = async () => {
+      // The production capture deliberately declines a concurrent call. Await a
+      // force request actually reaching this fixture before asserting its UI.
+      for (let attempt = 0; attempt < 150; attempt++) {
+        const before = forcedReviewCalls;
+        await evaluate('WhiteboxWorkspace.captureReviews(true)');
+        if (forcedReviewCalls > before) return;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error('Forced review never reached the fixture');
     };
     const waitFor = async (expression, label) => {
       for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -174,6 +187,14 @@ app.whenReady().then(async () => {
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
     const second = manager.list().find(item => item.id !== first.id);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
+    if (process.platform !== 'win32') {
+      // Keep the fixture independent of personal login-shell prompt themes.
+      // Long cwd prompts redraw multiple rows during rapid pane resizing.
+      for (const session of [first, second]) {
+        await manager.command(session.id, "PS1='WB> '; RPS1=''");
+        await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(session.id)}).trim().endsWith('WB>')`, 'deterministic fixture shell prompt');
+      }
+    }
     const command = marker => process.platform === 'win32' ? `Write-Output '${marker} 한글 입력 확인'\r` : `printf '%s\\n' '${marker} 한글 입력 확인'\r`;
     await manager.write(first.id, command('ONE_ONLY'));
     await manager.write(second.id, command('TWO_ONLY'));
@@ -183,7 +204,8 @@ app.whenReady().then(async () => {
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".wb-panel-heading strong")).map(node => node.textContent)'), ['패널'], 'panels use the approved plain label');
     assert.equal(await evaluate('document.querySelector(".wb-panel-heading small")'), null, 'panel headings do not repeat terminal counts or state');
     assert.equal(await evaluate('document.querySelectorAll("#wbTabs [data-pane-tab]").length'), 2, 'tabs select terminals within the current panel');
-    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
+    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
+    await forceCapture();
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), first.id);
     assert.match(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 1/u);
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
@@ -251,8 +273,8 @@ app.whenReady().then(async () => {
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), /백그라운드 실행/u);
     // Background progress comes from an actual delayed command, with no visible terminal.
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
-    await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output 'HIDDEN_PROGRESS'\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
-    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
+    await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 0);
     assert.equal(await drag(second.id, `[data-drop-panel="${originalPanel}"]`), true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 1, 'empty source panel is removed');
@@ -272,19 +294,22 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2);
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
     assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identityBeforeMoves, 'moves never create, restart, or kill a PTY');
-    assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('HIDDEN_PROGRESS')`), true);
-    assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).includes('TWO_ONLY')`), true);
+    // Reparenting can rehydrate the view asynchronously and wrap saved lines at
+    // the new pane width. Require both output markers after hydration completes.
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'background output survives panel moves');
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).split('\\n').join('').includes('TWO_ONLY')`, 'second terminal output survives panel moves');
     console.log('PASS panel hierarchy, detach/join, directional and cross-project drag, keyboard move, same PTY identity/buffer, hidden background output');
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
-    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true); WhiteboxWorkspace.captureReviews(true)`);
+    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
     assert.ok(captured.get(first.id).includes('ONE_ONLY'));
     assert.ok(!captured.get(first.id).includes('TWO_ONLY'));
     const originalSecondName = await evaluate(`document.querySelector('[data-instance="${second.id}"] strong').textContent`);
     requestSummary = '팀 티켓 스킬 플러그인 세팅';
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^팀 티켓 스킬 플러그인 세팅 ONE_ONLY/u, 'analysis title immediately names its terminal');
     assert.match(await evaluate(`document.querySelector('[data-terminal-id="${first.id}"] .wb-pane-title').textContent`), /^팀 티켓 스킬 플러그인 세팅 ONE_ONLY/u);
     assert.equal(await evaluate(`document.querySelector('[data-instance="${second.id}"] strong').textContent`), originalSecondName, 'another terminal keeps its own name');
@@ -319,7 +344,8 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '1,400 토큰');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /요청한 일.*실제로 한 일.*왜 이렇게 바꿨나요.*확인된 근거/su);
     assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), false, 'technical details start collapsed');
-    await evaluate('document.querySelector(".wb-task-details > summary").click(); WhiteboxWorkspace.captureReviews(true)');
+    await evaluate('document.querySelector(".wb-task-details > summary").click()');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), true, 'polling preserves expanded detail');
     const beforeFollowup = manager.get(first.id, true).output;
     await evaluate('document.querySelector("[data-followup]").click()');
@@ -333,7 +359,7 @@ app.whenReady().then(async () => {
     requestSummary = '다음 요청 제목';
     analysisStamp = 'second';
     reportedUsage = { input: 2400, output: 400, cachedInput: 0, cacheWrite: 0, total: 2800 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '2,800 토큰');
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^다음 요청 제목 ONE_ONLY/u, 'next analyzed request updates the terminal name');
     assert.equal(await evaluate('document.querySelector(".wb-history:not([open]) > summary .wb-analysis-tokens").textContent'), '1,400 토큰', 'collapsed history displays its own analysis cost');
@@ -341,11 +367,13 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(".wb-current-review").hidden'), true);
     assert.equal(await evaluate('document.querySelector(".wb-review-history").hidden'), false);
     assert.equal(await evaluate('document.querySelectorAll(".wb-review-history .wb-history").length'), 1);
-    await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
+    await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click()`);
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector("[data-review-view=current]").getAttribute("aria-pressed")'), 'true', 'changing terminals returns to its current review');
     assert.match(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 2/u);
     assert.match(await evaluate('document.querySelector(".wb-current-review").textContent'), /TWO_ONLY/u);
-    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
+    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
+    await forceCapture();
     const beforeReviewToggle = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
     await evaluate('document.querySelector("#wbReviewAuto").click()');
     await waitFor('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed") === "false"', 'header disables automatic review');
@@ -353,23 +381,24 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("#wbReviewAuto").click()');
     await waitFor('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed") === "true"', 'header enables automatic review');
     assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), beforeReviewToggle, 'review navigation never replaces terminal processes');
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'polling does not duplicate saved analysis');
     analysisRevision++;
     reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'reanalysis remains inside the same request');
     assert.equal(await evaluate('document.querySelectorAll(".wb-analysis-run").length'), 2, 'each reanalysis cost remains available in details');
     assert.match(await evaluate('document.querySelector(".wb-analysis-tokens").title'), /입력 1,200 · 출력 200/u);
     reportedUsage = null;
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '토큰 미제공');
     reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     await evaluate('document.querySelector("[data-action=settings]").click()');
     await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
     await evaluate('document.querySelector("#wbClaudeModel").value="sonnet"; document.querySelector("#wbClaudeModel").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbSettings").close(); WhiteboxWorkspace.captureReviews(true)');
+    await evaluate('document.querySelector("#wbSettings").close()');
+    await forceCapture();
     assert.equal(analysisOptions.provider, 'claude');
     assert.equal(analysisOptions.models.claude, 'sonnet');
     assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true);
@@ -380,32 +409,33 @@ app.whenReady().then(async () => {
     assert.equal(lastDetail, undefined);
     assert.equal(await evaluate('document.querySelector(".wb-task-details").contains(document.querySelector(".wb-task-section h3"))'), false);
     unverified = [{ item: '화면에 요청한 문구가 보이는지', reason: '사용자가 요청한 표시 변경의 완료 여부에 필요해요.' }];
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /완료 판단에 필요한 확인.*화면에 요청한 문구가/su);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /외부 원문 대조·독립 실행 검증|결과 수신은 작업 성공|내용 정확성/u);
     unverified = [];
     toolEvidence = { source: 'unavailable', items: [], omitted: 0 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector(".wb-task .wb-remaining")'), null, 'no unrelated unknowns inserted');
     lifecycle = 'interrupted';
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /중단됨 · 수행 기록/u);
     lifecycle = 'completed';
 
     assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'detail action keeps task history');
     recordOnly = true;
     reportedUsage = { input: 0, output: 0, cachedInput: 0, cacheWrite: 0, total: 0 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /0 토큰 · 호출 없음/u);
     assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /AI 분석 없이 기록/u);
     recordOnly = false;
     reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
 
     await evaluate('document.querySelector("[data-action=settings]").click()');
     await evaluate('document.querySelector("#wbAnalysisProvider").value="codex"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
     await evaluate('document.querySelector("#wbCodexModel").value="fixture-model"; document.querySelector("#wbCodexModel").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbSettings").close(); WhiteboxWorkspace.captureReviews(true)');
+    await evaluate('document.querySelector("#wbSettings").close()');
+    await forceCapture();
     assert.equal(analysisOptions.models.codex, 'fixture-model');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 0);
     assert.equal(await evaluate('document.querySelectorAll("#wbSpaces [data-instance]").length'), 2, 'project terminals are nested below their project');
@@ -427,7 +457,7 @@ app.whenReady().then(async () => {
     recordOnly = true; deferred = true;
     for (const pendingState of ['awaiting-answer', 'collecting', 'reviewing']) {
       reviewState = pendingState;
-      await evaluate('WhiteboxWorkspace.captureReviews(true)');
+      await forceCapture();
       assert.equal(await evaluate('document.querySelector("#wbReviewActivity").textContent'), '분석중…');
       assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /DEFERRED_USER_MESSAGE|근거가 확보되면 분석합니다|0 토큰 · 호출 없음/u, 'pending bookkeeping is not an analysis card');
       assert.equal(await evaluate('document.querySelector(".wb-record-only")'), null);
@@ -468,7 +498,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1450, 900);
     await waitFor('Math.abs(document.querySelector(".wb-main").getBoundingClientRect().width - (innerWidth - document.querySelector(".wb-sidebar").getBoundingClientRect().width - document.querySelector("#wbReview").getBoundingClientRect().width)) <= 1', 'desktop three-column layout restored');
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     const screenshot = process.env.WHITEBOX_WORKSPACE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-v2-workspace.png');
     fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG());
     console.log(`SCREENSHOT ${screenshot}`);
@@ -595,16 +625,26 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32') {
       const inputId = manager.list()[0].id;
       await manager.write(inputId, "printf '\\n› TURN_BOUNDARY_FIXTURE'; read wb_fixture_input\r");
-      await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(inputId)}).includes('› TURN_BOUNDARY_FIXTURE')`, 'submitted request fixture');
+      // The echoed printf command contains the marker before read is ready.
+      // Wait for the rendered input prompt that the production parser sees.
+      await waitFor(`WhiteboxTerminalReviewTurns.submittedPrompt(WhiteboxTerminal.readTerminal(${JSON.stringify(inputId)})) === 'TURN_BOUNDARY_FIXTURE'`, 'submitted request fixture');
+      reviewState = 'watching';
+      await forceCapture(); // Model an identified CLI, not an ordinary shell.
       await evaluate(`WhiteboxTerminal.focusTerminal(${JSON.stringify(inputId)})`);
-      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
-      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      // sendInputEvent requires a focused native window. CDP delivers trusted
+      // key events to this hidden fixture without taking the user's focus.
+      win.webContents.debugger.attach('1.3');
+      try {
+        for (const type of ['keyDown', 'keyUp']) await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+        });
+      } finally { win.webContents.debugger.detach(); }
       for (let attempt = 0; attempt < 40 && !lastSubmission; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
       assert.equal(lastSubmission?.request, 'TURN_BOUNDARY_FIXTURE', 'real terminal Enter sends a turn boundary to review');
       assert.ok(Number.isFinite(lastSubmission.at), 'submission records its time before terminal output arrives');
     }
     reviewState = 'awaiting-answer';
-    await evaluate('WhiteboxWorkspace.captureReviews()');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").textContent'), '', 'first pending request shows only the activity indicator');
     assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
@@ -618,14 +658,14 @@ app.whenReady().then(async () => {
       await waitFor(`Boolean(window.WhiteboxWorkspace) && document.querySelector('[data-action=settings]').textContent.includes(${JSON.stringify(label)})`, 'language switch');
       assert.equal(await evaluate(`WhiteboxWorkspaceI18n.msg(['내 요청 ', ''], '사용자 원문')`), ({en:'Your request 사용자 원문','zh-CN':'您的请求 사용자 원문',ko:'내 요청 사용자 원문'})[locale], 'interpolated user content is never translated');
       assert.deepEqual(manager.list().map(item => item.pid).sort(), localePids, 'language change preserves live terminal processes');
-      await evaluate('WhiteboxWorkspace.captureReviews(true)');
+      await forceCapture();
       assert.equal(analysisOptions.locale, locale);
     }
     assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-separator").length'), 1);
     assert.equal(await evaluate('document.querySelector(".wb-sidebar-separator").getBoundingClientRect().height'), 1);
     assert.notEqual(await evaluate('getComputedStyle(document.querySelector(".wb-sidebar-separator")).backgroundColor'), 'rgba(0, 0, 0, 0)');
     assert.equal(await evaluate(`WhiteboxWorkspaceI18n.msg(['내 요청 ', ''], '사용자 원문')`), '내 요청 사용자 원문');
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.equal(await evaluate('document.querySelector("[data-action=collaboration], #wbCollaboration") === null'), true, 'same-panel collaboration has no setup button or dialog');
     assert.equal(collaborationPayload.operation, 'sync');
     assert.ok(collaborationPayload.groups.length > 0);
@@ -657,11 +697,11 @@ app.whenReady().then(async () => {
     try {
       await host.start(); await client.connect();
       control = new TerminalCollaboration({ manager: () => client, directory: path.join(profile, 'terminal-collaboration'), monitor: { scan: () => ({ available: true, processes: [] }) } });
-      await evaluate('WhiteboxWorkspace.captureReviews(true)');
+      await forceCapture();
       await control.sync(collaborationPayload);
       const id = await evaluate('WhiteboxWorkspace.getState().activeId');
       await waitFor(` /[>%$#]\\s*$/.test(WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).trimEnd())`, 'new shell startup prompt before socket input');
-      await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
+      await forceCapture(); await control.sync(collaborationPayload);
       const before = await client.get(id, false);
       const opts = { directory: control.directory };
       const commandText = process.platform === 'win32' ? 'Write-Output "PANEL_ENV=$env:WHITEBOX_SURFACE_ID"' : 'printf "PANEL_ENV=%s\\n" "$WHITEBOX_SURFACE_ID"';
@@ -670,7 +710,7 @@ app.whenReady().then(async () => {
       // acknowledgement, identity errors and accepted sends are never replayed.
       let submitted = false, rejectedFrame;
       for (let attempt = 0; attempt < 150 && !submitted; attempt++) {
-        await evaluate('WhiteboxWorkspace.captureReviews(true)');
+        await forceCapture();
         await control.sync(collaborationPayload);
         try {
           await panelCommand(['send', '--source', id, '--surface', id, '--', commandText + '\n'], opts);
@@ -683,7 +723,7 @@ app.whenReady().then(async () => {
       }
       if (!submitted) throw rejectedFrame;
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env');
-      await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
+      await forceCapture(); await control.sync(collaborationPayload);
       const screen = await panelCommand(['read-screen', '--source', id, '--surface', id, '--json'], opts);
       assert.ok(screen.text.includes('PANEL_ENV=' + id));
       const after = await client.get(id, false);

@@ -398,7 +398,16 @@ html[data-workspace="terminal"] body > :not(#terminalWorkspace) { display: none 
 .wb-analysis-tokens { padding: 3px 5px; font-size: 11px; border-radius: 4px; }
 .wb-task-section { margin-top: 17px; }
 #terminalWorkspace .wb-task h3 { font-size: 12px; font-weight: 500; margin-bottom: 7px; }
-.wb-task p { font-size: 12px; line-height: 1.85; }
+.wb-task p { font-size: 15px; line-height: 1.8; text-wrap: pretty; }
+.wb-decision-reasons { padding-left: 20px; margin: 0; font-size: 15px; line-height: 1.8; }
+.wb-decision-reasons li + li { margin-top: 7px; }
+.wb-decision-conclusion p { font-weight: 550; }
+.wb-decision-caution { border-left: 2px solid var(--wb-muted); padding-left: 12px; }
+.wb-decision-action p + p { margin-top: 7px; }
+.wb-decision .wb-decision-condition { color: var(--wb-muted); font-size: 14px; }
+.wb-task blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--wb-line); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+#terminalWorkspace .wb-task h2 { text-wrap: balance; }
+.wb-task-details > summary { min-height: 40px; }
 .wb-task > .wb-request { margin-bottom: 14px; }
 .wb-task-time { margin: 5px 0 12px; font-size: 11px; }
 .wb-request-comparison { border: 1px solid var(--wb-line); border-radius: 6px; overflow: hidden; margin: 14px 0 17px; }

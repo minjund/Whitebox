@@ -10,6 +10,7 @@ const MAX_READ = 2 * 1024 * 1024;
 const { addCall, addResult, toolEvidence } = require('./terminalReviewTools');
 const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = require('./terminalReviewContext');
 const { acknowledgement } = require('./terminalReviewPolicy');
+const { bounded } = require('./terminalReviewBudget');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.filter(item => ['text', 'input_text', 'output_text'].includes(item?.type)).map(item => String(item.text || '')).join('\n') : '';
@@ -93,7 +94,7 @@ function applyCodexRow(state, row) {
 
 function project(state, idle = true) {
   const completed = state.complete && idle;
-  const evidence = state.requestId && state.answer ? `USER:\n${String(state.request).slice(0, 8000)}\n\nASSISTANT (${completed ? 'completed answer' : 'current report'}):\n${String(state.answer).slice(-16000)}` : '';
+  const evidence = state.requestId && state.answer ? `USER:\n${String(state.request).slice(0, 8000)}\n\nASSISTANT (${completed ? 'completed answer' : 'current report'}):\n${bounded(state.answer, 16000)}` : '';
   return { available: true, state: state.aborted ? 'interrupted' : completed ? 'completed' : idle ? 'unconfirmed' : 'working',
     request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
