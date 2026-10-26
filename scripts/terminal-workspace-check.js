@@ -744,6 +744,7 @@ app.whenReady().then(async () => {
     })()`);
     await waitFor('!WhiteboxWorkspace.getState().busy && Boolean(document.querySelector("#wbCanvas [data-retry-terminal]"))', 'failed mount retains a retry control');
     const failedMountId = await evaluate('WhiteboxWorkspace.getState().activeId');
+    await waitFor(`WhiteboxWorkspace.getState().sessions.some(session => session.id === ${JSON.stringify(failedMountId)} && Number.isSafeInteger(session.pid) && session.pid > 0)`, 'failed mount still observes the asynchronously published shell PID');
     const failedMountPid = manager.get(failedMountId).pid;
     assert.equal(manager.list().length, beforeMountFailure + 1, 'failed mount preserves its one actual session');
     assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label")'), '연결 확인 필요');

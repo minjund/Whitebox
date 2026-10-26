@@ -567,6 +567,11 @@
       const mounted = ensurePane(session);
       renderLayout(false);
       await mounted;
+      // Keep the 2.0.3 reconciliation: ConPTY may publish its PID while the
+      // renderer is still mounting, before its state listener is registered.
+      const current = await api.terminalGet(session.id);
+      if (current?.creationId === session.creationId) sessions.set(session.id, current);
+      refreshPaneChrome(); renderInstances();
       if (tab() === next) activeFocus();
     } catch (error) {
       if (!created && !splitting) {
