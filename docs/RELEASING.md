@@ -84,6 +84,11 @@ from every frozen source cohort with fresh state. It also verifies and executes
 the official v1.6.3 installer and immutable official v1.6.23 bridge as the representative
 full legacy path; all 19 published LoadToAgent packages were separately proven
 to contain byte-identical channel, trust, selector, and automatic-name logic.
+The pinned official 2.0.1 and 2.0.3 sources use the authenticated production
+terminal host for the idle-parent scenario. The fixture closes only its fresh
+startup workspace shells before requesting a normal window close; app exit,
+helper acknowledgement, relaunch and cleanup deadlines remain strict. The
+separate packaged-button scenario still proves preservation of a live PTY.
 For an otherwise unmatched release change, dispatch it manually with the
 complete 40-character candidate SHA. Repository rules must require the stable
 final check, and all four packaged attempts must run again in the tag release
