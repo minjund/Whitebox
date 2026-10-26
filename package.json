@@ -119,7 +119,7 @@
   },
   "dependencies": {
     "@crunchloop/ghostty-web": "0.4.6",
-    "node-pty": "1.2.0-beta.14"
+    "node-pty": "1.2.0-beta.18"
   },
   "peerDependencies": {
     "electron": "^44.3.0"
