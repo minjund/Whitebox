@@ -275,7 +275,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'dragging out creates an independent panel');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
     assert.equal(await evaluate(`originalTerminalNode === document.querySelector('[data-terminal-id="${second.id}"]')`), true, 'moving reuses terminal DOM and buffer');
-    assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), /입력 대기/u);
+    assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), process.platform === 'win32' ? /작업 상태 확인 중/u : /입력 대기/u);
     // Background progress comes from an actual delayed command, with no visible terminal.
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
@@ -477,6 +477,12 @@ app.whenReady().then(async () => {
     await evaluate("document.querySelector('[data-add-panel-terminal]').click()");
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length === 3 && document.querySelectorAll("#wbCanvas canvas").length === 3', 'default new terminal joins current panel and finishes connecting');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
+    // A mounted engine can still be fitting its canvas after the visible split
+    // changes. Check the finished geometry rather than the first paint.
+    await waitFor(`Array.from(document.querySelectorAll('#wbCanvas .wb-terminal-mount')).every(node => {
+      const r = node.getBoundingClientRect(), c = node.querySelector('canvas')?.getBoundingClientRect();
+      return r.width > 100 && r.height > 100 && c?.width > 100 && c?.height > 80;
+    })`, 'all three terminal canvases finish fitting their visible panes');
     const geometry = await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-terminal-mount')).map(node => { const r = node.getBoundingClientRect(); const c = node.querySelector('canvas')?.getBoundingClientRect(); return {width:r.width,height:r.height,canvasWidth:c?.width,canvasHeight:c?.height}; })`);
     assert.ok(geometry.every(item => item.width > 100 && item.height > 100 && item.canvasWidth > 100 && item.canvasHeight > 80), JSON.stringify(geometry));
     const initialPids = manager.list().map(item => item.pid).sort();
