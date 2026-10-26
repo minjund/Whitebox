@@ -6,6 +6,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const runFile = promisify(execFile);
+const { ReviewEvidenceIndex } = require('./terminalReviewEvidence');
 const MAX_READ = 2 * 1024 * 1024;
 const { addCall, addResult, toolEvidence } = require('./terminalReviewTools');
 const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = require('./terminalReviewContext');
@@ -107,7 +108,7 @@ function project(state, idle = true) {
 class TerminalReviewCompletion {
   constructor({ claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), platform = process.platform, execute = runFile } = {}) {
     this.claudeHome = claudeHome; this.codexHome = codexHome; this.platform = platform; this.execute = execute;
-    this.logs = new Map(); this.paths = new Map();
+    this.logs = new Map(); this.paths = new Map(); this.evidence = new ReviewEvidenceIndex();
   }
 
   async logState(file, provider, sessionId = '') {
@@ -115,29 +116,62 @@ class TerminalReviewCompletion {
     let record = this.logs.get(file);
     if (record && record.size === stat.size && record.mtime === stat.mtimeMs) return record.state;
     const continuation = record && record.ino === stat.ino && stat.size > record.size && stat.size - record.size <= MAX_READ && record.sessionId === sessionId;
-    const start = continuation ? Math.max(record.size, stat.size - MAX_READ) : Math.max(0, stat.size - MAX_READ);
+    const start = continuation ? Math.max(record.size, stat.size - MAX_READ) : Math.max(0, stat.size - 32 * 1024 * 1024);
+    if (!continuation) this.evidence.reset(file);
     const handle = await fs.open(file, 'r');
     let bytes;
     try {
       bytes = Buffer.alloc(stat.size - start);
       const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
       if (bytesRead !== bytes.length) throw new Error('Conversation changed while reading');
+      const after = await handle.stat();
+      if (after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('Conversation changed while reading');
     }
     finally { await handle.close(); }
     let data = continuation ? Buffer.concat([record.carry, bytes]) : bytes;
-    if (start > 0 && !continuation) data = data.subarray(data.indexOf(10) + 1);
+    let offset = continuation ? record.size - record.carry.length : start;
+    if (start > 0 && !continuation) { const skip = data.indexOf(10) + 1; offset += skip; data = data.subarray(skip); }
     const boundary = data.lastIndexOf(10);
     const carry = Buffer.from(data.subarray(boundary + 1));
     const lines = data.subarray(0, boundary + 1).toString('utf8').split('\n');
     const state = continuation ? { ...record.state } : {};
     for (const line of lines) {
+      const bytes = Buffer.from(line, 'utf8'), rowOffset = offset; offset += bytes.length + 1;
       let row; try { row = JSON.parse(line); } catch { continue; }
       if (provider === 'claude') applyClaudeRow(state, row, sessionId); else applyCodexRow(state, row);
+      this.evidence.add(file, stat, provider, sessionId, state.requestId, row, rowOffset, bytes);
     }
+    state.source = { file, requestId: state.requestId, fingerprint: this.evidence.manifest(file, state.requestId).fingerprint, skippedBytes: continuation ? record?.state?.source?.skippedBytes || 0 : start };
     record = { size: stat.size, mtime: stat.mtimeMs, ino: stat.ino, carry, state, sessionId };
     this.logs.set(file, record);
     if (this.logs.size > 64) this.logs.delete(this.logs.keys().next().value);
     return state;
+  }
+
+  async prepareEvidence(source, context) {
+    if (!source) return null;
+    const current = await this.evidence.prepare(source.file, source.requestId);
+    const prior = [];
+    for (const item of (context?.items || []).slice(-6)) {
+      if (!item.requestId || item.requestId === source.requestId) continue;
+      const records = this.evidence.manifest(source.file, item.requestId).records.filter(record => record.critical && record.role !== 'user');
+      if (records.length) prior.push(...await this.evidence.retrieve(source.file, item.requestId, records.sort((a, b) => Number(b.role === 'tool') - Number(a.role === 'tool')).slice(0, 1).map(record => record.id), 1200));
+    }
+    const allowed = new Set([...(context?.items || []), ...(context?.conditions || [])].map(item => item.requestId).filter(Boolean));
+    const linkedRecords = [...allowed].flatMap(requestId => this.evidence.manifest(source.file, requestId).records)
+      .filter(record => record.critical).slice(-64).map(({ id, requestId, role }) => ({ id, requestId, role }));
+    return { ...current, prior, linkedRecords, skippedBytes: source.skippedBytes || 0 };
+  }
+  async retrieveEvidence(source, ids, context) {
+    if (!source) return [];
+    const allowed = new Set([source.requestId, ...[...(context?.items || []), ...(context?.conditions || [])].map(item => item.requestId)]);
+    const indexed = this.evidence.sources.get(source.file)?.records || [];
+    const results = [];
+    for (const id of [...new Set(ids)].slice(0, 4)) {
+      const record = indexed.find(item => item.id === id && allowed.has(item.requestId));
+      results.push(...await this.evidence.retrieve(source.file, record?.requestId || source.requestId, [id], Math.max(0, 8000 - results.reduce((sum, item) => sum + (item.text?.length || 0), 0))));
+    }
+    return results;
   }
 
   async observe(child) {
@@ -157,7 +191,7 @@ class TerminalReviewCompletion {
         const finishedWithBackgroundShell = current.status === 'shell'
           && Number.isFinite(state.turnFinishedAt) && state.turnFinishedAt >= state.completedAt
           && Number(current.statusUpdatedAt) >= state.turnFinishedAt;
-        return { ...project(state, current.status === 'idle' || finishedWithBackgroundShell), conversationId: metadata.sessionId };
+        return { ...project(state, current.status === 'idle' || finishedWithBackgroundShell), conversationId: metadata.sessionId, source: state.source };
       }
       if (child.provider === 'codex' && ['darwin', 'linux'].includes(this.platform)) {
         const key = `${child.pid}:${child.startedAt}`;
@@ -172,7 +206,7 @@ class TerminalReviewCompletion {
           if (this.paths.size > 64) this.paths.delete(this.paths.keys().next().value);
         }
         const state = await this.logState(owned.file, 'codex');
-        return { ...project(state, Boolean(state.complete)), conversationId: path.basename(owned.file) };
+        return { ...project(state, Boolean(state.complete)), conversationId: path.basename(owned.file), source: state.source };
       }
     } catch { /* Unknown versions, missing metadata and ambiguous identity fall back to screen signals. */ }
     return { available: false };

@@ -5,10 +5,9 @@
 const limits = { simple: 220, standard: 450, complex: 600 };
 const text = value => typeof value === 'string' ? value.trim() : '';
 
-const decisionInstructions = `Add a decision object to the task:
-"decision":{"complexity":"simple|standard|complex","conclusion":"current result and what can be decided now","reasons":[{"text":"reason supporting the judgment","evidenceQuote":"exact CURRENT evidence substring"}],"caution":"decision-changing uncertainty or empty","action":{"kind":"finish|verify|choose|continue","text":"one recommended next action","why":"why this action is useful now","request":"ready-to-send follow-up request, or empty for finish"},"alternatives":[{"option":"real alternative","tradeoff":"benefit and cost","when":"condition that makes this preferable"}]}.
-First establish the observed result and limits, then the decision that is actually needed, then the smallest useful action. Separate facts, reported claims and advice. Reasons need 1-3 exact CURRENT evidence quotes; quotes show provenance, not independent proof. Do not invent choices or ask questions answerable from the supplied evidence. Compare at most 3 real alternatives ONLY for an actual unresolved choice, otherwise use []. Explain what would change the recommendation. Missing evidence calls for a targeted check, never a confident completion claim. If relevant unverified requirements or omitted evidence could change the decision, put that limitation in caution, not only in details. Do not finish interrupted or in-progress work. Finish is valid when no further action is needed; its request must be empty. Other actions require a concrete request that stays within the user's goal. A recommendation is not authorization to execute it.
-Keep the first-screen text (conclusion + reasons.text + caution + action.text + action.why) within 220 characters for simple, 450 for standard, 600 for complex tasks, in the requested language. These are maxima, not quotas. Use fewer words when possible. Put technical detail in understanding/verification and alternatives; do not repeat the same explanation across fields. Keep conclusion <=180, each reason <=120, caution <=160, each action text/why <=120, request <=1000; each alternative field <=100. Choose simple for a small edit or explanation, standard for ordinary work, complex only for interacting tradeoffs. Before returning, check evidence, decisive omissions, duplication, clarity and length. Return only the final JSON, no private reasoning.`;
+const decisionInstructions = `Inside each task, include decision:{"complexity":"simple|standard|complex","conclusion":"what can be decided now","reasons":[{"text":"why this changes the choice","evidenceQuote":"exact record substring"}],"caution":"material uncertainty or empty","action":{"kind":"finish|verify|choose|continue","text":"one useful next action","why":"decision it unlocks","request":"concrete follow-up or empty for finish"},"alternatives":[]}.
+Derive meaning by connecting facts, not restating the work list. Use 1-3 reasons backed by current records or explicitly linked prior checks. Never cite omission markers or reference headers as facts. Finish only completed work with no unverified requirements; finish request is empty. Other actions require a concrete request within the user's goal. Recommendations do not authorize execution. Choose requires 2-3 real alternatives {option,tradeoff,when}; otherwise alternatives is [].
+No repetition across fields. Limits are maxima, not quotas: conclusion 180 chars; reason text 120; caution 160; action text/why 120 each; action request 1000; each alternative field 100; quotes 1000. Total conclusion + reason texts + caution + action text/why <=220 simple, 450 standard, 600 complex. Use less for simple work. If unknown requirements change the decision, state that in caution. Keep facts and model inference distinct.`;
 
 function assessDecision(value, { source, supported, unverified = [], lifecycle = 'completed' }) {
   if (value === undefined) return { decision: null, issues: [] }; // Cached/legacy response.
@@ -24,12 +23,14 @@ function assessDecision(value, { source, supported, unverified = [], lifecycle =
   const conclusion = field(value.conclusion, 'conclusion', 180);
   const caution = field(value.caution, 'caution', 160, false);
   if (unverified.length && !caution) issues.push('missing decision-changing uncertainty');
-  if (source.includes('[omitted:') && !caution) issues.push('missing evidence omission caution');
+  // Truncation alone does not establish a decision-changing missing fact.
+  // Material unknowns are validated through the explicit unverified records.
   if (!Array.isArray(value.reasons) || value.reasons.length < 1 || value.reasons.length > 3) issues.push('1-3 reasons');
   const reasons = (Array.isArray(value.reasons) ? value.reasons : []).slice(0, 3).map(item => {
     const reason = field(item?.text, 'reason text', 120);
     const evidenceQuote = field(item?.evidenceQuote, 'reason evidence quote', 1000);
     if (!evidenceQuote || !source.includes(evidenceQuote)) issues.push('reason not in CURRENT evidence');
+    if (/^\[omitted[: ]/iu.test(evidenceQuote) || /^\[e\d+ ·/u.test(evidenceQuote)) issues.push('metadata is not a factual reason');
     return { text: reason, evidenceQuote };
   });
   const kind = value.action?.kind;

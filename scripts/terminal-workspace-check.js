@@ -22,9 +22,11 @@ app.whenReady().then(async () => {
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
+  let jevConfigured = false;
   let requestSummary = '';
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
   let toolEvidence = { source: 'session', items: Array.from({ length: 3 }, () => ({ name: 'WebFetch', status: 'returned', target: 'https://arxiv.org/html/2610.28380v1', excerpt: 'Received 395.7KB (200 OK)' })), omitted: 0 };
+  let reviewRetryAt = null;
   let reviewState, suppressReview = false, rejectRestoreIdentity = false, rejectedCloseId = '';
   const otherProject = path.join(profile, 'other-project');
   fs.mkdirSync(otherProject);
@@ -45,6 +47,8 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
     for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:renderer-ready', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
+    ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
+    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigured = !payload.remove && Boolean(payload.apiKey); return { configured: jevConfigured }; });
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       collaborationPayload = payload;
       if (payload.operation === 'connect') return { ok: true };
@@ -76,7 +80,7 @@ app.whenReady().then(async () => {
       if (payload.submission) lastSubmission = payload.submission;
       captured.set(payload.id, payload.text);
       const marker = payload.text.includes('ONE_ONLY') ? 'ONE_ONLY' : payload.text.includes('TWO_ONLY') ? 'TWO_ONLY' : payload.text.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
-      return { startedAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary ? `${requestSummary} ${marker}` : '', reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
+      return { startedAt, retryAt: reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary ? `${requestSummary} ${marker}` : '', reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     // Initial bounds can be clamped to the hosted runner's small display.
@@ -163,6 +167,13 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), true);
     assert.equal(await evaluate('document.querySelector("#wbUpdateError").hidden'), true);
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
+    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('[data-action=jev-save]').click()`);
+    await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('Jev 연결됨')`, 'Jev key saved through main IPC');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
+    assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
+    await evaluate(`document.querySelector('#wbAnalysisProvider').value='jev'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('[data-action=jev-remove]').click()`);
+    await waitFor(`document.querySelector('#wbAnalysisProvider').value === 'auto'`, 'disconnect resets Jev selection');
+    await evaluate('document.querySelector("#wbSettings").close()');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
@@ -294,6 +305,26 @@ app.whenReady().then(async () => {
     // Drop onto another project, then return the same session to its original panel.
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
+    const otherPanel = await evaluate('WhiteboxWorkspace.getState().spaces[1].activeTab');
+    const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner => ({id:owner.id, tabs:owner.tabs.map(panel => ({id:panel.id, layout:panel.layout}))})))');
+    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'different project panels shown together');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
+    await evaluate(`window.pinnedTerminalNode = document.querySelector('[data-terminal-id="${first.id}"]'); WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), originalOwner, 'focus follows the terminal project');
+    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'focus keeps both panels visible');
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
+    assert.equal(await evaluate(`pinnedTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]')`), true, 'focus preserves terminal DOM');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner => ({id:owner.id, tabs:owner.tabs.map(panel => ({id:panel.id, layout:panel.layout}))})))'), membershipBeforePin, 'viewing leaves project membership and splits intact');
+    fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-multi-panel.png'), (await win.webContents.capturePage()).toPNG());
+    await win.loadFile(path.join(root, 'renderer/index.html'));
+    await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload pinned panels');
+    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'both panels restored after reload');
+    assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identityBeforeMoves, 'multi-panel display and reload retain exact PTYs');
+    await evaluate(`document.querySelector('[data-pin-panel="${otherPanel}"]').click(); document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 0, 'unpin returns to normal panel view');
+    console.log('PASS cross-project panels displayed together, unchanged membership, focus/review routing, DOM/PTY identity and reload persistence');
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
     const beforeSelfDrop = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces)');
     assert.equal(await drag(second.id, `#wbCanvas [data-terminal-id="${second.id}"]`), false);
@@ -308,6 +339,19 @@ app.whenReady().then(async () => {
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'background output survives panel moves');
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).split('\\n').join('').includes('TWO_ONLY')`, 'second terminal output survives panel moves');
     console.log('PASS panel hierarchy, detach/join, directional and cross-project drag, keyboard move, same PTY identity/buffer, hidden background output');
+    const reviewEvent = { id: first.id, value: { state: 'ready', revision: 10, creationId: first.creationId, terminalPid: manager.get(first.id).pid,
+      provider: 'claude', providerPid: manager.get(first.id).pid + 1, currentTaskId: `ONE_ONLY:${analysisStamp}`,
+      result: { observedAt: new Date().toISOString(), tasks: [{ taskId: `ONE_ONLY:${analysisStamp}`, analysisId: `ONE_ONLY:${analysisStamp}:${analysisRevision}`,
+        request: 'ONE_ONLY', requestQuote: 'ONE_ONLY', actual: 'EVENT_READY_IMMEDIATE', evidenceQuote: 'ONE_ONLY', reviewSchema: 3, observedAt: new Date().toISOString() }] } } };
+    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
+    win.webContents.send('terminals:review-state', reviewEvent);
+    await waitFor('document.querySelector("#wbReviewContent").textContent.includes("EVENT_READY_IMMEDIATE")', 'completed review arrives by event without polling');
+    win.webContents.send('terminals:review-state', { ...reviewEvent, value: { ...reviewEvent.value, revision: 9, state: 'error', message: 'STALE_EVENT_ERROR' } });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /STALE_EVENT_ERROR/u, 'late review event cannot replace a newer result');
+    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(second.id)}, true)`);
+    console.log('PASS review events, versioned stale-result rejection and focused terminal routing');
+
     await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
     await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
@@ -452,9 +496,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     reviewState = 'collecting';
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석중/u);
+    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석 대기/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting review rendered after the previous selection refresh');
+    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 대기/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false');
+    reviewRetryAt = Date.now() + 10000;
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 사용 한도 대기.*다시 시도까지/u);
+    assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false', 'capacity waiting is not model execution');
+    reviewRetryAt = null;
     reviewState = 'reviewing'; startedAt = Date.now() - 31000;
     await evaluate('WhiteboxWorkspace.captureReviews(true)');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
@@ -467,7 +516,7 @@ app.whenReady().then(async () => {
     for (const pendingState of ['awaiting-answer', 'collecting', 'reviewing']) {
       reviewState = pendingState;
       await forceCapture();
-      assert.equal(await evaluate('document.querySelector("#wbReviewActivity").textContent'), '분석중…');
+      assert.equal(await evaluate('document.querySelector("#wbReviewActivity").textContent'), ({ 'awaiting-answer': '작업 관찰 중', collecting: '분석 대기', reviewing: '분석중…' })[pendingState]);
       assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /DEFERRED_USER_MESSAGE|근거가 확보되면 분석합니다|0 토큰 · 호출 없음/u, 'pending bookkeeping is not an analysis card');
       assert.equal(await evaluate('document.querySelector(".wb-record-only")'), null);
       assert.ok(await evaluate('document.querySelector(".wb-task")'), 'existing analysis stays available during the next request');
@@ -650,7 +699,7 @@ app.whenReady().then(async () => {
     }
     reviewState = 'awaiting-answer';
     await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
+    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^작업 관찰 중$/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").textContent'), '', 'first pending request shows only the activity indicator');
     assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
     assert.equal(await evaluate('document.querySelector("[data-action=refresh]").title'), '답변 완료 다시 확인');

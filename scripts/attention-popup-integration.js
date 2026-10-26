@@ -83,7 +83,11 @@ async function run() {
   }
 
   const questionEntry = manager.windows.get('e2e\u0000question');
-  await waitFor(() => questionEntry.height > 300);
+  await waitFor(() => questionEntry.window.webContents.executeJavaScript(`document.querySelector('#popupCard').dataset.type === 'question' && document.querySelectorAll('.popup-option').length >= 2`));
+  await questionEntry.window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  await waitFor(() => questionEntry.height >= 180);
+  assert.ok(questionEntry.window.getBounds().width > questionEntry.window.getBounds().height, 'question popup is horizontal');
+  assert.ok(questionEntry.window.getBounds().height <= 360, 'long questionnaires stay compact and scroll');
   const artifactDirectory = path.join(root, 'artifacts');
   fs.mkdirSync(artifactDirectory, { recursive: true });
   const questionImage = await questionEntry.window.webContents.capturePage();

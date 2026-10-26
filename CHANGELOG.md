@@ -3,6 +3,24 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.5 - 2026-10-27
+
+- Pin panels from different projects together on one canvas while preserving
+  terminal processes, project ownership, splits and the saved selection.
+- Recover critical execution records and linked prior checks for decision briefs;
+  preserve changed user conditions, source references and explicit missing evidence.
+- Recognize Codex 429 transport backoff, preserve queued reviews with a retry
+  countdown, and stop bounded retries instead of reporting a generic timeout.
+- Queue reviews fairly, prioritize the selected terminal and manual requests,
+  publish results immediately and reject stale results from replaced terminals.
+- Remove remote replay requests from collaboration synchronization to prevent
+  routine refreshes from waiting behind terminal-host operations.
+- Replace irrelevant Codex coding instructions for isolated terminal analysis
+  while retaining tool restrictions, source validation and bounded repair calls.
+- Add optional Jev typed analysis with an OS-encrypted API key and uncertainty
+  handling; arrange attention questions horizontally in a bounded popup.
+- Pin official 2.0.4 installers while retaining the supported older cohorts.
+
 ## 2.0.4 - 2026-10-26
 
 - Show a new panel and connection progress immediately while its terminal starts;

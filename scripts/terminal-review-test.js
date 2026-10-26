@@ -240,6 +240,7 @@ async function main() {
   assert.deepEqual(layout.ids(layout.remove(tree, 'b')), ['a', 'c']);
   assert.deepEqual(layout.ids(layout.restore(tree, new Set(['a', 'c']))), ['a', 'c']);
   assert.deepEqual(layout.ids(layout.restore({ axis: 'row', first: { id: 'a' }, second: { id: 'a' } }, new Set(['a']))), ['a']);
+  await require('./analysis-pipeline-check')();
   console.log('PASS terminal review: exact ownership, ambiguity, citation validation, concurrency, stale/restart/pause/exit isolation, split persistence');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

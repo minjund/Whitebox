@@ -39,12 +39,17 @@ class TerminalCollaboration {
   serialize(action) { const next = this.queue.then(action); this.queue = next.catch(() => {}); return next; }
   sync(payload) { return this.serialize(() => this.update(payload)); }
   async update({ groups = [], frames = [] } = {}) {
+    // Polling membership uses the host's event-fed metadata cache. Repeated
+    // remote get calls queue behind shell launches on the host connection.
+    const manager = this.manager();
+    const inventory = typeof manager.list === 'function' ? await manager.list() : null;
+    const liveById = inventory ? new Map(inventory.map(item => [item.id, item])) : null;
     this.groups = new Map();
     for (const group of groups.slice(0, 100)) {
       if (!safeId(group.id) || !path.isAbsolute(group.cwd || '')) continue;
       const members = [];
       for (const member of (group.members || []).slice(0, 64)) {
-        const live = await this.manager().get(member.id, false);
+        const live = liveById ? liveById.get(member.id) : await manager.get(member.id, false);
         if (live && live.creationId === member.creationId && live.pid === member.pid && live.status === 'running') members.push({ id: live.id, creationId: live.creationId, pid: live.pid, title: String(member.title || live.title).slice(0, 120) });
       }
       this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members });

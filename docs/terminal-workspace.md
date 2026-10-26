@@ -40,6 +40,17 @@ persisted. The actual terminal mounts in its visible layout.
   The terminal header's **터미널 이동** button offers the same placement controls
   without dragging. It also offers moving the terminal to the trash.
 
+## Viewing several panels together
+
+Use the **이 패널 함께 보기** button beside a sidebar panel to keep it on screen
+alongside the current panel. Panels from different projects and independent
+panels can share the screen. Each frame shows its project name and panel number;
+its existing terminal splits and project membership stay intact. Click any
+terminal to type there and see its understanding and review. Pinned panels stay
+visible when switching projects, and the pinned selection survives a reload.
+Use **함께 보기 해제** to stop keeping a panel visible; the selected panel remains
+on screen. Narrow windows stack the panels vertically and scroll as needed.
+
 Switching projects or panels, hiding a terminal, and rearranging splits keep the
 same host PTY, renderer buffer, and terminal DOM node. An empty source panel is
 removed automatically. Layout and selection are saved for renderer reloads.

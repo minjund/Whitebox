@@ -681,6 +681,8 @@ class AgentRunner extends EventEmitter {
       || (session.cwd && path.resolve(session.cwd) === path.resolve(this.questionnaireCwd))));
   }
 
+  canGenerateTerminalReview() { return ![...this.active.values()].some(run => run.internalQuestionnaire); }
+
   generateTerminalReview(options) {
     return this.generateQuestionnaire({ ...options, terminalReview: true });
   }
@@ -692,34 +694,48 @@ class AgentRunner extends EventEmitter {
     ensureDir(this.questionnaireCwd);
     return new Promise((resolve, reject) => {
       let id = '';
+      let generationRun;
       let timeout;
-      const onChanged = event => {
-        if (event.runId !== id || this.active.has(id)) return;
+      const cleanup = () => {
         clearTimeout(timeout);
         this.removeListener('changed', onChanged);
+        this.removeListener('review-rate-limited', onRateLimited);
+      };
+      const onRateLimited = event => {
+        if (event.runId !== id) return;
+        cleanup();
+        const stopped = this.stop(id);
+        const error = new Error(stopped.ok ? '분석 서비스의 사용 한도에 도달했습니다. 잠시 후 다시 시도합니다.' : stopped.error);
+        if (stopped.ok) Object.assign(error, { code: 'REVIEW_RATE_LIMITED', retryAfterMs: event.retryAfterMs });
+        reject(error);
+      };
+      const onChanged = event => {
+        if (event.runId !== id || this.active.has(id)) return;
+        cleanup();
         if (event.state.status !== 'completed' || !event.state.completionObserved) {
           reject(new Error(event.state.statusDetail));
         } else resolve(terminalReview
-          ? { text: lastAssistantResponse(event.state), usage: event.state.completionUsage ?? null, model: event.state.model || model }
+          ? { text: lastAssistantResponse(event.state), usage: event.state.completionUsage ?? null, model: event.state.model || model, timings: { processStartedAt: generationRun?.processStartedAt || null, firstStdoutAt: generationRun?.firstStdoutAt || null, firstResponseAt: generationRun?.firstAssistantAt || null, processExitedAt: Date.now() } }
           : lastAssistantResponse(event.state));
       };
       this.on('changed', onChanged);
+      if (terminalReview) this.on('review-rate-limited', onRateLimited);
       let result;
       try {
         result = this.start({ provider, prompt, model, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: terminalReview ? 'terminal-review' : true });
       } catch (error) {
-        this.removeListener('changed', onChanged);
+        cleanup();
         reject(error);
         return;
       }
       if (!result.ok) {
-        this.removeListener('changed', onChanged);
+        cleanup();
         reject(new Error(result.error));
         return;
       }
-      id = result.runId;
+      id = result.runId; generationRun = this.active.get(id);
       timeout = setTimeout(() => {
-        this.removeListener('changed', onChanged);
+        cleanup();
         reject(new Error(terminalReview ? '검토 시간이 초과되었습니다.' : '질문지 생성 시간이 초과되었습니다.'));
         this.stop(id);
       }, this.questionnaireTimeoutMs);
@@ -806,7 +822,8 @@ class AgentRunner extends EventEmitter {
     const run = {
       id, provider, dir, child, state, stdoutBuffer: '', stderrBuffer: '', stopping: false,
       stdoutDecoder: new StringDecoder('utf8'), stderrDecoder: new StringDecoder('utf8'),
-      processGroup: this.platform !== 'win32',
+      processGroup: this.platform !== 'win32', processStartedAt: Date.now(), firstStdoutAt: null, firstAssistantAt: null,
+      terminalReview: raw[INTERNAL_QUESTIONNAIRE] === 'terminal-review',
       pendingEventLines: [], persistTimer: null, outputOverflow: false, internalQuestionnaire,
     };
     if (internalQuestionnaire) this.questionnaireIds.add(id);
@@ -871,6 +888,7 @@ class AgentRunner extends EventEmitter {
 
   consume(run, stream, chunk) {
     if (!run || run.finalized || run.outputOverflow) return;
+    if (stream === 'stdout' && chunk?.length && run.firstStdoutAt === null) run.firstStdoutAt = Date.now();
     const key = `${stream}Buffer`;
     const decoderKey = `${stream}Decoder`;
     if (!(run[decoderKey] instanceof StringDecoder)) run[decoderKey] = new StringDecoder('utf8');
@@ -948,10 +966,25 @@ class AgentRunner extends EventEmitter {
 
   handleLine(run, stream, line) {
     if (!run || run.finalized || run.processErrored) return;
+    // Only a CLI transport diagnostic can defer a review. Quoted terminal data
+    // and assistant stdout mentioning 429 must never affect scheduling.
+    if (run.terminalReview && !run.rateLimited && stream === 'stderr'
+      && /codex_core::responses_retry/u.test(line) && /last status:\s*429\b/u.test(line)) {
+      const delay = line.match(/retrying sampling request \(\d+\/\d+ in ([\d.]+)(ms|s)\)/u);
+      const parsed = delay ? Number(delay[1]) * (delay[2] === 's' ? 1000 : 1) : 60000;
+      run.rateLimited = true;
+      this.emit('review-rate-limited', { runId: run.id,
+        retryAfterMs: Number.isFinite(parsed) ? Math.min(86400000, Math.max(1000, Math.ceil(parsed))) : 60000 });
+      return;
+    }
     let event = null;
     try { event = JSON.parse(line); } catch (_plainOutputLine) { event = null; } // Plain stderr/stdout lines are valid runner output.
     const eventLine = `${JSON.stringify({ timestamp: new Date().toISOString(), stream, event, text: event ? undefined : clip(line, 4000) })}\n`;
     if (event) {
+      const assistantText = event.item?.type === 'agent_message' ? event.item.text
+        : event.type === 'assistant' ? (Array.isArray(event.message?.content) ? event.message.content.filter(item => item.type === 'text').map(item => item.text).join('') : typeof event.message?.content === 'string' ? event.message.content : '')
+          : event.type === 'content_block_delta' && event.delta?.type === 'text_delta' ? event.delta.text : '';
+      if (run.internalQuestionnaire && !run.firstAssistantAt && typeof assistantText === 'string' && assistantText.trim()) run.firstAssistantAt = Date.now();
       if (run.provider === 'claude') handleClaude(run.state, event);
       else if (run.provider === 'codex') handleCodex(run.state, event);
       else if (run.provider === 'gemini') handleGemini(run.state, event);

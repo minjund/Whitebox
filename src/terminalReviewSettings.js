@@ -7,7 +7,7 @@ const path = require('path');
 function normalizeReviewSettings(value = {}) {
   const model = input => typeof input === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/[\]-]{0,127}$/u.test(input.trim()) ? input.trim() : '';
   return {
-    provider: ['claude', 'codex'].includes(value?.provider) ? value.provider : 'auto',
+    provider: ['claude', 'codex', 'jev'].includes(value?.provider) ? value.provider : 'auto',
     models: { claude: model(value?.models?.claude), codex: model(value?.models?.codex) },
   };
 }

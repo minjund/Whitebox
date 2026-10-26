@@ -15,6 +15,15 @@ const parse = decision => parseReview(JSON.stringify(response(decision)), eviden
 const usage = { input: 100, output: 20, cachedInput: 10, cacheWrite: 0, total: 120 };
 
 module.exports = async function decisionChecks() {
+  const rootDecision = { ...response(undefined), decision: fixture() };
+  const normalized = parseReview(JSON.stringify(rootDecision), evidence, 'ko', request).tasks[0];
+  assert.deepEqual(normalized.decision, parse(fixture()).decision, 'a single task can own a root-level decision after full validation');
+  assert.equal(normalized.nextStep, fixture().action.request);
+  const invalidRoot = { ...rootDecision, decision: { ...fixture(), reasons: [{ text: 'invented', evidenceQuote: '모든 테스트 통과' }] } };
+  assert.equal(parseReview(JSON.stringify(invalidRoot), evidence, 'ko', request).tasks[0].decision, null, 'root normalization cannot bypass source validation');
+  assert.equal(parseReview(JSON.stringify(invalidRoot), evidence, 'ko', request).tasks[0].nextStep, '');
+  const ambiguousRoot = { ...rootDecision, tasks: [...rootDecision.tasks, ...rootDecision.tasks] };
+  assert.throws(() => parseReview(JSON.stringify(ambiguousRoot), evidence, 'ko', request), /요청 하나/, 'fresh reviews reject multiple tasks');
   assert.ok(parse(fixture()).decision);
   assert.equal(parse(fixture()).nextStep, fixture().action.request);
   let bad = fixture(); bad.reasons[0].evidenceQuote = '모든 테스트 통과';
@@ -25,7 +34,9 @@ module.exports = async function decisionChecks() {
   assert.equal(parseReview(JSON.stringify(response(bad)), evidence, 'ko', request, 'interrupted').tasks[0].decision, null);
   assert.equal(assessDecision(bad, { source: evidence, supported: true, unverified: [{}] }).decision, null);
   bad = fixture(); bad.caution = '';
-  assert.equal(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).decision, null);
+  assert.ok(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).decision, 'irrelevant omission alone does not force a warning or repair call');
+  bad = fixture(); bad.reasons[0].evidenceQuote = '[omitted: evidence exceeds budget]';
+  assert.ok(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).issues.includes('metadata is not a factual reason'));
   bad = fixture(); bad.action.text = bad.conclusion;
   assert.ok(parse(bad).decisionIssues.includes('repeated explanation'));
   bad = fixture(); bad.action.kind = 'choose';
