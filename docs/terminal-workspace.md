@@ -1,9 +1,27 @@
 # Terminal workspace panels
 
 The terminal workspace groups live terminals into panels. Each project has its
-own panels; **독립 패널** holds panels outside a project. The sidebar shows a
-miniature split layout, each terminal's identity, and whether it is visible,
-running in the background, or exited.
+own panels; **독립 패널** holds panels outside a project. The sidebar shows each
+terminal's identity and work state through dots: green while work is in progress,
+yellow when waiting for input, approval, stopped, or unconfirmed. Tooltips and
+accessible labels describe the exact state without visible status text. Claude
+and Codex use process-owned native turn records and the current terminal screen;
+an open shell alone never turns green. POSIX shell commands use the terminal's
+foreground process group, so a quiet `sleep` remains working until it ends.
+Activity refreshes independently of automatic review and makes no model calls.
+Missing/stale observations stay yellow; silence never implies completion.
+Unknown shell activity on platforms without a foreground process probe also
+stays yellow. State dots appear on terminals only. Panels with terminals have a
+disclosure arrow. Selecting another
+panel or project leaves opened panel lists expanded. Each disclosure arrow
+toggles only its own list without changing the selected terminal; the saved
+layout retains explicit collapse choices.
+
+Creating a panel displays a temporary panel and connection progress immediately,
+before host creation or terminal mounting finishes. Duplicate creation is disabled
+while that request is pending. Failed creation removes the placeholder; a failed
+mount retains the real session with a reconnect button. Placeholders are never
+persisted. The actual terminal mounts in its visible layout.
 
 - **⌘/Ctrl T** and the terminal **+** add a terminal to the current panel.
 - The sidebar **새 패널** (and the project/independent section `+`) starts a
@@ -18,8 +36,9 @@ running in the background, or exited.
 - Drop onto **새 패널 · 여기로 끌어 분리** to move the terminal out into a
   separate panel. A project's drop target can also receive terminals from
   another project. Moving does not change the shell's working directory.
-- The **터미널 이동** button beside each terminal offers the same placement
-  controls without dragging. It also offers moving the terminal to the trash.
+- The trash button beside each sidebar terminal moves it directly to the trash.
+  The terminal header's **터미널 이동** button offers the same placement controls
+  without dragging. It also offers moving the terminal to the trash.
 
 Switching projects or panels, hiding a terminal, and rearranging splits keep the
 same host PTY, renderer buffer, and terminal DOM node. An empty source panel is
@@ -34,7 +53,9 @@ Validation: `node scripts/check-source.js` and
 `./node_modules/.bin/electron scripts/terminal-workspace-check.js`. The workspace
 check uses real shell PTYs, native Chromium drag initiation, directional moves,
 cross-project placement, background output, process identity checks, and reload
-restoration. Its review responses are fixtures rather than live model calls.
+restoration. It also checks delayed creation/mount feedback, failure rollback,
+reconnect without duplicate shells, disclosure arrows, sidebar trash and real shell
+exit state. Its review responses are fixtures rather than live model calls.
 
 ## Panel control
 
@@ -55,10 +76,7 @@ whitebox ask codex "ㅎㅇ"
 whitebox wait <returned-job-id> 60
 ```
 
-`send` pastes text; a trailing newline submits it atomically. Shell delivery
-uses the shell's current paste mode. Shells without bracketed paste accept only
-single-line text without tabs; multiline/tabbed pastes are rejected before any
-input is written. `send-key enter`
+`send` pastes text; a trailing newline submits it atomically. `send-key enter`
 submits only a matching, unchanged paste made by the same source. AI targets must
 be idle with no existing draft or approval prompt. `ask` submits one request and
 `wait` returns only its matched completion; reading a screen alone does not prove

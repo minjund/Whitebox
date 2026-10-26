@@ -1068,16 +1068,17 @@ async function main() {
   const downloadedTarget = await downloadWithFrozenUpdater(v173UpdaterModule, firstDownloadsDir);
   updateInstallerPaths.add(downloadedTarget);
 
-  // The official 2.0.1 source needs its production terminal host too: capture
-  // mode cannot authenticate or close its startup workspace shells.
-  if (SOURCE_VERSION === '2.0.1') delete process.env.WHITEBOX_DEMO_CAPTURE;
+  // These pinned official sources need their production terminal host too:
+  // capture mode cannot authenticate or close their startup workspace shells.
+  const workspaceSource = ['2.0.1', '2.0.3'].includes(SOURCE_VERSION);
+  if (workspaceSource) delete process.env.WHITEBOX_DEMO_CAPTURE;
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;
-  // Official 2.0.1 opens a workspace shell on first launch and intentionally
-  // keeps a window close in the tray while that shell is active. Prepare the
+  // These official sources open a workspace shell on first launch and
+  // intentionally keep a window close in the tray while it is active. Prepare the
   // same authenticated idle-parent fixture used for candidate reinstalls.
-  // Only this pinned source gets this preparation; deadlines remain strict.
-  if (SOURCE_VERSION === '2.0.1') await idleWorkspaceParent();
+  // Only these pinned sources get this preparation; deadlines remain strict.
+  if (workspaceSource) await idleWorkspaceParent();
   // Historical sources keep their existing idle fixture. The 2.0 renderer
   // opens a real shell even in capture mode, so the candidate must use its
   // production authenticated host for the scoped idle preparation below.

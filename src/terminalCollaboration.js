@@ -12,8 +12,9 @@ const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, monitor = new ProcessMonitor(), completion = new TerminalReviewCompletion(), now = Date.now, enableControl = true }) {
+  constructor({ manager, directory, monitor = new ProcessMonitor(), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
     Object.assign(this, { manager, directory, monitor, completion, now });
+    this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
     this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = [];
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -49,6 +50,7 @@ class TerminalCollaboration {
       this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members });
     }
     for (const frame of frames.slice(0, 256)) if (safeId(frame.id) && typeof frame.text === 'string') this.frames.set(frame.id, { ...frame, text: frame.text.slice(-24000), at: this.now() });
+    const activity = await this.activity.observe([...this.groups.values()].flatMap(group => group.members), this.frames, this.monitor.scan());
     for (const record of this.restoredConnections.splice(0)) {
       const member = [...this.groups.values()].flatMap(group => group.members).find(item => item.id === record.id && item.creationId === record.creationId && item.pid === record.pid);
       const child = member && exactProcess({ ...member, status: 'running' }, this.monitor.scan());
@@ -59,6 +61,7 @@ class TerminalCollaboration {
       member.provider = child?.provider || '';
       member.providerPid = child?.pid || null;
       member.ready = Boolean(child && frame && !frame.inputDraft && inputReady(frame.readinessText ?? frame.text, child.provider));
+      member.activity = activity.get(member.id);
     }
     for (const [id, connection] of this.connected) {
       const group = [...this.groups.values()].find(group => group.members.some(member => member.id === id));

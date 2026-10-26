@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "A terminal workspace that connects every AI task to its own understanding and review.",
   "main": "main.js",
   "author": "wincube AX",
@@ -111,7 +111,7 @@
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package",
-    "test:workspace": "node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && node scripts/workspace-attention-runner.js"
+    "test:workspace": "node scripts/terminal-activity-test.js && node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && node scripts/workspace-attention-runner.js"
   },
   "publishConfig": {
     "access": "public",
