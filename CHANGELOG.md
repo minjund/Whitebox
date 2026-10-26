@@ -3,6 +3,22 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.4 - 2026-10-26
+
+- Show a new panel and connection progress immediately while its terminal starts;
+  recover connection failures without creating duplicate shell processes.
+- Keep expanded panel lists open when selecting other panels. Add terminals with
+  the `+` button on each panel heading and move them directly to trash from the list.
+- Preserve drag placement between panels and projects with the same process and
+  output buffer; remove redundant terminal numbering from navigation and tabs.
+- Show terminal activity through dots: green for actual work, yellow for input or
+  approval waiting. Observe process-owned Claude/Codex turn records and terminal
+  screens; quiet POSIX foreground commands remain working until they end.
+- Keep activity detection independent of paid automatic review, reject stale
+  observations, and show no aggregate activity dot on panel headings.
+- Pin official 2.0.3 update inputs while retaining official 2.0.1 and all earlier
+  supported installer cohorts for packaged compatibility verification.
+
 ## 2.0.3 - 2026-10-26
 
 - Lead terminal analyses with a concise conclusion, cited reasons, material

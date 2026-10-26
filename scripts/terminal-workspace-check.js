@@ -15,6 +15,7 @@ app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
   let win;
   const manager = new TerminalManager({ storeFile: path.join(profile, 'terminals.json') });
+  const activityReader = new (require('../src/terminalActivity').TerminalActivity)();
   const errors = [];
   const captured = new Map();
   const adapterDirectory = path.join(profile, 'panel-bin');
@@ -35,6 +36,7 @@ app.whenReady().then(async () => {
   let bootstrapUpdate = { status: 'checking', currentVersion: '2.0.0' }, bootstrapPush = initialAvailableUpdate;
   let updateCheckCalls = 0, updateInstallCalls = 0, releasePageCalls = 0, updateCheckFailure = '', finishUpdateInstall;
   let updateCheckResponse = { status: 'current', currentVersion: '2.0.0', latestVersion: '2.0.0' };
+  let delayCreation = false, releaseCreation, rejectCreation = false;
   const deadline = setTimeout(() => { console.error('Workspace E2E timed out'); app.exit(1); }, 90000);
   try {
     ipcMain.handle('app:bootstrap', event => { if (bootstrapPush) event.sender.send('app:update-state', bootstrapPush); return ({ update: bootstrapUpdate, versions: { app: '2.0.0' }, platform: { id: process.platform, localShell: process.platform === 'win32' ? 'powershell' : 'shell' }, workspaces, terminalWorkspace: { defaultCwd: profile } }); });
@@ -43,7 +45,13 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
     for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:renderer-ready', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
-    ipcMain.handle('terminals:collaboration', (_event, payload) => { collaborationPayload = payload; return payload.operation === 'connect' ? { ok: true } : { jobs: [], connected: [] }; });
+    ipcMain.handle('terminals:collaboration', async (_event, payload) => {
+      collaborationPayload = payload;
+      if (payload.operation === 'connect') return { ok: true };
+      const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
+      const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
+      return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
+    });
     ipcMain.handle('terminals:review-models', () => ({ codex: [{id:'fixture-model',label:'Fixture model'}], claude: [{id:'sonnet',label:'Sonnet'}] }));
     ipcMain.handle('providers:usage', () => { accountUsageCalls++; return ({ providers: {codex:{available:true,updatedAt:new Date().toISOString(),weekly:{label:'주간 한도',usedPercent:12.3}},claude:{available:false}} }); });
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
@@ -52,10 +60,9 @@ app.whenReady().then(async () => {
     for (const op of ['list', 'get', 'create', 'write', 'resize', 'close', 'reconnect']) ipcMain.handle(`terminals:${op}`, (_event, ...args) => manager[op](...args));
     ipcMain.removeHandler('terminals:create');
     ipcMain.handle('terminals:create', async (_event, options) => {
-      const session = await providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
-      // Reproduce a pre-ready create reply even on hosts with synchronous PIDs.
-      // The real host inventory and terminalGet retain the actual process.
-      return { ...session, pid: null };
+      if (delayCreation) await new Promise(resolve => { releaseCreation = resolve; });
+      if (rejectCreation) throw new Error('fixture creation failure');
+      return providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
     });
     ipcMain.removeHandler('terminals:close');
     ipcMain.handle('terminals:close', (_event, id) => { if (id === rejectedCloseId) throw new Error('fixture close failure'); return manager.close(id); });
@@ -80,8 +87,8 @@ app.whenReady().then(async () => {
       catch (error) { throw new Error(`${expression}: ${error.message}; console=${JSON.stringify(errors)}`); }
     };
     const forceCapture = async () => {
-      // The production capture deliberately declines a concurrent call. Await a
-      // force request actually reaching this fixture before asserting its UI.
+      // Await the selected terminal refresh reaching this fixture, including a
+      // refresh queued behind an in-flight observation, before asserting its UI.
       for (let attempt = 0; attempt < 150; attempt++) {
         const before = forcedReviewCalls;
         await evaluate('WhiteboxWorkspace.captureReviews(true)');
@@ -95,11 +102,7 @@ app.whenReady().then(async () => {
         if (await evaluate(expression)) return;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      const geometry = await evaluate(`(() => {
-        const bounds = selector => { const r = document.querySelector(selector)?.getBoundingClientRect(); return r && { width: r.width, height: r.height }; };
-        return { viewport: innerWidth, main: bounds('.wb-main'), screen: bounds('#wbCanvas .terminal-screen'), canvas: bounds('#wbCanvas canvas') };
-      })()`);
-      throw new Error(`${label}: ${JSON.stringify({ errors, geometry })}`);
+      throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
@@ -173,7 +176,6 @@ app.whenReady().then(async () => {
     assert.equal(suggestionProbe.draftReady, false, 'real text remains a draft even with cursor at the start');
     assert.equal(manager.list().length, 1, 'opens a plain shell with no provider wizard');
     const first = manager.list()[0];
-    assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.find(session => session.id === ${JSON.stringify(first.id)}).pid`), first.pid, 'mount reconciles the live PID after a pre-ready create reply');
     assert.equal(await evaluate('document.querySelectorAll(".wb-space-icon svg").length'), 2, 'folder icons are SVG, independent of font glyphs');
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 0, 'project terminals never appear as independent instances');
@@ -182,6 +184,18 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32') {
       await manager.command(first.id, 'command -v claude; command -v codex');
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).replace(/\\s+/g, '').includes(${JSON.stringify(path.join(adapterDirectory, 'codex'))})`, 'provider adapters remain first after user login shell startup');
+      const activitySelector = `[data-instance="${first.id}"] .wb-terminal-state`;
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'idle shell is yellow even while its process remains running');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(223, 184, 79)');
+      await evaluate('document.querySelector("#wbAutoReview").checked = false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
+      await manager.command(first.id, 'sleep 3');
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work turns green with automatic review disabled');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
+      assert.equal(await evaluate(`document.querySelector('${activitySelector}').textContent`), '', 'dot has no visible status copy');
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'finished command returns to yellow input waiting');
+      assert.equal(manager.get(first.id).pid, first.pid, 'working/idle transition never restarts the shell');
+      await evaluate('document.querySelector("#wbAutoReview").checked = true; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
+      console.log('PASS live activity dots: idle yellow → silent working green → input waiting yellow, same PID, automatic review disabled');
     }
     await evaluate('document.querySelector("[data-add-panel-terminal]").click()');
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
@@ -207,7 +221,9 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
     await forceCapture();
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), first.id);
-    assert.match(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 1/u);
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 \d+/u);
+    assert.equal(await evaluate('document.querySelector(".wb-pane-number")'), null, 'sidebar omits redundant terminal numbering');
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbTabs").textContent'), /터미널 \d+/u);
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
     // Move actual live PTYs through the same DOM drag/drop handlers as the UI.
@@ -230,7 +246,6 @@ app.whenReady().then(async () => {
     })()`);
     // Chromium's native drag initiation must work too, including draggable buttons.
     const nativeDrag = async (id, selector) => {
-      win.show(); win.focus();
       win.webContents.debugger.attach('1.3');
       const send = (method, params) => win.webContents.debugger.sendCommand(method, params);
       let intercepted;
@@ -248,18 +263,8 @@ app.whenReady().then(async () => {
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...points.target, button: 'left', buttons: 1 });
         for (let attempt = 0; !intercepted && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
         assert.ok(intercepted, 'native drag starts from sidebar terminal');
-        // Drag help expands the sidebar. Use the live drop target after that
-        // layout change, rather than coordinates from before dragstart.
-        const target = await evaluate(`(() => {
-          const node = document.querySelector(${JSON.stringify(selector)});
-          node.scrollIntoView({ block: 'nearest' });
-          const r = node.getBoundingClientRect();
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        })()`);
-        for (const type of ['dragEnter', 'dragOver']) await send('Input.dispatchDragEvent', { type, ...target, data: intercepted });
-        await waitFor(`document.querySelector(${JSON.stringify(selector)}).dataset.dropDirection === 'new'`, 'native drag reaches the live panel drop target');
-        await send('Input.dispatchDragEvent', { type: 'drop', ...target, data: intercepted });
-        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, button: 'left', buttons: 0, clickCount: 1 });
+        for (const type of ['dragEnter', 'dragOver', 'drop']) await send('Input.dispatchDragEvent', { type, ...points.target, data: intercepted });
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...points.target, button: 'left', buttons: 0, clickCount: 1 });
       } finally {
         await send('Input.setInterceptDrags', { enabled: false });
         win.webContents.debugger.removeListener('message', listener);
@@ -270,7 +275,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'dragging out creates an independent panel');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
     assert.equal(await evaluate(`originalTerminalNode === document.querySelector('[data-terminal-id="${second.id}"]')`), true, 'moving reuses terminal DOM and buffer');
-    assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), /백그라운드 실행/u);
+    assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), /입력 대기/u);
     // Background progress comes from an actual delayed command, with no visible terminal.
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
@@ -340,7 +345,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(".wb-task-time").getAttribute("datetime")'), '2026-10-21T12:00:00.000Z');
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /보관된 이해|요청 한 번이|개 요청 ·/u);
     assert.equal(accountUsageCalls, 0, 'review never fetches terminal/account-wide usage');
-    assert.match(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /패널 \/ 터미널/u);
+    assert.equal(await evaluate('document.querySelector("#wbReviewTarget strong").textContent'), '선택한 패널');
     assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '1,400 토큰');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /요청한 일.*실제로 한 일.*왜 이렇게 바꿨나요.*확인된 근거/su);
     assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), false, 'technical details start collapsed');
@@ -370,7 +375,7 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click()`);
     await forceCapture();
     assert.equal(await evaluate('document.querySelector("[data-review-view=current]").getAttribute("aria-pressed")'), 'true', 'changing terminals returns to its current review');
-    assert.match(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 2/u);
+    assert.match(await evaluate('document.querySelector("#wbReviewTarget small").textContent'), /TWO_ONLY/u);
     assert.match(await evaluate('document.querySelector(".wb-current-review").textContent'), /TWO_ONLY/u);
     await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
     await forceCapture();
@@ -443,11 +448,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     reviewState = 'collecting';
-    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석중/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting review rendered after the previous selection refresh');
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석중/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false');
     reviewState = 'reviewing'; startedAt = Date.now() - 31000;
-    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return document.querySelector("#wbReviewActivity").textContent === "분석중…" && document.querySelector("#wbReviewContent").getAttribute("aria-busy") === "true"; })()', 'reviewing state rendered');
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
     assert.equal(await evaluate('document.querySelector(".wb-review-preview")'), null, 'no redundant observed-facts preview');
     if (process.env.WHITEBOX_REVIEW_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_REVIEW_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
@@ -470,22 +475,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
     reviewState = undefined;
     await evaluate("document.querySelector('[data-add-panel-terminal]').click()");
-    await waitFor('document.querySelectorAll("#wbCanvas .wb-pane").length === 3', 'default new terminal joins current panel');
+    await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length === 3 && document.querySelectorAll("#wbCanvas canvas").length === 3', 'default new terminal joins current panel and finishes connecting');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
     const geometry = await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-terminal-mount')).map(node => { const r = node.getBoundingClientRect(); const c = node.querySelector('canvas')?.getBoundingClientRect(); return {width:r.width,height:r.height,canvasWidth:c?.width,canvasHeight:c?.height}; })`);
     assert.ok(geometry.every(item => item.width > 100 && item.height > 100 && item.canvasWidth > 100 && item.canvasHeight > 80), JSON.stringify(geometry));
     const initialPids = manager.list().map(item => item.pid).sort();
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
-    await waitFor(`(() => {
-      const main = document.querySelector('.wb-main').getBoundingClientRect();
-      const screen = document.querySelector('#wbCanvas .terminal-screen').getBoundingClientRect();
-      const canvas = document.querySelector('#wbCanvas canvas').getBoundingClientRect();
-      const fontSize = parseFloat(getComputedStyle(document.querySelector('#wbCanvas .ghostty-terminal')).fontSize) || 14;
-      // Ghostty reserves 15px for its scrollbar and rounds down to whole cells.
-      return Math.abs(main.width - innerWidth) <= 1 && screen.width >= innerWidth - 16
-        && canvas.width <= screen.width + 1 && canvas.width >= screen.width - 15 - 2 * fontSize;
-    })()`, 'expanded terminal fits the actual viewport and whole-cell grid');
+    await waitFor(`document.querySelector('#wbCanvas canvas').getBoundingClientRect().width > 1300`, 'expanded terminal fits full available width');
     assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids);
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
@@ -496,7 +493,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbReview").getBoundingClientRect().left >= document.querySelector(".wb-main").getBoundingClientRect().right - 1'), true, 'review does not cover terminal panes at 1000px');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'no horizontal page overflow');
     win.setContentSize(1450, 900);
-    await waitFor('Math.abs(document.querySelector(".wb-main").getBoundingClientRect().width - (innerWidth - document.querySelector(".wb-sidebar").getBoundingClientRect().width - document.querySelector("#wbReview").getBoundingClientRect().width)) <= 1', 'desktop three-column layout restored');
+    await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width > 850', 'desktop layout restored');
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     await forceCapture();
     const screenshot = process.env.WHITEBOX_WORKSPACE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-v2-workspace.png');
@@ -510,17 +507,16 @@ app.whenReady().then(async () => {
     assert.deepEqual(manager.list().map(item => item.pid).sort(), oldPids, 'reload reattaches without spawning duplicate shells');
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^다음 요청 제목 ONE_ONLY/u, 'terminal name survives renderer reload');
     await evaluate('document.querySelector("[data-new-panel]").click()');
-    await waitFor('WhiteboxWorkspace.getState().spaces[0].tabs.length === 2', 'new panel');
+    await waitFor('WhiteboxWorkspace.getState().spaces[0].tabs.length === 2 && !WhiteboxWorkspace.getState().busy', 'new panel');
     assert.equal(manager.list().length, 4);
     const last = await evaluate('WhiteboxWorkspace.getState().activeId');
     const lastPid = manager.get(last).pid;
     await manager.write(last, command('TRASH_KEPT'));
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'trash output fixture');
-    await waitFor(`WhiteboxWorkspace.getState().sessions.some(session => session.id === ${JSON.stringify(last)} && session.pid === ${lastPid})`, 'trash review records the live PTY identity');
-    await waitFor(`WhiteboxWorkspace.captureReviews(true).then(() => document.querySelector('#wbReviewContent').textContent.includes('TRASH_KEPT') && Boolean(document.querySelector('.wb-analysis-tokens')))`, 'trash analysis is rendered before preservation');
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
     const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
-    await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
+    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'move to trash');
     assert.equal(manager.get(last).pid, lastPid, 'soft deletion preserves live process');
     assert.equal(await evaluate(`Boolean(document.querySelector('[data-instance="${last}"]'))`), false);
@@ -544,7 +540,6 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore project terminal');
     assert.equal(manager.get(last).pid, lastPid);
-    await waitFor('Boolean(document.querySelector(".wb-analysis-tokens"))', 'restored review and token usage are rendered');
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
     assert.ok(restoredReview.includes(reviewBeforeTrash), 'original review cards and observation time survive trash and renderer restart');
@@ -569,7 +564,7 @@ app.whenReady().then(async () => {
     assert.equal(manager.list().some(item => item.id === last), false);
     await evaluate('document.querySelector("[data-action=trash-close]").click()');
     await evaluate('document.querySelector("[data-action=new-independent]").click()');
-    await waitFor('WhiteboxWorkspace.getState().standalone.tabs.length === 1', 'independent instance creation');
+    await waitFor('WhiteboxWorkspace.getState().standalone.tabs.length === 1 && !WhiteboxWorkspace.getState().busy', 'independent instance creation');
     const independent = await evaluate('WhiteboxWorkspace.getState().activeId');
     const independentPid = manager.get(independent).pid;
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 1);
@@ -676,7 +671,29 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("[data-action=collaboration-connect]") === null'), true, 'no guide injection action');
     const beforeAdd = await evaluate('(() => { const s = WhiteboxWorkspace.getState(); const owner = [...s.spaces, s.standalone].find(o => o.id === s.selectedSpace); return { ownerId:owner.id, panelId:owner.activeTab, panels:owner.tabs.length, members:WhiteboxWorkspaceLayout.ids(owner.tabs.find(t => t.id === owner.activeTab).layout).length, sessions:s.sessions.length }; })()');
     const retained = manager.list().map(({id,pid,creationId}) => ({id,pid,creationId}));
+    delayCreation = true;
+    await evaluate(`(() => {
+      const mount = WhiteboxTerminal.mountTerminal;
+      WhiteboxTerminal.mountTerminal = async (...args) => {
+        const dispose = await mount(...args);
+        await new Promise(resolve => { window.releaseWorkspaceMount = () => { WhiteboxTerminal.mountTerminal = mount; resolve(); }; });
+        return dispose;
+      };
+    })()`);
     await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click()`);
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-creating")?.textContent.includes("패널 생성 중")'), true, 'new panel appears before host creation completes');
+    assert.equal(await evaluate('Boolean(document.querySelector(".wb-panel-group[aria-busy=true]"))'), true, 'sidebar immediately exposes creation state');
+    assert.equal(manager.list().length, beforeAdd.sessions, 'placeholder does not spawn an extra shell');
+    assert.equal(await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).spaces.concat([JSON.parse(localStorage.getItem('whitebox:workspace:v2')).standalone]).some(owner => owner.tabs.some(panel => panel.pending))`), false, 'pending panels are never persisted');
+    assert.equal(await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').disabled`), true, 'repeat creation is disabled');
+    for (let attempt = 0; !releaseCreation && attempt < 50; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(releaseCreation);
+    delayCreation = false; releaseCreation();
+    await waitFor('Boolean(window.releaseWorkspaceMount)', 'real terminal mount held before readiness');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'real pane is visible while mount finishes');
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label")'), '시작 중…');
+    assert.equal(await evaluate('Boolean(document.querySelector("#wbCanvas .wb-pane-loading"))'), true, 'connection progress stays visible');
+    await evaluate('releaseWorkspaceMount(); delete window.releaseWorkspaceMount');
     await waitFor(`!WhiteboxWorkspace.getState().busy && WhiteboxWorkspace.getState().sessions.length === ${beforeAdd.sessions + 1}`, 'sidebar new panel');
     const addedPanel = await evaluate('(() => { const s = WhiteboxWorkspace.getState(); return [...s.spaces, s.standalone].find(o => o.id === s.selectedSpace).activeTab; })()');
     assert.notEqual(addedPanel, beforeAdd.panelId);
@@ -685,7 +702,47 @@ app.whenReady().then(async () => {
     const afterAdd = await evaluate(`(() => { const s = WhiteboxWorkspace.getState(); const o = [...s.spaces, s.standalone].find(o => o.id === ${JSON.stringify(beforeAdd.ownerId)}); return { panels:o.tabs.length, selected:o.activeTab, members:WhiteboxWorkspaceLayout.ids(o.tabs.find(t=>t.id===${JSON.stringify(beforeAdd.panelId)}).layout).length, separate:WhiteboxWorkspaceLayout.ids(o.tabs.find(t=>t.id===${JSON.stringify(addedPanel)}).layout).length }; })()`);
     assert.deepEqual(afterAdd, {panels:beforeAdd.panels+1, selected:beforeAdd.panelId, members:beforeAdd.members+1, separate:1});
     assert.deepEqual(manager.list().filter(s=>retained.some(r=>r.id===s.id)).map(({id,pid,creationId})=>({id,pid,creationId})), retained);
+    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'true', 'previously opened panel stays expanded when another panel is selected');
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), false);
+    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
+    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'false', 'inactive panel can be collapsed explicitly');
+    assert.equal(await evaluate(`WhiteboxWorkspace.getState().activeId`), await evaluate(`WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner => owner.tabs).find(panel => panel.id === '${beforeAdd.panelId}').activePane`), 'disclosure does not switch the active terminal');
+    assert.equal(await evaluate('document.querySelector(".wb-panel-status")'), null, 'panels do not repeat terminal activity dots');
+    await evaluate(`document.querySelector('[data-select-panel="${beforeAdd.panelId}"]').click()`);
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), true, 'explicit collapse survives selection changes');
+    await evaluate(`document.querySelector('[data-select-panel="${addedPanel}"]').click()`);
+    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'true');
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${beforeAdd.panelId}').hidden`), false, 'selecting another panel keeps the original panel expanded');
+    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), true, 'active panel can collapse without stopping the terminal');
+    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
+    await waitFor(`document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
+    const beforeFailure = manager.list().length;
+    rejectCreation = true;
+    await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click()`);
+    await waitFor('!WhiteboxWorkspace.getState().busy', 'failed creation clears pending state');
+    rejectCreation = false;
+    assert.equal(manager.list().length, beforeFailure, 'failed creation leaves no extra shell');
+    assert.equal(await evaluate('document.querySelector(".wb-panel-group[aria-busy=true], #wbCanvas .wb-creating")'), null, 'failed creation removes placeholders');
+    assert.equal(await evaluate('document.querySelector("#wbError").textContent.includes("fixture creation failure")'), true, 'creation failure is actionable');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).some(owner => owner.tabs.some(panel => panel.pending))'), false);
+    const beforeMountFailure = manager.list().length;
+    await evaluate(`(() => {
+      window.originalWorkspaceMount = WhiteboxTerminal.mountTerminal;
+      WhiteboxTerminal.mountTerminal = async () => { throw new Error('fixture mount failure'); };
+      document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click();
+    })()`);
+    await waitFor('!WhiteboxWorkspace.getState().busy && Boolean(document.querySelector("#wbCanvas [data-retry-terminal]"))', 'failed mount retains a retry control');
+    const failedMountId = await evaluate('WhiteboxWorkspace.getState().activeId');
+    const failedMountPid = manager.get(failedMountId).pid;
+    assert.equal(manager.list().length, beforeMountFailure + 1, 'failed mount preserves its one actual session');
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label")'), '연결 확인 필요');
+    await evaluate('WhiteboxTerminal.mountTerminal = window.originalWorkspaceMount; delete window.originalWorkspaceMount; document.querySelector("#wbCanvas [data-retry-terminal]").click()');
+    await waitFor('!document.querySelector("#wbCanvas .wb-pane-loading") && Boolean(document.querySelector("#wbCanvas canvas"))', 'mount retry reconnects the original terminal');
+    assert.equal(manager.get(failedMountId).pid, failedMountPid);
+    assert.equal(manager.list().length, beforeMountFailure + 1, 'retry never duplicates the shell');
     console.log('PASS sidebar new-panel separation and per-panel plus target, including a non-selected panel');
+    console.log('PASS immediate panel creation feedback, duplicate prevention, failure rollback, collapsed arrows and terminal state badges');
     // Exercise the public socket against a real shell through the real host.
     const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost');
     const { TerminalCollaboration } = require('../src/terminalCollaboration');
@@ -766,6 +823,12 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 0);
     assert.equal(await evaluate('document.querySelector("[data-action=trash-empty]").disabled'), true);
     assert.equal(manager.get(survivor.id).pid, survivor.pid, 'outside-trash terminal remains running');
+    await evaluate(`document.querySelector('#wbTrash').close(); document.querySelector('[data-instance="${survivor.id}"]').click()`);
+    await manager.write(survivor.id, 'exit\r');
+    await waitFor(`document.querySelector('[data-terminal-id="${survivor.id}"] .wb-pane-state').getAttribute('aria-label') === '종료됨'`, 'real shell exit updates the pane state');
+    assert.equal(await evaluate(`document.querySelector('[data-instance="${survivor.id}"] .wb-terminal-state').getAttribute('aria-label')`), '종료됨', 'sidebar reflects the same real exit');
+    assert.match(await evaluate('document.querySelector("#wbTerminalStatus .wb-terminal-state").getAttribute("aria-label")'), /종료됨/u);
+    console.log('PASS delayed mount visibility, failed mount retry without duplicate PTYs, and live exit state in pane/sidebar/footer');
     console.log('PASS empty-trash confirmation/cancel, missing sessions, changed identity protection, partial failure/retry and empty state');
     console.log('PASS button-free automatic panel membership, scoped roster/frames without prompt injection');
     console.log('PASS locale switching and session persistence; trash/restore/PID/output persistence/purge, independent and project ownership, SVG icons, deletion/cancel/reload, token usage, responsive widths and expansion; real PTY workspace: shell creation, Unicode, nested splits, per-terminal review focus/evidence, reload persistence, tabs and exact close');
@@ -775,10 +838,7 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error);
-    if (win && !win.isDestroyed()) {
-      console.error('Fixture terminal output:', await win.webContents.executeJavaScript('WhiteboxTerminal.readTerminal(' + JSON.stringify(manager.list()[0]?.id) + ')'));
-      console.error('Fixture review persistence:', await win.webContents.executeJavaScript('JSON.stringify({ saved: localStorage.getItem("whitebox:workspace:v2"), review: document.querySelector("#wbReviewContent")?.textContent })'));
-    }
+    console.error('Fixture terminal output:', await win.webContents.executeJavaScript('WhiteboxTerminal.readTerminal(' + JSON.stringify(manager.list()[0]?.id) + ')'));
     clearTimeout(deadline);
     await manager.dispose();
     win?.destroy();

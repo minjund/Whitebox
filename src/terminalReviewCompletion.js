@@ -95,7 +95,7 @@ function applyCodexRow(state, row) {
 function project(state, idle = true) {
   const completed = state.complete && idle;
   const evidence = state.requestId && state.answer ? `USER:\n${String(state.request).slice(0, 8000)}\n\nASSISTANT (${completed ? 'completed answer' : 'current report'}):\n${bounded(state.answer, 16000)}` : '';
-  return { available: true, state: state.aborted ? 'interrupted' : completed ? 'completed' : idle ? 'unconfirmed' : 'working',
+  return { available: true, inputWaiting: idle, state: state.aborted ? 'interrupted' : completed ? 'completed' : idle ? 'unconfirmed' : 'working',
     request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
     tools: toolEvidence(state), context: reviewContext(state), updates: assistantUpdates(state),

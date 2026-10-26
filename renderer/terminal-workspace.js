@@ -29,6 +29,7 @@
   let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false;
   let fontSize = 14, autoReview = true, reviewWidth = 280, expanded = false;
   let reviewView = 'current';
+  let reviewTask = null;
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
   let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
@@ -40,6 +41,7 @@
   const collaborationStates = new Map(), collaborationNotices = new Map();
   let collaborationLoaded = false;
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
+  const workStates = new Map();
   const root = document.createElement('div');
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
@@ -187,6 +189,7 @@
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
   let draggingId = '';
   let arrangingId = '';
+  let pendingCreation = null;
 
   function report(error) {
     $('#wbError').hidden = false;
@@ -194,7 +197,12 @@
     console.error('terminal-workspace:', error);
   }
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces, standalone, trash, selectedSpace, fontSize, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
+    // A visible creation placeholder is not a terminal and must not survive reload.
+    const storedOwner = owner => {
+      const tabs = owner.tabs.filter(panel => !panel.pending);
+      return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
+    };
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, fontSize, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -241,35 +249,47 @@
       && task.analysisDepth !== 'deferred' && typeof task.summary === 'string' && task.summary.trim());
     return namedTask?.summary.trim() || review?.provider || session?.title || t('터미널');
   }
-  function terminalPosition(id) {
-    for (const owner of owners()) {
-      for (const panel of owner.tabs) {
-        const index = layout.ids(panel.layout).indexOf(id);
-        if (index >= 0) return { owner, panel, index };
+  function terminalState(id) {
+    const session = sessions.get(id), pane = panes.get(id);
+    if (!session) return { state: 'unknown', label: t('연결 확인 필요') };
+    if (['failed', 'exited', 'stopped'].includes(session.status)) return { state: session.status, label: t(session.status === 'failed' ? '실행 실패' : '종료됨') };
+    if (session.status === 'stopping') return { state: 'stopping', label: t('종료 중…') };
+    if (pane?.error) return { state: 'unknown', label: t('연결 확인 필요') };
+    if (session.status === 'starting' || pane?.loading) return { state: 'starting', label: t('시작 중…') };
+    if (session.status === 'running') {
+      const activity = workStates.get(id);
+      if (activity?.creationId === session.creationId && activity.pid === session.pid && Date.now() - activity.observedAt < 5000) {
+        const labels = { working: '작업 중', idle: '입력 대기', waiting: '사용자 응답 대기', unknown: '작업 상태 확인 중' };
+        return { state: activity.state, label: t(labels[activity.state] || labels.unknown) };
       }
+      return { state: 'unknown', label: t('작업 상태 확인 중') };
     }
-    return null;
+    return { state: 'unknown', label: t('연결 확인 필요') };
   }
-  function terminalLabel(id) {
-    const position = terminalPosition(id);
-    return position ? msg`터미널 ${position.index + 1}` : t('터미널');
+  function stateBadge(value, className = 'wb-terminal-state') {
+    return `<span class="${className}" data-state="${value.state}" role="img" aria-label="${esc(value.label)}" title="${esc(value.label)}"><i aria-hidden="true"></i></span>`;
   }
   function renderPaneTabs() {
-    $('#wbTabs').innerHTML = layout.ids(tab()?.layout).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span>${esc(terminalLabel(id))}</span><small title="${esc(title(id))}">${esc(title(id))}</small></button>`).join('');
+    $('#wbTabs').innerHTML = layout.ids(tab()?.layout).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
   }
   function refreshPaneChrome() {
     for (const [id, pane] of panes) {
       pane.node.querySelector('.wb-pane-title').textContent = title(id);
       pane.node.querySelector('.wb-pane-title').title = title(id);
-      pane.node.setAttribute('aria-label', `${terminalLabel(id)} · ${title(id)}`);
+      pane.node.setAttribute('aria-label', `${title(id)} ${t('터미널')}`);
       const expandButton = pane.node.querySelector('[data-expand-terminal]');
       expandButton.setAttribute('aria-pressed', String(expanded && id === activeId()));
       expandButton.title = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
       expandButton.setAttribute('aria-label', expandButton.title);
-      const provider = reviews.get(id)?.provider;
-      pane.node.querySelector('.wb-pane-state').textContent = sessions.get(id)?.status !== 'running'
-        ? t('종료됨') : provider ? provider.toUpperCase() : t('셸');
+      const value = terminalState(id);
+      const badge = pane.node.querySelector('.wb-pane-state');
+      badge.innerHTML = '<i aria-hidden="true"></i>';
+      badge.dataset.state = value.state;
+      badge.setAttribute('role', 'img');
+      badge.setAttribute('aria-label', value.label);
+      badge.title = value.label;
     }
+    if (activeId()) $('#wbTerminalStatus').innerHTML = `${esc(title(activeId()))} ${stateBadge(terminalState(activeId()))}`;
   }
   function selectPane(id, focus = false) {
     if (!layout.ids(tab()?.layout).includes(id)) return;
@@ -278,7 +298,6 @@
     if (changed) reviewView = 'current';
     if (expanded && changed) { renderLayout(focus); return; }
     root.querySelectorAll('.wb-pane').forEach(node => node.classList.toggle('is-selected', node.dataset.terminalId === id));
-    $('#wbTerminalStatus').textContent = `${title(id)} · ${sessions.get(id)?.status === 'running' ? t('실행 중') : t('종료됨')}`;
     refreshPaneChrome();
     renderPaneTabs();
     renderReview();
@@ -310,11 +329,13 @@
   function instanceRows(owner) {
     return owner.tabs.map(item => {
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
-      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" data-drop-panel="${esc(item.id)}"><div class="wb-panel-heading-row"><button class="wb-panel-heading" data-select-panel="${esc(item.id)}" aria-current="${visible}" aria-expanded="${visible}"><span class="wb-panel-icon" aria-hidden="true">${icon('panel')}</span><span><strong>패널</strong></span></button></div><div class="wb-panel-members" ${visible ? '' : 'hidden'}>${ids.map((id, index) => {
-        const running = sessions.get(id)?.status === 'running';
-        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(running ? visible && (!expanded || id === activeId()) ? t('실행 중') : t('백그라운드 실행') : t('종료됨'))}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-pane-number">터미널 ${index + 1}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong></span></button><button data-arrange-instance="${esc(id)}" class="wb-arrange-instance" title="터미널 이동" aria-label="${esc(title(id))} ${t('터미널 이동')}">${icon('panel')}</button></div>`;
-      }).join('')}<button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" title="이 패널에 터미널 추가">${icon('plus')} 터미널 추가</button></div></section>`;
-    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}">${icon('plus')} ${owner.standalone ? t('독립 패널 추가') : t('패널 추가')} <small>여기로 끌어 분리</small></button>`;
+      const open = !item.collapsed;
+      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" data-drop-panel="${esc(item.id)}" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-heading-row">${ids.length ? `<button class="wb-panel-toggle" data-toggle-panel="${esc(item.id)}" aria-expanded="${open}" aria-controls="wbMembers-${esc(item.id)}" aria-label="${t('패널 펼치기·접기')}">${icon('chevron')}</button>` : ''}<button class="wb-panel-heading" data-select-panel="${esc(item.id)}" aria-current="${visible}"><span class="wb-panel-icon" aria-hidden="true">${icon('panel')}</span><span><strong>패널</strong></span></button><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" title="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" aria-label="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div><div class="wb-panel-members" id="wbMembers-${esc(item.id)}" ${open ? '' : 'hidden'}>${ids.map(id => {
+        const value = terminalState(id);
+        const tooltip = value.label;
+        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(tooltip)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="휴지통으로 이동" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
+      }).join('')}</div></section>`;
+    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')} ${owner.standalone ? t('독립 패널 추가') : t('패널 추가')} <small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
   function renderInstances() {
@@ -329,7 +350,7 @@
     const owner = owners().find(item => item.tabs.some(tab => layout.ids(tab.layout).includes(id)));
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     if (!target) return;
-    selectedSpace = owner.id; owner.activeTab = target.id; target.activePane = id;
+    selectedSpace = owner.id; owner.activeTab = target.id; target.activePane = id; target.collapsed = false;
     renderLayout();
   }
 
@@ -337,7 +358,9 @@
   function selectPanel(panelId) {
     const owner = panelOwner(panelId);
     if (!owner) return;
-    selectedSpace = owner.id; owner.activeTab = panelId; renderLayout();
+    selectedSpace = owner.id; owner.activeTab = panelId;
+    owner.tabs.find(item => item.id === panelId).collapsed = false;
+    renderLayout();
   }
   function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right' }) {
     if (busy || !sessions.has(id) || trashed(id)) return;
@@ -359,12 +382,12 @@
     if (destination) {
       destination.layout = layout.split(destination.layout, targetId, id,
         ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
-      destination.activePane = id; owner.activeTab = destination.id;
+      destination.activePane = id; destination.collapsed = false; owner.activeTab = destination.id;
     } else {
       const next = { id: uuid(), name: t('패널'), layout: { id }, activePane: id };
       owner.tabs.push(next); owner.activeTab = next.id;
     }
-    selectedSpace = owner.id;
+    selectedSpace = owner.id; owner.collapsed = false;
     expanded = false; root.classList.remove('terminal-expanded');
     renderLayout();
   }
@@ -419,7 +442,7 @@
 
   async function ensurePane(session, restoring = false) {
     let pane = panes.get(session.id);
-    if (pane) return pane;
+    if (pane) return pane.promise || pane;
     const node = document.createElement('section');
     node.className = 'wb-pane';
     node.id = `wbPane-${session.id}`;
@@ -427,9 +450,8 @@
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
     node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-state"></span><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="터미널 이동" aria-label="터미널 이동">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
-    node.querySelector('.wb-pane-state').textContent = session.status === 'running' ? 'SHELL' : t('종료됨');
     $('#wbParking').append(node);
-    pane = { node, dispose: null, promise: null };
+    pane = { node, dispose: null, promise: null, loading: true, error: false };
     panes.set(session.id, pane);
     node.addEventListener('pointerdown', () => selectPane(session.id));
     pane.promise = terminal.mountTerminal(session.id, node.querySelector('.wb-terminal-mount'), {
@@ -452,7 +474,19 @@
       },
       fontSize, inputLabel: msg`${session.title} ${session.id.slice(-5)} 터미널 입력`,
       onInputFocus: focused => { if (focused && activeId() !== session.id) selectPane(session.id); },
-    }).then(dispose => { pane.dispose = dispose; return pane; }).catch(error => { panes.delete(session.id); node.remove(); throw error; });
+    }).then(dispose => {
+      pane.dispose = dispose; pane.loading = false;
+      node.querySelector('.wb-pane-loading')?.remove();
+      refreshPaneChrome(); renderInstances();
+      return pane;
+    }).catch(error => {
+      if (restoring) { panes.delete(session.id); node.remove(); throw error; }
+      pane.loading = false; pane.error = true;
+      node.querySelector('.wb-terminal-mount').innerHTML = msg`<div class="wb-pane-loading" role="alert"><p>터미널 연결에 실패했습니다.</p><button data-retry-terminal="${esc(session.id)}">다시 연결</button></div>`;
+      refreshPaneChrome(); renderInstances();
+      throw error;
+    });
+    node.querySelector('.wb-terminal-mount').insertAdjacentHTML('beforeend', msg`<div class="wb-pane-loading" role="status">시작 중…</div>`);
     return pane.promise;
   }
   function renderTree(tree) {
@@ -489,7 +523,11 @@
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
     const current = tab();
-    if (current?.layout) {
+    if (current?.pending) {
+      $('#wbCanvas').innerHTML = msg`<div class="wb-empty wb-creating" role="status" aria-live="polite" aria-busy="true"><span>${icon('terminal')}</span><h2>패널 생성 중…</h2><p>터미널을 연결하고 있어요.</p></div>`;
+      $('#wbTerminalStatus').innerHTML = stateBadge({ state: 'starting', label: t('시작 중…') });
+      renderReview();
+    } else if (current?.layout) {
       if (!layout.ids(current.layout).includes(current.activePane)) current.activePane = layout.ids(current.layout)[0];
       const tree = renderTree(expanded ? { id: current.activePane } : current.layout); tree.style.flex = '1';
       $('#wbCanvas').append(tree);
@@ -497,6 +535,7 @@
       if (focus) requestAnimationFrame(activeFocus);
     } else {
       $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
+      $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
       renderReview();
     }
     renderNav(); save();
@@ -509,26 +548,38 @@
     if (panelId && !destination.tabs.some(item => item.id === panelId)) return;
     busy = true; $('#wbError').hidden = true;
     const owner = destination, previousTab = owner.tabs.find(item => item.id === panelId), selected = previousTab?.activePane || '';
+    const previousActive = owner.activeTab, previousSpace = selectedSpace;
+    const splitting = axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected);
+    const next = splitting ? previousTab : { id: uuid(), name: t('패널'), layout: null, activePane: '', pending: true };
+    if (!splitting) owner.tabs.push(next);
+    pendingCreation = { panelId: next.id };
+    owner.activeTab = next.id; owner.collapsed = false; next.collapsed = false; selectedSpace = owner.id;
+    renderLayout(false);
+    let created = false;
     try {
       const session = await api.terminalCreate({ type: bootstrap.platform.localShell, cwd: owner.cwd, cols: 100, rows: 30, creationId: `workspace:${uuid()}` });
       sessions.set(session.id, session);
-      await ensurePane(session);
-      // Mounting reads the host after creation; reconcile any PID that became
-      // ready before this renderer registered the session's state events.
-      const mounted = await api.terminalGet(session.id);
-      if (mounted?.creationId === session.creationId) sessions.set(session.id, mounted);
-      if (axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected)) {
-        previousTab.layout = layout.split(previousTab.layout, selected, session.id, axis);
-        previousTab.activePane = session.id;
-        owner.activeTab = previousTab.id;
-      } else {
-        const next = { id: uuid(), name: t('패널'), layout: { id: session.id }, activePane: session.id };
-        owner.tabs.push(next); owner.activeTab = next.id;
+      created = true;
+      next.layout = splitting ? layout.split(next.layout, selected, session.id, axis) : { id: session.id };
+      next.activePane = session.id; delete next.pending;
+      // Mount in the visible layout so engine/replay initialization does not
+      // hold the whole panel offscreen or fit it against the hidden parking lot.
+      const mounted = ensurePane(session);
+      renderLayout(false);
+      await mounted;
+      if (tab() === next) activeFocus();
+    } catch (error) {
+      if (!created && !splitting) {
+        owner.tabs = owner.tabs.filter(item => item !== next);
+        if (owner.activeTab === next.id) {
+          owner.activeTab = previousActive;
+          if (selectedSpace === owner.id) selectedSpace = previousSpace;
+        }
+        renderLayout(false);
       }
-      selectedSpace = owner.id;
-      renderLayout();
-    } catch (error) { report(error); }
-    finally { busy = false; }
+      report(error);
+    }
+    finally { pendingCreation = null; busy = false; renderNav(); }
   }
   function detachFromLayout(id) {
     for (const owner of owners()) {
@@ -605,7 +656,7 @@
         owner = { id: uuid(), cwd: item.cwd, name: item.projectName, tabs: [], activeTab: '', nextNumber: 1 };
         spaces.push(owner);
       }
-      const restored = { id: uuid(), name: item.name || msg`터미널 ${owner.nextNumber++}`, layout: { id: session.id }, activePane: session.id };
+      const restored = { id: uuid(), name: item.name || t('패널'), layout: { id: session.id }, activePane: session.id };
       owner.tabs.push(restored); owner.activeTab = restored.id; selectedSpace = owner.id;
       trash = trash.filter(record => record !== item);
       $('#wbTrash').close();
@@ -739,10 +790,10 @@
   function renderReview() {
     renderCollaborationStatus();
     const id = activeId(), value = reviews.get(id);
-    const key = JSON.stringify([id, terminalLabel(id), selectedSpace, tab()?.id, value, autoReview, reviewView]);
+    const key = JSON.stringify([id, title(id), selectedSpace, tab()?.id, value, autoReview, reviewView]);
     if (key === lastReviewKey) return;
     lastReviewKey = key;
-    $('#wbReviewTarget').innerHTML = msg`<span class="wb-target-icon">${icon('terminal')}</span><div><strong>${esc(id ? `${t('패널')} / ${terminalLabel(id)}` : t('선택한 터미널 없음'))}</strong><small>${esc(id ? title(id) : t('터미널을 먼저 열어 주세요'))}</small></div>`;
+    $('#wbReviewTarget').innerHTML = msg`<span class="wb-target-icon">${icon('terminal')}</span><div><strong>${esc(id ? t('선택한 패널') : t('선택한 터미널 없음'))}</strong><small>${esc(id ? title(id) : t('터미널을 먼저 열어 주세요'))}</small></div>`;
     $('#wbReviewAuto').setAttribute('aria-pressed', String(autoReview));
     $('#wbReviewAuto').setAttribute('aria-label', t(autoReview ? '자동 분석 켜짐' : '자동 분석 꺼짐'));
     root.querySelectorAll('[data-review-view]').forEach(button => {
@@ -837,10 +888,15 @@
   });
   async function syncCollaboration() {
     if (!api.terminalCollaboration) return;
-    const groups = owners().flatMap(owner => owner.tabs.map(panel => ({ id: panel.id, name: `${owner.name} · ${panel.name}`, cwd: owner.cwd,
+    const groups = owners().flatMap(owner => owner.tabs.filter(panel => !panel.pending).map(panel => ({ id: panel.id, name: `${owner.name} · ${panel.name}`, cwd: owner.cwd,
       members: layout.ids(panel.layout).map(id => ({ ...sessions.get(id), title: title(id) })).filter(item => item.id && !trashed(item.id)) })));
     const frames = [...panes.keys()].filter(id => !trashed(id)).map(id => ({ id, creationId: sessions.get(id)?.creationId, ...terminal.readTerminalSnapshot(id) }));
     const result = await api.terminalCollaboration({ operation: 'sync', groups, frames });
+    workStates.clear();
+    for (const panel of result.panels || []) for (const member of panel.members || []) {
+      if (member.activity) workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
+    }
+    refreshPaneChrome(); renderInstances();
     collaborationJobs = result.jobs || [];
     for (const job of collaborationJobs) {
       if (collaborationLoaded && job.state === 'completed' && collaborationStates.get(job.id) !== 'completed') {
@@ -880,8 +936,15 @@
     const markup = job => `<div><strong>${esc(job.terminal && job.state === 'completed' ? t('새 터미널 열림') : labels[job.state] || job.state)}</strong><span>${esc((job.targetId || '').slice(-5))} · ${esc(job.request || t('새 터미널'))}</span>${job.error ? `<small>${esc(job.error)}</small>` : ''}</div>`;
     status.innerHTML = jobs.map(markup).join('');
   }
-  async function captureReviews(force = false) {
-    if (reviewBusy || !api.terminalReview) return;
+  function captureReviews(force = false) {
+    if (!api.terminalReview) return Promise.resolve();
+    // A manual refresh must observe its selected terminal after an in-flight
+    // background observation, rather than silently dropping the request.
+    if (reviewBusy) return force ? reviewTask.then(() => captureReviews(true)) : reviewTask;
+    reviewTask = captureReviewsNow(force);
+    return reviewTask;
+  }
+  async function captureReviewsNow(force) {
     reviewBusy = true;
     try {
       try { await syncCollaboration(); } catch (error) {
@@ -902,7 +965,6 @@
         reviews.set(id, history ? { ...result, result: history.result, restored: !result.result } : result);
         const pane = panes.get(id);
         if (pane) pane.node.querySelector('.wb-pane-title').textContent = title(id);
-        if (pane) pane.node.querySelector('.wb-pane-state').textContent = result.provider ? result.provider.toUpperCase() : session.status === 'running' ? 'SHELL' : t('종료됨');
       }
       refreshPaneChrome();
       renderPaneTabs();
@@ -974,7 +1036,23 @@
     }
     if (button.dataset.expandTerminal) { selectPane(button.dataset.expandTerminal); act('expand').catch(report); }
     if (button.dataset.instance) selectInstance(button.dataset.instance);
+    if (button.dataset.togglePanel) {
+      const owner = panelOwner(button.dataset.togglePanel);
+      const panel = owner?.tabs.find(item => item.id === button.dataset.togglePanel);
+      if (panel) {
+        panel.collapsed = !panel.collapsed;
+        renderInstances(); save();
+      }
+    }
     if (button.dataset.selectPanel) selectPanel(button.dataset.selectPanel);
+    if (button.dataset.retryTerminal) {
+      const id = button.dataset.retryTerminal, pane = panes.get(id);
+      if (pane?.error && sessions.has(id)) {
+        panes.delete(id); pane.node.remove();
+        const mounted = ensurePane(sessions.get(id));
+        renderLayout(false); mounted.catch(report);
+      }
+    }
     if (button.dataset.newPanel) createTerminal('', owners().find(item => item.id === button.dataset.newPanel)).catch(report);
     if (button.dataset.addPanelTerminal) {
       const owner = panelOwner(button.dataset.addPanelTerminal);
@@ -1106,11 +1184,8 @@
       for (const session of payload.sessions || []) {
         if (!sessions.has(session.id)) continue;
         sessions.set(session.id, session);
-        if (session.status !== 'running') {
-          const pane = panes.get(session.id);
-          if (pane) pane.node.querySelector('.wb-pane-state').textContent = t('종료됨');
-        }
       }
+      refreshPaneChrome();
       renderInstances();
     });
     api.onTerminalConnection?.(value => {
@@ -1138,6 +1213,7 @@
     await api.rendererReady();
     let panelSyncBusy = false;
     setInterval(() => {
+      refreshPaneChrome(); renderInstances();
       if (panelSyncBusy) return;
       panelSyncBusy = true;
       syncCollaboration().catch(report).finally(() => { panelSyncBusy = false; });
