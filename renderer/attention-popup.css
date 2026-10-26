@@ -522,3 +522,14 @@ label {
     }
   }
 }
+
+/* Wide question card: choices run across the window, long content scrolls. */
+@media (min-width: 520px) {
+  .popup-questions, .option-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .popup-question:only-child { grid-column: 1 / -1; }
+  .popup-text { min-height: 48px; }
+  .permission-actions, .question-actions { display: flex; flex-wrap: wrap; }
+  .permission-actions .popup-button, .question-actions .popup-button { flex: 1 1 130px; width: auto; }
+}
+.popup-actions { position: sticky; bottom: 0; padding-top: 8px; padding-bottom: 3px; background: var(--surface-strong); }
+.popup-command { max-height: 110px; }

@@ -69,7 +69,7 @@ module.exports = async function completionChecks() {
     await fs.appendFile(log, final.subarray(split));
     await capture(submission);
     now += 1000; await capture(submission);
-    await new Promise(resolve => setImmediate(resolve));
+    for (let attempt = 0; calls < 1 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(calls, 1, 'native end_turn completes exactly once even without a screen completion footer');
     now += 90000; await capture(submission);
     assert.equal(calls, 1, 'idle polling does not repeat completed analysis');
@@ -102,7 +102,7 @@ module.exports = async function completionChecks() {
     assert.equal(calls, 1, 'unchanged background answer does not repeat analysis');
     await append([{ ...answer(10000), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: '완료했습니다. 검사 결과를 반영한 7개 에픽입니다.' }] } }, user('late-notification', 10010, '<task-notification>completed</task-notification>')]);
     await capture(submission);
-    await new Promise(resolve => setImmediate(resolve));
+    for (let attempt = 0; calls < 2 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(calls, 2, 'a new completed answer after background hand-back refreshes the same request');
     assert.equal(service.entries.get('terminal').result.tasks.length, 1, 'background continuation updates one request card');
     await capture(submission);
@@ -111,7 +111,8 @@ module.exports = async function completionChecks() {
     await capture(repeat); now += 1000; await capture(repeat);
     assert.equal(calls, 2, 'same request submitted again cannot reuse its previous completion');
     await fs.appendFile(log, ' '.repeat(2 * 1024 * 1024) + '\n' + JSON.stringify(answer(100000)) + '\n');
-    assert.notEqual((await reader.observe(child)).state, 'completed', 'skipped log ranges invalidate earlier request ownership');
+    assert.equal((await reader.observe(child)).state, 'completed', 'a large append is rescanned within the 32 MiB cap without discarding request ownership');
+    assert.equal((await reader.observe(child)).source.skippedBytes, 0);
 
     const codexLog = path.join(codexHome, 'sessions/2026/10/21/rollout-test.jsonl');
     await fs.mkdir(path.dirname(codexLog), { recursive: true });

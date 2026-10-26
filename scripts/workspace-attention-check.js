@@ -71,6 +71,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:set-attention-popups', (_event, value) => { const saved = preference.save(value); popups.setEnabled(saved.enabled); return saved; });
     ipcMain.handle('terminals:review-models', () => ({ claude: [], codex: [] }));
     ipcMain.handle('terminals:review', () => ({ state: 'shell' }));
+    ipcMain.handle('terminals:jev-status', () => ({ configured: false }));
     ipcMain.handle('terminals:collaboration', () => ({ jobs: [], connected: [] }));
     ipcMain.handle('wsl:list-distros', () => []);
     ipcMain.handle('agents:snapshot', () => ({ sessions: [] }));

@@ -4,6 +4,19 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ["이 패널 함께 보기", "Show this panel alongside", "同时显示此面板"],
+  ["함께 보기 해제", "Unpin panel", "取消固定面板"],
+  ["Jev · 판단 분석", "Jev · Typed analysis", "Jev · 结构化分析"],
+  ["Jev 플러그인", "Jev plugin", "Jev 插件"],
+  ["API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.", "Save an API key, then select Jev as the analysis service. Linked task records are sent to TypeSafe to assess support, coverage changes, recovery and repeated checks.", "保存 API 密钥后，在分析服务中选择 Jev。相关任务记录会发送给 TypeSafe，以判断证据、验证范围变化、恢复和重复检查。"],
+  ["API 키", "API key", "API 密钥"],
+  ["키 저장", "Save key", "保存密钥"],
+  ["연결 해제", "Disconnect", "断开连接"],
+  ["Jev 연결됨", "Jev connected", "Jev 已连接"],
+  ["Jev 연결 해제됨", "Jev disconnected", "Jev 已断开"],
+  ["API 키를 저장해 연결하세요.", "Save an API key to connect.", "保存 API 密钥以连接。"],
+  ["근거 준비 중…", "Preparing evidence…", "正在准备证据…"],
+  ["판단 요약", "Decision summary", "判断摘要"],
   ["프로젝트", "Projects", "项目"],
   ["패널", "Panel", "面板"],
   ["셸", "Shell", "Shell"],
@@ -76,6 +89,8 @@
   ["업데이트 다운로드", "Update download", "下载更新"],
   ["작업 중에도 의미 있는 결과가 수집되면 분석합니다. 근거가 부족하면 기다리고, 같은 결과는 다시 분석하지 않습니다. 결과가 나오기 전에는 분석중 상태만 표시합니다. 고정 사용량 상한은 없으며 자동 이해·검토를 끄면 추가 호출을 멈춥니다.", "Meaningful results can be analyzed during work. Analysis waits for sufficient evidence and does not repeat unchanged results. Only the analysis status is shown until results are available. There is no fixed cumulative usage cap; turn automatic review off to stop further calls.", "工作中收集到有意义的结果时也会分析。证据不足时等待，不重复分析相同结果。结果出来前仅显示分析状态。不设累计用量上限；关闭自动审查可停止后续调用。"],
   ["작업 관찰 중", "Observing work", "正在观察工作"],
+  ["분석 사용 한도 대기", "Waiting for analysis capacity", "等待分析额度恢复"],
+  ["다시 시도까지", "Retry in", "重试倒计时"],
   ["분석 대기", "Waiting for analysis", "等待分析"],
   ["분석이 평소보다 오래 걸리고 있어요. 완료되면 표시할게요.", "Analysis is taking longer than usual. Results will appear when ready.", "分析时间较长，完成后将显示结果。"],
   ["중단 시점까지 확인된 내용", "Observed before interruption", "中断前已记录的内容"],

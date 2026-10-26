@@ -21,7 +21,7 @@ function evidenceDigest(chunk) {
     || /\b(?:tests? (?:passed|failed)|\d+ (?:passed|failed)|FAIL|PASS)\b|테스트.*(?:통과|실패)/u.test(item.excerpt || ''));
   return digest([normalize(chunk.request), normalize(String(chunk.text || '').replace(/ASSISTANT \((?:completed answer|current report)\)/gu, 'ASSISTANT')),
     Boolean(tools.length), meaningful.map(item => [item.name, item.status, item.target, normalize(item.excerpt), item.operation, item.exitCode, item.reportedError]),
-    chunk.updates?.items?.map(normalize), chunk.localRecord]);
+    chunk.updates?.items?.map(normalize), chunk.localRecord, chunk.source?.fingerprint || '']);
 }
 function observedFacts(chunk, locale = 'ko') {
   const facts = [];

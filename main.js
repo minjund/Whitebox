@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, net, Notification, screen, nativeImage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, net, Notification, screen, nativeImage, session, safeStorage } = require('electron');
 if (process.env.WHITEBOX_INTERIM_PROFILE_GUARD === '1') {
   require('./src/interimProfileGuardProcess');
 } else {
@@ -1995,7 +1995,11 @@ async function setupRuntime() {
     backgroundQuestionnaire.on('changed', () => sendSnapshot(visibleSnapshotSessions(lastSnapshot)));
   }
   const terminalStoreFile = userFile('terminal-sessions.json');
-  terminalReview = new TerminalReview({ manager: () => terminalManager, runner, file: userFile('terminal-reviews.json'), records: () => [...(terminalCollaboration?.jobs?.values() || [])] });
+  const jevAnalysis = new (require('./src/jevAnalysis').JevAnalysis)({ file: userFile('jev-analysis-key.json'), secure: safeStorage });
+  terminalReview = new TerminalReview({ jev: jevAnalysis, manager: () => terminalManager, runner, file: userFile('terminal-reviews.json'), records: () => [...(terminalCollaboration?.jobs?.values() || [])] });
+  terminalReview.on('changed', payload => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminals:review-state', payload);
+  });
   const terminalHostFile = userFile('terminal-host.json');
   terminalManager = demoCapture
     ? new TerminalManager({
@@ -2433,6 +2437,8 @@ function registerIpcHandlers() {
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });
+  handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
+  handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
   handleTrusted('terminals:review-models', () => require('./src/terminalReviewSettings').reviewModelCatalog());
   registerTerminalIpc({
     createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),

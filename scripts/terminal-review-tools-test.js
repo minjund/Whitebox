@@ -71,8 +71,8 @@ module.exports = async function toolChecks() {
   assert.equal(calls, 1);
   assert.match(prompt, /200 OK/);
   assert.equal((prompt.match(/WebFetch/g) || []).length, 3, 'all three fetch metadata records survive a very long answer');
-  assert.match(prompt, /A tool result being returned does not prove success/);
-  assert.match(prompt, /Never claim to have inspected files, run tests or checked external sources yourself/);
+  assert.match(prompt, /A returned tool result is not proof of success/);
+  assert.match(prompt, /Do not claim your own inspections or tests/);
   assert.equal(task.reviewSchema, 3);
   assert.equal(task.toolEvidence.items.length, 3);
   assert.equal(task.contentAccuracy, '원문 대조는 하지 않았습니다.');

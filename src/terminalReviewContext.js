@@ -6,7 +6,12 @@ const { bounded } = require('./terminalReviewBudget');
 // instructions. Keep it separate from execution evidence for the current turn.
 function archiveRequest(state) {
   if (!state.requestId || !state.request) return;
-  state.context = [...(state.context || []), { request: bounded(state.request, 600), answer: bounded(state.answer, 300) }];
+  state.conditions ||= [];
+  if (/하지|금지|유지|변경|대신|앞으로|철회|never|must|instead|keep|do not|allow|revoke/iu.test(state.request)) {
+    state.conditions.push({ role: 'user', requestId: state.requestId, original: bounded(state.request, 4000) });
+    if (state.conditions.length > 32) { state.conditions.shift(); state.conditionsOmitted = (state.conditionsOmitted || 0) + 1; }
+  }
+  state.context = [...(state.context || []), { request: bounded(state.request, 8000), answer: bounded(state.answer, 300), requestId: state.requestId, source: state.source ? { requestId: state.requestId } : undefined }];
   if (state.context.length > 6) {
     state.context.shift();
     state.contextOmitted = (state.contextOmitted || 0) + 1;
@@ -27,7 +32,7 @@ function recordAnswer(state, answer) {
 }
 
 function reviewContext(state) {
-  return { items: state.context || [], omitted: state.contextOmitted || 0 };
+  return { items: state.context || [], omitted: state.contextOmitted || 0, conditions: state.conditions || [], conditionsOmitted: state.conditionsOmitted || 0 };
 }
 function assistantUpdates(state) {
   return { items: state.updates || [], omitted: state.updatesOmitted || 0 };
@@ -35,7 +40,9 @@ function assistantUpdates(state) {
 function compactContext(context) {
   const items = Array.isArray(context?.items) ? context.items : [];
   return JSON.stringify({ scope: 'earlier turns, not current execution', omitted: (context?.omitted || 0) + Math.max(0, items.length - 6),
-    items: items.slice(-6).map(item => ({ request: bounded(item.request, 320), answer: bounded(item.answer, 140) })) });
+    conditions: (context?.conditions || []).slice(-12).map(item => ({ ...item, original: bounded(item.original, 600), truncated: String(item.original || '').length > 600 })),
+    conditionsOmitted: (context?.conditionsOmitted || 0) + Math.max(0, (context?.conditions?.length || 0) - 12),
+    items: items.slice(-6).map(item => ({ request: bounded(item.request, 320), answer: bounded(item.answer, 140), requestId: item.requestId, userConditions: String(item.request || '').split('\n').filter(line => /하지|금지|유지|변경|대신|앞으로|never|must|instead|keep|do not/iu.test(line)).map(line => bounded(line, 1000)).slice(0, 12) })) });
 }
 function compactUpdates(updates) {
   const items = Array.isArray(updates?.items) ? updates.items : [];

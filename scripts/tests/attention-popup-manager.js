@@ -185,7 +185,7 @@ test('disabled reconciliation retains requests, enabling creates one hardened wi
   manager.setEnabled(true);
   assert.equal(FakeBrowserWindow.instances.length, 2);
   for (const win of FakeBrowserWindow.instances) {
-    assert.equal(win.options.width, POPUP_WIDTH);
+    assert.equal(win.options.width, Math.min(POPUP_WIDTH, 450));
     assert.equal(win.options.show, false);
     assert.equal(win.options.frame, false);
     assert.equal(win.options.transparent, true);
@@ -218,8 +218,8 @@ test('oldest window is above newest and the stack stays bottom-right with the re
   manager.handleResize(eventFor(newEntry.window), { height: 140, hasTextInput: false });
   const oldBounds = oldEntry.window.getBounds();
   const newBounds = newEntry.window.getBounds();
-  assert.deepStrictEqual(newBounds, { x: 100 + 500 - EDGE_MARGIN - POPUP_WIDTH, y: 100 + 600 - EDGE_MARGIN - 140, width: 340, height: 140 });
-  assert.deepStrictEqual(oldBounds, { x: newBounds.x, y: newBounds.y - STACK_GAP - 120, width: 340, height: 120 });
+  assert.deepStrictEqual(newBounds, { x: 100 + 500 - EDGE_MARGIN - 450, y: 100 + 600 - EDGE_MARGIN - 140, width: 450, height: 140 });
+  assert.deepStrictEqual(oldBounds, { x: newBounds.x, y: newBounds.y - STACK_GAP - 120, width: 450, height: 120 });
   assert.equal(oldEntry.window.shownInactive, 1);
   assert.equal(oldEntry.window.shown, 0);
   assert.equal(newEntry.window.shownInactive, 1);
@@ -557,10 +557,10 @@ test('display changes reflow each display stack and preserve explicit display af
   const entry = [...manager.windows.values()][0];
   manager.handleReady(eventFor(entry.window));
   manager.handleResize(eventFor(entry.window), { height: 110 });
-  assert.deepStrictEqual(entry.window.getBounds(), { x: 1252, y: 622, width: 340, height: 110 });
+  assert.deepStrictEqual(entry.window.getBounds(), { x: 1052, y: 622, width: 540, height: 110 });
   screen.displays[1].workArea = { x: 900, y: 20, width: 500, height: 500 };
   screen.emit('display-metrics-changed', {}, screen.displays[1], ['workArea']);
-  assert.deepStrictEqual(entry.window.getBounds(), { x: 1052, y: 402, width: 340, height: 110 });
+  assert.deepStrictEqual(entry.window.getBounds(), { x: 942, y: 402, width: 450, height: 110 });
   manager.dispose();
   assert.equal(screen.listenerCount('display-added'), 0);
   assert.equal(screen.listenerCount('display-removed'), 0);

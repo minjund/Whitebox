@@ -453,3 +453,14 @@ html[data-workspace="terminal"] body > :not(#terminalWorkspace) { display: none 
 @media(max-width: 1160px) { .wb-status > span:last-child { display: none; } }
 @media(min-width: 851px) and (max-width: 1050px) { #terminalWorkspace { --wb-sidebar-width: 210px; } .wb-tab { max-width: 190px !important; } }
 @media(prefers-reduced-motion: reduce) { .wb-project-toggle .wb-icon { transition: none; } }
+
+/* Each visible panel retains its own terminal split tree and project identity. */
+#wbCanvas.wb-multi-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(240px, 1fr); gap: 6px; padding: 6px; overflow: auto; }
+.wb-panel-frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--wb-line); border-radius: 6px; }
+.wb-panel-frame.is-selected { border-color: var(--wb-accent); }
+.wb-panel-frame-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: var(--wb-side); border-bottom: 1px solid var(--wb-line); }
+#terminalWorkspace .wb-panel-frame-heading button { min-width: 0; text-align: left; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#terminalWorkspace .wb-panel-frame-heading button:last-child { color: var(--wb-muted); flex-shrink: 0; }
+#terminalWorkspace .wb-pin-panel { flex-shrink: 0; color: var(--wb-muted); }
+#terminalWorkspace .wb-pin-panel[aria-pressed="true"] { color: var(--wb-accent); background: color-mix(in srgb, var(--wb-accent) 12%, transparent); }
+@media (max-width: 1000px) { #wbCanvas.wb-multi-panel { grid-template-columns: minmax(0, 1fr); } }

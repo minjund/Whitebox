@@ -30,6 +30,7 @@
   let fontSize = 14, autoReview = true, reviewWidth = 280, expanded = false;
   let reviewView = 'current';
   let reviewTask = null;
+  let pinnedPanels = [];
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
   let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
@@ -40,6 +41,16 @@
   const handledCollaborations = new Set();
   const collaborationStates = new Map(), collaborationNotices = new Map();
   let collaborationLoaded = false;
+  const reviewRevisions = new Map();
+  function acceptReview(id, value) {
+    const session = sessions.get(id);
+    if (!session || value.creationId && value.creationId !== session.creationId || value.terminalPid && value.terminalPid !== session.pid) return false;
+    if (!Number.isSafeInteger(value.revision)) return true;
+    const key = `${session.creationId}:${session.pid}`;
+    const previous = reviewRevisions.get(id);
+    if (previous?.key === key && previous.revision > value.revision) return false;
+    reviewRevisions.set(id, { key, revision: value.revision }); return true;
+  }
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
   const workStates = new Map();
   const root = document.createElement('div');
@@ -96,7 +107,8 @@
       </fieldset>
       <label>자동 이해 · 검토 <input id="wbAutoReview" type="checkbox" checked/></label>
 <p class="wb-budget-note">기록만으로 확인할 수 있는 작업은 AI 호출 없이 표시합니다. 해석이 필요한 결과는 변경 이유와 동작 방식을 함께 설명합니다.</p><fieldset class="wb-analysis-settings"><legend>이해·검토용 모델</legend>
-        <label>분석 서비스 <select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
+        <label>분석 서비스 <select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="jev">Jev · 판단 분석</option></select></label>
+        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인</legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label>API 키 <input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key"/></label><div><button type="button" data-action="jev-save">키 저장</button><button type="button" data-action="jev-remove">연결 해제</button></div><p id="wbJevStatus" role="status"></p></fieldset>
         <label data-model-row="claude">Claude 모델 <select id="wbClaudeModel"></select></label>
         <label id="wbClaudeCustomRow" hidden>모델 ID <input id="wbClaudeCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
         <label data-model-row="codex">Codex 모델 <select id="wbCodexModel"></select></label>
@@ -202,7 +214,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, fontSize, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -291,12 +303,22 @@
     }
     if (activeId()) $('#wbTerminalStatus').innerHTML = `${esc(title(activeId()))} ${stateBadge(terminalState(activeId()))}`;
   }
+  function terminalPosition(id) {
+    for (const owner of owners()) for (const panel of owner.tabs) {
+      const index = layout.ids(panel.layout).indexOf(id);
+      if (index >= 0) return { owner, panel, index };
+    }
+    return null;
+  }
   function selectPane(id, focus = false) {
-    if (!layout.ids(tab()?.layout).includes(id)) return;
+    const position = terminalPosition(id);
+    if (!position || !visiblePanels().some(item => item.id === position.panel.id)) return;
     const changed = activeId() !== id;
+    selectedSpace = position.owner.id; position.owner.activeTab = position.panel.id;
     tab().activePane = id;
     if (changed) reviewView = 'current';
     if (expanded && changed) { renderLayout(focus); return; }
+    root.querySelectorAll('[data-visible-panel]').forEach(node => node.classList.toggle('is-selected', node.dataset.visiblePanel === tab()?.id));
     root.querySelectorAll('.wb-pane').forEach(node => node.classList.toggle('is-selected', node.dataset.terminalId === id));
     refreshPaneChrome();
     renderPaneTabs();
@@ -328,9 +350,10 @@
 
   function instanceRows(owner) {
     return owner.tabs.map(item => {
-      const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
+      const ids = layout.ids(item.layout), visible = visiblePanels().includes(item);
+      const pinned = pinnedPanels.includes(item.id);
       const open = !item.collapsed;
-      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" data-drop-panel="${esc(item.id)}" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-heading-row">${ids.length ? `<button class="wb-panel-toggle" data-toggle-panel="${esc(item.id)}" aria-expanded="${open}" aria-controls="wbMembers-${esc(item.id)}" aria-label="${t('패널 펼치기·접기')}">${icon('chevron')}</button>` : ''}<button class="wb-panel-heading" data-select-panel="${esc(item.id)}" aria-current="${visible}"><span class="wb-panel-icon" aria-hidden="true">${icon('panel')}</span><span><strong>패널</strong></span></button><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" title="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" aria-label="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div><div class="wb-panel-members" id="wbMembers-${esc(item.id)}" ${open ? '' : 'hidden'}>${ids.map(id => {
+      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" data-drop-panel="${esc(item.id)}" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-heading-row">${ids.length ? `<button class="wb-panel-toggle" data-toggle-panel="${esc(item.id)}" aria-expanded="${open}" aria-controls="wbMembers-${esc(item.id)}" aria-label="${t('패널 펼치기·접기')}">${icon('chevron')}</button>` : ''}<button class="wb-panel-heading" data-select-panel="${esc(item.id)}" aria-current="${visible}"><span class="wb-panel-icon" aria-hidden="true">${icon('panel')}</span><span><strong>패널</strong></span></button><button class="wb-pin-panel" data-pin-panel="${esc(item.id)}" aria-pressed="${pinned}" title="${pinned ? t('함께 보기 해제') : t('이 패널 함께 보기')}" aria-label="${esc(owner.name)} · ${t('패널')} ${owner.tabs.indexOf(item) + 1} · ${pinned ? t('함께 보기 해제') : t('이 패널 함께 보기')}">${icon('split')}</button><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" title="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" aria-label="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div><div class="wb-panel-members" id="wbMembers-${esc(item.id)}" ${open ? '' : 'hidden'}>${ids.map(id => {
         const value = terminalState(id);
         const tooltip = value.label;
         return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(tooltip)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="휴지통으로 이동" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
@@ -519,6 +542,18 @@
     node.append(first, handle, second);
     return node;
   }
+  function visiblePanels() {
+    const all = owners().flatMap(owner => owner.tabs);
+    pinnedPanels = pinnedPanels.filter(id => all.some(panel => panel.id === id));
+    return [...new Set([...pinnedPanels.map(id => all.find(panel => panel.id === id)), tab()].filter(Boolean))];
+  }
+  function togglePanelView(id) {
+    if (!panelOwner(id)) return;
+    if (pinnedPanels.includes(id)) pinnedPanels = pinnedPanels.filter(item => item !== id);
+    else pinnedPanels = [...new Set([...pinnedPanels, tab()?.id, id].filter(Boolean))];
+    expanded = false; root.classList.remove('terminal-expanded');
+    renderLayout(false);
+  }
   function renderLayout(focus = true) {
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
@@ -527,16 +562,35 @@
       $('#wbCanvas').innerHTML = msg`<div class="wb-empty wb-creating" role="status" aria-live="polite" aria-busy="true"><span>${icon('terminal')}</span><h2>패널 생성 중…</h2><p>터미널을 연결하고 있어요.</p></div>`;
       $('#wbTerminalStatus').innerHTML = stateBadge({ state: 'starting', label: t('시작 중…') });
       renderReview();
-    } else if (current?.layout) {
-      if (!layout.ids(current.layout).includes(current.activePane)) current.activePane = layout.ids(current.layout)[0];
-      const tree = renderTree(expanded ? { id: current.activePane } : current.layout); tree.style.flex = '1';
-      $('#wbCanvas').append(tree);
-      selectPane(current.activePane);
-      if (focus) requestAnimationFrame(activeFocus);
     } else {
-      $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
-      $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
-      renderReview();
+      const displayed = expanded ? [current].filter(Boolean) : visiblePanels();
+      $('#wbCanvas').classList.toggle('wb-multi-panel', displayed.length > 1);
+      if (displayed.length) {
+        for (const panel of displayed) {
+          if (!layout.ids(panel.layout).includes(panel.activePane)) panel.activePane = layout.ids(panel.layout)[0];
+          const tree = renderTree(expanded ? { id: panel.activePane } : panel.layout); tree.style.flex = '1';
+          if (displayed.length === 1) { $('#wbCanvas').append(tree); continue; }
+          const owner = panelOwner(panel.id);
+          const frame = document.createElement('section');
+          frame.className = 'wb-panel-frame'; frame.dataset.visiblePanel = panel.id;
+          frame.setAttribute('aria-label', `${owner.name} · ${t('패널')} ${owner.tabs.indexOf(panel) + 1}`);
+          const heading = document.createElement('header'); heading.className = 'wb-panel-frame-heading';
+          const label = document.createElement('button'); label.dataset.selectPanel = panel.id;
+          label.textContent = `${owner.name} · ${t('패널')} ${owner.tabs.indexOf(panel) + 1}`; label.title = owner.cwd;
+          const unpin = document.createElement('button'); unpin.dataset.pinPanel = panel.id;
+          unpin.textContent = t('함께 보기 해제'); unpin.hidden = !pinnedPanels.includes(panel.id);
+          heading.append(label, unpin); frame.append(heading, tree); $('#wbCanvas').append(frame);
+        }
+        if (!current && displayed[0]) {
+          const owner = panelOwner(displayed[0].id); selectedSpace = owner.id; owner.activeTab = displayed[0].id;
+        }
+        selectPane(activeId());
+        if (focus) requestAnimationFrame(activeFocus);
+      } else {
+        $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
+        $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
+        renderReview();
+      }
     }
     renderNav(); save();
     // Publish moves immediately, even while review analysis is in flight.
@@ -807,14 +861,15 @@
       button.setAttribute('aria-pressed', String(selected));
     });
     const analyst = value?.result?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
-    $('#wbReviewModel').textContent = autoReview ? `${{ claude: 'Claude', codex: 'Codex' }[analyst] || t('자동 분석')}${value?.result?.analysisModel ? ` · ${value.result.analysisModel}` : ''}` : t('자동 분석 꺼짐');
+    $('#wbReviewModel').textContent = autoReview ? `${{ claude: 'Claude', codex: 'Codex', jev: 'Jev' }[analyst] || t('자동 분석')}${value?.result?.analysisModel ? ` · ${value.result.analysisModel}` : ''}` : t('자동 분석 꺼짐');
     const state = !autoReview ? 'paused' : value?.state || 'watching';
     const analyzing = state === 'reviewing';
+    const rateLimited = value?.retryAt > Date.now();
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(state);
     const states = { 'awaiting-answer': t('작업 관찰 중'), paused: t('자동 검토 꺼짐'), watching: t('새 요청을 기다리는 중'), collecting: t('분석 대기'), shell: t('셸 사용 중'), unbound: t('연결 확인 필요'), reviewing: t('분석중…'), ready: t('이번 요청 검토 완료'), error: t('검토를 완료하지 못했습니다') };
     const activity = $('#wbReviewActivity');
     activity.hidden = !['awaiting-answer', 'collecting', 'reviewing', 'error', 'unbound'].includes(state);
-    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}"><i aria-hidden="true"></i><div><strong>${pending ? t('분석중…') : states[state]}</strong></div></div>`;
+    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}"><i aria-hidden="true"></i><div><strong>${state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state]}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
     $('#wbReviewContent').setAttribute('aria-busy', String(analyzing));
     $('[data-action="refresh"]').disabled = analyzing;
     $('[data-action="refresh"]').title = state === 'awaiting-answer' ? t('답변 완료 다시 확인') : t('지금 검토');
@@ -846,10 +901,12 @@
         const checks = task.reviewSchema === 3
           ? `${task.verification ? `<div class="wb-task-section"><h3>${t('확인된 근거')}</h3><p>${esc(task.verification)}</p></div>` : ''}${task.unverified?.length ? `<div class="wb-remaining"><h3>${t('완료 판단에 필요한 확인')}</h3>${task.unverified.map(item => `<p><strong>${esc(item.item)}</strong><br/>${esc(item.reason)}</p>`).join('')}</div>` : ''}`
           : `${task.verification ? `<div class="wb-task-section"><h3>${t('기록에서 확인한 범위')}</h3><p>${esc(task.verification)}</p></div>` : ''}`;
+        const typed = task.typedAnalysis ? `<section class="wb-task-section wb-typed-analysis"><h3>Jev · ${t('판단 요약')}</h3><p>${esc(task.actual)}</p>${task.typedAnalysis.findings.map(item => `<p>${esc(item.text)}</p>`).join('')}<details><summary>${t('판단의 근거 기록')}</summary><blockquote>${esc(task.evidenceQuote)}</blockquote><pre>${esc(JSON.stringify(task.typedAnalysis.probabilities, null, 2))}</pre></details></section>` : '';
         const brief = window.WhiteboxReviewDecision.render(task, { t, esc, taskKey });
         const card = msg`<article class="wb-task">
           <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(task.summary || task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
           ${lifecycle}
+          ${typed}
           ${brief || `<div class="wb-request-comparison"><div class="wb-comparison-row"><h3>${t('요청한 일')}</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}`}
           ${task.decisionIssues?.length ? `<p class="wb-evidence-limit">${t('판단 요약을 확인하지 못해 작업 기록을 표시합니다.')}</p>` : ''}
           ${task.nextStep ? msg`<button class="wb-next-request" data-followup="${esc(taskKey)}">확인할 내용으로 다음 요청 준비</button>` : ''}
@@ -891,7 +948,13 @@
       $('#wbFollowupStatus').textContent = t('복사했어요. 원하는 터미널에 붙여 넣고 보내세요.');
     } catch (error) { $('#wbFollowupStatus').textContent = t('복사하지 못했어요. 내용을 선택해 직접 복사해 주세요.'); }
   });
-  async function syncCollaboration() {
+  let collaborationSync = null;
+  function syncCollaboration() {
+    if (collaborationSync) return collaborationSync;
+    collaborationSync = syncCollaborationNow().finally(() => { collaborationSync = null; });
+    return collaborationSync;
+  }
+  async function syncCollaborationNow() {
     if (!api.terminalCollaboration) return;
     const groups = owners().flatMap(owner => owner.tabs.filter(panel => !panel.pending).map(panel => ({ id: panel.id, name: `${owner.name} · ${panel.name}`, cwd: owner.cwd,
       members: layout.ids(panel.layout).map(id => ({ ...sessions.get(id), title: title(id) })).filter(item => item.id && !trashed(item.id)) })));
@@ -964,8 +1027,13 @@
           reviews.set(id, { state: 'unbound', message: t('이전 터미널에는 검토 연결 식별자가 없습니다. 새 터미널을 열면 이해·검토가 연결됩니다.') });
           continue;
         }
-        const result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview ? terminal.readTerminal(id) : '', enabled: autoReview, force, submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
-        if (sessions.get(id)?.creationId !== session.creationId || trashed(id)) continue;
+        let result;
+        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview ? terminal.readTerminal(id) : '', enabled: autoReview, force: force && id === activeId(), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+        } catch (error) {
+          if (sessions.get(id)?.creationId === session.creationId) reviews.set(id, { ...reviews.get(id), state: 'error', message: String(error.message || error) });
+          continue;
+        }
+        if (sessions.get(id)?.creationId !== session.creationId || trashed(id) || !acceptReview(id, result)) continue;
         const history = retainReview(session, result);
         reviews.set(id, history ? { ...result, result: history.result, restored: !result.result } : result);
         const pane = panes.get(id);
@@ -981,6 +1049,14 @@
     } finally { reviewBusy = false; }
   }
   async function act(action) {
+    if (action === 'jev-save' || action === 'jev-remove') {
+      try {
+        const result = await api.terminalJevConfigure(action === 'jev-remove' ? { remove: true } : { apiKey: $('#wbJevKey').value });
+        $('#wbJevKey').value = ''; $('#wbJevStatus').textContent = result.configured ? t('Jev 연결됨') : t('Jev 연결 해제됨');
+        if (!result.configured && analysisSettings.provider === 'jev') { analysisSettings.provider = 'auto'; save(); renderModelSettings(); }
+      } catch (error) { $('#wbJevStatus').textContent = String(error.message || error); }
+      return;
+    }
     if (action === 'new') return createTerminal();
     if (action === 'new-independent') return createTerminal('', standalone);
     if (action === 'new-panel') return createTerminal('');
@@ -1058,6 +1134,7 @@
         renderLayout(false); mounted.catch(report);
       }
     }
+    if (button.dataset.pinPanel) togglePanelView(button.dataset.pinPanel);
     if (button.dataset.newPanel) createTerminal('', owners().find(item => item.id === button.dataset.newPanel)).catch(report);
     if (button.dataset.addPanelTerminal) {
       const owner = panelOwner(button.dataset.addPanelTerminal);
@@ -1135,9 +1212,10 @@
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
     for (const id of saved.handledCollaborations || []) if (typeof id === 'string') handledCollaborations.add(id);
-    analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
+    analysisSettings = { provider: ['claude', 'codex', 'jev'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }
     renderModelSettings();
+    try { const jev = await api.terminalJevStatus?.(); if (jev) $('#wbJevStatus').textContent = jev.configured ? t('Jev 연결됨') : t('API 키를 저장해 연결하세요.'); } catch { /* Explicit setup errors appear when saving a key. */ }
     fontSize = Math.max(11, Math.min(24, Number(saved.fontSize) || 14));
     setReviewWidth(Number(saved.reviewWidth) || 280);
     autoReview = saved.autoReview !== false;
@@ -1178,6 +1256,7 @@
       owner.tabs.push(item); owner.activeTab ||= item.id;
     }
     if (!spaces.length && !Array.isArray(saved.spaces)) spaces.push({ id: uuid(), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.', name: t('내 작업 공간'), tabs: [], activeTab: '', nextNumber: 1 });
+    pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
     for (const session of sessions.values()) if (!archivedIds.has(session.id)) await ensurePane(session);
     $('#wbAutoReview').checked = autoReview; $('#wbFont').value = fontSize;
@@ -1185,6 +1264,15 @@
     $('#wbConnection').innerHTML = t('<i></i>셸 연결됨');
     renderLayout(false);
     if (!Array.isArray(saved.spaces) && space() && !space().tabs.length && sessions.size === 0 && trash.length === 0) await createTerminal();
+    api.onTerminalReview?.(({ id, value }) => {
+      const session = sessions.get(id);
+      if (!session || trashed(id) || !value || !acceptReview(id, value)) return;
+      const history = retainReview(session, value);
+      const task = value.result?.tasks?.at(-1);
+      if (task?.analysisMetrics) { task.analysisMetrics.displayedAt = Date.now(); save(); }
+      reviews.set(id, history ? { ...value, result: history.result } : value);
+      refreshPaneChrome(); renderPaneTabs(); renderInstances(); renderReview();
+    });
     api.onTerminalState(payload => {
       for (const session of payload.sessions || []) {
         if (!sessions.has(session.id)) continue;
@@ -1224,8 +1312,8 @@
       syncCollaboration().catch(report).finally(() => { panelSyncBusy = false; });
     }, 1000);
     setInterval(() => captureReviews(), 2500);
-    setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing') renderReview(); }, 1000);
-    window.WhiteboxWorkspace = { createTerminal, selectPane, captureReviews, getState: () => ({ busy, spaces, standalone, trash, selectedSpace, activeId: activeId(), sessions: [...sessions.values()] }) };
+    setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing' || reviews.get(activeId())?.retryAt > Date.now()) renderReview(); }, 1000);
+    window.WhiteboxWorkspace = { createTerminal, selectPane, captureReviews, getState: () => ({ busy, spaces, standalone, trash, selectedSpace, pinnedPanels, activeId: activeId(), sessions: [...sessions.values()] }) };
     document.title = `Whitebox ${bootstrap.versions.app}`;
   }
   init().catch(report);

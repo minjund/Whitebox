@@ -60,6 +60,13 @@ contextBridge.exposeInMainWorld('whitebox', {
   pickAsideHistoryFolder: () => ipcRenderer.invoke('sources:pick-history-folder'),
   removeAsideHistoryFolder: folder => ipcRenderer.invoke('sources:remove-history-folder', folder),
   providerUsage: options => ipcRenderer.invoke('providers:usage', options),
+  terminalJevStatus: () => ipcRenderer.invoke('terminals:jev-status'),
+  terminalJevConfigure: payload => ipcRenderer.invoke('terminals:jev-configure', payload),
+  onTerminalReview: callback => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('terminals:review-state', listener);
+    return () => ipcRenderer.removeListener('terminals:review-state', listener);
+  },
   terminalReviewModels: () => ipcRenderer.invoke('terminals:review-models'),
   listWorkspaces: () => ipcRenderer.invoke('workspaces:list'),
   addWorkspaces: () => ipcRenderer.invoke('workspaces:add'),

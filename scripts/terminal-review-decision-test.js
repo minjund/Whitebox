@@ -25,7 +25,9 @@ module.exports = async function decisionChecks() {
   assert.equal(parseReview(JSON.stringify(response(bad)), evidence, 'ko', request, 'interrupted').tasks[0].decision, null);
   assert.equal(assessDecision(bad, { source: evidence, supported: true, unverified: [{}] }).decision, null);
   bad = fixture(); bad.caution = '';
-  assert.equal(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).decision, null);
+  assert.ok(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).decision, 'irrelevant omission alone does not force a warning or repair call');
+  bad = fixture(); bad.reasons[0].evidenceQuote = '[omitted: evidence exceeds budget]';
+  assert.ok(assessDecision(bad, { source: `${evidence}\n[omitted: evidence exceeds budget]`, supported: true }).issues.includes('metadata is not a factual reason'));
   bad = fixture(); bad.action.text = bad.conclusion;
   assert.ok(parse(bad).decisionIssues.includes('repeated explanation'));
   bad = fixture(); bad.action.kind = 'choose';
