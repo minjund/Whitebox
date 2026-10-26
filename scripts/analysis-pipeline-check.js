@@ -123,6 +123,22 @@ module.exports = async function analysisPipelineChecks() {
     queryService.drain(); await wait(() => !queryService.busy);
     assert.equal(rereads, 1); assert.equal(queryCalls, 2, 'retrieval plus quality repair never becomes an unbounded model loop');
     assert.equal(queryService.entries.get('query').result.tasks[0].analysisUsage.total, 30);
+    const conditionQuote = '파일은 삭제하지 마.';
+    for (const linked of [true, false]) {
+      let conditionCalls = 0;
+      const conditionService = new TerminalReview({ manager: () => ({ get: id => ({ id, creationId: 'c', pid: 1, status: 'running' }) }),
+        completion: { prepareEvidence: async () => ({ records: [], recovered: [], prior: [], linkedRecords: [{ id: 'u1', requestId: 'prior-1', role: 'user' }], readCount: 0, readChars: 0 }) },
+        runner: { generateTerminalReview: async () => { conditionCalls++; return JSON.stringify({ tasks: [{ requestQuote: 'request condition', evidenceQuote: 'Implemented the requested output', actual: 'checked', decision: {
+          complexity: 'simple', conclusion: '삭제 없이 사용처를 확인할 수 있다.', reasons: [{ text: '사용자의 삭제 금지 조건이 유지된다.', evidenceQuote: conditionQuote }], caution: '', action: { kind: 'verify', text: '사용처 확인', why: '삭제하지 않고 판단 근거를 얻는다.', request: '파일은 삭제하지 말고 사용처를 확인해줘.' }, alternatives: []
+        } }] }); } } });
+      const conditionChunk = { taskId: 'condition', request: 'request condition', text: 'ASSISTANT: Implemented the requested output, changed the visible message and confirmed the missing context for users.', lifecycle: 'completed', observedAt: 0, queuedAt: 0,
+        source: { file: 'owned-log', requestId: 'current-1' }, context: { items: [], conditions: [{ role: 'user', requestId: linked ? 'prior-1' : 'foreign', original: conditionQuote }] } };
+      const conditionEntry = { key: JSON.stringify(['condition', 'c', 1, undefined]), provider: 'codex', pending: [conditionChunk], latest: { condition: conditionChunk }, seen: {}, revision: 0, locale: 'ko', state: 'collecting' };
+      conditionService.entries.set('condition', conditionEntry); conditionService.scheduling.set('condition', { session: { id: 'condition' }, analysis: { provider: 'codex' } });
+      conditionService.drain(); await wait(() => !conditionService.busy);
+      assert.equal(conditionCalls, linked ? 1 : 2, 'linked user conditions avoid unnecessary repair; foreign context still fails');
+      assert.equal(Boolean(conditionEntry.result.tasks[0].decision), linked);
+    }
     let capacityNow = 0, capacityCalls = 0;
     const capacityFile = path.join(dir, 'capacity.json');
     const capacity = new TerminalReview({ file: capacityFile, now: () => capacityNow,

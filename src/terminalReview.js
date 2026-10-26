@@ -521,6 +521,14 @@ class TerminalReview extends EventEmitter {
         active.evidence = evidence;
         const renderRecords = records => records.map(item => `[${item.id} · ${item.role || 'record'} · ${item.requestId || chunk.source.requestId} · ${item.status}]\n${item.text || ''}`).join('\n');
         active.relatedEvidence = renderRecords(evidence.prior || []);
+        // Earlier user conditions already parsed from this exact linked log are
+        // valid reason citations too. Keep task evidenceQuote current-only.
+        // Never accept an arbitrary context item without a linked user record.
+        const linkedUsers = new Set((evidence.linkedRecords || []).filter(item => item.role === 'user'
+          && item.requestId !== chunk.source.requestId).map(item => item.requestId));
+        const userConditions = [...(chunk.context?.items || []).filter(item => linkedUsers.has(item.requestId)).map(item => item.request),
+          ...(chunk.context?.conditions || []).filter(item => item.role === 'user' && linkedUsers.has(item.requestId)).map(item => item.original)];
+        active.relatedEvidence += '\n' + userConditions.filter(item => typeof item === 'string').join('\n');
         active.retrievals += evidence.readCount;
         currentSource += `\nRECOVERED CURRENT RECORDS (roles identify reported claims vs tool results):\n${renderRecords(evidence.recovered)}`;
         modelSource = `${currentSource}\nLINKED PRIOR VERIFICATIONS (not current execution):\n${active.relatedEvidence}\nPRIOR CONTEXT:\n${compactContext(chunk.context)}\nEVIDENCE COVERAGE:\n${JSON.stringify({ records: evidence.records, linkedPriorRecords: evidence.linkedRecords, omitted: evidence.omitted, omittedFromInput: evidence.omittedFromInput, skippedBytes: evidence.skippedBytes })}`;

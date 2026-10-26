@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { TerminalManager } = require('../src/terminalManager');
-const { AttentionPopupManager } = require('../src/attentionPopupManager');
+const { AttentionPopupManager, EDGE_MARGIN } = require('../src/attentionPopupManager');
 const { AttentionPopupPreferenceStore } = require('../src/attentionPopupPreferenceStore');
 const { attentionProject } = require('../src/attentionProject');
 const root = path.resolve(__dirname, '..');
@@ -95,7 +95,12 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id, 'automatic popup must not switch the selected terminal');
     const entry = [...popups.windows.values()][0];
     const bounds = entry.window.getBounds(), area = screen.getPrimaryDisplay().workArea;
-    assert.ok(bounds.x > area.x + area.width / 2 && bounds.y > area.y + area.height / 2, 'bottom-right placement');
+    // A horizontal popup can start left of the screen center on small displays.
+    // Its right and bottom edges still have to align with the work-area margins.
+    assert.ok(Math.abs(bounds.x + bounds.width - (area.x + area.width - EDGE_MARGIN)) <= 1, 'popup right-edge placement');
+    assert.ok(Math.abs(bounds.y + bounds.height - (area.y + area.height - EDGE_MARGIN)) <= 1, 'popup bottom-edge placement');
+    assert.ok(bounds.x >= area.x && bounds.y >= area.y, 'popup stays inside work area');
+    assert.ok(bounds.width <= Math.floor(area.width * .9) && bounds.height <= Math.min(360, Math.floor(area.height * .9)), 'popup respects horizontal size limits');
     assert.equal(lastPrompts[0].sessionId, first.id, 'ordinary shell without monitor snapshot is scanned');
     const request = [...sandbox.terminalAttentionPrompts.values()][0];
     assert.equal(sandbox.normalizeTerminalAttentionPrompts([{ ...lastPrompts[0], pid: first.pid + 1 }]).size, 0, 'stale process identity rejected');
