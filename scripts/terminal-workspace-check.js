@@ -79,6 +79,9 @@ app.whenReady().then(async () => {
       return { startedAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary ? `${requestSummary} ${marker}` : '', reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+    // Initial bounds can be clamped to the hosted runner's small display.
+    // Resize the hidden window explicitly before testing desktop geometry.
+    win.setContentSize(1450, 900);
     win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
     manager.on('data', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:data', payload); });
     manager.on('state', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:state', payload); });
@@ -105,6 +108,7 @@ app.whenReady().then(async () => {
       throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
+    await waitFor('innerWidth === 1450', 'explicit desktop test viewport');
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
     await evaluate("WhiteboxI18n.setLocale('ko')");
     await win.reload();
