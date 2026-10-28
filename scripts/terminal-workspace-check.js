@@ -317,11 +317,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].tabs.map(panel => ({id:panel.id, layout:panel.layout})))'), separatedPanels, 'reload preserves separate membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-separated-panels.png'), (await win.webContents.capturePage()).toPNG());
-    await waitFor(`document.querySelector('[data-instance="${first.id}"]').title.includes('입력 대기')`, 'activity probe settles after separate-panel reload');
+    await waitFor(`document.querySelector('[data-instance="${first.id}"]').title.includes(${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')})`, 'platform activity state settles after separate-panel reload');
     // Background progress comes from an actual delayed command, with no visible terminal.
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
-    await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output 'HIDDEN_PROGRESS'\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
-    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
+    await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 0);
     assert.equal(await drag(second.id, `[data-drop-panel="${originalPanel}"]`), true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
