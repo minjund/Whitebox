@@ -55,6 +55,12 @@ function ownedExecutablePids() {
     : {size:119993464,sha256:'0cfbfa66d4ea202a0929b5f7eda1b72c2568d245df30ee5c5d15f642dc99e768'};
   const pins = {
     '1.7.3': originalPinned,
+    '2.0.1': process.arch === 'arm64'
+      ? {size:122073307,sha256:'cf6a1ac27b4567e0dd652b0f99ea81cc9a0cfda7ab25cba8b20500f588b3a71a'}
+      : {size:126313538,sha256:'5db2442584d1e17f65cb5ec406d0db3a059e3cd727528e28413f0faf6829fa5b'},
+    '2.0.6': process.arch === 'arm64'
+      ? {size:123048115,sha256:'fb80b9f74746d22bb2076092d0c469187c78cb2aceca42659acc595711887e72'}
+      : {size:126843864,sha256:'2e089fa8e7497f516abb0640125d0fb652c91d107faa0275f5c4e7bfbe5f24bd'},
     '1.8.6': process.arch === 'arm64'
       ? {size:118205927,sha256:'5b15aad4f70ebac77a403fcb93adbc457cee4922e1c5cbaf04c1e5320191af14'}
       : {size:120000980,sha256:'026eeae970882d576c88a6e2039bedda0eca0c5589b7ee6021d8d413f4472e2a'},
@@ -98,7 +104,7 @@ function ownedExecutablePids() {
   assert.equal(await driver.evaluate(`process.mainModule.require('electron').app.getVersion()`),sourceVersion);
   await waitFor(async () => driver.evaluate(`(async () => {
     const w=process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
-    return w ? await w.webContents.executeJavaScript(${JSON.stringify(`document.querySelector('#currentVersion')?.textContent.trim() === ${JSON.stringify(sourceVersion)}`)}) : false;
+    return w ? await w.webContents.executeJavaScript(${JSON.stringify(`document.querySelector(document.documentElement.dataset.workspace === 'terminal' ? '#wbVersion' : '#currentVersion')?.textContent.trim().replace(/^v/, '') === ${JSON.stringify(sourceVersion)}`)}) : false;
   })()`),'official macOS '+sourceVersion+' renderer');
   if (sourceVersion === '1.7.3') {
     // A manual replacement must wait for the official app's idle daemon too.

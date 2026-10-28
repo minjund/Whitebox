@@ -46,7 +46,13 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-install', () => { updateInstallCalls++; return new Promise(resolve => { finishUpdateInstall = resolve; }); });
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
-    for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:renderer-ready', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
+    for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
+    let initialInventoryReads = 0, rendererReadyCalls = 0, inventoryUnavailable = false;
+    ipcMain.handle('app:renderer-ready', () => {
+      assert(initialInventoryReads >= 3, 'renderer readiness must follow recovery of the initial host connection');
+      rendererReadyCalls += 1;
+      return { ok: true };
+    });
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
@@ -62,7 +68,12 @@ app.whenReady().then(async () => {
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
     ipcMain.handle('wsl:list-distros', () => []);
     ipcMain.handle('agents:snapshot', () => ({ sessions: [] }));
-    for (const op of ['list', 'get', 'create', 'write', 'resize', 'close', 'reconnect']) ipcMain.handle(`terminals:${op}`, (_event, ...args) => manager[op](...args));
+    ipcMain.handle('terminals:list', () => {
+      initialInventoryReads += 1;
+      if (initialInventoryReads <= 2 || inventoryUnavailable) throw new Error('fixture: packaged terminal host is still starting');
+      return manager.list();
+    });
+    for (const op of ['get', 'create', 'write', 'resize', 'close', 'reconnect']) ipcMain.handle(`terminals:${op}`, (_event, ...args) => manager[op](...args));
     ipcMain.removeHandler('terminals:create');
     ipcMain.handle('terminals:create', async (_event, options) => {
       if (delayCreation) await new Promise(resolve => { releaseCreation = resolve; });
@@ -958,6 +969,22 @@ app.whenReady().then(async () => {
     console.log('PASS empty-trash confirmation/cancel, missing sessions, changed identity protection, partial failure/retry and empty state');
     console.log('PASS button-free automatic panel membership, scoped roster/frames without prompt injection');
     console.log('PASS locale switching and session persistence; trash/restore/PID/output persistence/purge, independent and project ownership, SVG icons, deletion/cancel/reload, token usage, responsive widths and expansion; real PTY workspace: shell creation, Unicode, nested splits, per-terminal review focus/evidence, reload persistence, tabs and exact close');
+    await win.loadURL('about:blank');
+    const readyBeforeFailure = rendererReadyCalls;
+    const readsBeforeFailure = initialInventoryReads;
+    inventoryUnavailable = true;
+    await win.loadFile(path.join(root, 'renderer/index.html'));
+    await waitFor(`!document.querySelector('#wbError').hidden && document.querySelector('#wbError').textContent.includes('fixture: packaged terminal host is still starting')`, 'persistent inventory failure stays visible');
+    assert(initialInventoryReads - readsBeforeFailure >= 3, 'persistent failure must survive the startup retry budget');
+    const settledReads = initialInventoryReads;
+    await new Promise(resolve => setTimeout(resolve, 750));
+    assert.equal(initialInventoryReads, settledReads, 'startup retries must stop after the visible persistent error');
+    assert.equal(rendererReadyCalls, readyBeforeFailure, 'permanent host failure must never count as renderer readiness');
+    inventoryUnavailable = false;
+    await win.loadFile(path.join(root, 'renderer/index.html'));
+    await waitFor('!!window.WhiteboxWorkspace', 'workspace recovers after the host becomes available');
+    assert(rendererReadyCalls > readyBeforeFailure);
+    console.log('PASS startup inventory recovery, bounded permanent-failure retries, and no false renderer-ready signal');
     clearTimeout(deadline);
     await manager.dispose();
     win.destroy();
