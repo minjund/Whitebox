@@ -78,6 +78,8 @@ async function waitForPackagedRenderer(driver, { timeoutMs = 60000, pollMs = 200
 
 async function clickPackagedUpdate(driver, installer, version, options = {}) {
   const { evaluate } = driver;
+  const sourceVersion = options.currentVersion || version;
+  const sameVersionReinstall = sourceVersion === version;
   let terminalPid = 0;
   const bytes = fs.readFileSync(installer);
   const name = path.basename(installer);
@@ -117,7 +119,11 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       // A startup check may already be using the live release channel. Let it
       // finish before the explicit button check uses the candidate fixture.
       if (this.checkPromise) await this.checkPromise;
-      this.currentVersion = '0.0.0'; this.fetch = globalThis.fetch;
+      // Only candidate self-reinstallation needs an available-version fixture.
+      // An immutable old client's own version comparison must run unchanged.
+      if (${JSON.stringify(sameVersionReinstall)}) this.currentVersion = '0.0.0';
+      else if (this.currentVersion !== ${JSON.stringify(sourceVersion)}) throw new Error('Frozen updater current version changed');
+      this.fetch = globalThis.fetch;
       return check.apply(this,args);
     };
     return true;
