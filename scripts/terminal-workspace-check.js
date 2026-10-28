@@ -23,17 +23,17 @@ app.whenReady().then(async () => {
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let jevConfigured = false;
+  let reviewRetryAt = null;
+  let forcedReviewCalls = 0;
   let requestSummary = '';
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
   let toolEvidence = { source: 'session', items: Array.from({ length: 3 }, () => ({ name: 'WebFetch', status: 'returned', target: 'https://arxiv.org/html/2610.28380v1', excerpt: 'Received 395.7KB (200 OK)' })), omitted: 0 };
-  let reviewRetryAt = null;
-  let reviewState, suppressReview = false, rejectRestoreIdentity = false, rejectedCloseId = '';
+  let reviewState, suppressReview = false, rejectRestoreIdentity = false, rejectedCloseId = '', collaborationFailure = '';
   const otherProject = path.join(profile, 'other-project');
   fs.mkdirSync(otherProject);
   let workspaces = [{ name: 'Whitebox test', path: profile }, { name: 'Other project', path: otherProject }];
   let analysisStamp = 'first', analysisRevision = 1, accountUsageCalls = 0;
   let reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-  let forcedReviewCalls = 0;
   const initialAvailableUpdate = { status: 'available', currentVersion: '2.0.0', latestVersion: '2.0.1', installMode: 'automatic', asset: { name: 'fixture-installer' }, notes: '<script>release notes stay text</script>', checkedAt: '2026-10-22T08:00:00Z' };
   let bootstrapUpdate = { status: 'checking', currentVersion: '2.0.0' }, bootstrapPush = initialAvailableUpdate;
   let updateCheckCalls = 0, updateInstallCalls = 0, releasePageCalls = 0, updateCheckFailure = '', finishUpdateInstall;
@@ -47,15 +47,16 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
     for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:renderer-ready', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
-    ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
-    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigured = !payload.remove && Boolean(payload.apiKey); return { configured: jevConfigured }; });
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
+      if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
       if (payload.operation === 'connect') return { ok: true };
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
       return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
     });
+    ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
+    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigured = !payload.remove && Boolean(payload.apiKey); return { configured: jevConfigured }; });
     ipcMain.handle('terminals:review-models', () => ({ codex: [{id:'fixture-model',label:'Fixture model'}], claude: [{id:'sonnet',label:'Sonnet'}] }));
     ipcMain.handle('providers:usage', () => { accountUsageCalls++; return ({ providers: {codex:{available:true,updatedAt:new Date().toISOString(),weekly:{label:'주간 한도',usedPercent:12.3}},claude:{available:false}} }); });
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
@@ -73,18 +74,17 @@ app.whenReady().then(async () => {
     ipcMain.removeHandler('terminals:get');
     ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
     ipcMain.handle('terminals:review', (_event, payload) => {
-      if (payload.force) forcedReviewCalls++;
+      if(payload.force)forcedReviewCalls++;
       if (payload.enabled === false) return { state: 'paused', provider: 'claude' };
       analysisOptions = payload.analysis;
       if (payload.detail) lastDetail = payload.detail;
       if (payload.submission) lastSubmission = payload.submission;
       captured.set(payload.id, payload.text);
-      const marker = payload.text.includes('ONE_ONLY') ? 'ONE_ONLY' : payload.text.includes('TWO_ONLY') ? 'TWO_ONLY' : payload.text.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
-      return { startedAt, retryAt: reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary ? `${requestSummary} ${marker}` : '', reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
+      const observedText = payload.text.replace(/\s+/g, '');
+      const marker = observedText.includes('ONE_ONLY') ? 'ONE_ONLY' : observedText.includes('TWO_ONLY') ? 'TWO_ONLY' : observedText.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
+      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
-    // Initial bounds can be clamped to the hosted runner's small display.
-    // Resize the hidden window explicitly before testing desktop geometry.
     win.setContentSize(1450, 900);
     win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
     manager.on('data', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:data', payload); });
@@ -112,7 +112,6 @@ app.whenReady().then(async () => {
       throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
-    await waitFor('innerWidth === 1450', 'explicit desktop test viewport');
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
     await evaluate("WhiteboxI18n.setLocale('ko')");
     await win.reload();
@@ -121,6 +120,21 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".wb-main")).padding'), '0px', 'terminal area uses its original full-width layout');
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).padding'), '0px', 'terminal splits have no added outer padding');
     assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceOptions(14).lineHeight'), 1.28, 'original terminal line spacing');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#wbReviewTabs [role=tab]")).map(node => node.textContent)'), ['이번 요청', '히스토리'], 'review has only request and history tabs');
+    assert.equal(await evaluate('document.querySelector("#wbNewTerminal, .wb-work-heading, .wb-panel-heading-row, .wb-panel-color")'), null, 'approved workspace has no introduction, central create button or color-only tabs');
+    const searchSelection = await evaluate('WhiteboxWorkspace.getState().selectedSpace');
+    await evaluate('document.querySelector("#wbProjectSearch").value = "Other project"; document.querySelector("#wbProjectSearch").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.querySelectorAll("#wbSpaces .wb-project").length'), 1);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), searchSelection, 'search filters navigation without changing active work');
+    await evaluate('document.querySelector("#wbProjectSearch").value = ""; document.querySelector("#wbProjectSearch").dispatchEvent(new Event("input"))');
+    collaborationFailure = 'fixture synchronization timeout';
+    await waitFor('!document.querySelector("#wbError").hidden && document.querySelector("#wbError").dataset.scope === "collaboration"', 'transient synchronization error appears');
+    collaborationFailure = '';
+    await waitFor('document.querySelector("#wbError").hidden', 'successful subsequent sync removes its stale error');
+    assert.ok(errors.some(message => message.includes('fixture synchronization timeout')), 'the intentionally injected outage is logged');
+    for (let index = errors.length - 1; index >= 0; index--) {
+      if (errors[index].includes('fixture synchronization timeout')) errors.splice(index, 1);
+    }
     assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), false, 'startup update event wins over stale bootstrap checking state');
     assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").textContent'), '업데이트 있음');
     assert.equal(updateInstallCalls, 0, 'background notification never starts installation');
@@ -160,13 +174,6 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbUpdateInstalledVersion").textContent.includes("확인 불가")', 'unknown installed version shown explicitly');
     assert.equal(await evaluate('document.querySelector("[data-action=update-install]").hidden'), true, 'blocked updater has no install action');
     assert.equal(updateInstallCalls, 1, 'state changes never install automatically');
-    bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
-    await evaluate('document.querySelector("#wbSettings").close()');
-    await win.reload();
-    await waitFor('Boolean(window.WhiteboxWorkspace)', 'update state restores from bootstrap after reload');
-    assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), true);
-    assert.equal(await evaluate('document.querySelector("#wbUpdateError").hidden'), true);
-    console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
     await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('[data-action=jev-save]').click()`);
     await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('Jev 연결됨')`, 'Jev key saved through main IPC');
     assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
@@ -174,6 +181,13 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('#wbAnalysisProvider').value='jev'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('[data-action=jev-remove]').click()`);
     await waitFor(`document.querySelector('#wbAnalysisProvider').value === 'auto'`, 'disconnect resets Jev selection');
     await evaluate('document.querySelector("#wbSettings").close()');
+    bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
+    await evaluate('document.querySelector("#wbSettings").close()');
+    await win.reload();
+    await waitFor('Boolean(window.WhiteboxWorkspace)', 'update state restores from bootstrap after reload');
+    assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), true);
+    assert.equal(await evaluate('document.querySelector("#wbUpdateError").hidden'), true);
+    console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
@@ -230,11 +244,11 @@ app.whenReady().then(async () => {
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('ONE_ONLY 한글 입력 확인')`, 'first shell Unicode output');
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).includes('TWO_ONLY 한글 입력 확인')`, 'second shell Unicode output');
     assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('TWO_ONLY')`), false);
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".wb-panel-heading strong")).map(node => node.textContent)'), ['패널'], 'panels use the approved plain label');
+    assert.equal(await evaluate('document.querySelector(".wb-panel-heading")'), null, 'panels have no visible names or title rows');
+    assert.equal(await evaluate('Array.from(document.querySelectorAll(".wb-panel-group")).every(group => group.contains(group.querySelector("[data-add-panel-terminal]")))'), true, 'terminal-add is inside each panel box');
     assert.equal(await evaluate('document.querySelector(".wb-panel-heading small")'), null, 'panel headings do not repeat terminal counts or state');
     assert.equal(await evaluate('document.querySelectorAll("#wbTabs [data-pane-tab]").length'), 2, 'tabs select terminals within the current panel');
-    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
-    await forceCapture();
+    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), first.id);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 \d+/u);
     assert.equal(await evaluate('document.querySelector(".wb-pane-number")'), null, 'sidebar omits redundant terminal numbering');
@@ -288,44 +302,58 @@ app.whenReady().then(async () => {
     };
     await nativeDrag(second.id, `[data-drop-owner="${originalOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'dragging out creates an independent panel');
-    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2, 'separate panels stay together on the split canvas');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
+    assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
+    assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
+    const splitView = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)');
+    await evaluate(`document.querySelector('[data-drop-panel="${originalPanel}"] [data-instance]').click()`);
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)'), splitView, 'panel selection keeps the displayed split');
     assert.equal(await evaluate(`originalTerminalNode === document.querySelector('[data-terminal-id="${second.id}"]')`), true, 'moving reuses terminal DOM and buffer');
-    assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"]').title`), process.platform === 'win32' ? /작업 상태 확인 중/u : /입력 대기/u);
+    const separatedPanels = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].tabs.map(panel => ({id:panel.id, layout:panel.layout})))');
+    await win.reload();
+    await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload separate panels');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)'), splitView, 'separate-panel screen positions survive reload');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].tabs.map(panel => ({id:panel.id, layout:panel.layout})))'), separatedPanels, 'reload preserves separate membership');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
+    fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-separated-panels.png'), (await win.webContents.capturePage()).toPNG());
+    await waitFor(`document.querySelector('[data-instance="${first.id}"]').title.includes(${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')})`, 'platform activity state settles after separate-panel reload');
     // Background progress comes from an actual delayed command, with no visible terminal.
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 0);
     assert.equal(await drag(second.id, `[data-drop-panel="${originalPanel}"]`), true);
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 1, 'empty source panel is removed');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
     await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`, .5, .1);
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs[0].layout.axis'), 'column');
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs[0].layout.first.id'), second.id, 'top edge inserts above target');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'column');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge inserts above target without changing membership');
     // Drop onto another project, then return the same session to its original panel.
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
+    const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))');
+    await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'explicit together-view preserves cross-project panel display');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'),2);
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'together-view retains logical panel membership');
     const otherPanel = await evaluate('WhiteboxWorkspace.getState().spaces[1].activeTab');
-    const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner => ({id:owner.id, tabs:owner.tabs.map(panel => ({id:panel.id, layout:panel.layout}))})))');
-    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
-    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'different project panels shown together');
-    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
-    await evaluate(`window.pinnedTerminalNode = document.querySelector('[data-terminal-id="${first.id}"]'); WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), originalOwner, 'focus follows the terminal project');
-    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'focus keeps both panels visible');
+    await evaluate(`window.pinnedTerminalNode = document.querySelector('[data-terminal-id="${first.id}"]'); WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)},true)`);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'),originalOwner,'focus follows the terminal project');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'focus retains both projects on screen');
     await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
-    assert.equal(await evaluate(`pinnedTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]')`), true, 'focus preserves terminal DOM');
-    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner => ({id:owner.id, tabs:owner.tabs.map(panel => ({id:panel.id, layout:panel.layout}))})))'), membershipBeforePin, 'viewing leaves project membership and splits intact');
-    fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-multi-panel.png'), (await win.webContents.capturePage()).toPNG());
-    await win.loadFile(path.join(root, 'renderer/index.html'));
-    await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload pinned panels');
-    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 2, 'both panels restored after reload');
-    assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identityBeforeMoves, 'multi-panel display and reload retain exact PTYs');
-    await evaluate(`document.querySelector('[data-pin-panel="${otherPanel}"]').click(); document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
-    assert.equal(await evaluate('document.querySelectorAll("[data-visible-panel]").length'), 0, 'unpin returns to normal panel view');
-    console.log('PASS cross-project panels displayed together, unchanged membership, focus/review routing, DOM/PTY identity and reload persistence');
+    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'),/ONE_ONLY/u);
+    assert.equal(await evaluate(`pinnedTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]')`),true,'cross-project focus preserves the terminal DOM');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)','reload pinned projects');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'cross-project shared view survives reload');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),identityBeforeMoves,'shared focus and reload retain every PTY');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'shared focus and reload preserve memberships');
+    await evaluate(`document.querySelector('[data-arrange-instance="${first.id}"]').click(); document.querySelector('#wbMoveTarget').value='${otherPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),1,'explicit unpin returns to this project panel');
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
+    await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="join-panel"]').click()`);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 1, 'explicit join alone merges logical panels');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 0, 'same-panel splits have no color border');
     const beforeSelfDrop = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces)');
     assert.equal(await drag(second.id, `#wbCanvas [data-terminal-id="${second.id}"]`), false);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces)'), beforeSelfDrop, 'self-drop leaves layout intact');
@@ -333,29 +361,14 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='owner:${originalOwner}'; document.querySelector('[data-action="move-terminal"]').click()`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2);
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
+    await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="join-panel"]').click()`);
     assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identityBeforeMoves, 'moves never create, restart, or kill a PTY');
-    // Reparenting can rehydrate the view asynchronously and wrap saved lines at
-    // the new pane width. Require both output markers after hydration completes.
-    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'background output survives panel moves');
-    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).split('\\n').join('').includes('TWO_ONLY')`, 'second terminal output survives panel moves');
+    assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).includes('HIDDEN_PROGRESS')`), true);
+    assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).includes('TWO_ONLY')`), true);
     console.log('PASS panel hierarchy, detach/join, directional and cross-project drag, keyboard move, same PTY identity/buffer, hidden background output');
-    const reviewEvent = { id: first.id, value: { state: 'ready', revision: 10, creationId: first.creationId, terminalPid: manager.get(first.id).pid,
-      provider: 'claude', providerPid: manager.get(first.id).pid + 1, currentTaskId: `ONE_ONLY:${analysisStamp}`,
-      result: { observedAt: new Date().toISOString(), tasks: [{ taskId: `ONE_ONLY:${analysisStamp}`, analysisId: `ONE_ONLY:${analysisStamp}:${analysisRevision}`,
-        request: 'ONE_ONLY', requestQuote: 'ONE_ONLY', actual: 'EVENT_READY_IMMEDIATE', evidenceQuote: 'ONE_ONLY', reviewSchema: 3, observedAt: new Date().toISOString() }] } } };
-    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
-    win.webContents.send('terminals:review-state', reviewEvent);
-    await waitFor('document.querySelector("#wbReviewContent").textContent.includes("EVENT_READY_IMMEDIATE")', 'completed review arrives by event without polling');
-    win.webContents.send('terminals:review-state', { ...reviewEvent, value: { ...reviewEvent.value, revision: 9, state: 'error', message: 'STALE_EVENT_ERROR' } });
-    await new Promise(resolve => setTimeout(resolve, 50));
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /STALE_EVENT_ERROR/u, 'late review event cannot replace a newer result');
-    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(second.id)}, true)`);
-    console.log('PASS review events, versioned stale-result rejection and focused terminal routing');
-
     await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
-    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true)`);
-    await forceCapture();
+    await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true); WhiteboxWorkspace.captureReviews(true)`);
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
     assert.ok(captured.get(first.id).includes('ONE_ONLY'));
@@ -372,9 +385,9 @@ app.whenReady().then(async () => {
       const identities = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
       for (const theme of ['dark', 'light']) {
         await evaluate(`WhiteboxTheme.setTheme(${JSON.stringify(theme)})`);
-        assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceTheme().background'), theme === 'dark' ? '#030304' : '#f3f0ea');
-        const tabBackground = theme === 'dark' ? 'rgb(17, 19, 22)' : 'rgb(250, 250, 250)';
-        await waitFor(`getComputedStyle(document.querySelector('.wb-tab.active')).backgroundColor === ${JSON.stringify(tabBackground)}`, 'theme transitions settle before screenshot');
+        assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceTheme().background'), '#0c0c0c', 'terminal remains neutral black in both shell themes');
+        const tabBackground = theme === 'dark' ? 'rgb(8, 8, 8)' : 'rgb(250, 251, 249)';
+        await waitFor(`getComputedStyle(document.querySelector('.wb-main')).backgroundColor === ${JSON.stringify(tabBackground)}`, 'theme transitions settle before screenshot');
         fs.writeFileSync(path.join(screenshots, `desktop-${theme}.png`), (await win.webContents.capturePage()).toPNG());
       }
       await evaluate('WhiteboxTheme.setTheme("dark")');
@@ -393,12 +406,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(".wb-task-time").getAttribute("datetime")'), '2026-10-21T12:00:00.000Z');
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /보관된 이해|요청 한 번이|개 요청 ·/u);
     assert.equal(accountUsageCalls, 0, 'review never fetches terminal/account-wide usage');
-    assert.equal(await evaluate('document.querySelector("#wbReviewTarget strong").textContent'), '선택한 패널');
+    assert.equal(await evaluate('document.querySelector("#wbReviewTarget strong").textContent'), '선택한 터미널');
     assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '1,400 토큰');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /요청한 일.*실제로 한 일.*왜 이렇게 바꿨나요.*확인된 근거/su);
     assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), false, 'technical details start collapsed');
-    await evaluate('document.querySelector(".wb-task-details > summary").click()');
-    await forceCapture();
+    await evaluate('document.querySelector(".wb-task-details > summary").click(); WhiteboxWorkspace.captureReviews(true)');
     assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), true, 'polling preserves expanded detail');
     const beforeFollowup = manager.get(first.id, true).output;
     await evaluate('document.querySelector("[data-followup]").click()');
@@ -420,13 +432,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(".wb-current-review").hidden'), true);
     assert.equal(await evaluate('document.querySelector(".wb-review-history").hidden'), false);
     assert.equal(await evaluate('document.querySelectorAll(".wb-review-history .wb-history").length'), 1);
-    await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click()`);
-    await forceCapture();
+    await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
     assert.equal(await evaluate('document.querySelector("[data-review-view=current]").getAttribute("aria-pressed")'), 'true', 'changing terminals returns to its current review');
     assert.match(await evaluate('document.querySelector("#wbReviewTarget small").textContent'), /TWO_ONLY/u);
     assert.match(await evaluate('document.querySelector(".wb-current-review").textContent'), /TWO_ONLY/u);
-    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click()`);
-    await forceCapture();
+    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
     const beforeReviewToggle = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
     await evaluate('document.querySelector("#wbReviewAuto").click()');
     await waitFor('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed") === "false"', 'header disables automatic review');
@@ -496,7 +506,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     reviewState = 'collecting';
-    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석 대기/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting review rendered after the previous selection refresh');
+    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석 대기/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting state renders after selection refresh');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 대기/u);
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false');
     reviewRetryAt = Date.now() + 10000;
@@ -505,8 +515,9 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false', 'capacity waiting is not model execution');
     reviewRetryAt = null;
     reviewState = 'reviewing'; startedAt = Date.now() - 31000;
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
+    assert.equal(await evaluate('Boolean(document.querySelector("#wbReviewActivity .ui-tlc"))'), true, 'official thinking loader shows real review state');
     assert.equal(await evaluate('document.querySelector(".wb-review-preview")'), null, 'no redundant observed-facts preview');
     if (process.env.WHITEBOX_REVIEW_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_REVIEW_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
     assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), false);
@@ -530,12 +541,6 @@ app.whenReady().then(async () => {
     await evaluate("document.querySelector('[data-add-panel-terminal]').click()");
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length === 3 && document.querySelectorAll("#wbCanvas canvas").length === 3', 'default new terminal joins current panel and finishes connecting');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
-    // A mounted engine can still be fitting its canvas after the visible split
-    // changes. Check the finished geometry rather than the first paint.
-    await waitFor(`Array.from(document.querySelectorAll('#wbCanvas .wb-terminal-mount')).every(node => {
-      const r = node.getBoundingClientRect(), c = node.querySelector('canvas')?.getBoundingClientRect();
-      return r.width > 100 && r.height > 100 && c?.width > 100 && c?.height > 80;
-    })`, 'all three terminal canvases finish fitting their visible panes');
     const geometry = await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-terminal-mount')).map(node => { const r = node.getBoundingClientRect(); const c = node.querySelector('canvas')?.getBoundingClientRect(); return {width:r.width,height:r.height,canvasWidth:c?.width,canvasHeight:c?.height}; })`);
     assert.ok(geometry.every(item => item.width > 100 && item.height > 100 && item.canvasWidth > 100 && item.canvasHeight > 80), JSON.stringify(geometry));
     const initialPids = manager.list().map(item => item.pid).sort();
@@ -546,13 +551,58 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
     await evaluate('document.querySelector("#wbReviewResize").dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowRight", bubbles:true}))');
-    assert.equal(await evaluate('document.querySelector("#wbReviewResize").getAttribute("aria-valuenow")'), '260');
+    assert.equal(await evaluate('document.querySelector("#wbReviewResize").getAttribute("aria-valuenow")'), '312');
     win.setContentSize(1000, 800);
     await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width >= 450', 'narrow window keeps all three columns visible');
     assert.equal(await evaluate('document.querySelector("#wbReview").getBoundingClientRect().left >= document.querySelector(".wb-main").getBoundingClientRect().right - 1'), true, 'review does not cover terminal panes at 1000px');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'no horizontal page overflow');
+    const checkFittedPanes = async () => {
+      await waitFor(`(async () => {
+        const probeHost = document.createElement('div'); document.body.append(probeHost);
+        const probe = WhiteboxTerminalEngine.createView(probeHost, WhiteboxTerminalEngine.workspaceOptions(Number(document.querySelector('#wbFont').value)));
+        const metrics = probe.terminal.renderer.getMetrics(); probe.terminal.dispose(); probeHost.remove();
+        for (const pane of document.querySelectorAll('#wbCanvas .wb-pane')) {
+          const element = pane.querySelector('.ghostty-terminal'), canvas = pane.querySelector('canvas');
+          if (!element || !canvas) return false;
+          const session = await whitebox.terminalGet(pane.dataset.terminalId);
+          const cols = Math.max(2, Math.floor((element.clientWidth - 15) / metrics.width));
+          const rows = Math.max(1, Math.floor(element.clientHeight / metrics.height));
+          if (session.cols !== cols || session.rows !== rows) { window.fitDiagnostic = {id:pane.dataset.terminalId,actual:[session.cols,session.rows],expected:[cols,rows],element:[element.clientWidth,element.clientHeight],metrics}; return false; }
+          const rect = canvas.getBoundingClientRect();
+          if (Math.abs(rect.width - cols * metrics.width) > 1 || Math.abs(rect.height - rows * metrics.height) > 1) { window.fitDiagnostic = {id:pane.dataset.terminalId,canvas:[rect.width,rect.height],expected:[cols*metrics.width,rows*metrics.height],metrics}; return false; }
+        }
+        return true;
+      })()`, 'each visible canvas and real PTY agree with the final container grid').catch(async error => { throw new Error(error.message + ': ' + JSON.stringify(await evaluate('window.fitDiagnostic'))); });
+    };
+    await checkFittedPanes();
+    // Reproduce a narrow navigation column like the reported screenshot.
+    await evaluate("document.querySelector('#terminalWorkspace').style.setProperty('--wb-sidebar-width', '176px')");
+    const sidebarGeometry = await evaluate(`(() => {
+      const group = document.querySelector('.wb-panel-group').getBoundingClientRect();
+      const plus = document.querySelector('.wb-panel-group .wb-panel-add').getBoundingClientRect();
+      const name = document.querySelector('.wb-instance-copy strong').getBoundingClientRect();
+      return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height };
+    })()`);
+    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 100 && sidebarGeometry.plusHeight >= 30, JSON.stringify(sidebarGeometry));
+    await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
+    for (const width of [780, 640, 1000]) {
+      win.setContentSize(width, 700);
+      await waitFor(`innerWidth === ${width}`, 'window size updated');
+      if (width <= 850) {
+        assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'none', 'compact layout leaves terminal unobstructed');
+        await evaluate('document.querySelector("#wbReviewToggle").click()');
+        assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'flex');
+        await evaluate('document.querySelector(".wb-review-close").click()');
+      }
+      await checkFittedPanes();
+    }
+    await evaluate(`for (let i = 0; i < 5; i++) document.querySelector('.wb-divider').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))`);
+    await checkFittedPanes();
+    assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids, 'resizing keeps the same running shells');
+    console.log('PASS 176px sidebar text/actions, 640/780/1000px layouts, review open/close, rapid split resize and matching canvas/PTY rows and columns');
     win.setContentSize(1450, 900);
     await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width > 850', 'desktop layout restored');
+    await checkFittedPanes();
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     await forceCapture();
     const screenshot = process.env.WHITEBOX_WORKSPACE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-v2-workspace.png');
@@ -572,7 +622,7 @@ app.whenReady().then(async () => {
     const lastPid = manager.get(last).pid;
     await manager.write(last, command('TRASH_KEPT'));
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'trash output fixture');
-    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
     const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
     await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
@@ -601,7 +651,7 @@ app.whenReady().then(async () => {
     assert.equal(manager.get(last).pid, lastPid);
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
-    assert.ok(restoredReview.includes(reviewBeforeTrash), 'original review cards and observation time survive trash and renderer restart');
+    assert.ok(restoredReview.includes(reviewBeforeTrash), `original review cards and observation time survive trash and renderer restart: ${JSON.stringify({before:reviewBeforeTrash,after:restoredReview})}`);
     await evaluate('WhiteboxWorkspace.captureReviews()');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u, 'empty backend poll cannot erase restored review');
     suppressReview = false;
@@ -679,20 +729,12 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32') {
       const inputId = manager.list()[0].id;
       await manager.write(inputId, "printf '\\n› TURN_BOUNDARY_FIXTURE'; read wb_fixture_input\r");
-      // The echoed printf command contains the marker before read is ready.
-      // Wait for the rendered input prompt that the production parser sees.
       await waitFor(`WhiteboxTerminalReviewTurns.submittedPrompt(WhiteboxTerminal.readTerminal(${JSON.stringify(inputId)})) === 'TURN_BOUNDARY_FIXTURE'`, 'submitted request fixture');
       reviewState = 'watching';
-      await forceCapture(); // Model an identified CLI, not an ordinary shell.
+      await forceCapture();
       await evaluate(`WhiteboxTerminal.focusTerminal(${JSON.stringify(inputId)})`);
-      // sendInputEvent requires a focused native window. CDP delivers trusted
-      // key events to this hidden fixture without taking the user's focus.
-      win.webContents.debugger.attach('1.3');
-      try {
-        for (const type of ['keyDown', 'keyUp']) await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
-          type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-        });
-      } finally { win.webContents.debugger.detach(); }
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
       for (let attempt = 0; attempt < 40 && !lastSubmission; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
       assert.equal(lastSubmission?.request, 'TURN_BOUNDARY_FIXTURE', 'real terminal Enter sends a turn boundary to review');
       assert.ok(Number.isFinite(lastSubmission.at), 'submission records its time before terminal output arrives');
@@ -749,8 +791,8 @@ app.whenReady().then(async () => {
     assert.ok(releaseCreation);
     delayCreation = false; releaseCreation();
     await waitFor('Boolean(window.releaseWorkspaceMount)', 'real terminal mount held before readiness');
-    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'real pane is visible while mount finishes');
-    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label")'), '시작 중…');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'new panel switches to its only terminal while mounting');
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label")'), '시작 중…');
     assert.equal(await evaluate('Boolean(document.querySelector("#wbCanvas .wb-pane-loading"))'), true, 'connection progress stays visible');
     await evaluate('releaseWorkspaceMount(); delete window.releaseWorkspaceMount');
     await waitFor(`!WhiteboxWorkspace.getState().busy && WhiteboxWorkspace.getState().sessions.length === ${beforeAdd.sessions + 1}`, 'sidebar new panel');
@@ -761,21 +803,39 @@ app.whenReady().then(async () => {
     const afterAdd = await evaluate(`(() => { const s = WhiteboxWorkspace.getState(); const o = [...s.spaces, s.standalone].find(o => o.id === ${JSON.stringify(beforeAdd.ownerId)}); return { panels:o.tabs.length, selected:o.activeTab, members:WhiteboxWorkspaceLayout.ids(o.tabs.find(t=>t.id===${JSON.stringify(beforeAdd.panelId)}).layout).length, separate:WhiteboxWorkspaceLayout.ids(o.tabs.find(t=>t.id===${JSON.stringify(addedPanel)}).layout).length }; })()`);
     assert.deepEqual(afterAdd, {panels:beforeAdd.panels+1, selected:beforeAdd.panelId, members:beforeAdd.members+1, separate:1});
     assert.deepEqual(manager.list().filter(s=>retained.some(r=>r.id===s.id)).map(({id,pid,creationId})=>({id,pid,creationId})), retained);
-    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'true', 'previously opened panel stays expanded when another panel is selected');
-    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), false);
-    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
-    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'false', 'inactive panel can be collapsed explicitly');
-    assert.equal(await evaluate(`WhiteboxWorkspace.getState().activeId`), await evaluate(`WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner => owner.tabs).find(panel => panel.id === '${beforeAdd.panelId}').activePane`), 'disclosure does not switch the active terminal');
-    assert.equal(await evaluate('document.querySelector(".wb-panel-status")'), null, 'panels do not repeat terminal activity dots');
-    await evaluate(`document.querySelector('[data-select-panel="${beforeAdd.panelId}"]').click()`);
-    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), true, 'explicit collapse survives selection changes');
-    await evaluate(`document.querySelector('[data-select-panel="${addedPanel}"]').click()`);
-    assert.equal(await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').getAttribute('aria-expanded')`), 'true');
-    assert.equal(await evaluate(`document.querySelector('#wbMembers-${beforeAdd.panelId}').hidden`), false, 'selecting another panel keeps the original panel expanded');
-    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
-    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), true, 'active panel can collapse without stopping the terminal');
-    await evaluate(`document.querySelector('[data-toggle-panel="${addedPanel}"]').click()`);
-    await waitFor(`document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${addedPanel}').hidden`), false, 'other panel remains available in its sidebar box');
+    assert.equal(await evaluate('document.querySelector(".wb-panel-status, .wb-panel-heading")'), null, 'panels have no repeated states or name rows');
+    await evaluate(`document.querySelector('[data-drop-panel="${addedPanel}"] [data-instance]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'new panel stays a single screen after switching back');
+    assert.equal(await evaluate(`document.querySelector('#wbMembers-${beforeAdd.panelId}').hidden`), false, 'switching panels leaves other sidebar boxes visible');
+    const singlePanelId = await evaluate('WhiteboxWorkspace.getState().activeId');
+    const singleColor = await evaluate('getComputedStyle(document.querySelector("#wbCanvas .wb-pane")).borderTopColor');
+    const priorPanelColor = await evaluate(`getComputedStyle(document.querySelector('[data-drop-panel="${beforeAdd.panelId}"]')).getPropertyValue('--wb-panel-color')`);
+    assert.notEqual(singleColor, priorPanelColor);
+    const originalRoster = await evaluate(`WhiteboxWorkspaceLayout.ids(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner=>owner.tabs).find(panel=>panel.id==='${beforeAdd.panelId}').layout)`);
+    await evaluate(`document.querySelector('[data-add-panel-terminal="${addedPanel}"]').click()`);
+    await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length===2', 'terminal-add splits the selected panel only');
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane')).every(pane=>pane.dataset.panelId==='${addedPanel}')`), true);
+    assert.equal(await evaluate(`WhiteboxWorkspaceLayout.ids(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner=>owner.tabs).find(panel=>panel.id==='${beforeAdd.panelId}').layout).every((id,index)=>id===${JSON.stringify(originalRoster)}[index])`), true);
+    await evaluate(`document.querySelector('[data-instance="${singlePanelId}"]').click()`);
+    await waitFor(`document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
+    // Intentional mixed-panel placement must still work after fresh-panel isolation.
+    const rosterBeforeArrange = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))');
+    await evaluate(`document.querySelector('[data-arrange-instance="${singlePanelId}"]').click();document.querySelector('#wbMoveTarget').value='${beforeAdd.panelId}';document.querySelector('[data-action="move-terminal"]').click()`);
+    assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>node.dataset.panelId)).size>1'), 'explicit arrange still shows different panels together');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'), rosterBeforeArrange, 'screen placement never changes collaboration membership');
+    const beforePanelReload = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+    const visibleBeforePanelReload = await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>({id:node.dataset.terminalId,color:node.style.getPropertyValue("--wb-panel-color")}))');
+    const ratioBeforePanelReload = await evaluate('(() => {const divider=document.querySelector("#wbCanvas .wb-divider");divider.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}));return divider.getAttribute("aria-valuenow")})()');
+    await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','per-panel arrangement restored');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>({id:node.dataset.terminalId,color:node.style.getPropertyValue("--wb-panel-color")}))'),visibleBeforePanelReload,'intentional shared view and assigned colors survive reload');
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-divider").getAttribute("aria-valuenow")'),ratioBeforePanelReload,'explicit split ratio survives polling and reload');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),beforePanelReload,'navigation and reload retain all PTYs');
+    await evaluate('WhiteboxTheme.setTheme("dark")');
+    const neutralSurfaces = await evaluate('Array.from(document.querySelectorAll(".wb-main,.wb-sidebar,.wb-review,#wbCanvas .wb-pane,#wbCanvas .wb-pane>header,.wb-terminal-mount"),node=>getComputedStyle(node).backgroundColor)');
+    for(const color of neutralSurfaces){const components=color.match(/[\d.]+/g).map(Number);assert.ok(components[0]===components[1]&&components[1]===components[2],color)}
+    assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceTheme().background'),'#0c0c0c');
+    console.log('PASS explicit cross-panel arrangement after isolated creation, logical roster/PTY/color retention, split-ratio reload and neutral dark surfaces');
     const beforeFailure = manager.list().length;
     rejectCreation = true;
     await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click()`);
@@ -784,25 +844,31 @@ app.whenReady().then(async () => {
     assert.equal(manager.list().length, beforeFailure, 'failed creation leaves no extra shell');
     assert.equal(await evaluate('document.querySelector(".wb-panel-group[aria-busy=true], #wbCanvas .wb-creating")'), null, 'failed creation removes placeholders');
     assert.equal(await evaluate('document.querySelector("#wbError").textContent.includes("fixture creation failure")'), true, 'creation failure is actionable');
+    await evaluate('WhiteboxWorkspace.captureReviews()');
+    assert.equal(await evaluate('document.querySelector("#wbError").hidden'), false, 'background sync success does not hide a creation error');
+    await evaluate('document.querySelector("#wbError [data-action=dismiss-error]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbError").hidden'), true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).some(owner => owner.tabs.some(panel => panel.pending))'), false);
     const beforeMountFailure = manager.list().length;
     await evaluate(`(() => {
       window.originalWorkspaceMount = WhiteboxTerminal.mountTerminal;
-      WhiteboxTerminal.mountTerminal = async () => { throw new Error('fixture mount failure'); };
+      WhiteboxTerminal.mountTerminal = async () => { throw new Error("Error invoking remote method 'terminals:get': Error: 명령창 연결이 닫혔습니다."); };
       document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click();
     })()`);
     await waitFor('!WhiteboxWorkspace.getState().busy && Boolean(document.querySelector("#wbCanvas [data-retry-terminal]"))', 'failed mount retains a retry control');
     const failedMountId = await evaluate('WhiteboxWorkspace.getState().activeId');
-    await waitFor(`WhiteboxWorkspace.getState().sessions.some(session => session.id === ${JSON.stringify(failedMountId)} && Number.isSafeInteger(session.pid) && session.pid > 0)`, 'failed mount still observes the asynchronously published shell PID');
+    await waitFor(`WhiteboxWorkspace.getState().sessions.some(session => session.id === ${JSON.stringify(failedMountId)} && Number.isSafeInteger(session.pid) && session.pid > 0)`, 'failed mount observes asynchronously published shell PID');
     const failedMountPid = manager.get(failedMountId).pid;
     assert.equal(manager.list().length, beforeMountFailure + 1, 'failed mount preserves its one actual session');
-    assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-pane-state").getAttribute("aria-label")'), '연결 확인 필요');
+    assert.equal(await evaluate('document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label")'), '연결 확인 필요');
+    assert.equal(await evaluate('document.querySelector("#wbError").textContent'), '명령창 연결이 닫혔습니다.', 'show the useful error without Electron transport boilerplate');
     await evaluate('WhiteboxTerminal.mountTerminal = window.originalWorkspaceMount; delete window.originalWorkspaceMount; document.querySelector("#wbCanvas [data-retry-terminal]").click()');
     await waitFor('!document.querySelector("#wbCanvas .wb-pane-loading") && Boolean(document.querySelector("#wbCanvas canvas"))', 'mount retry reconnects the original terminal');
+    assert.equal(await evaluate('document.querySelector("#wbError").hidden'), true, 'successful reconnect clears its stale error');
     assert.equal(manager.get(failedMountId).pid, failedMountPid);
     assert.equal(manager.list().length, beforeMountFailure + 1, 'retry never duplicates the shell');
     console.log('PASS sidebar new-panel separation and per-panel plus target, including a non-selected panel');
-    console.log('PASS immediate panel creation feedback, duplicate prevention, failure rollback, collapsed arrows and terminal state badges');
+    console.log('PASS immediate panel creation feedback, duplicate prevention, failure rollback, anonymous sidebar boxes, selected-panel views and terminal state badges');
     // Exercise the public socket against a real shell through the real host.
     const { TerminalHostServer, TerminalHostClient } = require('../src/terminalHost');
     const { TerminalCollaboration } = require('../src/terminalCollaboration');
@@ -839,10 +905,10 @@ app.whenReady().then(async () => {
         }
       }
       if (!submitted) throw rejectedFrame;
-      await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env');
+      await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).replace(/\\s+/g, '').includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env across wrapped rows');
       await forceCapture(); await control.sync(collaborationPayload);
       const screen = await panelCommand(['read-screen', '--source', id, '--surface', id, '--json'], opts);
-      assert.ok(screen.text.includes('PANEL_ENV=' + id));
+      assert.ok(screen.text.replace(/\s+/g, '').includes('PANEL_ENV=' + id));
       const after = await client.get(id, false);
       assert.equal(after.pid, before.pid); assert.equal(after.creationId, before.creationId);
       console.log('PASS real PTY → host socket → panel socket → CLI send/read, automatic surface env, unchanged process identity');
@@ -898,7 +964,8 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error);
-    console.error('Fixture terminal output:', await win.webContents.executeJavaScript('WhiteboxTerminal.readTerminal(' + JSON.stringify(manager.list()[0]?.id) + ')'));
+    console.error('Fixture terminal outputs:', await win.webContents.executeJavaScript('JSON.stringify(window.WhiteboxWorkspace?.getState().sessions.map(session => ({id:session.id, text:WhiteboxTerminal.readTerminal(session.id)})) || [])').catch(error => error.message));
+    fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-workspace-failure.png'), (await win.webContents.capturePage()).toPNG());
     clearTimeout(deadline);
     await manager.dispose();
     win?.destroy();

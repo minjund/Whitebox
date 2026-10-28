@@ -26,5 +26,16 @@
     const first = restore(node.first, available, seen, depth + 1), second = restore(node.second, available, seen, depth + 1);
     return first && second ? { axis: node.axis === 'column' ? 'column' : 'row', ratio: Math.max(.15, Math.min(.85, Number(node.ratio) || .5)), first, second } : first || second;
   }
-  return { ids, split, remove, restore };
+  function reconcile(node, panels, available = new Set(panels.flatMap(ids))) {
+    let result = restore(node, available);
+    const present = new Set(ids(result));
+    for (const panel of panels) {
+      const missing = restore(panel, available, new Set(present));
+      if (!missing) continue;
+      result = result ? { axis: 'row', ratio: Math.min(.85, ids(result).length / (ids(result).length + ids(missing).length)), first: result, second: missing } : missing;
+      ids(missing).forEach(id => present.add(id));
+    }
+    return result;
+  }
+  return { ids, split, remove, restore, reconcile };
 });

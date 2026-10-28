@@ -3,6 +3,18 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.6 - 2026-10-28
+
+- Apply the approved clean terminal workspace with anonymous, color-bordered
+  panel boxes and terminal-add controls inside each box.
+- Open a newly created panel as a single terminal; split only when a terminal
+  is added or a user explicitly arranges terminals from different panels.
+- Preserve explicit cross-panel arrangements, PTY identity, buffers and split
+  ratios across navigation and reloads. Keep published analysis and Jev behavior.
+- Use neutral black/gray dark surfaces and reliably fit the final terminal grid
+  after resize or replay. Clear recovered connection notices without duplicating
+  terminal sessions.
+
 ## 2.0.5 - 2026-10-27
 
 - Pin panels from different projects together on one canvas while preserving
