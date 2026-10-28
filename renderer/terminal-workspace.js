@@ -62,7 +62,7 @@
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
     <aside class="wb-sidebar">
-      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox<span class="wb-brand-period">.</span></strong><span>2.0</span></div>
+      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
       <div class="wb-local-workspace"><span>W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
       <div class="wb-sidebar-scroll">
