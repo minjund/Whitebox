@@ -337,7 +337,18 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'explicit together-view preserves cross-project panel display');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'),2);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'together-view retains logical panel membership');
-    await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
+    const otherPanel = await evaluate('WhiteboxWorkspace.getState().spaces[1].activeTab');
+    await evaluate(`window.pinnedTerminalNode = document.querySelector('[data-terminal-id="${first.id}"]'); WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)},true)`);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'),originalOwner,'focus follows the terminal project');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'focus retains both projects on screen');
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'),/ONE_ONLY/u);
+    assert.equal(await evaluate(`pinnedTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]')`),true,'cross-project focus preserves the terminal DOM');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)','reload pinned projects');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'cross-project shared view survives reload');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),identityBeforeMoves,'shared focus and reload retain every PTY');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'shared focus and reload preserve memberships');
+    await evaluate(`document.querySelector('[data-arrange-instance="${first.id}"]').click(); document.querySelector('#wbMoveTarget').value='${otherPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),1,'explicit unpin returns to this project panel');
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
     await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="join-panel"]').click()`);
@@ -718,7 +729,9 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32') {
       const inputId = manager.list()[0].id;
       await manager.write(inputId, "printf '\\n› TURN_BOUNDARY_FIXTURE'; read wb_fixture_input\r");
-      await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(inputId)}).includes('› TURN_BOUNDARY_FIXTURE')`, 'submitted request fixture');
+      await waitFor(`WhiteboxTerminalReviewTurns.submittedPrompt(WhiteboxTerminal.readTerminal(${JSON.stringify(inputId)})) === 'TURN_BOUNDARY_FIXTURE'`, 'submitted request fixture');
+      reviewState = 'watching';
+      await forceCapture();
       await evaluate(`WhiteboxTerminal.focusTerminal(${JSON.stringify(inputId)})`);
       win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
       win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
@@ -805,7 +818,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane')).every(pane=>pane.dataset.panelId==='${addedPanel}')`), true);
     assert.equal(await evaluate(`WhiteboxWorkspaceLayout.ids(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner=>owner.tabs).find(panel=>panel.id==='${beforeAdd.panelId}').layout).every((id,index)=>id===${JSON.stringify(originalRoster)}[index])`), true);
     await evaluate(`document.querySelector('[data-instance="${singlePanelId}"]').click()`);
-    await waitFor('document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label") === "입력 대기"', 'connected shell waits for input');
+    await waitFor(`document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
     // Intentional mixed-panel placement must still work after fresh-panel isolation.
     const rosterBeforeArrange = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))');
     await evaluate(`document.querySelector('[data-arrange-instance="${singlePanelId}"]').click();document.querySelector('#wbMoveTarget').value='${beforeAdd.panelId}';document.querySelector('[data-action="move-terminal"]').click()`);

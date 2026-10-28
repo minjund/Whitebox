@@ -374,9 +374,14 @@
     const changed = activeId() !== id;
     const panel = panelFor(id), owner = panel && panelOwner(panel.id);
     if (!panel || !owner) return;
-    // Selecting a pane changes its logical panel, without replacing the canvas.
-    if (owner === space()) owner.activeTab = panel.id;
-    space().activeSurface = id;
+    // Focus follows the terminal's project while retaining the shared canvas.
+    const projectChanged = owner !== space();
+    if (projectChanged) {
+      const sharedView = canvasLayout();
+      rememberCanvas(); rememberCanvas(owner);
+      selectedSpace = owner.id; owner.viewLayout = sharedView;
+    }
+    owner.activeTab = panel.id; owner.activeSurface = id;
     panel.activePane = id;
     if (changed) reviewView = 'current';
     if (expanded && changed) { renderLayout(focus); return; }
@@ -384,7 +389,7 @@
     refreshPaneChrome();
     renderPaneTabs();
     renderReview();
-    renderInstances();
+    if (projectChanged) renderNav(); else renderInstances();
     save();
     if (focus) activeFocus();
   }
