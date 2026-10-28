@@ -106,6 +106,29 @@ function ownedExecutablePids() {
     const w=process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
     return w ? await w.webContents.executeJavaScript(${JSON.stringify(`document.querySelector(document.documentElement.dataset.workspace === 'terminal' ? '#wbVersion' : '#currentVersion')?.textContent.trim().replace(/^v/, '') === ${JSON.stringify(sourceVersion)}`)}) : false;
   })()`),'official macOS '+sourceVersion+' renderer');
+  if (['2.0.1', '2.0.6'].includes(sourceVersion)) {
+    // These exact immutable clients abandon workspace init after a cold-host
+    // connection failure. Establish the running source baseline before any
+    // updater action; candidate cold startup is verified separately.
+    const archive = path.join(app, 'Contents', 'Resources', 'app.asar');
+    const originalDigest = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
+    const discoveryFile = path.join(profile, 'terminal-host.json');
+    await waitFor(() => fs.existsSync(discoveryFile), 'official ' + sourceVersion + ' cold host discovery');
+    const { TerminalHostClient } = require('../src/terminalHost');
+    const baselineHost = new TerminalHostClient({ discoveryFile });
+    try {
+      await baselineHost.connect();
+      assert(ownedExecutablePids().includes(baselineHost.discovery.pid), 'Official baseline host must belong to this isolated root');
+      await baselineHost.listFresh();
+      const workspaceReady = await driver.evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript('Boolean(window.WhiteboxWorkspace)')`);
+      if (!workspaceReady) {
+        await driver.evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html')).webContents.reload(); true`);
+      }
+      await waitFor(async () => driver.evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript('Boolean(window.WhiteboxWorkspace)')`), 'authenticated official ' + sourceVersion + ' workspace baseline');
+      assert.equal(crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex'), originalDigest);
+      console.log('PASS immutable official ' + sourceVersion + ' baseline host authenticated before updater action; app.asar unchanged');
+    } finally { baselineHost.dispose({ preserveHost: true }); }
+  }
   if (sourceVersion === '1.7.3') {
     // A manual replacement must wait for the official app's idle daemon too.
     // Replacing app.asar while that daemon is alive races the candidate's

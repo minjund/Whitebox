@@ -3,7 +3,7 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
-## 2.0.7 - 2026-10-28
+## 2.0.7 - 2026-10-29
 
 - Keep Whitebox's native macOS app identity for the main window and hidden
   profile guard, preventing generic exec icons and duplicate Dock entries.

@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { fixtureReleaseAssets, selectionDecoys } = require('./release-asset-contract');
 
 async function openInspectedApp(executable, args, env) {
   env = { ...env };
@@ -82,8 +83,15 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   const name = path.basename(installer);
   const asset = { name, size: bytes.length, digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex'),
     state: 'uploaded', browser_download_url: `https://github.com/minjund/Whitebox/releases/download/v${version}/${name}` };
+  const completeAssets = fixtureReleaseAssets(version).map(item => item.name === name ? asset : item);
   const release = { tag_name: 'v' + version, draft: false, prerelease: false,
-    html_url: `https://github.com/minjund/Whitebox/releases/tag/v${version}`, assets: [asset] };
+    html_url: `https://github.com/minjund/Whitebox/releases/tag/v${version}`,
+    assets: [
+      { ...asset, state: 'new' },
+      { ...asset, browser_download_url: `https://example.com/${name}` },
+      ...selectionDecoys(version),
+      ...completeAssets,
+    ] };
   const deadline = Date.now() + 60000;
   await waitForPackagedRenderer(driver);
   // Replace only the external HTTP boundary. Production release selection,

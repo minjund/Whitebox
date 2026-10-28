@@ -84,7 +84,15 @@ from every frozen source cohort with fresh state. It also verifies and executes
 the official v1.6.3 installer and immutable official v1.6.23 bridge as the representative
 full legacy path; all 19 published LoadToAgent packages were separately proven
 to contain byte-identical channel, trust, selector, and automatic-name logic.
-The pinned official 2.0.1, 2.0.3, 2.0.4 and 2.0.5 sources use the authenticated production
+For the exact pinned macOS 2.0.1 and 2.0.6 sources, establish an authenticated
+terminal-host baseline before clicking update. Their immutable workspace init
+does not resume after its first cold-host connection failure, so the fixture may
+reload that source renderer only after the real host is authenticated. The
+installed source app.asar digest must remain unchanged. No updater action has
+started at that point; download, install, parent shutdown, helper acknowledgement,
+candidate renderer readiness, relaunch and cleanup still use their strict checks.
+The candidate's independent cold-profile check must pass without that preparation.
+The pinned official 2.0.1, 2.0.3, 2.0.4, 2.0.5 and 2.0.6 sources use the authenticated production
 terminal host for the idle-parent scenario. The fixture closes only its fresh
 startup workspace shells before requesting a normal window close; app exit,
 helper acknowledgement, relaunch and cleanup deadlines remain strict. The
