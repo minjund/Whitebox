@@ -1,0 +1,20 @@
+[
+  {
+    "name": "button-clean",
+    "source": "https://www.affectui.com/r/button-clean.json",
+    "sha256": "b5863cfe612e6db5c0f2f21cc3d84df3cb4c0a1ff23534c1b8fe6ddb843c53d3",
+    "license": "MIT"
+  },
+  {
+    "name": "segmented-control-clean",
+    "source": "https://www.affectui.com/r/segmented-control-clean.json",
+    "sha256": "1d0e5d145b9364dd1e1c52e29a30a50eed92245d26add9b1b4c991511a9dddc3",
+    "license": "MIT"
+  },
+  {
+    "name": "thinking-loader-clean",
+    "source": "https://www.affectui.com/r/thinking-loader-clean.json",
+    "sha256": "459869b68f0b163262cb183b5d1b1261d3fe621c3551826c06aae136e7047d76",
+    "license": "MIT"
+  }
+]

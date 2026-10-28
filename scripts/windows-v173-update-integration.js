@@ -1070,7 +1070,7 @@ async function main() {
 
   // These pinned official sources need their production terminal host too:
   // capture mode cannot authenticate or close their startup workspace shells.
-  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4'].includes(SOURCE_VERSION);
+  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5'].includes(SOURCE_VERSION);
   if (workspaceSource) delete process.env.WHITEBOX_DEMO_CAPTURE;
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;

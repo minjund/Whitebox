@@ -329,7 +329,27 @@
   }
 
   class FitAddon {
-    constructor() { return new ghosttyWeb.FitAddon(); }
+    constructor() { this.measurement = new ghosttyWeb.FitAddon(); }
+    activate(terminal) { this.terminal = terminal; this.measurement.activate(terminal); }
+    proposeDimensions() {
+      const size = this.measurement.proposeDimensions();
+      return size && { cols: Math.max(2, Math.min(500, size.cols)), rows: Math.max(1, Math.min(200, size.rows)) };
+    }
+    fit() {
+      const terminal = this.terminal;
+      if (!terminal || terminal.disposed) return;
+      const size = this.proposeDimensions();
+      // The native addon drops fits during its 50ms cooldown and remembers a
+      // stale last size across replay hydration. Compare the live grid so the
+      // last drag/window size always reaches both the canvas and the PTY.
+      if (size && (size.cols !== terminal.cols || size.rows !== terminal.rows)) terminal.resize(size.cols, size.rows);
+    }
+    observeResize() {
+      if (!this.terminal?.element || this.observer) return;
+      this.observer = new ResizeObserver(() => this.fit());
+      this.observer.observe(this.terminal.element);
+    }
+    dispose() { this.observer?.disconnect(); this.measurement.dispose(); this.terminal = null; }
   }
   const TERMINAL_THEMES = Object.freeze({
     dark: Object.freeze({
@@ -381,6 +401,7 @@
   });
 
   function workspaceTheme() {
+    if (document.documentElement.dataset.workspace === 'terminal') return { ...TERMINAL_THEMES.dark, background: '#0c0c0c', foreground: '#d0d0d0', cursor: '#ddd', cursorAccent: '#0c0c0c', selectionBackground: '#383838' };
     const name = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
     return { ...TERMINAL_THEMES[name] };
   }

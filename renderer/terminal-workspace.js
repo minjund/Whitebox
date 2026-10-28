@@ -7,6 +7,7 @@
   const layout = window.WhiteboxWorkspaceLayout;
   const esc = window.WhiteboxRendererUtils.esc;
   const { t, msg } = window.WhiteboxWorkspaceI18n;
+  const ui = window.WhiteboxWorkspaceUI;
   const KEY = 'whitebox:workspace:v2';
   const icons = {
     folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11H3Z"/>',
@@ -22,15 +23,19 @@
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
     review: '<path d="M4 6h16M4 12h10M4 18h7m4-1 2 2 4-5"/>',
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+    moon: '<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/>',
   };
   const icon = name => `<svg class="wb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
   const uuid = () => crypto.randomUUID();
   const base = path => String(path).split(/[\\/]/u).filter(Boolean).at(-1) || path;
   let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false;
-  let fontSize = 14, autoReview = true, reviewWidth = 280, expanded = false;
+  let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
   let reviewView = 'current';
   let reviewTask = null;
   let pinnedPanels = [];
+  let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
   let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
@@ -57,7 +62,9 @@
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
     <aside class="wb-sidebar">
-      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
+      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox<span class="wb-brand-period">.</span></strong><span>2.0</span></div>
+      <div class="wb-local-workspace"><span>W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
+      <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
       <div class="wb-sidebar-scroll">
       <div class="wb-side-heading"><span>프로젝트</span><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
       <p class="wb-side-description">작업 폴더별로 묶은 패널</p>
@@ -71,23 +78,24 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <div class="wb-tabbar"><div id="wbTabs" role="tablist" aria-label="이 패널의 터미널"></div></div>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-layout-controls" role="group" aria-label="터미널 배치"><button data-action="layout-row" aria-label="좌우 분할">${icon('split')}</button><button data-action="layout-column" aria-label="상하 분할">${icon('down')}</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button><button data-action="settings" aria-label="설정">${icon('settings')}</button></div></header>
+      <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
-      <footer class="wb-status"><span id="wbConnection"><i></i>터미널 연결 중</span><span id="wbTerminalStatus"></span><span>⌘/Ctrl T 새 터미널 <b>·</b> ⌘/Ctrl D 분할</span></footer>
+      <footer class="wb-status"><span id="wbConnection"><i></i>터미널 연결 중</span><span id="wbTerminalStatus"></span><span>⌘/Ctrl T 터미널 추가 <b>·</b> ⌘/Ctrl D 분할</span></footer>
     </main>
     <aside id="wbReview" class="wb-review" aria-label="선택한 터미널 이해와 검토">
       <div id="wbReviewResize" role="separator" tabindex="0" aria-label="이해 검토 패널 너비" aria-orientation="vertical"></div>
-      <header><h1>이해 · 검토</h1><button id="wbReviewAuto" data-action="auto-review" aria-pressed="true"><span>자동 분석</span><i class="wb-auto-switch" aria-hidden="true"></i></button></header>
+      <header><h1>이해 · 검토</h1><button id="wbReviewAuto" data-action="auto-review" aria-pressed="true"><span>자동 분석</span><i class="wb-auto-switch" aria-hidden="true"></i></button><button class="wb-review-close" data-action="toggle-review" aria-label="닫기">${icon('close')}</button></header>
       <div id="wbReviewTarget" class="wb-review-target"></div>
-      <nav id="wbReviewTabs" class="wb-review-tabs" aria-label="이해와 검토 내용"><button data-review-view="current" aria-pressed="true" class="active">이번 요청</button><button data-review-view="history" aria-pressed="false">분석 기록</button></nav>
+      <nav id="wbReviewTabs" class="wb-review-tabs" aria-label="이해와 검토 내용"><button data-review-view="current" aria-pressed="true" class="active">이번 요청</button><button data-review-view="history" aria-pressed="false">히스토리</button></nav>
       <div id="wbReviewActivity" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="wbCollaborationStatus" class="wb-collaboration-status" aria-live="polite" hidden></div>
       <div id="wbReviewContent" class="wb-review-content"></div>
       <footer><span id="wbReviewModel"></span><button data-action="refresh" title="지금 검토" aria-label="현재 터미널 다시 검토">${icon('refresh')} 다시 분석</button></footer>
     </aside>
     <div id="wbParking" hidden></div>
-    <dialog id="wbArrange"><form method="dialog"><header><h2>터미널 이동</h2><button aria-label="닫기">${icon('close')}</button></header><label>대상 패널<select id="wbMoveTarget"></select></label><label>배치<select id="wbMoveDirection"><option value="right">오른쪽에 배치</option><option value="down">아래에 배치</option><option value="left">왼쪽에 배치</option><option value="up">위에 배치</option></select></label><p>실행 중인 작업과 터미널 기록은 그대로 유지됩니다.</p><div class="wb-dialog-actions"><button type="button" data-action="archive-arranged">휴지통으로 이동</button><button value="cancel">취소</button><button type="button" data-action="move-terminal">터미널 이동</button></div></form></dialog>
+    <dialog id="wbArrange"><form method="dialog"><header><h2>패널 분리 · 화면 배치</h2><button aria-label="닫기">${icon('close')}</button></header><p>패널을 분리해도 같은 화면에서 함께 봅니다. 다른 패널은 테두리 색으로 구분합니다.</p><label>함께 볼 패널<select id="wbMoveTarget"></select></label><label>배치<select id="wbMoveDirection"><option value="right">오른쪽에 배치</option><option value="down">아래에 배치</option><option value="left">왼쪽에 배치</option><option value="up">위에 배치</option></select></label><div class="wb-dialog-actions"><button type="button" data-action="detach-panel">패널 분리</button><button type="button" data-action="join-panel">같은 패널로 묶기</button><button value="cancel">취소</button><button type="button" data-action="pin-arranged">함께 보기</button><button type="button" data-action="move-terminal">분할 배치</button></div></form></dialog>
     <dialog id="wbSettings"><form method="dialog"><header><h2>Whitebox 설정</h2><button aria-label="설정 닫기">${icon('close')}</button></header>
       <fieldset id="wbUpdateSettings" class="wb-analysis-settings"><legend>업데이트</legend>
         <p id="wbUpdateVersions"></p><p id="wbUpdateInstalledVersion" hidden></p>
@@ -196,19 +204,61 @@
   });
   const space = () => owners().find(item => item.id === selectedSpace);
   const tab = () => space()?.tabs.find(item => item.id === space().activeTab);
-  const activeId = () => tab()?.activePane || '';
+  const activeId = () => space()?.activeSurface || tab()?.activePane || '';
+  const panelFor = id => owners().flatMap(owner => owner.tabs).find(panel => layout.ids(panel.layout).includes(id));
+  // Each panel remembers its own screen arrangement. Explicit drag/arrange
+  // operations may include other panels without changing logical membership.
+  function canvasLayout(owner = space()) {
+    if (!owner) return null;
+    const current = owner.tabs.find(panel => panel.id === owner.activeTab);
+    if (!current || current.pending) return null;
+    const available = new Set(owners().flatMap(item => item.tabs.flatMap(panel => layout.ids(panel.layout))));
+    const view = owner.viewLayout || current.viewLayout, present = layout.ids(view);
+    owner.viewLayout = present.length && present.length === new Set(present).size && present.every(id => available.has(id))
+      ? view : layout.restore(view, available) || layout.restore(current.layout, available);
+    current.viewLayout = owner.viewLayout;
+    return owner.viewLayout;
+  }
+  function rememberCanvas(owner = space()) {
+    const current = owner?.tabs.find(panel => panel.id === owner.activeTab);
+    if (current && !current.pending) current.viewLayout = owner.viewLayout;
+  }
+  function activatePanel(owner, panel, id = panel.activePane) {
+    rememberCanvas();
+    if (owner !== space()) rememberCanvas(owner);
+    selectedSpace = owner.id; owner.activeTab = panel.id; panel.collapsed = false;
+    owner.viewLayout = panel.viewLayout || panel.layout;
+    if (id && !layout.ids(owner.viewLayout).includes(id)) owner.viewLayout = panel.layout;
+    owner.activeSurface = layout.ids(owner.viewLayout).includes(id) ? id : layout.ids(panel.layout)[0] || '';
+    panel.activePane = owner.activeSurface;
+    expanded = false; root.classList.remove('terminal-expanded');
+  }
+  const panelColors = ['#77ad91', '#7d9fc8', '#c6a474', '#ab8ebd', '#bd8791', '#77b7b3', '#b9b66e', '#ce997d'];
+  function panelColor(panel) {
+    if (!panel) return panelColors[0];
+    if (/^#[a-f0-9]{6}$/iu.test(panel.color || '') || /^hsl\(\d{1,3}\.\d{3} 38% 66%\)$/u.test(panel.color || '')) return panel.color;
+    const used = new Set(owners().flatMap(owner => owner.tabs).map(item => item.color));
+    panel.color = panelColors.find(color => !used.has(color));
+    let index = owners().flatMap(owner => owner.tabs).length;
+    while (!panel.color || used.has(panel.color)) panel.color = `hsl(${((index++ * 137.508) % 360).toFixed(3)} 38% 66%)`;
+    return panel.color;
+  }
   let lastReviewKey = '';
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
   let draggingId = '';
   let arrangingId = '';
   let pendingCreation = null;
 
-  function report(error) {
+  function report(error, scope = 'general') {
     $('#wbError').hidden = false;
-    $('#wbError').textContent = String(error?.message || error);
+    $('#wbError').dataset.scope = scope;
+    const message = String(error?.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
+    $('#wbError').dataset.connection = String(/명령창.*연결|터미널.*연결/u.test(message));
+    $('#wbError').innerHTML = `<span>${esc(message)}</span><button data-action="dismiss-error" aria-label="${t('닫기')}">${icon('close')}</button>`;
     console.error('terminal-workspace:', error);
   }
   function save() {
+    owners().forEach(rememberCanvas);
     // A visible creation placeholder is not a terminal and must not survive reload.
     const storedOwner = owner => {
       const tabs = owner.tabs.filter(panel => !panel.pending);
@@ -282,10 +332,19 @@
     return `<span class="${className}" data-state="${value.state}" role="img" aria-label="${esc(value.label)}" title="${esc(value.label)}"><i aria-hidden="true"></i></span>`;
   }
   function renderPaneTabs() {
-    $('#wbTabs').innerHTML = layout.ids(tab()?.layout).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
+    $('#wbTabs').innerHTML = layout.ids(canvasLayout()).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
   }
   function refreshPaneChrome() {
+    const visiblePanels = new Set(layout.ids(canvasLayout()).map(panelFor).filter(Boolean));
     for (const [id, pane] of panes) {
+      const panel = panelFor(id), separated = visiblePanels.size > 1 && visiblePanels.has(panel);
+      pane.node.classList.toggle('is-separate-panel', separated);
+      pane.node.style.setProperty('--wb-panel-color', panelColor(panel));
+      pane.node.dataset.panelId = panel?.id || '';
+      const panelBadge = pane.node.querySelector('.wb-pane-panel');
+      panelBadge.hidden = true;
+      panelBadge.textContent = '';
+      panelBadge.removeAttribute('title');
       pane.node.querySelector('.wb-pane-title').textContent = title(id);
       pane.node.querySelector('.wb-pane-title').title = title(id);
       pane.node.setAttribute('aria-label', `${title(id)} ${t('터미널')}`);
@@ -311,14 +370,16 @@
     return null;
   }
   function selectPane(id, focus = false) {
-    const position = terminalPosition(id);
-    if (!position || !visiblePanels().some(item => item.id === position.panel.id)) return;
+    if (!layout.ids(canvasLayout()).includes(id)) return;
     const changed = activeId() !== id;
-    selectedSpace = position.owner.id; position.owner.activeTab = position.panel.id;
-    tab().activePane = id;
+    const panel = panelFor(id), owner = panel && panelOwner(panel.id);
+    if (!panel || !owner) return;
+    // Selecting a pane changes its logical panel, without replacing the canvas.
+    if (owner === space()) owner.activeTab = panel.id;
+    space().activeSurface = id;
+    panel.activePane = id;
     if (changed) reviewView = 'current';
     if (expanded && changed) { renderLayout(focus); return; }
-    root.querySelectorAll('[data-visible-panel]').forEach(node => node.classList.toggle('is-selected', node.dataset.visiblePanel === tab()?.id));
     root.querySelectorAll('.wb-pane').forEach(node => node.classList.toggle('is-selected', node.dataset.terminalId === id));
     refreshPaneChrome();
     renderPaneTabs();
@@ -332,9 +393,7 @@
     for (const owner of owners()) {
       const panel = owner.tabs.find(item => layout.ids(item.layout).includes(id));
       if (!panel) continue;
-      selectedSpace = owner.id;
-      owner.activeTab = panel.id;
-      panel.activePane = id;
+      activatePanel(owner, panel, id);
       renderLayout(true);
       return true;
     }
@@ -342,6 +401,8 @@
   }
 
   function renderNav() {
+    $('#wbBreadcrumbProject').textContent = space()?.name || t('내 작업 공간');
+    root.querySelectorAll('.wb-layout-controls button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.action === `layout-${canvasLayout()?.axis || 'row'}`)));
     renderInstances();
     renderTrash();
     refreshPaneChrome();
@@ -350,30 +411,30 @@
 
   function instanceRows(owner) {
     return owner.tabs.map(item => {
-      const ids = layout.ids(item.layout), visible = visiblePanels().includes(item);
-      const pinned = pinnedPanels.includes(item.id);
-      const open = !item.collapsed;
-      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" data-drop-panel="${esc(item.id)}" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-heading-row">${ids.length ? `<button class="wb-panel-toggle" data-toggle-panel="${esc(item.id)}" aria-expanded="${open}" aria-controls="wbMembers-${esc(item.id)}" aria-label="${t('패널 펼치기·접기')}">${icon('chevron')}</button>` : ''}<button class="wb-panel-heading" data-select-panel="${esc(item.id)}" aria-current="${visible}"><span class="wb-panel-icon" aria-hidden="true">${icon('panel')}</span><span><strong>패널</strong></span></button><button class="wb-pin-panel" data-pin-panel="${esc(item.id)}" aria-pressed="${pinned}" title="${pinned ? t('함께 보기 해제') : t('이 패널 함께 보기')}" aria-label="${esc(owner.name)} · ${t('패널')} ${owner.tabs.indexOf(item) + 1} · ${pinned ? t('함께 보기 해제') : t('이 패널 함께 보기')}">${icon('split')}</button><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" title="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" aria-label="${pendingCreation?.panelId === item.id ? t('생성 중…') : t('이 패널에 터미널 추가')}" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div><div class="wb-panel-members" id="wbMembers-${esc(item.id)}" ${open ? '' : 'hidden'}>${ids.map(id => {
+      const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
+      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
-        const tooltip = value.label;
-        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(tooltip)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="휴지통으로 이동" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
-      }).join('')}</div></section>`;
-    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')} ${owner.standalone ? t('독립 패널 추가') : t('패널 추가')} <small>여기로 끌어 분리</small></button>`;
+        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="휴지통으로 이동" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
+      }).join('')}</div><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널 추가')}</span></button></section>`;
+    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('panel')} <span>패널 추가</span>${icon('plus')}<small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
   function renderInstances() {
     if (draggingId) return; // Keep the native drag source and drop targets attached during polling.
-    const projectsMarkup = spaces.map(item => msg`<section class="wb-project"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" title="${esc(item.cwd)}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
+    const matchingProjects = spaces.filter(item => !projectQuery || [item.name, item.cwd, ...item.tabs.flatMap(panel => layout.ids(panel.layout).map(title))].some(value => String(value).toLocaleLowerCase().includes(projectQuery)));
+    const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" title="${esc(item.cwd)}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
     const independentMarkup = instanceRows(standalone) || t('<p class="wb-no-instances">프로젝트 없는 세션이 여기에 표시됩니다.</p>');
     if (projectsMarkup !== lastProjectsMarkup) { $('#wbSpaces').innerHTML = projectsMarkup; lastProjectsMarkup = projectsMarkup; }
     if (independentMarkup !== lastInstancesMarkup) { $('#wbInstances').innerHTML = independentMarkup; lastInstancesMarkup = independentMarkup; }
   }
 
+  $('#wbProjectSearch').addEventListener('input', event => { projectQuery = event.target.value.trim().toLocaleLowerCase(); renderInstances(); });
+
   function selectInstance(id) {
     const owner = owners().find(item => item.tabs.some(tab => layout.ids(tab.layout).includes(id)));
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     if (!target) return;
-    selectedSpace = owner.id; owner.activeTab = target.id; target.activePane = id; target.collapsed = false;
+    activatePanel(owner, target, id);
     renderLayout();
   }
 
@@ -381,35 +442,47 @@
   function selectPanel(panelId) {
     const owner = panelOwner(panelId);
     if (!owner) return;
-    selectedSpace = owner.id; owner.activeTab = panelId;
-    owner.tabs.find(item => item.id === panelId).collapsed = false;
+    activatePanel(owner, owner.tabs.find(item => item.id === panelId));
     renderLayout();
   }
-  function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right' }) {
+  function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right', join = false }) {
     if (busy || !sessions.has(id) || trashed(id)) return;
     const sourceOwner = owners().find(owner => owner.tabs.some(item => layout.ids(item.layout).includes(id)));
     const source = sourceOwner?.tabs.find(item => layout.ids(item.layout).includes(id));
     const owner = ownerId ? owners().find(item => item.id === ownerId) : panelOwner(panelId);
     const destination = owner?.tabs.find(item => item.id === panelId);
     if (!source || !owner || (!ownerId && !destination)) return;
+    rememberCanvas();
+    if (destination && (owner !== space() || !layout.ids(canvasLayout(owner)).includes(targetId || destination.activePane))) {
+      rememberCanvas(owner); owner.activeTab = destination.id; owner.viewLayout = destination.viewLayout || destination.layout;
+    }
     if (destination) {
-      const candidates = layout.ids(destination.layout).filter(item => item !== id);
+      const candidates = layout.ids(canvasLayout(owner)).filter(item => item !== id);
       targetId ||= candidates.includes(destination.activePane) ? destination.activePane : candidates[0];
       if (!candidates.includes(targetId)) return;
     } else if (sourceOwner === owner && layout.ids(source.layout).length === 1) {
       selectInstance(id); return;
     }
-    // Layout ownership is separate from the host session. Moving never creates,
-    // closes, reconnects or remounts a PTY; the same DOM node and buffer travel.
-    detachFromLayout(id);
-    if (destination) {
+    const sourceView = canvasLayout(sourceOwner), destinationView = canvasLayout(owner);
+    // Screen placement and AI panel membership are independent. A normal
+    // directional drop only arranges the screen; joining is explicit.
+    if (!destination || join) detachFromLayout(id, true);
+    if (destination && join) {
       destination.layout = layout.split(destination.layout, targetId, id,
         ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
       destination.activePane = id; destination.collapsed = false; owner.activeTab = destination.id;
-    } else {
+    } else if (!destination) {
       const next = { id: uuid(), name: t('패널'), layout: { id }, activePane: id };
       owner.tabs.push(next); owner.activeTab = next.id;
     }
+    sourceOwner.viewLayout = sourceView;
+    if (destination) {
+      owner.viewLayout = layout.split(layout.remove(destinationView, id), targetId, id,
+        ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
+    } else owner.viewLayout = sourceOwner === owner ? sourceView
+      : layout.reconcile(destinationView, [{ id }], new Set([...layout.ids(destinationView), id]));
+    rememberCanvas(owner);
+    owner.activeSurface = id;
     selectedSpace = owner.id; owner.collapsed = false;
     expanded = false; root.classList.remove('terminal-expanded');
     renderLayout();
@@ -417,7 +490,7 @@
   function openArrange(id) {
     if (!sessions.has(id) || trashed(id)) return;
     arrangingId = id;
-    $('#wbMoveTarget').innerHTML = owners().map(owner => `<optgroup label="${esc(owner.name)}">${owner.tabs.filter(item => layout.ids(item.layout).some(member => member !== id)).map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}<option value="owner:${esc(owner.id)}">${t('새 패널')}</option></optgroup>`).join('');
+    $('#wbMoveTarget').innerHTML = owners().map(owner => `<optgroup label="${esc(owner.name)}">${owner.tabs.filter(item => layout.ids(item.layout).some(member => member !== id)).map(item => `<option value="${esc(item.id)}">${esc(layout.ids(item.layout).map(title).join(" · "))}</option>`).join('')}<option value="owner:${esc(owner.id)}">${t('새 패널')}</option></optgroup>`).join('');
     $('#wbArrange').showModal();
   }
   function clearDrop() {
@@ -471,7 +544,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-state"></span><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="터미널 이동" aria-label="터미널 이동">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -548,53 +621,40 @@
     return [...new Set([...pinnedPanels.map(id => all.find(panel => panel.id === id)), tab()].filter(Boolean))];
   }
   function togglePanelView(id) {
-    if (!panelOwner(id)) return;
-    if (pinnedPanels.includes(id)) pinnedPanels = pinnedPanels.filter(item => item !== id);
-    else pinnedPanels = [...new Set([...pinnedPanels, tab()?.id, id].filter(Boolean))];
-    expanded = false; root.classList.remove('terminal-expanded');
-    renderLayout(false);
+    const target = panelOwner(id)?.tabs.find(panel => panel.id === id);
+    if (!target) return;
+    if (pinnedPanels.includes(id)) {
+      pinnedPanels = pinnedPanels.filter(item => item !== id);
+      if (target !== tab()) for (const member of layout.ids(target.layout)) space().viewLayout = layout.remove(space().viewLayout, member);
+    } else {
+      pinnedPanels = [...new Set([...pinnedPanels, tab()?.id, id].filter(Boolean))];
+      space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
+    }
+    expanded = false; root.classList.remove('terminal-expanded'); renderLayout(false);
   }
   function renderLayout(focus = true) {
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
     const current = tab();
+    const view = canvasLayout();
     if (current?.pending) {
       $('#wbCanvas').innerHTML = msg`<div class="wb-empty wb-creating" role="status" aria-live="polite" aria-busy="true"><span>${icon('terminal')}</span><h2>패널 생성 중…</h2><p>터미널을 연결하고 있어요.</p></div>`;
       $('#wbTerminalStatus').innerHTML = stateBadge({ state: 'starting', label: t('시작 중…') });
       renderReview();
+    } else if (view) {
+      if (!layout.ids(view).includes(activeId())) space().activeSurface = layout.ids(view)[0];
+      const tree = renderTree(expanded ? { id: activeId() } : view); tree.style.flex = '1';
+      $('#wbCanvas').append(tree);
+      selectPane(activeId());
+      if (focus) requestAnimationFrame(activeFocus);
     } else {
-      const displayed = expanded ? [current].filter(Boolean) : visiblePanels();
-      $('#wbCanvas').classList.toggle('wb-multi-panel', displayed.length > 1);
-      if (displayed.length) {
-        for (const panel of displayed) {
-          if (!layout.ids(panel.layout).includes(panel.activePane)) panel.activePane = layout.ids(panel.layout)[0];
-          const tree = renderTree(expanded ? { id: panel.activePane } : panel.layout); tree.style.flex = '1';
-          if (displayed.length === 1) { $('#wbCanvas').append(tree); continue; }
-          const owner = panelOwner(panel.id);
-          const frame = document.createElement('section');
-          frame.className = 'wb-panel-frame'; frame.dataset.visiblePanel = panel.id;
-          frame.setAttribute('aria-label', `${owner.name} · ${t('패널')} ${owner.tabs.indexOf(panel) + 1}`);
-          const heading = document.createElement('header'); heading.className = 'wb-panel-frame-heading';
-          const label = document.createElement('button'); label.dataset.selectPanel = panel.id;
-          label.textContent = `${owner.name} · ${t('패널')} ${owner.tabs.indexOf(panel) + 1}`; label.title = owner.cwd;
-          const unpin = document.createElement('button'); unpin.dataset.pinPanel = panel.id;
-          unpin.textContent = t('함께 보기 해제'); unpin.hidden = !pinnedPanels.includes(panel.id);
-          heading.append(label, unpin); frame.append(heading, tree); $('#wbCanvas').append(frame);
-        }
-        if (!current && displayed[0]) {
-          const owner = panelOwner(displayed[0].id); selectedSpace = owner.id; owner.activeTab = displayed[0].id;
-        }
-        selectPane(activeId());
-        if (focus) requestAnimationFrame(activeFocus);
-      } else {
-        $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
-        $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
-        renderReview();
-      }
+      $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
+      $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
+      renderReview();
     }
     renderNav(); save();
     // Publish moves immediately, even while review analysis is in flight.
-    syncCollaboration().catch(error => report(error));
+    syncCollaboration().catch(error => report(error, 'collaboration'));
   }
   async function createTerminal(axis = 'row', destination = space(), panelId = destination?.activeTab) {
     if (busy) return;
@@ -602,10 +662,14 @@
     if (panelId && !destination.tabs.some(item => item.id === panelId)) return;
     busy = true; $('#wbError').hidden = true;
     const owner = destination, previousTab = owner.tabs.find(item => item.id === panelId), selected = previousTab?.activePane || '';
-    const previousActive = owner.activeTab, previousSpace = selectedSpace;
+    rememberCanvas(); rememberCanvas(owner);
+    const previousActive = owner.activeTab, previousSpace = selectedSpace, previousView = owner.viewLayout, previousSurface = owner.activeSurface, previousPins = pinnedPanels;
     const splitting = axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected);
     const next = splitting ? previousTab : { id: uuid(), name: t('패널'), layout: null, activePane: '', pending: true };
-    if (!splitting) owner.tabs.push(next);
+    if (!splitting) { owner.tabs.push(next); pinnedPanels = []; }
+    owner.viewLayout = splitting ? previousTab.viewLayout || previousTab.layout : null;
+    if (splitting && !layout.ids(owner.viewLayout).includes(selected)) owner.viewLayout = previousTab.layout;
+    expanded = false; root.classList.remove('terminal-expanded');
     pendingCreation = { panelId: next.id };
     owner.activeTab = next.id; owner.collapsed = false; next.collapsed = false; selectedSpace = owner.id;
     renderLayout(false);
@@ -616,13 +680,16 @@
       created = true;
       next.layout = splitting ? layout.split(next.layout, selected, session.id, axis) : { id: session.id };
       next.activePane = session.id; delete next.pending;
+      const view = layout.remove(canvasLayout(owner), session.id);
+      owner.viewLayout = splitting ? layout.split(view, layout.ids(view).includes(selected) ? selected : layout.ids(view)[0], session.id, axis) : { id: session.id };
+      next.viewLayout = owner.viewLayout;
+      owner.activeSurface = session.id;
       // Mount in the visible layout so engine/replay initialization does not
       // hold the whole panel offscreen or fit it against the hidden parking lot.
       const mounted = ensurePane(session);
       renderLayout(false);
       await mounted;
-      // Keep the 2.0.3 reconciliation: ConPTY may publish its PID while the
-      // renderer is still mounting, before its state listener is registered.
+      // Retain the released ConPTY post-mount PID reconciliation.
       const current = await api.terminalGet(session.id);
       if (current?.creationId === session.creationId) sessions.set(session.id, current);
       refreshPaneChrome(); renderInstances();
@@ -631,7 +698,7 @@
       if (!created && !splitting) {
         owner.tabs = owner.tabs.filter(item => item !== next);
         if (owner.activeTab === next.id) {
-          owner.activeTab = previousActive;
+          owner.activeTab = previousActive; owner.viewLayout = previousView; owner.activeSurface = previousSurface; pinnedPanels = previousPins;
           if (selectedSpace === owner.id) selectedSpace = previousSpace;
         }
         renderLayout(false);
@@ -640,10 +707,13 @@
     }
     finally { pendingCreation = null; busy = false; renderNav(); }
   }
-  function detachFromLayout(id) {
+  function detachFromLayout(id, preserveDisplay = false) {
     for (const owner of owners()) {
+      if (!preserveDisplay) owner.viewLayout = layout.remove(owner.viewLayout, id);
+      if (owner.activeSurface === id && !preserveDisplay) owner.activeSurface = '';
       for (const item of owner.tabs) {
         item.layout = layout.remove(item.layout, id);
+        if (!preserveDisplay) item.viewLayout = layout.remove(item.viewLayout, id);
         if (!layout.ids(item.layout).includes(item.activePane)) item.activePane = layout.ids(item.layout)[0] || '';
       }
       owner.tabs = owner.tabs.filter(item => item.layout);
@@ -680,7 +750,7 @@
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     const session = sessions.get(id);
     if (!target || !session) return;
-    trash.push({ id, creationId: session.creationId, pid: session.pid, name: target.name, provider: reviews.get(id)?.provider || '', projectId: owner.id,
+    trash.push({ id, creationId: session.creationId, pid: session.pid, name: title(id), provider: reviews.get(id)?.provider || '', projectId: owner.id,
       review: retainReview(session, reviews.get(id)), projectName: owner.name, standalone: owner.standalone === true, cwd: owner.cwd, deletedAt: new Date().toISOString() });
     detachFromLayout(id);
     renderLayout();
@@ -716,7 +786,8 @@
         spaces.push(owner);
       }
       const restored = { id: uuid(), name: item.name || t('패널'), layout: { id: session.id }, activePane: session.id };
-      owner.tabs.push(restored); owner.activeTab = restored.id; selectedSpace = owner.id;
+      rememberCanvas(); rememberCanvas(owner);
+      owner.tabs.push(restored); owner.activeTab = restored.id; selectedSpace = owner.id; owner.viewLayout = restored.layout; owner.activeSurface = session.id;
       trash = trash.filter(record => record !== item);
       $('#wbTrash').close();
       renderLayout();
@@ -852,7 +923,8 @@
     const key = JSON.stringify([id, title(id), selectedSpace, tab()?.id, value, autoReview, reviewView]);
     if (key === lastReviewKey) return;
     lastReviewKey = key;
-    $('#wbReviewTarget').innerHTML = msg`<span class="wb-target-icon">${icon('terminal')}</span><div><strong>${esc(id ? t('선택한 패널') : t('선택한 터미널 없음'))}</strong><small>${esc(id ? title(id) : t('터미널을 먼저 열어 주세요'))}</small></div>`;
+    $('#wbReviewTarget').innerHTML = msg`<span class="wb-target-icon">${icon('terminal')}</span><div><strong>${esc(id ? t('선택한 터미널') : t('선택한 터미널 없음'))}</strong><small>${esc(id ? title(id) : t('터미널을 먼저 열어 주세요'))}</small></div>`;
+    ui?.reviewTabs($('#wbReviewTabs'), { value: reviewView, current: t('이번 요청'), history: t('히스토리'), onChange: value => { reviewView = value; renderReview(); } });
     $('#wbReviewAuto').setAttribute('aria-pressed', String(autoReview));
     $('#wbReviewAuto').setAttribute('aria-label', t(autoReview ? '자동 분석 켜짐' : '자동 분석 꺼짐'));
     root.querySelectorAll('[data-review-view]').forEach(button => {
@@ -869,7 +941,11 @@
     const states = { 'awaiting-answer': t('작업 관찰 중'), paused: t('자동 검토 꺼짐'), watching: t('새 요청을 기다리는 중'), collecting: t('분석 대기'), shell: t('셸 사용 중'), unbound: t('연결 확인 필요'), reviewing: t('분석중…'), ready: t('이번 요청 검토 완료'), error: t('검토를 완료하지 못했습니다') };
     const activity = $('#wbReviewActivity');
     activity.hidden = !['awaiting-answer', 'collecting', 'reviewing', 'error', 'unbound'].includes(state);
-    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}"><i aria-hidden="true"></i><div><strong>${state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state]}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
+    const activityLabel = state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state];
+    const previousLoader = activity.querySelector('.wb-review-state-label');
+    if (previousLoader) ui?.clear(previousLoader);
+    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}"><i aria-hidden="true"></i><div><strong class="wb-review-state-label">${esc(activityLabel)}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
+    if (analyzing) ui?.thinking(activity.querySelector('.wb-review-state-label'), activityLabel);
     $('#wbReviewContent').setAttribute('aria-busy', String(analyzing));
     $('[data-action="refresh"]').disabled = analyzing;
     $('[data-action="refresh"]').title = state === 'awaiting-answer' ? t('답변 완료 다시 확인') : t('지금 검토');
@@ -983,7 +1059,10 @@
           if (!owner.tabs.some(item => layout.ids(item.layout).includes(live.id))) {
             detachFromLayout(live.id);
             sessions.set(live.id, live); await ensurePane(live);
-            panel.layout = layout.split(panel.layout, panel.activePane || layout.ids(panel.layout)[0], live.id);
+            const target = panel.activePane || layout.ids(panel.layout)[0], view = panel.viewLayout || panel.layout;
+            panel.layout = layout.split(panel.layout, target, live.id);
+            panel.viewLayout = layout.split(view, layout.ids(view).includes(target) ? target : layout.ids(view)[0], live.id);
+            if (owner.activeTab === panel.id) owner.viewLayout = panel.viewLayout;
             if (tab()?.id === panel.id) renderLayout(false); else { renderNav(); renderInstances(); }
           }
           handledCollaborations.add(`new:${job.id}`); save();
@@ -995,6 +1074,7 @@
       }
     }
     renderCollaborationStatus();
+    if ($('#wbError').dataset.scope === 'collaboration') $('#wbError').hidden = true;
   }
   function renderCollaborationStatus() {
     const related = collaborationJobs.filter(job => job.sourceId === activeId() || job.targetId === activeId());
@@ -1049,6 +1129,14 @@
     } finally { reviewBusy = false; }
   }
   async function act(action) {
+    if (action === 'dismiss-error') $('#wbError').hidden = true;
+    if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');
+    if (action === 'layout-row' || action === 'layout-column') {
+      const view = canvasLayout();
+      if (view && !view.id) { view.axis = action === 'layout-row' ? 'row' : 'column'; renderLayout(false); }
+    }
+    if (action === 'toggle-review') setReviewVisible(root.classList.contains('review-hidden'));
+
     if (action === 'jev-save' || action === 'jev-remove') {
       try {
         const result = await api.terminalJevConfigure(action === 'jev-remove' ? { remove: true } : { apiKey: $('#wbJevKey').value });
@@ -1060,6 +1148,17 @@
     if (action === 'new') return createTerminal();
     if (action === 'new-independent') return createTerminal('', standalone);
     if (action === 'new-panel') return createTerminal('');
+    if (action === 'pin-arranged') { const id = $('#wbMoveTarget').value; if (!id.startsWith('owner:')) togglePanelView(id); $('#wbArrange').close(); }
+    if (action === 'detach-panel') {
+      const panel = panelFor(arrangingId);
+      if (panel) moveTerminal(arrangingId, { ownerId: panelOwner(panel.id).id });
+      $('#wbArrange').close();
+    }
+    if (action === 'join-panel') {
+      const panelId = $('#wbMoveTarget').value;
+      if (!panelId.startsWith('owner:')) moveTerminal(arrangingId, { panelId, direction: $('#wbMoveDirection').value, join: true });
+      $('#wbArrange').close();
+    }
     if (action === 'archive-arranged') { $('#wbArrange').close(); return trashInstance(arrangingId); }
     if (action === 'move-terminal') {
       const value = $('#wbMoveTarget').value;
@@ -1131,7 +1230,7 @@
       if (pane?.error && sessions.has(id)) {
         panes.delete(id); pane.node.remove();
         const mounted = ensurePane(sessions.get(id));
-        renderLayout(false); mounted.catch(report);
+        renderLayout(false); mounted.then(() => { if ($('#wbError').dataset.connection === 'true') $('#wbError').hidden = true; }).catch(report);
       }
     }
     if (button.dataset.pinPanel) togglePanelView(button.dataset.pinPanel);
@@ -1148,10 +1247,21 @@
     if (button.dataset.purgeInstance) purgeInstance(button.dataset.purgeInstance).catch(report);
   });
   function setReviewWidth(width) {
-    reviewWidth = Math.max(260, Math.min(520, window.innerWidth - 220 - 360, width));
+    const sidebarWidth = $('.wb-sidebar').getBoundingClientRect().width
+      || Number.parseFloat(getComputedStyle(root).getPropertyValue('--wb-sidebar-width')) || 220;
+    const maximum = window.innerWidth <= 850 ? Math.min(520, window.innerWidth - 32) : Math.max(260, Math.min(520, window.innerWidth - sidebarWidth - 360));
+    reviewWidth = Math.max(260, Math.min(maximum, width));
     root.style.setProperty('--wb-review-width', `${reviewWidth}px`);
     $('#wbReviewResize').setAttribute('aria-valuenow', String(Math.round(reviewWidth)));
+    $('#wbReviewResize').setAttribute('aria-valuemax', String(Math.round(maximum)));
   }
+  function setReviewVisible(visible) {
+    root.classList.toggle('review-hidden', !visible);
+    $('#wbReviewToggle').setAttribute('aria-expanded', String(visible));
+  }
+  const compactLayout = window.matchMedia('(max-width: 850px)');
+  setReviewVisible(!compactLayout.matches);
+  compactLayout.addEventListener('change', event => setReviewVisible(!event.matches));
   const reviewResize = $('#wbReviewResize');
   reviewResize.setAttribute('aria-valuemin', '260'); reviewResize.setAttribute('aria-valuemax', '520');
   reviewResize.addEventListener('pointerdown', event => { reviewResize.setPointerCapture(event.pointerId); event.preventDefault(); });
@@ -1165,7 +1275,7 @@
   $('#wbTabs').addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();
-    const ids = layout.ids(tab()?.layout), current = ids.indexOf(activeId());
+    const ids = layout.ids(canvasLayout()), current = ids.indexOf(activeId());
     if (!ids.length) return;
     selectPane(ids[(current + (event.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length]);
     $('#wbTabs [aria-selected="true"]')?.focus();
@@ -1173,16 +1283,17 @@
   document.addEventListener('keydown', event => {
     if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey || root.querySelector('dialog[open]')) return;
     const key = event.key.toLowerCase();
+    if (key === 'k') { event.preventDefault(); event.stopImmediatePropagation(); root.classList.remove('sidebar-hidden'); $('#wbProjectSearch').focus(); return; }
     let action = '';
     if (key === 't') action = 'new';
     if (key === 'd') action = event.shiftKey ? 'split-down' : 'split';
     if (action) { event.preventDefault(); event.stopImmediatePropagation(); act(action).catch(report); return; }
-    if (/^[1-9]$/u.test(key) && layout.ids(tab()?.layout)[Number(key) - 1]) {
-      event.preventDefault(); event.stopImmediatePropagation(); selectPane(layout.ids(tab().layout)[Number(key) - 1], true);
+    if (/^[1-9]$/u.test(key) && layout.ids(canvasLayout())[Number(key) - 1]) {
+      event.preventDefault(); event.stopImmediatePropagation(); selectPane(layout.ids(canvasLayout())[Number(key) - 1], true);
     }
     if (event.shiftKey && ['BracketLeft', 'BracketRight'].includes(event.code)) {
       event.preventDefault(); event.stopImmediatePropagation();
-      const ids = layout.ids(tab()?.layout), current = ids.indexOf(activeId());
+      const ids = layout.ids(canvasLayout()), current = ids.indexOf(activeId());
       if (ids.length) selectPane(ids[(current + (event.code === 'BracketRight' ? 1 : ids.length - 1)) % ids.length], true);
     }
   }, true);
@@ -1217,7 +1328,7 @@
     renderModelSettings();
     try { const jev = await api.terminalJevStatus?.(); if (jev) $('#wbJevStatus').textContent = jev.configured ? t('Jev 연결됨') : t('API 키를 저장해 연결하세요.'); } catch { /* Explicit setup errors appear when saving a key. */ }
     fontSize = Math.max(11, Math.min(24, Number(saved.fontSize) || 14));
-    setReviewWidth(Number(saved.reviewWidth) || 280);
+    setReviewWidth(Number(saved.reviewWidth) || 332);
     autoReview = saved.autoReview !== false;
     const trashIds = new Set();
     trash = (Array.isArray(saved.trash) ? saved.trash : []).filter(item => {
@@ -1244,6 +1355,7 @@
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
     standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.',
+      viewLayout: savedStandalone.viewLayout, activeSurface: savedStandalone.activeSurface,
       tabs: independentTabs, nextNumber: Math.max(1, Number(savedStandalone.nextNumber) || independentTabs.length + 1),
       activeTab: independentTabs.some(item => item.id === savedStandalone.activeTab) ? savedStandalone.activeTab : independentTabs[0]?.id || '' };
     for (const workspace of bootstrap.workspaces || []) {
@@ -1257,7 +1369,9 @@
     }
     if (!spaces.length && !Array.isArray(saved.spaces)) spaces.push({ id: uuid(), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.', name: t('내 작업 공간'), tabs: [], activeTab: '', nextNumber: 1 });
     pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
+    for (const owner of owners()) { owner.viewLayout = layout.restore(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.restore(panel.viewLayout, available); }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
+    if (pinnedPanels.length) space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
     for (const session of sessions.values()) if (!archivedIds.has(session.id)) await ensurePane(session);
     $('#wbAutoReview').checked = autoReview; $('#wbFont').value = fontSize;
     renderUpdates();
@@ -1309,7 +1423,7 @@
       refreshPaneChrome(); renderInstances();
       if (panelSyncBusy) return;
       panelSyncBusy = true;
-      syncCollaboration().catch(report).finally(() => { panelSyncBusy = false; });
+      syncCollaboration().catch(error => report(error, 'collaboration')).finally(() => { panelSyncBusy = false; });
     }, 1000);
     setInterval(() => captureReviews(), 2500);
     setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing' || reviews.get(activeId())?.retryAt > Date.now()) renderReview(); }, 1000);

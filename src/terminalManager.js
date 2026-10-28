@@ -1462,8 +1462,8 @@ function normalizeLaunchOptions(options = {}, platform = process.platform) {
     agentForkSourceSignature,
     title: cleanText(options.title, 100),
     transient: Boolean(options.transient),
-    cols: numericDimension(options.cols, 120, 20, 500),
-    rows: numericDimension(options.rows, 32, 5, 200),
+    cols: numericDimension(options.cols, 120, 2, 500),
+    rows: numericDimension(options.rows, 32, 1, 200),
   };
 }
 
@@ -1887,8 +1887,8 @@ function restoredOptions(value = {}, platform = process.platform, storeVersion =
       : value.agentForkSourceSignature).trim(),
     title: cleanText(value.title, 100),
     transient: Boolean(value.transient),
-    cols: numericDimension(value.cols, 120, 20, 500),
-    rows: numericDimension(value.rows, 32, 5, 200),
+    cols: numericDimension(value.cols, 120, 2, 500),
+    rows: numericDimension(value.rows, 32, 1, 200),
   };
 }
 
@@ -4293,8 +4293,10 @@ class TerminalManager extends EventEmitter {
     if (session.spec?.exactPaneProxy) {
       return { ok: true, cols: session.cols, rows: session.rows, fixedGrid: true };
     }
-    session.cols = numericDimension(cols, session.cols, 20, 500);
-    session.rows = numericDimension(rows, session.rows, 5, 200);
+    // Match the emulator grid even for narrow nested panes; a larger PTY
+    // minimum makes terminal applications draw outside the visible canvas.
+    session.cols = numericDimension(cols, session.cols, 2, 500);
+    session.rows = numericDimension(rows, session.rows, 1, 200);
     if (session.process && session.status === 'running') session.process.resize(session.cols, session.rows);
     this.schedulePersist();
     return { ok: true, cols: session.cols, rows: session.rows };
