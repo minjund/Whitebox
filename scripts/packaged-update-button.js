@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { fixtureReleaseAssets, selectionDecoys, assertCompleteReleaseAssetSet } = require('./release-asset-contract');
 
 async function openInspectedApp(executable, args, env) {
   env = { ...env };
@@ -77,13 +78,28 @@ async function waitForPackagedRenderer(driver, { timeoutMs = 60000, pollMs = 200
 
 async function clickPackagedUpdate(driver, installer, version, options = {}) {
   const { evaluate } = driver;
+  const sourceVersion = options.currentVersion || version;
+  const sameVersionReinstall = sourceVersion === version;
   let terminalPid = 0;
   const bytes = fs.readFileSync(installer);
   const name = path.basename(installer);
   const asset = { name, size: bytes.length, digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex'),
     state: 'uploaded', browser_download_url: `https://github.com/minjund/Whitebox/releases/download/v${version}/${name}` };
+  const windowsSetup = /^Whitebox-(?:Manual-)?Setup-/.test(name);
+  const completeAssets = fixtureReleaseAssets(version).map(item => (
+    item.name === name || (windowsSetup && /^Whitebox-(?:Manual-)?Setup-/.test(item.name))
+      ? { ...item, size: asset.size, digest: asset.digest }
+      : item
+  ));
+  assertCompleteReleaseAssetSet(completeAssets, version);
   const release = { tag_name: 'v' + version, draft: false, prerelease: false,
-    html_url: `https://github.com/minjund/Whitebox/releases/tag/v${version}`, assets: [asset] };
+    html_url: `https://github.com/minjund/Whitebox/releases/tag/v${version}`,
+    assets: [
+      { ...asset, state: 'new' },
+      { ...asset, browser_download_url: `https://example.com/${name}` },
+      ...selectionDecoys(version),
+      ...completeAssets,
+    ] };
   const deadline = Date.now() + 60000;
   await waitForPackagedRenderer(driver);
   // Replace only the external HTTP boundary. Production release selection,
@@ -103,7 +119,11 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       // A startup check may already be using the live release channel. Let it
       // finish before the explicit button check uses the candidate fixture.
       if (this.checkPromise) await this.checkPromise;
-      this.currentVersion = '0.0.0'; this.fetch = globalThis.fetch;
+      // Only candidate self-reinstallation needs an available-version fixture.
+      // An immutable old client's own version comparison must run unchanged.
+      if (${JSON.stringify(sameVersionReinstall)}) this.currentVersion = '0.0.0';
+      else if (this.currentVersion !== ${JSON.stringify(sourceVersion)}) throw new Error('Frozen updater current version changed');
+      this.fetch = globalThis.fetch;
       return check.apply(this,args);
     };
     return true;

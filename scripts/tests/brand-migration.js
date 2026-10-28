@@ -15,6 +15,7 @@ const {
 const {
   mergeRendererState,
 } = require('../../src/rendererStateRecovery');
+const { sameProfileDirectory } = require('../../src/profileIdentity');
 
 const tests = [];
 function test(name, run) { tests.push({ name, run }); }
@@ -29,6 +30,57 @@ function fixture() {
 function remove(value) {
   fs.rmSync(value.root, { recursive: true, force: true });
 }
+
+test('an update scoped to the legacy store does not select its case alias as another profile', () => {
+  const value = fixture();
+  try {
+    const legacy = path.join(value.container, 'loadtoagent');
+    const alias = path.join(value.container, 'LoadToAgent');
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(path.join(legacy, 'terminal-sessions.json'), '[{"id":"preserved"}]');
+    const caseInsensitiveFs = Object.create(fs);
+    caseInsensitiveFs.lstatSync = candidate => fs.lstatSync(candidate === alias ? legacy : candidate);
+
+    const result = selectBrandUserData({ userDataPath: legacy, fileSystem: caseInsensitiveFs, platform: 'darwin' });
+
+    assert.equal(result.path, legacy);
+    assert.equal(result.currentPath, legacy);
+    assert.equal(result.runtimePath, legacy, 'a helper must not contend with its own main process lock');
+    assert.equal(result.legacyPath, '');
+    assert.deepStrictEqual(result.errors, []);
+    assert.equal(fs.readFileSync(path.join(legacy, 'terminal-sessions.json'), 'utf8'), '[{"id":"preserved"}]');
+  } finally { remove(value); }
+});
+
+test('different profile directories remain distinct even when their names differ only in case', () => {
+  const value = fixture();
+  try {
+    const first = path.join(value.container, 'first');
+    const second = path.join(value.container, 'second');
+    fs.mkdirSync(first, { recursive: true });
+    fs.mkdirSync(second, { recursive: true });
+    const aliases = Object.create(fs);
+    aliases.lstatSync = candidate => fs.lstatSync(candidate === '/profiles/Store' ? first : second);
+    assert.equal(sameProfileDirectory('/profiles/Store', '/profiles/store', { platform: 'darwin', fileSystem: aliases }), false);
+    aliases.lstatSync = () => fs.lstatSync(first);
+    assert.equal(sameProfileDirectory('/profiles/Store', '/profiles/store', { platform: 'darwin', fileSystem: aliases }), true);
+  } finally { remove(value); }
+});
+
+test('profile identity errors do not silently select an unverified legacy store', () => {
+  const value = fixture();
+  try {
+    fs.mkdirSync(path.join(value.container, 'loadtoagent'), { recursive: true });
+    const denied = Object.create(fs);
+    denied.lstatSync = candidate => {
+      if (candidate === value.current) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return fs.lstatSync(candidate);
+    };
+    const result = selectBrandUserData({ userDataPath: value.current, fileSystem: denied });
+    assert.equal(result.runtimePath, value.current);
+    assert(result.errors.some(item => item.operation === 'compare-profile-identity' && item.code === 'EACCES'));
+  } finally { remove(value); }
+});
 
 test('an existing lowercase legacy userData root is kept in place', () => {
   const value = fixture();

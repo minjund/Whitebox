@@ -102,7 +102,8 @@ const ALLOW_UNSIGNED_WINDOWS_UPDATES = packageMetadata.whitebox?.distributionCha
 const ALLOW_UNSIGNED_MAC_UPDATES = packageMetadata.whitebox?.distributionChannel === 'internal'
   && packageMetadata.whitebox?.allowUnsignedMacUpdates === true;
 app.setName(PRODUCT_NAME);
-process.title = PRODUCT_NAME;
+// Preserve the executable identity used by macOS LaunchServices and the Dock.
+if (process.platform !== 'darwin') process.title = PRODUCT_NAME;
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 const scopedUpdateProfile = applyScopedUpdateRelaunchProfile({
   app, request: pendingUpdateRelaunch, profilePath: pendingUpdateProfile,
@@ -380,19 +381,8 @@ function installBridgeLauncher(home = bridgeHome) {
     : path.join(__dirname, 'bin', 'whitebox.js');
   const launcher = writeBridgeLauncher({ directory, command: 'whitebox', script });
   require('./bin/panel-provider').install({ directory, runtime: process.execPath, script: path.join(path.dirname(script), 'panel-provider.js') });
-  let legacyPath = '';
-  try {
-    legacyPath = writeBridgeLauncher({
-      directory: path.join(home, '.loadtoagent', 'bin'),
-      command: 'loadtoagent',
-      script,
-    });
-  } catch (error) {
-    reportRecoverableError('legacy-bridge-launcher-install', error);
-  }
   return {
     path: launcher,
-    legacyPath,
     directory,
     commandPrefix: process.platform === 'win32' ? `& "${launcher}"` : shellQuote(launcher),
     simpleCommand: 'whitebox',
@@ -2535,9 +2525,9 @@ function registerIpcHandlers() {
 registerIpcHandlers();
 
 app.whenReady().then(async () => {
-  if (!app.isPackaged && process.platform === 'darwin' && app.dock) {
-    const sourceDockIcon = nativeImage.createFromPath(BRAND_ICON_PATH);
-    if (!sourceDockIcon.isEmpty()) app.dock.setIcon(sourceDockIcon);
+  if (process.platform === 'darwin' && app.dock) {
+    const dockIcon = nativeImage.createFromPath(BRAND_ICON_PATH);
+    if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   if (!interimProfileGuardRequest) return;
   try {

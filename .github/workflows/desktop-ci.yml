@@ -80,6 +80,9 @@ jobs:
       - run: npm run pack
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Verify packaged Whitebox Dock and update-profile identity
+        if: runner.os == 'macOS'
+        run: node scripts/mac-packaged-brand-identity.js
       - run: npm run check:package
 
   dependency-review:
@@ -97,7 +100,7 @@ jobs:
 
   mac-arm64-update:
     needs: mac-artifacts
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
@@ -112,6 +115,7 @@ jobs:
           test "$(node -p process.arch)" = arm64
           version="$(node -p 'require("./package.json").version')"
           ditto -x -k "release/Whitebox-$version-arm64.zip" release/mac-arm64
+          node scripts/mac-packaged-brand-identity.js release/mac-arm64/Whitebox.app
           node scripts/mac-update-cohort-check.js
 
   mac-artifacts:
@@ -129,6 +133,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - run: npm run test:artifacts:mac
+      - run: node scripts/mac-packaged-brand-identity.js release/mac/Whitebox.app
       - run: node scripts/mac-update-cohort-check.js
       - run: npm run test:terminal-restart
         env:

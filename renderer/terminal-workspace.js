@@ -1323,7 +1323,19 @@
     attentionSettings.loadAttentionPopupSettings(bootstrap.attentionPopups);
     attentionSettings.renderAttentionPopupSettings();
     attentionSettings.bindAttentionPopupSettings();
-    const inventory = await api.terminalList();
+    // A freshly staged packaged daemon may still be starting when the first
+    // bounded connection attempt ends. Resume initialization after a real
+    // connection; never turn a failed inventory read into an empty workspace.
+    let inventory;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        inventory = await api.terminalList();
+        break;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
     inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => sessions.set(item.id, item));
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }

@@ -2,17 +2,14 @@
 
 const path = require('path');
 const { spawn } = require('child_process');
+const { sameProfileDirectory } = require('./profileIdentity');
 
 const GUARD_READY = 'whitebox-interim-profile-guard-ready';
 const GUARD_RELEASE = 'whitebox-interim-profile-guard-release';
 const GUARD_ACTIVATE = 'whitebox-interim-profile-guard-activate';
 
 function samePath(left, right, platform = process.platform) {
-  const normalize = value => {
-    const resolved = path.resolve(String(value || ''));
-    return platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
+  return sameProfileDirectory(left, right, { platform });
 }
 
 function acquireInterimProfileGuard(options = {}) {

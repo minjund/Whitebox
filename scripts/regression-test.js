@@ -78,8 +78,8 @@ registerRuntimeTerminalBridgeTests(context);
 registerUiContractSuite(context);
 require('./tests/control-room-projects').registerControlRoomProjectTests(context);
 
-if (harness.count() !== 558) {
-  throw new Error(`회귀 테스트 등록 수가 558개가 아닙니다: ${harness.count()}`);
+if (harness.count() !== 561) {
+  throw new Error(`회귀 테스트 등록 수가 561개가 아닙니다: ${harness.count()}`);
 }
 
 harness.run({ cleanup: fixtures.cleanup }).catch(error => {

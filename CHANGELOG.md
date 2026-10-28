@@ -3,6 +3,17 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.7 - 2026-10-29
+
+- Keep Whitebox's native macOS app identity for the main window and hidden
+  profile guard, preventing generic exec icons and duplicate Dock entries.
+- Recognize case aliases of the same data directory during update relaunch so
+  the app does not compete with its own profile lock and restore an older version.
+- Recover workspace startup when a new terminal host is still preparing; report
+  persistent connection failures without sending a false renderer-ready signal.
+- Install only the Whitebox command on new installations while preserving
+  existing data, live terminal hosts and historical update compatibility.
+
 ## 2.0.6 - 2026-10-28
 
 - Apply the approved clean terminal workspace with anonymous, color-bordered

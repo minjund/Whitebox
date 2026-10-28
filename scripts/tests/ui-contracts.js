@@ -1583,7 +1583,7 @@ function registerUiContractTests(context) {
     assert.ok(mainEntry.includes('appIconPath: app.isPackaged ? process.execPath : BRAND_WINDOWS_ICON_PATH'));
     assert.ok(mainEntry.includes('await registerWindowsShellIdentity({'));
     assert.ok(mainEntry.includes("new Tray(icon)"));
-    assert.ok(mainEntry.includes("app.dock.setIcon(sourceDockIcon)"));
+    assert.ok(mainEntry.includes("app.dock.setIcon(dockIcon)"));
     assert.ok(html.includes('id="brandIcon"'));
     assert.ok(html.includes('src="../build/icon.png"'));
     assert.ok(pkg.files.includes('build/icon.png'));

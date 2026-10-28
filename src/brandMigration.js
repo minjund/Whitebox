@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sameProfileDirectory } = require('./profileIdentity');
 
 const LEGACY_PRODUCT_NAME = 'LoadToAgent';
 const LEGACY_USER_DATA_NAMES = Object.freeze(['loadtoagent', LEGACY_PRODUCT_NAME]);
@@ -129,11 +130,6 @@ function selectBrandUserData(options = {}) {
     const comparisonKey = platform === 'win32' ? candidate.toLowerCase() : candidate;
     if (seen.has(comparisonKey)) continue;
     seen.add(comparisonKey);
-    if (candidate === currentPath) {
-      result.errors.push(errorRecord(candidate, 'validate-legacy-path', new Error('Legacy and current userData paths must differ')));
-      continue;
-    }
-
     let state;
     try {
       state = fileSystem.lstatSync(candidate);
@@ -145,6 +141,13 @@ function selectBrandUserData(options = {}) {
 
     if (state.isSymbolicLink() || !state.isDirectory()) {
       result.errors.push(errorRecord(candidate, 'validate-legacy-path', new Error('Legacy userData path is symbolic or not a directory')));
+      continue;
+    }
+
+    try {
+      if (sameProfileDirectory(candidate, currentPath, { fileSystem, platform })) continue;
+    } catch (error) {
+      result.errors.push(errorRecord(candidate, 'compare-profile-identity', error));
       continue;
     }
 

@@ -39,6 +39,8 @@ async function waitForMainWindow() {
 }
 
 async function run() {
+  assert.equal(fs.existsSync(path.join(bridgeHome, '.loadtoagent')), false,
+    'a Whitebox startup must not install launchers under the retired product name');
   const iconPath = path.join(root, 'build', 'icon.png');
   const applicationIcon = nativeImage.createFromPath(iconPath);
   assert.equal(applicationIcon.isEmpty(), false, 'The application icon could not be loaded');

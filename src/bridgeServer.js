@@ -64,8 +64,12 @@ class BridgeServer {
     const explicitDiscoveryFile = typeof options.discoveryFile === 'string' && options.discoveryFile.trim();
     this.file = explicitDiscoveryFile || discoveryFile(this.home);
     this.discoveryFiles = [this.file];
-    if (!explicitDiscoveryFile && options.legacyDiscovery !== false) {
-      this.discoveryFiles.push(legacyDiscoveryFile(this.home));
+    const legacyFile = legacyDiscoveryFile(this.home);
+    // Refresh discovery for existing clients only; a fresh Whitebox install
+    // must not recreate the retired product's directory.
+    if (!explicitDiscoveryFile && (options.legacyDiscovery === true
+      || (options.legacyDiscovery !== false && fs.existsSync(legacyFile)))) {
+      this.discoveryFiles.push(legacyFile);
     }
     this.maxOutboundQueueBytes = Number.isFinite(Number(options.maxOutboundQueueBytes))
       ? Math.max(1, Number(options.maxOutboundQueueBytes))
