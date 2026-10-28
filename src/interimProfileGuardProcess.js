@@ -27,7 +27,9 @@ else {
     app.exit(3);
   }
   else {
-    process.title = 'Whitebox Profile Guard';
+    // This process shares the packaged bundle with the GUI. Renaming it on
+    // macOS also creates an exec entry for that bundle in Dock recents.
+    if (process.platform !== 'darwin') process.title = 'Whitebox Profile Guard';
     process.on('message', message => {
       if (message?.type === GUARD_RELEASE) app.exit(0);
     });

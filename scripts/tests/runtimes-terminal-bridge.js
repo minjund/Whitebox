@@ -6353,6 +6353,15 @@ function registerTerminalFailureTests(context) {
     assert.equal(decodeBase64(Buffer.from('안전한 입력').toString('base64')), '안전한 입력');
     assert.throws(() => decodeBase64('%%%'), /글자를 읽을 수 없습니다/);
     const terminalManager = new EventEmitter();
+    const bridgeHome = path.join(temp, 'whitebox-only-bridge-home');
+    const freshServer = new BridgeServer({ terminalManager, home: bridgeHome });
+    assert.deepStrictEqual(freshServer.discoveryFiles, [path.join(bridgeHome, '.whitebox', 'bridge.json')]);
+    const legacyFile = path.join(bridgeHome, '.loadtoagent', 'bridge.json');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, '{}');
+    assert.equal(new BridgeServer({ terminalManager, home: bridgeHome }).discoveryFiles.length, 2,
+      'existing legacy clients keep discovery during the transition');
+    assert.equal(new BridgeServer({ terminalManager, home: bridgeHome, legacyDiscovery: false }).discoveryFiles.length, 1);
     terminalManager.write = () => { throw new Error('호출되면 안 됨'); };
     const server = new BridgeServer({ terminalManager });
     const client = { authenticated: true, terminalId: 'terminal:1', socket: { end() {} } };

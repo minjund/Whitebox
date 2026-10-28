@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "A terminal workspace that connects every AI task to its own understanding and review.",
   "main": "main.js",
   "author": "wincube AX",
@@ -52,8 +52,7 @@
     "README.zh-CN.md"
   ],
   "bin": {
-    "whitebox": "bin/whitebox.js",
-    "loadtoagent": "bin/whitebox.js"
+    "whitebox": "bin/whitebox.js"
   },
   "scripts": {
     "start": "electron .",

@@ -38,7 +38,26 @@ function macActivationPolicy(pid) {
   }).trim());
 }
 
+function assertMacBundleIdentity(pid) {
+  const bundle = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e',
+    `ObjC.import('AppKit'); const running = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${Number(pid)}); ObjC.unwrap(running.bundleURL.path);`,
+  ], { encoding: 'utf8' }).trim();
+  assert.equal(fs.realpathSync(bundle), fs.realpathSync(path.resolve(path.dirname(process.execPath), '../..')),
+    'a hidden guard must retain the app bundle identity instead of creating an exec entry');
+}
+
 app.whenReady().then(async () => {
+  const caseAlias = path.join(root, 'LEGACY');
+  if (fs.existsSync(caseAlias) && fs.lstatSync(caseAlias).ino === fs.lstatSync(runtimePath).ino) {
+    const selfGuard = await acquireInterimProfileGuard({
+      currentPath: caseAlias,
+      runtimePath,
+      executable: '/must-not-spawn-a-self-competing-guard',
+    });
+    assert.equal(selfGuard.acquired, true);
+    assert.equal(selfGuard.skipped, true, 'case aliases of the same directory must not acquire a second singleton');
+    await selfGuard.release();
+  }
   let activationCount = 0;
   const first = await acquireInterimProfileGuard({
     ...options,
@@ -50,6 +69,7 @@ app.whenReady().then(async () => {
     const activationPolicy = macActivationPolicy(first.pid);
     assert.equal(activationPolicy, 2,
       `the guard must use NSApplicationActivationPolicyProhibited (received ${activationPolicy})`);
+    assertMacBundleIdentity(first.pid);
   }
   const competing = await acquireInterimProfileGuard(options);
   assert.equal(competing.acquired, false, 'an interim Whitebox instance must block the new split-profile app');
@@ -64,6 +84,7 @@ app.whenReady().then(async () => {
     const activationPolicy = macActivationPolicy(packagedEntry.pid);
     assert.equal(activationPolicy, 2,
       `the packaged guard must use NSApplicationActivationPolicyProhibited (received ${activationPolicy})`);
+    assertMacBundleIdentity(packagedEntry.pid);
   }
   const packagedCompeting = await acquireInterimProfileGuard(options);
   assert.equal(packagedCompeting.acquired, false, 'the packaged guard entry must own the Whitebox profile lock');
