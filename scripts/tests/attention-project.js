@@ -98,50 +98,6 @@ function registerAttentionProjectTests({ test, temp, jsonl }) {
     assert.equal(sandbox.popupSessionCopy(sandbox.lastSnapshot.sessions[1]).project, 'SupplierGW');
   });
 
-  test('팝업 이동은 요청한 터미널 ID를 집중 화면까지 전달하고 연결 없는 작업도 관제 화면으로 보내지 않는다', async () => {
-    const session = { id: 'codex:task', externalId: 'task', provider: 'codex', cwd: '/work/project-alpha' };
-    const { sandbox, sent, resolved } = mainHarness([session], [
-      { id: 'terminal:exact', bridgeId: session.id, type: 'agent', status: 'running', provider: 'codex', cwd: '/work/project-alpha' },
-      { id: 'terminal:other', bridgeId: 'codex:other', type: 'agent', status: 'running', provider: 'codex', cwd: '/work/mediagw' },
-    ]);
-    sandbox.handleAttentionPopupOpenMain({}, { context: { kind: 'hook', hookKey: 'hook', rawSessionId: 'task', provider: 'codex' } });
-    assert.equal(resolved[0][1].action, 'none');
-    const payload = sent[0][1];
-    assert.equal(payload.event, 'terminal');
-    assert.equal(payload.sessionId, session.id);
-    assert.equal(payload.terminalId, 'terminal:exact');
-    assert.equal(payload.targetId, 'terminal:exact');
-    sandbox.rendererBootstrapped = false;
-    sandbox.openAttentionSession(session, 'terminal', { terminalId: 'terminal:exact' });
-    assert.equal(sandbox.pendingAttentionTarget.terminalId, 'terminal:exact');
-
-    const source = fs.readFileSync(path.join(__dirname, '../../renderer/app-bootstrap.js'), 'utf8');
-    const start = source.indexOf('const handleAttentionRequested = async (payload) => {');
-    const end = source.indexOf('const handleTerminalPromptResolved', start);
-    for (const opened of [true, false]) {
-      const mounts = [], focused = [], views = [];
-      const renderer = {
-        state: { snapshot: { sessions: [session] } }, passiveFocusGeneration: 0,
-        attentionActivation: { userNavigated: () => {} },
-        isProviderVisible: () => true, ownerRootSession: value => value,
-        isPtyFocusActive: () => false,
-        openPtyFocusVerified: async (id, options) => { mounts.push({ id, options }); return { opened }; },
-        app: { canOpenResponsibleFocus: () => true, openResponsibleFocus: id => { focused.push(id); return true; } },
-        showAttentionSession: () => views.push('overview'), selectView: value => views.push(value),
-        toast: () => {}, t: key => key,
-        window: { WhiteboxRendererUtils: { reportRecoverableError: (_scope, error) => { throw error; } } },
-      };
-      vm.createContext(renderer);
-      vm.runInContext(`${source.slice(start, end)}\nglobalThis.handle = handleAttentionRequested;`, renderer);
-      await renderer.handle(payload);
-      assert.equal(mounts[0].id, session.id);
-      assert.equal(mounts[0].options.terminalId, 'terminal:exact');
-      assert.equal(mounts[0].options.targetId, 'terminal:exact');
-      assert.deepEqual(focused, opened ? [] : [session.id]);
-      assert.deepEqual(views, []);
-    }
-  });
-
   test('로그에서 감지한 권한 안내 팝업을 제거하고 실제 승인 훅과 질문 응답 창은 유지한다', () => {
     const session = { id: 'codex:task', externalId: 'task', provider: 'codex', cwd: '/work/project-alpha' };
     const { sandbox } = mainHarness([

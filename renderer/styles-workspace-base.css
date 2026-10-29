@@ -1,0 +1,12 @@
+/* Shared document primitives for the terminal workspace. */
+@font-face {font-family:Geist;src:url("fonts/geist.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+@font-face {font-family:Geist;src:url("fonts/geist-ext.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap;unicode-range:U+1100-11FF,U+3130-318F,U+AC00-D7AF}
+:root{--font-sans:Geist,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;--studio-mono:"Geist Mono","Cascadia Code",Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans)}
+button,input,select,textarea{font:inherit}
+.hidden,[hidden]{display:none!important}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+body,body *{font-family:var(--font-sans);text-transform:none}
+body :is(code,pre,kbd,samp),body :is(code,pre,kbd,samp) *{font-family:var(--studio-mono)}
+.terminal-screen{position:absolute;overflow:hidden}

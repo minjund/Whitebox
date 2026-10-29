@@ -62,7 +62,10 @@ class TerminalActivity {
   }
   async observe(members, frames, fallbackSnapshot = {}) {
     let rows = [], available = false;
-    if (['darwin', 'linux'].includes(this.platform)) {
+    const age = this.now() - Date.parse(fallbackSnapshot.generatedAt);
+    if (fallbackSnapshot.available && Array.isArray(fallbackSnapshot.activityRows) && age >= 0 && age < 2000) {
+      rows = fallbackSnapshot.activityRows; available = rows.length > 0;
+    } else if (['darwin', 'linux'].includes(this.platform)) {
       try {
         const { stdout } = await this.execute('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,tpgid=,stat=,etime=,comm=,args='], { timeout: 2000, maxBuffer: 4 * 1024 * 1024 });
         rows = processTable(stdout, this.now()); available = rows.length > 0;
@@ -76,10 +79,16 @@ class TerminalActivity {
       const providers = (available ? rows.filter(row => ['claude', 'codex'].includes(row.provider) && !utilityProcess(row)) : fallbackSnapshot.processes || []).filter(inSession);
       const roots = providers.filter(row => !providers.some(other => row.ancestorPids?.includes(other.pid)));
       const child = roots.length === 1 ? roots[0] : null;
-      let state = 'unknown';
-      if (child && frame?.creationId === member.creationId && this.now() - frame.at < 5000) {
+      let state = 'unknown', completed = false;
+      if (child && (!frame || frame.creationId === member.creationId && this.now() - frame.at < 5000)) {
         const native = await this.completion.observe(child);
-        state = providerActivity({ text: frame.readinessText ?? frame.text, native });
+        // Unopened restored panels have no renderer buffer. Exact native
+        // process/turn evidence still describes their activity independently.
+        state = frame ? providerActivity({ text: frame.readinessText ?? frame.text, native })
+          : !native.available ? 'unknown'
+            : native.inputWaiting || ['completed', 'interrupted'].includes(native.state) ? 'idle'
+              : native.state === 'working' && native.requestId ? 'working' : 'unknown';
+        completed = state === 'idle' && native.available === true && native.state === 'completed';
       } else if (available && shell && !providers.length) {
         // An idle shell owns its foreground process group. An external command
         // owns a different group until it exits, even if it produces no output.
@@ -90,7 +99,7 @@ class TerminalActivity {
           state = /^R/u.test(shell.stat) ? 'working' : 'idle';
         }
       }
-      result.set(member.id, { state, creationId: member.creationId, pid: member.pid });
+      result.set(member.id, { state, completed, creationId: member.creationId, pid: member.pid });
     }));
     return result;
   }

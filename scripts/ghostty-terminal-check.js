@@ -55,6 +55,7 @@ app.whenReady().then(async () => {
         notice: error => { throw new Error(error); }, xtermOptions: () => ({ cols: 80, rows: 20, scrollback: 200,
           fontFamily: 'Consolas, monospace', fontSize: 15, theme: { background: '#112233', foreground: '#ddeeff', cursor: '#ffcc00' } }) });
       window.entry = await workbench.ensureSessionTerminal({ id: 'test', type: 'agent', provider: 'codex' });
+      entry.host.dataset.groupTerminal = 'true'; // Visible workspace pane input lease.
       window.term = entry.terminal;
       window.write = data => new Promise(resolve => term.write(data, resolve));
       window.delay = () => new Promise(resolve => setTimeout(resolve, 60));

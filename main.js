@@ -2428,6 +2428,7 @@ function registerIpcHandlers() {
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });
   handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
+  handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
   handleTrusted('terminals:review-models', () => require('./src/terminalReviewSettings').reviewModelCatalog());
   registerTerminalIpc({

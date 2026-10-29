@@ -5,7 +5,6 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const {
     state,
-    currentSession,
     fitEntry,
     refreshSessions,
     notice,
@@ -102,16 +101,25 @@ window.WhiteboxTerminalEvents = function bindTerminalEvents(context) {
   };
 
   window.addEventListener('resize', () => {
-    const entry = currentSession() ? state.terminals.get(state.selectedId) : state.remoteTerminal;
-    fitEntry(entry, state.selectedId || '');
+    for (const [id, entry] of state.terminals) {
+      if (entry.host.dataset.groupTerminal) fitEntry(entry, id);
+    }
   });
   window.whitebox.onTerminalData(payload => {
+    const cached = state.promptReplayCache?.get(payload?.id);
+    if (cached && Number.isSafeInteger(cached.outputSequence) && Number.isSafeInteger(payload?.outputSequence)) {
+      if (payload.outputSequence === cached.outputSequence + 1) {
+        cached.replay = (cached.replay + String(payload.data || '')).slice(-24000);
+        cached.outputSequence = payload.outputSequence;
+      } else if (payload.outputSequence > cached.outputSequence) state.promptReplayCache.delete(payload.id);
+    } else state.promptReplayCache?.delete(payload?.id);
     const entry = state.terminals.get(payload && payload.id);
     const data = entry?.acceptOutput ? entry.acceptOutput(payload) : payload && payload.data;
     writeTerminalOutput(entry, data);
     schedulePendingPromptRefresh();
   });
   window.whitebox.onTerminalState(payload => {
+    state.promptReplayCache?.clear();
     refreshSessions(payload);
     schedulePendingPromptRefresh(true);
   });

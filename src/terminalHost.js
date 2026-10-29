@@ -834,6 +834,7 @@ class TerminalHostClient extends EventEmitter {
     this.discoveryFile = path.resolve(options.discoveryFile);
     this.spawnHost = typeof options.spawnHost === 'function' ? options.spawnHost : null;
     this.connectTimeoutMs = Number(options.connectTimeoutMs || 12_000);
+    this.requestTimeoutMs = Math.max(1, Number(options.requestTimeoutMs) || REQUEST_TIMEOUT_MS);
     this.expectedRuntime = String(options.expectedRuntime || TERMINAL_HOST_RUNTIME);
     this.verifyHost = typeof options.verifyHost === 'function' ? options.verifyHost : verifyHostDiscovery;
     this.terminateHost = typeof options.terminateHost === 'function' ? options.terminateHost : terminateHostProcess;
@@ -1208,11 +1209,21 @@ class TerminalHostClient extends EventEmitter {
     // an unledgered retry under the old capability assumption.
     const requestArgs = typeof args === 'function' ? args() : args;
     const requestId = String(++this.sequence);
+    const requestSocket = this.socket;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error('명령창 작업이 제한 시간 안에 끝나지 않았습니다.'));
-      }, REQUEST_TIMEOUT_MS);
+        const error = new Error('명령창 작업이 제한 시간 안에 끝나지 않았습니다.');
+        error.code = 'TERMINAL_HOST_REQUEST_TIMEOUT';
+        reject(error);
+        // A socket can stay open after the host stops answering. Leaving it
+        // marked connected strands every later request on that same transport.
+        // Reconnect without replaying this request (in particular, any write).
+        if (this.socket === requestSocket) {
+          this.handleDisconnect(requestSocket);
+          requestSocket.destroy();
+        }
+      }, this.requestTimeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
       const frameSent = sendFrame(this.socket, { type: 'request', requestId, operation, args: requestArgs });
       if (transportAttempt && typeof transportAttempt === 'object') transportAttempt.frameSent = frameSent;

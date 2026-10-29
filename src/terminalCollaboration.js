@@ -5,18 +5,18 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const { exactProcess } = require('./terminalReview');
 const { completedTurn, completionStamp, inputReady } = require('./terminalReviewTurns');
-const { ProcessMonitor } = require('./processMonitor');
+const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
 
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, monitor = new ProcessMonitor(), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
+  constructor({ manager, directory, monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
     Object.assign(this, { manager, directory, monitor, completion, now });
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
-    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = [];
+    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.helper = path.join(directory, 'panel-agent.cjs');
     fs.copyFileSync(path.join(__dirname, '../bin/panel-agent.js'), this.helper);
@@ -54,15 +54,26 @@ class TerminalCollaboration {
       }
       this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members });
     }
-    for (const frame of frames.slice(0, 256)) if (safeId(frame.id) && typeof frame.text === 'string') this.frames.set(frame.id, { ...frame, text: frame.text.slice(-24000), at: this.now() });
-    const activity = await this.activity.observe([...this.groups.values()].flatMap(group => group.members), this.frames, this.monitor.scan());
+    const currentMembers = new Map([...this.groups.values()].flatMap(group => group.members).map(member => [member.id, member]));
+    for (const [id, frame] of this.frames) {
+      const member = currentMembers.get(id);
+      if (!member || frame.creationId !== member.creationId || frame.pid !== member.pid) this.frames.delete(id);
+    }
+    for (const frame of frames.slice(0, 256)) {
+      const member = currentMembers.get(frame.id);
+      if (member && frame.creationId === member.creationId && typeof frame.text === 'string') this.frames.set(frame.id, {
+        ...frame, pid: member.pid, text: frame.text.slice(-24000), readinessText: typeof frame.readinessText === 'string' ? frame.readinessText.slice(-24000) : undefined, at: this.now(),
+      });
+    }
+    const snapshot = await scanProcesses(this.monitor);
+    const activity = await this.activity.observe([...currentMembers.values()], this.frames, snapshot);
     for (const record of this.restoredConnections.splice(0)) {
       const member = [...this.groups.values()].flatMap(group => group.members).find(item => item.id === record.id && item.creationId === record.creationId && item.pid === record.pid);
-      const child = member && exactProcess({ ...member, status: 'running' }, this.monitor.scan());
+      const child = member && exactProcess({ ...member, status: 'running' }, snapshot);
       if (child?.pid === record.providerPid) this.connected.set(record.id, record);
     }
     for (const group of this.groups.values()) for (const member of group.members) {
-      const child = exactProcess({ ...member, status: 'running' }, this.monitor.scan()), frame = this.frames.get(member.id);
+      const child = exactProcess({ ...member, status: 'running' }, snapshot), frame = this.frames.get(member.id);
       member.provider = child?.provider || '';
       member.providerPid = child?.pid || null;
       member.ready = Boolean(child && frame && !frame.inputDraft && inputReady(frame.readinessText ?? frame.text, child.provider));
@@ -71,9 +82,9 @@ class TerminalCollaboration {
     for (const [id, connection] of this.connected) {
       const group = [...this.groups.values()].find(group => group.members.some(member => member.id === id));
       const member = group?.members.find(item => item.id === id && item.creationId === connection.creationId);
-      if (!member || member.pid !== connection.pid || member.providerPid !== connection.providerPid) { this.connected.delete(id); fs.rmSync(this.file(id, 'access'), { force: true }); continue; }
+      if (!member || member.pid !== connection.pid || member.providerPid !== connection.providerPid) { this.connected.delete(id); this.accessSnapshots.delete(id); await fs.promises.rm(this.file(id, 'access'), { force: true }); continue; }
       if (connection.groupId !== group.id) { connection.groupId = group.id; connection.token = randomUUID(); }
-      this.writeAccess(id, connection, group);
+      await this.writeAccess(id, connection, group);
     }
     // Membership is an app-owned binding, never an AI instruction or hook.
     for (const group of this.groups.values()) for (const member of group.members) {
@@ -85,8 +96,27 @@ class TerminalCollaboration {
     const visible = new Set([...this.groups.values()].flatMap(group => group.members.map(member => member.id)));
     return { jobs: [...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80), connected: [...this.connected.keys()], panels: [...this.groups.values()].map(group => ({ id: group.id, name: group.name, members: group.members.map(member => ({ ...member, connected: this.connected.has(member.id), connectionError: '' })) })) };
   }
-  writeAccess(id, connection, group) {
-    this.write(this.file(id, 'access'), { ...connection, id, helper: this.helper, scope: 'whitebox-panel', groupName: group.name, members: group.members, updatedAt: this.now() });
+  async writeAccessFile(file, value) {
+    const tmp = file + '.tmp';
+    await fs.promises.writeFile(tmp, JSON.stringify(value), { mode: 0o600 });
+    await fs.promises.rename(tmp, file);
+    return fs.promises.stat(file);
+  }
+  async writeAccess(id, connection, group) {
+    const value = { ...connection, id, helper: this.helper, scope: 'whitebox-panel', groupName: group.name, members: group.members };
+    const signature = JSON.stringify(value), previous = this.accessSnapshots.get(id), now = this.now();
+    const age = now - (previous?.at ?? 0);
+    // Keep the CLI's 30s freshness check alive without rewriting an unchanged
+    // roster every second. Changes to membership/token/readiness publish now.
+    const file = this.file(id, 'access');
+    if (previous?.signature === signature && age >= 0 && age < 5000) {
+      // Another app instance or profile recovery may replace the access file.
+      // An unchanged local signature must not leave its foreign token in place.
+      const stat = await fs.promises.stat(file).catch(() => null);
+      if (stat && stat.ino === previous.ino && stat.mtimeMs === previous.mtimeMs && stat.size === previous.size) return;
+    }
+    const stat = await this.writeAccessFile(file, { ...value, updatedAt: now });
+    this.accessSnapshots.set(id, { signature, at: now, ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size });
   }
   member(groupId, id) {
     const group = this.groups.get(groupId), member = group?.members.find(item => item.id === id);
@@ -97,7 +127,7 @@ class TerminalCollaboration {
     const { member } = this.member(groupId, id);
     const live = await this.manager().get(id, false);
     if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('터미널 실행 세션이 바뀌었습니다.');
-    const child = exactProcess(live, this.monitor.scan());
+    const child = exactProcess(live, await scanProcesses(this.monitor));
     if (!child) throw new Error('이 터미널에서 Claude 또는 Codex를 먼저 실행해 주세요.');
     const frame = this.frames.get(id);
     if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || frame.outputSequence !== live.outputSequence) throw new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.');
@@ -111,7 +141,7 @@ class TerminalCollaboration {
     if (native.available && native.state === 'working') throw new Error('상대 AI가 아직 작업 중입니다.');
     const live = await this.manager().get(id, false);
     if (!live || live.creationId !== target.member.creationId || live.pid !== target.member.pid
-      || exactProcess(live, this.monitor.scan())?.pid !== target.child.pid) throw new Error('터미널 실행 세션이 바뀌었습니다.');
+      || exactProcess(live, await scanProcesses(this.monitor))?.pid !== target.child.pid) throw new Error('터미널 실행 세션이 바뀌었습니다.');
     if (!this.manager().rawWriteDeliverySupported?.()) throw new Error('현재 터미널 호스트는 안전한 협업 전달을 지원하지 않습니다.');
     // One guarded write prevents an intervening draft between paste and Enter.
     await this.manager().write(id, `\x1b[200~${message}\x1b[201~${submit ? '\r' : ''}`, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
@@ -122,7 +152,7 @@ class TerminalCollaboration {
     const { member } = this.member(groupId, sourceId);
     const connection = this.connected.get(sourceId) || { groupId, creationId: member.creationId, pid: member.pid, providerPid: member.providerPid, token: randomUUID(), connectedAt: this.now(), state: 'connected' };
     this.connected.set(sourceId, connection);
-    this.writeAccess(sourceId, connection, this.groups.get(groupId));
+    await this.writeAccess(sourceId, connection, this.groups.get(groupId));
     return { ok: true };
   }
   async poll() {

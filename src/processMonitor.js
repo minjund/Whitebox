@@ -7,6 +7,8 @@ const {
   promoteComprehensionCandidate,
 } = require('./comprehensionPacket');
 const { execFileSync } = require('child_process');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const asyncScans = new Map();
 const { blankUsage } = require('./providerRegistry');
 
 const DEFAULT_SCAN_TTL_MS = 12_000;
@@ -1090,8 +1092,47 @@ class ProcessMonitor {
     this.execFileSync = options.execFileSync || execFileSync;
     this.platform = options.platform || process.platform;
     this.scanTtlMs = options.scanTtlMs ?? DEFAULT_SCAN_TTL_MS;
+    this.workerFactory = options.workerFactory || ((file, options) => new Worker(file, options));
+    // Production monitors share one in-flight OS snapshot across review/activity.
+    if (!asyncScans.has(this.platform)) asyncScans.set(this.platform, {});
+    this.asyncScan = options.workerFactory ? {} : asyncScans.get(this.platform);
     this.lastScanAt = 0;
     this.lastSnapshot = { generatedAt: new Date().toISOString(), available: false, processes: [], error: '' };
+  }
+
+  scanAsync(force = false) {
+    const cache = this.asyncScan;
+    const age = Date.now() - cache.at;
+    if (!force && cache.snapshot && age >= 0 && age < this.scanTtlMs) {
+      this.lastSnapshot = cache.snapshot; this.lastScanAt = cache.at;
+      return Promise.resolve(cache.snapshot);
+    }
+    if (!cache.pending) {
+      cache.pending = new Promise(resolve => {
+        let worker, timer, settled = false;
+        const finish = snapshot => {
+          if (settled) return;
+          settled = true; clearTimeout(timer);
+          cache.snapshot = snapshot; cache.at = Date.now();
+          resolve(snapshot);
+        };
+        const failed = error => finish({ generatedAt: new Date().toISOString(), available: false, processes: [], error: String(error?.message || error) });
+        try {
+          worker = this.workerFactory(__filename, { workerData: { whiteboxProcessScan: true, platform: this.platform } });
+          worker.once('message', finish);
+          worker.once('error', failed);
+          worker.once('exit', code => { if (!settled) failed(new Error('Process scan worker exited before reporting: ' + code)); });
+          timer = setTimeout(() => {
+            failed(new Error('Process scan worker timed out'));
+            Promise.resolve(worker.terminate()).catch(() => {});
+          }, 20000);
+        } catch (error) { failed(error); }
+      }).finally(() => { cache.pending = null; });
+    }
+    return cache.pending.then(snapshot => {
+      this.lastSnapshot = snapshot; this.lastScanAt = cache.at;
+      return snapshot;
+    });
   }
 
   scan(force = false) {
@@ -1114,7 +1155,14 @@ class ProcessMonitor {
   }
 }
 
+// Test monitors may provide a synchronous in-memory snapshot. Production callers
+// always use the worker path and keep parsing/OS waits off Electron's main loop.
+async function scanProcesses(monitor, force = false) {
+  return monitor.scanAsync ? monitor.scanAsync(force) : monitor.scan(force);
+}
+
 module.exports = {
+  scanProcesses,
   ProcessMonitor,
   parseCsvRows,
   processRows,
@@ -1137,3 +1185,20 @@ module.exports = {
   inferredBridgeBindings,
   applyRuntimePresence,
 };
+
+// A worker performs one bounded read, reports once, and exits naturally.
+if (!isMainThread && workerData?.whiteboxProcessScan) {
+  const platform = workerData.platform;
+  let snapshot;
+  try {
+    if (platform === 'win32') snapshot = new ProcessMonitor({ platform }).scan(true);
+    else {
+      const output = execFileSync('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,tpgid=,stat=,etime=,comm=,args='], { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024 });
+      const rows = require('./terminalActivity').processTable(output);
+      snapshot = { generatedAt: new Date().toISOString(), available: rows.length > 0,
+        processes: selectAgentProcesses(rows, { providerResolver: row => row.provider, environment: platform === 'darwin' ? 'macos' : 'linux' }),
+        activityRows: rows, error: '' };
+    }
+  } catch (error) { snapshot = { generatedAt: new Date().toISOString(), available: false, processes: [], error: String(error.message || error) }; }
+  parentPort.postMessage(snapshot);
+}

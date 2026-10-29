@@ -13,7 +13,12 @@
     }
   }
 
-  let theme = readTheme();
+  const MODE_KEY = 'whitebox:theme-mode:v1';
+  const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
+  let preference;
+  try { preference = localStorage.getItem(MODE_KEY); } catch (_) { /* Keep the existing explicit theme. */ }
+  if (!['light', 'dark', 'system'].includes(preference)) preference = readTheme();
+  let theme = preference === 'system' ? (systemAppearance.matches ? 'dark' : 'light') : preference;
   document.documentElement.dataset.theme = theme;
 
   function syncNativeThemeAppearance() {
@@ -48,7 +53,7 @@
       }
     });
     document.querySelectorAll('[data-theme-choice]').forEach(button => {
-      const selected = button.dataset.themeChoice === theme;
+      const selected = button.dataset.themeChoice === preference;
       button.setAttribute('aria-checked', selected ? 'true' : 'false');
       button.tabIndex = selected ? 0 : -1;
       button.classList.toggle('active', selected);
@@ -62,14 +67,17 @@
   }
 
   function setTheme(nextTheme, options = {}) {
-    if (!THEMES.has(nextTheme)) return false;
-    const changed = theme !== nextTheme;
-    theme = nextTheme;
+    if (!['light', 'dark', 'system'].includes(nextTheme)) return false;
+    const resolved = nextTheme === 'system' ? (systemAppearance.matches ? 'dark' : 'light') : nextTheme;
+    const changed = theme !== resolved || preference !== nextTheme;
+    preference = nextTheme;
+    theme = resolved;
     document.documentElement.dataset.theme = theme;
     syncNativeThemeAppearance();
     if (options.persist !== false) {
       try {
         localStorage.setItem(STORAGE_KEY, theme);
+        localStorage.setItem(MODE_KEY, preference);
       } catch (error) {
         window.WhiteboxRendererUtils?.reportRecoverableError?.('theme-save', error);
       }
@@ -82,6 +90,8 @@
     }
     return changed;
   }
+
+  systemAppearance.addEventListener('change', () => { if (preference === 'system') setTheme('system', { persist: false }); });
 
   function bindControls() {
     syncControls();
@@ -118,6 +128,7 @@
 
   window.WhiteboxTheme = Object.freeze({
     getTheme: () => theme,
+    getPreference: () => preference,
     setTheme,
     syncControls,
   });

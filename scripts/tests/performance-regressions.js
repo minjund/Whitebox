@@ -100,21 +100,6 @@ function registerPerformanceRegressionTests({ test, temp, jsonl, root }) {
     } finally { coordinator.stop(); }
   });
 
-  test('browsing many transcripts bounds renderer memory without losing selected parent or reload', async () => {
-    let reads = 0;
-    const sandbox = { window: { WhiteboxAppFactories: {}, WhiteboxI18n: { t: key => key, errorText: String },
-      whitebox: { sessionDetail: async id => { reads++; return { id, messages: [{ text: id }] }; } } } };
-    vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer/app-drawer-data.js'), 'utf8'), sandbox);
-    const state = { details: new Map([['parent', { id: 'parent' }], ['child', { id: 'child', parentId: 'parent' }]]),
-      selectedId: 'child', snapshot: { sessions: [] }, detailErrors: new Map(), detailLoadingIds: new Set() };
-    const data = sandbox.window.WhiteboxAppFactories.createDrawerData({ state, renderDrawer() {}, reportRecoverableError(error) { throw error; } });
-    for (let i = 0; i < 60; i++) await data.loadSessionDetail('history-' + i);
-    assert.equal(state.details.size, 12);
-    assert(state.details.has('parent') && state.details.has('child'));
-    const before = reads;
-    assert.equal((await data.loadSessionDetail('history-0')).messages[0].text, 'history-0');
-    assert.equal(reads, before + 1);
-  });
 }
 
 module.exports = { registerPerformanceRegressionTests };

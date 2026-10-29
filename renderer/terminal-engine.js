@@ -30,6 +30,8 @@
       this.scrollListeners = new Set();
       this.addons = [];
       this.writing = false;
+      this.contentVersion = 0;
+      this.textSnapshot = null;
       const buffers = new Map();
       const buffer = type => {
         if (!buffers.has(type)) {
@@ -79,19 +81,22 @@
       const line = buffer.getLine(row);
       if (!line) return undefined;
       const base = type === 'normal' ? this.backend.getScrollbackLength() : 0;
-      const cells = row < base ? this.wasmTerm.getScrollbackLine(row) : this.wasmTerm.getLine(row - base);
+      // The pinned buffer line already owns a copy of these cells. Avoid a
+      // second WASM extraction and per-cell Proxy allocation for plain text.
+      const cells = line.cells || (row < base ? this.wasmTerm.getScrollbackLine(row) : this.wasmTerm.getLine(row - base));
+      const chars = column => {
+        const cell = cells?.[column];
+        if (!cell || cell.width === 0) return '';
+        if (cell.grapheme_len > 0) return row < base
+          ? this.wasmTerm.getScrollbackGraphemeString(row, column)
+          : this.wasmTerm.getGraphemeString(row - base, column);
+        return cell.codepoint ? String.fromCodePoint(cell.codepoint) : '';
+      };
       const getCell = column => {
         const original = line.getCell(column);
         if (!original) return undefined;
         return new Proxy(original, { get: (target, key) => {
-          if (key === 'getChars') return () => {
-            const cell = cells?.[column];
-            if (!cell || cell.width === 0) return '';
-            if (cell.grapheme_len > 0) return row < base
-              ? this.wasmTerm.getScrollbackGraphemeString(row, column)
-              : this.wasmTerm.getGraphemeString(row - base, column);
-            return cell.codepoint ? String.fromCodePoint(cell.codepoint) : '';
-          };
+          if (key === 'getChars') return () => chars(column);
           const value = target[key];
           return typeof value === 'function' ? value.bind(target) : value;
         } });
@@ -103,12 +108,27 @@
           let limit = Math.min(end, line.length);
           if (trimRight) while (limit > start && !cells?.[limit - 1]?.codepoint) limit -= 1;
           for (let col = Math.max(0, start); col < limit; col += 1) {
-            const cell = getCell(col);
-            if (cell?.getWidth() > 0) text += cell.getChars() || ' ';
+            if ((cells?.[col]?.width ?? 1) > 0) text += chars(col) || ' ';
           }
           return text;
         },
       };
+    }
+    readTextSnapshot(readinessText) {
+      if (this.textSnapshot?.version === this.contentVersion && this.textSnapshot.reader === readinessText) return this.textSnapshot.value;
+      const buffer = this.buffer.active, start = Math.max(0, buffer.length - 400);
+      const rows = new Map();
+      const getLine = row => {
+        if (!rows.has(row)) rows.set(row, buffer.getLine(row));
+        return rows.get(row);
+      };
+      const lines = [];
+      for (let row = start; row < buffer.length; row++) lines.push(getLine(row)?.translateToString(true) || '');
+      const cachedBuffer = new Proxy(buffer, { get: (target, key) => key === 'getLine' ? getLine : target[key] });
+      const value = { text: lines.join('\n').slice(-24000), readinessText: readinessText?.(cachedBuffer) || '' };
+      // Cache strings only; do not retain hundreds of WASM cell arrays per pane.
+      this.textSnapshot = { version: this.contentVersion, reader: readinessText, value };
+      return value;
     }
     onData(listener) { return this.backend.onData(listener); }
     onResize(listener) { return this.backend.onResize(listener); }
@@ -189,6 +209,7 @@
       const active = this.buffer.active;
       const anchor = active.viewportY;
       const following = anchor >= active.baseY;
+      if (data.length) this.contentVersion += 1;
       this.writing = true;
       try {
         // The pinned WASM allocator does not accept a zero-byte allocation.
@@ -210,6 +231,7 @@
     }
     writeln(data, callback) { this.write(`${data}\r\n`, callback); }
     resize(cols, rows) {
+      this.contentVersion += 1;
       this.backend.resize(cols, rows);
       // 0.4 overwrites the DPR-scaled canvas after renderer.resize(). Restore it.
       this.renderer.resize(this.cols, this.rows);
@@ -233,7 +255,11 @@
         this.accessibilityTimer = null;
         if (this.disposed) return;
         const buffer = this.buffer.active;
-        this.accessibility.setAttribute('aria-live', document.activeElement === this.textarea ? 'polite' : 'off');
+        const live = document.activeElement === this.textarea ? 'polite' : 'off';
+        if (this.accessibility.getAttribute('aria-live') !== live) this.accessibility.setAttribute('aria-live', live);
+        const key = `${this.contentVersion}:${buffer.viewportY}:${this.rows}`;
+        if (key === this.accessibilityVersion) return;
+        this.accessibilityVersion = key;
         while (this.accessibility.children.length > this.rows) this.accessibility.lastChild.remove();
         for (let row = 0; row < this.rows; row += 1) {
           let element = this.accessibility.children[row];
@@ -261,6 +287,7 @@
       // Keep the same WASM object: upstream reset replaces it while selection
       // retains a freed reference. RIS + ED3 reset state and erase scrollback.
       this.clearSelection();
+      this.contentVersion += 1;
       this.backend.write('\x1bc\x1b[3J');
       this.scrollToBottom();
     }
@@ -315,6 +342,7 @@
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
+      this.textSnapshot = null;
       for (const addon of this.addons) addon.dispose();
       this.addons = [];
       // Let already accepted writes finish their promises, even on disposal.

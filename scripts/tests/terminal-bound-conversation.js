@@ -1844,34 +1844,6 @@ function registerTerminalBoundConversationTests({ test, root, temp }) {
     }
   });
 
-  test('bound PTY 루트는 집중 xterm을 열고 읽기 전용 상세 패널과 공존한다', () => {
-    const workbench = fs.readFileSync(path.join(root, 'renderer', 'terminal-workbench.js'), 'utf8');
-    const ptyFocus = fs.readFileSync(path.join(root, 'renderer', 'app-pty-focus.js'), 'utf8');
-    const drawerView = fs.readFileSync(path.join(root, 'renderer', 'app-drawer.js'), 'utf8');
-    const graph = fs.readFileSync(path.join(root, 'renderer', 'app-graph-view.js'), 'utf8');
-    const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
-    const messages = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
-    const terminal = fs.readFileSync(path.join(root, 'renderer', 'terminal.js'), 'utf8');
-    const fixturePreload = fs.readFileSync(path.join(root, 'scripts', 'interaction-fixture-preload.js'), 'utf8');
-    assert.match(workbench, /inputDisabled = readOnly;/u);
-    assert.match(workbench, /const inputDisabled = false;/u);
-    assert.match(workbench, /if \(!inputDisabled\) \{\s*terminal\.onData/u);
-    assert.equal(fs.existsSync(path.join(root, 'renderer', 'drawer-terminal.js')), false);
-    assert.match(html, /id="ptyFocusTerminalViewport"[^>]*data-agent-terminal-viewport/u);
-    assert.match(html, /id="detailDrawer"[^>]*role="dialog"/u);
-    assert.match(html, /id="drawerContent"[^>]*role="tabpanel"/u);
-    assert.match(ptyFocus, /openPtyFocusVerified/u);
-    assert.match(drawerView, /context\.openPtyFocusVerified\?\.\(root\.id,/u);
-    assert.match(drawerView, /function openSubagentConversation\(id, options = \{\}\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u);
-    assert.match(drawerView, /function openExecutionActivity\(ownerId, executionId\)[\s\S]*openDrawerSurface\("modal"\)[\s\S]*renderDrawer\(\)/u);
-    assert.equal(graph.includes('data-inline-terminal-composer'), false);
-    assert.equal(graph.includes('data-inline-terminal-focus'), false);
-    assert.equal(messages.includes('"drawer.terminal_focus"'), false);
-    assert.match(messages, /실제 PTY 출력 및 스크롤 기록/u);
-    assert.match(terminal, /whitebox\.terminalRespond/u);
-    assert.equal((fixturePreload.match(/terminalRespond:/gu) || []).length, 2,
-      'controlled fixture와 real-terminal fixture가 모두 전용 승인 API를 노출해야 합니다.');
-  });
 }
 
 module.exports = { registerTerminalBoundConversationTests };

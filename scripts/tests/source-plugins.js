@@ -157,23 +157,6 @@ function registerSourcePluginTests(context) {
     assert.equal(isSourcePluginEnabled(store.snapshot(), 'builtin.claude-desktop'), true);
   });
 
-  test('런타임 준비 전 bootstrap도 데스크톱 기록 기본값을 숨기지 않는다', () => {
-    const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-    const rendererCore = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
-    assert.equal(main.includes('version: SOURCE_PLUGIN_SETTINGS_VERSION'), true);
-    assert.equal(main.includes('enabledPluginIds: [...DESKTOP_SOURCE_PLUGIN_IDS]'), true);
-    assert.match(rendererCore,
-      /sourcePluginSettings:\s*\{\s*version:\s*3,\s*enabledPluginIds:\s*\["builtin\.claude-desktop",\s*"builtin\.codex-desktop"\]/,
-      'renderer cold-start defaults must enable both desktop history sources.');
-
-    // A loaded v3 snapshot remains authoritative, including an explicit opt-out.
-    assert.deepEqual(normalizeSettings({
-      version: 3,
-      enabledPluginIds: ['builtin.codex-desktop'],
-      asideHistoryFolders: [],
-    }).enabledPluginIds, ['builtin.codex-desktop']);
-  });
-
   test('비활성 source plugin은 monitor factory·watch·scan·외부 snapshot을 사용하지 않는다', async () => {
     let factoryCalls = 0;
     let scanCalls = 0;
@@ -1198,44 +1181,6 @@ function registerSourcePluginTests(context) {
     client.child = null;
   });
 
-  test('renderer가 source·provider·environment·runtime 4개 배지와 source 삭제 확인을 유지한다', () => {
-    const renderer = fs.readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8');
-    for (const dimension of ['source', 'provider', 'environment', 'runtime']) {
-      assert.equal(renderer.includes(`session-dimension ${dimension}`), true, `${dimension} 배지가 없습니다.`);
-    }
-    assert.equal(renderer.includes('읽기 전용 폴더'), true);
-    assert.equal(renderer.includes('읽기 전용 기록'), true);
-    assert.equal(renderer.includes('session.controlAuthority === "read-only-import" || session.importMode === "selected-folder"'), false);
-    assert.equal(renderer.includes('session.controlAuthority === "read-only-import" || session.importMode === "local-history"'), true);
-    assert.equal(renderer.includes('공식 연결'), true);
-    assert.equal(renderer.includes('data-session-source='), true);
-    assert.equal(renderer.includes('data-session-provider='), true);
-    assert.equal(renderer.includes('data-session-environment='), true);
-    assert.equal(renderer.includes('data-session-runtime='), true);
-
-    const actions = fs.readFileSync(path.join(root, 'renderer', 'app-agent-actions.js'), 'utf8');
-    assert.equal(actions.includes('prepareSourceDelete(sessionId)'), true);
-    assert.equal(actions.includes('window.confirm('), true);
-    assert.equal(actions.includes('deleteToken: prepared.token'), true);
-
-    const worker = fs.readFileSync(path.join(root, 'src', 'monitorWorker.js'), 'utf8');
-    assert.equal(worker.includes('provenance: session.provenance || null'), true);
-    assert.equal(worker.includes("controlAuthority: session.controlAuthority || ''"), true);
-    assert.equal(worker.includes('readOnly: Boolean(session.readOnly)'), true);
-    assert.equal(worker.includes('JSON.stringify(item.managedSessionIds || [])'), true);
-
-    const runModal = fs.readFileSync(path.join(root, 'renderer', 'app-run-modal.js'), 'utf8');
-    assert.equal(runModal.includes('data-aside-history-remove='), true);
-    assert.equal(runModal.includes('읽기 전용 기록 연결 가능'), true);
-    assert.equal(runModal.includes('source.id === "builtin.aside" && state.platform.id === "darwin"'), true);
-
-    const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-    const visibility = fs.readFileSync(path.join(root, 'renderer', 'app-provider-visibility.js'), 'utf8');
-    assert.equal(main.includes('if (session.sourcePluginId) return isSourcePluginEnabled('), true);
-    assert.equal(visibility.includes('isSessionVisible(session)'), true);
-    assert.equal(visibility.includes('visibleSessionProjection(sessions = [])'), true);
-    assert.equal(visibility.includes('visibleSessionProjection(snapshot.sessions || [])'), true);
-  });
 }
 
 module.exports = { registerSourcePluginTests };

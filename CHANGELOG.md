@@ -3,6 +3,26 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.8 - 2026-10-29
+
+- Reduce terminal input and background polling costs with cached screen reads,
+  bounded replay hydration and process observation/parsing outside the main loop.
+- Recover an open but unresponsive terminal transport without blindly replaying
+  uncertain input, and release cached screens when sessions are removed.
+- Refresh unchanged panel access files with a bounded heartbeat instead of
+  rewriting them on every poll; preserve exact identity and roster validation.
+- Show a rotating activity indicator during AI work and a green dot only after
+  a confirmed answer. Keep approval/input waiting and interruption distinct.
+- Apply the approved settings design with persistent appearance, language and
+  terminal controls. Make saved Jev credentials visible on demand, show a saved
+  mask, select Jev after key storage, and improve settings spacing.
+- Page multi-question attention popups while retaining answers and delivering
+  one validated response to the original terminal and request.
+- Remove the unused dashboard/graph/drawer UI, its styles and obsolete fixtures.
+  Keep current workspace features, preserved terminal output and update cohorts.
+- Remove the duplicate topbar settings icon and keep the automatic-analysis
+  toggle usable in narrow review panels and small windows.
+
 ## 2.0.7 - 2026-10-29
 
 - Keep Whitebox's native macOS app identity for the main window and hidden

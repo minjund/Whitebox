@@ -2,7 +2,7 @@
 
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
-const { ProcessMonitor } = require('./processMonitor');
+const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { completedTurn, currentTurnEvidence, isStartupRequest } = require('./terminalReviewTurns');
 const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement } = require('./terminalReviewPolicy');
@@ -327,7 +327,15 @@ class TerminalReview extends EventEmitter {
     }
     this.scheduling.set(id, { session, analysis, foreground, force });
     entry.locale = analysis.locale || 'ko';
-    const snapshot = this.monitor.scan(), process = exactProcess(session, snapshot);
+    const snapshot = await scanProcesses(this.monitor);
+    // OS observation now yields. A close/restart while it runs must not revive
+    // a forgotten review or analyze evidence for the previous terminal process.
+    const inventory = this.manager().list?.();
+    const latest = Array.isArray(inventory) ? inventory.find(item => item.id === id) : session;
+    if (this.entries.get(id) !== entry || !latest || terminalKey(latest) !== key || latest.status !== session.status) {
+      return { state: 'unbound', message: '터미널 실행 상태가 바뀌어 관찰을 다시 확인합니다.' };
+    }
+    const process = exactProcess(session, snapshot);
     if (!enabled) {
       if (entry.state !== 'paused') entry.revision++;
       entry.state = 'paused'; entry.pending = []; entry.turn = null; entry.following = null; entry.failed = null; entry.message = '';

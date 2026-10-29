@@ -22,7 +22,9 @@ app.whenReady().then(async () => {
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
-  let jevConfigured = false;
+  let completedActivityId = '';
+  let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
+  let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
   let forcedReviewCalls = 0;
   let requestSummary = '';
@@ -59,10 +61,12 @@ app.whenReady().then(async () => {
       if (payload.operation === 'connect') return { ok: true };
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
+      if (completedActivityId && activity.has(completedActivityId)) activity.set(completedActivityId, { ...activity.get(completedActivityId), state: 'idle', completed: true });
       return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
     });
     ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
-    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigured = !payload.remove && Boolean(payload.apiKey); return { configured: jevConfigured }; });
+    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevSavedKey = payload.remove ? '' : payload.apiKey; jevConfigured = Boolean(jevSavedKey); return { configured: jevConfigured }; });
+    ipcMain.handle('terminals:jev-reveal', async () => { jevRevealCalls++; if(jevRevealDeferred) await new Promise(resolve=>setTimeout(resolve,250)); return {apiKey:jevSavedKey}; });
     ipcMain.handle('terminals:review-models', () => ({ codex: [{id:'fixture-model',label:'Fixture model'}], claude: [{id:'sonnet',label:'Sonnet'}] }));
     ipcMain.handle('providers:usage', () => { accountUsageCalls++; return ({ providers: {codex:{available:true,updatedAt:new Date().toISOString(),weekly:{label:'주간 한도',usedPercent:12.3}},claude:{available:false}} }); });
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
@@ -122,8 +126,35 @@ app.whenReady().then(async () => {
       }
       throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
+    const checkResponsiveReview = async () => {
+    assert.equal(await evaluate('document.querySelectorAll(".wb-top-actions [data-action=settings]").length'), 0, 'topbar has no duplicate settings icon');
+    assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-bottom [data-action=settings]").length'), 1, 'sidebar settings entry remains available');
+    const reviewHeaderCopy = await evaluate('({heading:document.querySelector("#wbReview h1").textContent,label:document.querySelector("#wbReviewAuto>span").textContent})');
+    for (const width of [1000, 640, 360]) {
+      win.setContentSize(width, 720);
+      await waitFor(`innerWidth === ${width}`, 'responsive review viewport');
+      if (await evaluate('getComputedStyle(document.querySelector("#wbReview")).display === "none"')) await evaluate('document.querySelector("#wbReviewToggle").click()');
+      await evaluate('document.querySelector("#terminalWorkspace").style.setProperty("--wb-review-width","260px");document.querySelector("#wbReview h1").textContent="Understanding & review";document.querySelector("#wbReviewAuto>span").textContent="Auto analysis"');
+      const geometry = await evaluate(`(() => {
+        const header=document.querySelector('#wbReview>header').getBoundingClientRect(), button=document.querySelector('#wbReviewAuto'), b=button.getBoundingClientRect(), heading=document.querySelector('#wbReview h1').getBoundingClientRect(), close=document.querySelector('.wb-review-close').getBoundingClientRect(), toggle=document.querySelector('.wb-auto-switch').getBoundingClientRect();
+        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width};
+      })()`);
+      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28, JSON.stringify({width,geometry}));
+      await evaluate('document.querySelector("#wbReviewAuto").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'false', 'narrow toggle responds immediately');
+      await evaluate('document.querySelector("#wbReviewAuto").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'true');
+    }
+    await evaluate(`document.querySelector('#wbReview h1').textContent=${JSON.stringify(reviewHeaderCopy.heading)};document.querySelector('#wbReviewAuto>span').textContent=${JSON.stringify(reviewHeaderCopy.label)};document.querySelector('#terminalWorkspace').style.removeProperty('--wb-review-width')`);
+    win.setContentSize(1450, 900);
+    console.log('PASS responsive analysis toggle: 260px review column, 360/640/1000px windows, long labels, hit target, immediate on/off and one sidebar settings entry');
+    };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
+    if (process.argv.includes('--responsive-only')) {
+      await checkResponsiveReview();
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     await evaluate("WhiteboxI18n.setLocale('ko')");
     await win.reload();
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'Korean locale bootstrap');
@@ -185,10 +216,78 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbUpdateInstalledVersion").textContent.includes("확인 불가")', 'unknown installed version shown explicitly');
     assert.equal(await evaluate('document.querySelector("[data-action=update-install]").hidden'), true, 'blocked updater has no install action');
     assert.equal(updateInstallCalls, 1, 'state changes never install automatically');
-    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('[data-action=jev-save]').click()`);
-    await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('Jev 연결됨')`, 'Jev key saved through main IPC');
+    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('#wbJevKey').dispatchEvent(new Event('input')); document.querySelector('[data-action=jev-save]').click()`);
+    await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('API 키가 저장되어')`, 'Jev key saved through main IPC');
     assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
     assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
+    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved key is visibly confirmed even though input is empty');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
+    assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
+    await evaluate('document.querySelector("[data-settings-section=connections]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'jev', 'saving a key automatically selects Jev');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.provider'), 'jev');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Jev를 분석 서비스로/);
+    assert.equal(await evaluate('document.querySelector("#wbJevAnalysisSettings").hidden'), true);
+    const jevSpacing = await evaluate('(() => { const provider=document.querySelector(".wb-settings-provider").getBoundingClientRect(),heading=document.querySelector("#wbJevHeading").getBoundingClientRect();return heading.top-provider.bottom;})()');
+    assert(jevSpacing>=24,'Jev heading must have space below the provider separator');
+    await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Claude/);
+    const selectedBeforeJevLink = await evaluate('document.querySelector("#wbAnalysisProvider").value');
+    await evaluate('document.querySelector("#wbJevAnalysisSettings").click()');
+    assert.equal(await evaluate('document.querySelector("[data-settings-page=analysis]").hidden'), false);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), selectedBeforeJevLink, 'navigation never changes the analysis provider');
+    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
+    await waitFor('document.querySelector("#wbJevKey").type === "text" && document.querySelector("#wbJevKey").value === "fixture-jev-key"', 'explicit Show decrypts the saved key');
+    assert.equal(jevRevealCalls,1);
+    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'viewing a saved key is not an unsaved edit');
+    assert.equal(await evaluate('JSON.stringify(localStorage).includes("fixture-jev-key")'), false);
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false);
+    assert.equal(jevConfigureCalls,1,'Done does not resave a merely revealed key');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '');
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
+    await waitFor('document.querySelector("#wbJevKey").type === "text"', 'saved key can be shown again');
+    await evaluate('document.querySelector("[data-action=jev-reveal]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'Hide removes saved plaintext from the DOM');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***', 'hidden saved key displays a fixed mask');
+    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'the visual mask is never saved as a replacement key');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    jevRevealDeferred=true;
+    await evaluate('document.querySelector("[data-action=jev-reveal]").click(); document.querySelector("#wbSettingsClose button").click()');
+    await waitFor('!document.querySelector("[data-action=jev-reveal]").disabled', 'late decrypt request finishes');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'late response cannot repopulate a closed dialog');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    jevRevealDeferred=false;
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
+    console.log('PASS explicit saved Jev key reveal; no automatic reads, no resave, Hide/close clear plaintext, late responses discarded');
+
+    await evaluate('document.querySelector("#wbJevKey").value="fixture-done-key"; document.querySelector("#wbJevKey").dispatchEvent(new Event("input")); document.querySelector("#wbSettingsDone button").click()');
+    await waitFor('!document.querySelector("#wbSettings").open', 'Done saves the pending key before closing');
+    assert.equal(jevConfigureCalls, 2);
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false);
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '');
+    const enterPrevented = await evaluate('(() => { const input=document.querySelector("#wbJevKey"); input.value="fixture-enter-key"; input.dispatchEvent(new Event("input")); const event=new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true}); input.dispatchEvent(event); input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true})); return event.defaultPrevented; })()');
+    assert.equal(enterPrevented, true, 'Enter must not implicitly submit the close button');
+    await waitFor('!document.querySelector("#wbJevKey").disabled && !document.querySelector("#wbJevKey").value', 'Enter finishes saving');
+    assert.equal(jevConfigureCalls, 3, 'repeated Enter never duplicates an in-flight save');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), true);
+    jevConfigureFailure = 'fixture secure store denied';
+    await evaluate('document.querySelector("#wbJevKey").value="fixture-retry-key"; document.querySelector("#wbJevKey").dispatchEvent(new Event("input")); document.querySelector("#wbSettingsDone button").click()');
+    await waitFor('document.querySelector("#wbJevStatus").textContent.includes("fixture secure store denied")', 'save failure is visible');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), true, 'failed save keeps settings open');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), 'fixture-retry-key', 'failed save retains the draft for retry');
+    jevConfigureFailure = '';
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    await waitFor('!document.querySelector("#wbSettings").open', 'successful retry closes settings');
+    bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'saved key status restores after renderer reload');
+    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved badge restores from the main process');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
+    for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture secure store denied')) errors.splice(index,1);
+    console.log('PASS Jev saved-state badge and placeholder; button/Done/Enter save, duplicate suppression, retry and reload without plaintext persistence');
+
     await evaluate(`document.querySelector('#wbAnalysisProvider').value='jev'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('[data-action=jev-remove]').click()`);
     await waitFor(`document.querySelector('#wbAnalysisProvider').value === 'auto'`, 'disconnect resets Jev selection');
     await evaluate('document.querySelector("#wbSettings").close()');
@@ -199,6 +298,57 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), true);
     assert.equal(await evaluate('document.querySelector("#wbUpdateError").hidden'), true);
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
+    const settingsShots = path.join(root, 'artifacts/settings'); fs.mkdirSync(settingsShots, { recursive: true });
+    await evaluate('document.querySelector("[data-action=settings]").click()');
+    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 5);
+    assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
+    const settingsActions = await evaluate('Object.fromEntries(["wbSettingsClose","wbSettingsDone"].map(id=>{const button=document.querySelector("#"+id+" button"),r=button.getBoundingClientRect();return [id,{width:r.width,height:r.height}]}))');
+    assert(settingsActions.wbSettingsClose.width>=44 && settingsActions.wbSettingsClose.height>=40,'close target has adequate space');
+    assert(settingsActions.wbSettingsDone.width>=88 && settingsActions.wbSettingsDone.height>=40,'Done has comfortable horizontal padding');
+
+    await new Promise(resolve => setTimeout(resolve, 600));
+    fs.writeFileSync(path.join(settingsShots, 'general-dark.png'), (await win.webContents.capturePage()).toPNG());
+    await evaluate('document.querySelector("[data-settings-section=terminal]").click(); document.querySelector("[data-action=settings-font-larger]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbFont").value'), '15');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontSize'), '15px');
+    await evaluate('document.querySelector("#wbFontFamily").value="monospace"; document.querySelector("#wbFontFamily").dispatchEvent(new Event("change",{bubbles:true}))');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontFamily'), 'monospace');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).fontFamily'), 'monospace');
+    fs.writeFileSync(path.join(settingsShots, 'terminal-dark.png'), (await win.webContents.capturePage()).toPNG());
+    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("#wbJevKey").value="unsaved-key"; document.querySelector("[data-action=jev-reveal]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'text');
+    await evaluate('document.querySelector("#wbSettingsClose button").click()');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false, 'affectUI close preserves native dialog submission');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'closing discards unsaved key');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    await evaluate('document.querySelector("[data-action=settings]").click(); WhiteboxTheme.setTheme("system")');
+    assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    win.webContents.debugger.attach('1.3');
+    for (const appearance of ['light', 'dark']) {
+      await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: appearance }] });
+      await waitFor(`WhiteboxTheme.getTheme() === '${appearance}'`, 'system appearance follows OS changes');
+      assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    }
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] }); win.webContents.debugger.detach();
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'settings restore after reload');
+    assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    assert.equal(await evaluate('document.querySelector("#wbFontFamily").value'), 'monospace');
+    assert.equal(await evaluate('document.querySelector("#wbFont").value'), '15');
+    await evaluate('WhiteboxTheme.setTheme("dark"); document.querySelector("[data-action=settings]").click()');
+    for (const width of [780, 360]) {
+      win.setContentSize(width, 720);
+      for (const section of ['general', 'terminal', 'analysis', 'connections', 'shortcuts']) {
+        await evaluate(`document.querySelector('[data-settings-section=${section}]').click()`);
+        const bounds = await evaluate('(() => { const r=document.querySelector("#wbSettings").getBoundingClientRect(), content=document.querySelector("#wbSettingsContent"); return {left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,scroll:content.scrollWidth,client:content.clientWidth}; })()');
+        assert(bounds.left>=0 && bounds.right<=bounds.width && bounds.bottom<=bounds.height && bounds.scroll<=bounds.client+1, JSON.stringify({section,bounds}));
+      }
+      fs.writeFileSync(path.join(settingsShots, `settings-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    win.setContentSize(1450,900);
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore layout after settings size checks');
+    console.log('PASS redesigned settings: native close, five categories, font persistence, key clearing, system appearance changes, 780/360px layouts');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
@@ -228,14 +378,42 @@ app.whenReady().then(async () => {
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'idle shell is yellow even while its process remains running');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(223, 184, 79)');
       await evaluate('document.querySelector("#wbAutoReview").checked = false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
-      await manager.command(first.id, 'sleep 3');
-      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work turns green with automatic review disabled');
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
+      // Keep quiet foreground work alive until the assertions explicitly finish.
+      // A fixed sleep races slow CI inspection and cannot cover both motion modes.
+      const silentWork = path.join(profile, 'silent-work.cjs');
+      fs.writeFileSync(silentWork, "process.stdin.setRawMode(true);process.stdin.resume();process.stdin.once('data',()=>{process.stdin.setRawMode(false);process.exit(0)});");
+      await manager.command(first.id, "node '" + silentWork.replace(/'/g, "'\\''") + "'");
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work shows a spinner with automatic review disabled');
+      win.webContents.debugger.attach('1.3');
+      try {
+        for (const motion of ['no-preference', 'reduce']) {
+          await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: motion }] });
+          const appearance = await evaluate(`(() => {const status=document.querySelector('${activitySelector}'),style=getComputedStyle(status.querySelector('i'));return {state:status.dataset.state,animation:style.animationName,ring:style.borderTopWidth};})()`);
+          assert.equal(appearance.state, 'working');
+          assert.equal(appearance.animation, motion === 'reduce' ? 'none' : 'wb-terminal-working');
+          assert(parseFloat(appearance.ring) > 0, 'reduced motion retains the working ring at every device scale');
+        }
+      } finally {
+        await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] });
+        win.webContents.debugger.detach();
+        await manager.write(first.id, 'x');
+      }
       assert.equal(await evaluate(`document.querySelector('${activitySelector}').textContent`), '', 'dot has no visible status copy');
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'finished command returns to yellow input waiting');
       assert.equal(manager.get(first.id).pid, first.pid, 'working/idle transition never restarts the shell');
       await evaluate('document.querySelector("#wbAutoReview").checked = true; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
-      console.log('PASS live activity dots: idle yellow → silent working green → input waiting yellow, same PID, automatic review disabled');
+      completedActivityId = first.id;
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'completed'`, 'confirmed AI completion becomes green');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).animationName`), 'none');
+      assert.equal(await evaluate(`document.querySelector('${activitySelector}').getAttribute('aria-label')`), '답변 완료');
+      assert.equal(await evaluate(`document.querySelector('.wb-pane-state').dataset.state`), 'completed');
+      await evaluate("document.documentElement.dataset.theme = 'light'");
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(40, 116, 93)');
+      await evaluate("document.documentElement.dataset.theme = 'dark'");
+      completedActivityId = '';
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'bare idle shell never claims an AI answer');
+      console.log('PASS activity: real silent work spinner, confirmed AI answer green in both themes/sidebar/pane, bare idle shell yellow, same PID');
     }
     await evaluate('document.querySelector("[data-add-panel-terminal]").click()');
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
@@ -249,6 +427,25 @@ app.whenReady().then(async () => {
         await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(session.id)}).trim().endsWith('WB>')`, 'deterministic fixture shell prompt');
       }
     }
+    const scanScheduling = await evaluate(`(async () => {
+      await WhiteboxWorkspace.captureReviews(true);
+      const read = WhiteboxTerminal.readTerminalSnapshot;
+      let calls = 0, taskRan = false, yielded = false;
+      WhiteboxTerminal.readTerminalSnapshot = (...args) => {
+        calls++;
+        if (calls === 1) {
+          setTimeout(() => { taskRan = true; }, 0);
+          const until = performance.now() + 12;
+          while (performance.now() < until) {} // model a cold WASM buffer read
+        } else if (taskRan) yielded = true;
+        return read(...args);
+      };
+      try { await WhiteboxWorkspace.captureReviews(true); return {calls, yielded}; }
+      finally { WhiteboxTerminal.readTerminalSnapshot = read; }
+    })()`);
+    assert(scanScheduling.calls >= 2, 'scheduling check requires multiple terminal buffers');
+    assert(scanScheduling.yielded, 'background scans blocked the input task queue across terminals');
+
     const command = marker => process.platform === 'win32' ? `Write-Output '${marker} 한글 입력 확인'\r` : `printf '%s\\n' '${marker} 한글 입력 확인'\r`;
     await manager.write(first.id, command('ONE_ONLY'));
     await manager.write(second.id, command('TWO_ONLY'));
@@ -570,7 +767,7 @@ app.whenReady().then(async () => {
     const checkFittedPanes = async () => {
       await waitFor(`(async () => {
         const probeHost = document.createElement('div'); document.body.append(probeHost);
-        const probe = WhiteboxTerminalEngine.createView(probeHost, WhiteboxTerminalEngine.workspaceOptions(Number(document.querySelector('#wbFont').value)));
+        const probe = WhiteboxTerminalEngine.createView(probeHost, {...WhiteboxTerminalEngine.workspaceOptions(Number(document.querySelector('#wbFont').value)), fontFamily:document.querySelector('#wbFontFamily').value});
         const metrics = probe.terminal.renderer.getMetrics(); probe.terminal.dispose(); probeHost.remove();
         for (const pane of document.querySelectorAll('#wbCanvas .wb-pane')) {
           const element = pane.querySelector('.ghostty-terminal'), canvas = pane.querySelector('canvas');
@@ -600,7 +797,7 @@ app.whenReady().then(async () => {
       win.setContentSize(width, 700);
       await waitFor(`innerWidth === ${width}`, 'window size updated');
       if (width <= 850) {
-        assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'none', 'compact layout leaves terminal unobstructed');
+        await waitFor('getComputedStyle(document.querySelector("#wbReview")).display === "none"', 'compact layout leaves terminal unobstructed after matchMedia change');
         await evaluate('document.querySelector("#wbReviewToggle").click()');
         assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'flex');
         await evaluate('document.querySelector(".wb-review-close").click()');

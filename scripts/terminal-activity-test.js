@@ -36,6 +36,13 @@ const { TerminalActivity, providerActivity } = require('../src/terminalActivity'
   table = '100 1 100 101 Ss 00:10 /bin/zsh /bin/zsh\n101 100 101 101 S+ 00:05 /usr/bin/claude claude';
   assert.equal(await state(), 'working');
   native = completed; assert.equal(await state(), 'idle', 'provider PID stays alive after its turn finishes');
+  assert.equal((await reader.observe([member],frames)).get('shell').completed,true,'only a confirmed answer becomes a green completion dot');
+  native={...completed,state:'interrupted'};assert.equal((await reader.observe([member],frames)).get('shell').completed,false,'interruption never claims answer completion');
+  native=completed;
+  assert.equal((await reader.observe([member], new Map())).get('shell').completed, true, 'unopened panels use exact native completion without allocating a terminal view');
+  native = { ...completed, state: 'working', requestId: 'next-request', inputWaiting: false };
+  assert.equal((await reader.observe([member], new Map())).get('shell').state, 'working');
+  native = completed;
   frames.get('shell').creationId = 'replacement'; assert.equal(await state(), 'unknown', 'stale screen identity is rejected');
   frames.get('shell').creationId = 'epoch'; frames.get('shell').at = 0;
   assert.equal(await state(), 'unknown', 'stale screens cannot claim work or readiness');
