@@ -930,6 +930,7 @@
       if (!mount.isConnected) return () => {};
       entry.host.dataset.groupTerminal = 'true';
       const workspaceOptions = window.WhiteboxTerminalEngine.workspaceOptions(options.fontSize || 15);
+      if (options.fontFamily) workspaceOptions.fontFamily = options.fontFamily;
       const previous = Object.fromEntries(Object.keys(workspaceOptions).map(key => [key, entry.terminal.options[key]]));
       Object.assign(entry.terminal.options, workspaceOptions);
       entry.terminal.textarea.setAttribute('aria-label', options.inputLabel || `${session.title} 터미널 입력`);
@@ -982,6 +983,7 @@
         $('#terminalRuntimeMount')?.appendChild(entry.host);
       };
       dispose.setFontSize = size => { entry.terminal.options.fontSize = size; scheduleFit(); syncCursor(); };
+      dispose.setFontFamily = family => { entry.terminal.options.fontFamily = family; scheduleFit(); syncCursor(); };
       return dispose;
     },
     deactivate,

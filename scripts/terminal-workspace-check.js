@@ -199,6 +199,53 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbUpdateBadge").hidden'), true);
     assert.equal(await evaluate('document.querySelector("#wbUpdateError").hidden'), true);
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
+    const settingsShots = path.join(root, 'artifacts/settings'); fs.mkdirSync(settingsShots, { recursive: true });
+    await evaluate('document.querySelector("[data-action=settings]").click()');
+    assert.equal(await evaluate('document.querySelectorAll("#wbSettings [data-settings-section]").length'), 5);
+    assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
+    await new Promise(resolve => setTimeout(resolve, 600));
+    fs.writeFileSync(path.join(settingsShots, 'general-dark.png'), (await win.webContents.capturePage()).toPNG());
+    await evaluate('document.querySelector("[data-settings-section=terminal]").click(); document.querySelector("[data-action=settings-font-larger]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbFont").value'), '15');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontSize'), '15px');
+    await evaluate('document.querySelector("#wbFontFamily").value="monospace"; document.querySelector("#wbFontFamily").dispatchEvent(new Event("change",{bubbles:true}))');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontFamily'), 'monospace');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).fontFamily'), 'monospace');
+    fs.writeFileSync(path.join(settingsShots, 'terminal-dark.png'), (await win.webContents.capturePage()).toPNG());
+    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("#wbJevKey").value="unsaved-key"; document.querySelector("[data-action=jev-reveal]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'text');
+    await evaluate('document.querySelector("#wbSettingsClose button").click()');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false, 'affectUI close preserves native dialog submission');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'closing discards unsaved key');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    await evaluate('document.querySelector("[data-action=settings]").click(); WhiteboxTheme.setTheme("system")');
+    assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    win.webContents.debugger.attach('1.3');
+    for (const appearance of ['light', 'dark']) {
+      await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: appearance }] });
+      await waitFor(`WhiteboxTheme.getTheme() === '${appearance}'`, 'system appearance follows OS changes');
+      assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    }
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] }); win.webContents.debugger.detach();
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'settings restore after reload');
+    assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
+    assert.equal(await evaluate('document.querySelector("#wbFontFamily").value'), 'monospace');
+    assert.equal(await evaluate('document.querySelector("#wbFont").value'), '15');
+    await evaluate('WhiteboxTheme.setTheme("dark"); document.querySelector("[data-action=settings]").click()');
+    for (const width of [780, 360]) {
+      win.setContentSize(width, 720);
+      for (const section of ['general', 'terminal', 'analysis', 'connections', 'shortcuts']) {
+        await evaluate(`document.querySelector('[data-settings-section=${section}]').click()`);
+        const bounds = await evaluate('(() => { const r=document.querySelector("#wbSettings").getBoundingClientRect(), content=document.querySelector("#wbSettingsContent"); return {left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,scroll:content.scrollWidth,client:content.clientWidth}; })()');
+        assert(bounds.left>=0 && bounds.right<=bounds.width && bounds.bottom<=bounds.height && bounds.scroll<=bounds.client+1, JSON.stringify({section,bounds}));
+      }
+      fs.writeFileSync(path.join(settingsShots, `settings-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    win.setContentSize(1450,900);
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore layout after settings size checks');
+    console.log('PASS redesigned settings: native close, five categories, font persistence, key clearing, system appearance changes, 780/360px layouts');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
@@ -589,7 +636,7 @@ app.whenReady().then(async () => {
     const checkFittedPanes = async () => {
       await waitFor(`(async () => {
         const probeHost = document.createElement('div'); document.body.append(probeHost);
-        const probe = WhiteboxTerminalEngine.createView(probeHost, WhiteboxTerminalEngine.workspaceOptions(Number(document.querySelector('#wbFont').value)));
+        const probe = WhiteboxTerminalEngine.createView(probeHost, {...WhiteboxTerminalEngine.workspaceOptions(Number(document.querySelector('#wbFont').value)), fontFamily:document.querySelector('#wbFontFamily').value});
         const metrics = probe.terminal.renderer.getMetrics(); probe.terminal.dispose(); probeHost.remove();
         for (const pane of document.querySelectorAll('#wbCanvas .wb-pane')) {
           const element = pane.querySelector('.ghostty-terminal'), canvas = pane.querySelector('canvas');

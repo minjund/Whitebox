@@ -20,6 +20,8 @@
     chevron: '<path d="m9 5 7 7-7 7"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2M6 18l2-2m8-8 2-2"/>',
+    plug: '<path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4"/>',
+    keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 12h1m3 0h1m3 0h1m3 0h1M7 15h10"/>',
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
     review: '<path d="M4 6h16M4 12h10M4 18h7m4-1 2 2 4-5"/>',
@@ -31,6 +33,7 @@
   const uuid = () => crypto.randomUUID();
   const base = path => String(path).split(/[\\/]/u).filter(Boolean).at(-1) || path;
   let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false;
+  let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
   let reviewView = 'current';
   let reviewTask = null;
@@ -96,38 +99,54 @@
     </aside>
     <div id="wbParking" hidden></div>
     <dialog id="wbArrange"><form method="dialog"><header><h2>패널 분리 · 화면 배치</h2><button aria-label="닫기">${icon('close')}</button></header><p>패널을 분리해도 같은 화면에서 함께 봅니다. 다른 패널은 테두리 색으로 구분합니다.</p><label>함께 볼 패널<select id="wbMoveTarget"></select></label><label>배치<select id="wbMoveDirection"><option value="right">오른쪽에 배치</option><option value="down">아래에 배치</option><option value="left">왼쪽에 배치</option><option value="up">위에 배치</option></select></label><div class="wb-dialog-actions"><button type="button" data-action="detach-panel">패널 분리</button><button type="button" data-action="join-panel">같은 패널로 묶기</button><button value="cancel">취소</button><button type="button" data-action="pin-arranged">함께 보기</button><button type="button" data-action="move-terminal">분할 배치</button></div></form></dialog>
-    <dialog id="wbSettings"><form method="dialog"><header><h2>Whitebox 설정</h2><button aria-label="설정 닫기">${icon('close')}</button></header>
-      <fieldset id="wbUpdateSettings" class="wb-analysis-settings"><legend>업데이트</legend>
-        <p id="wbUpdateVersions"></p><p id="wbUpdateInstalledVersion" hidden></p>
-        <strong id="wbUpdateStatus" role="status" aria-live="polite"></strong>
-        <p>앱 시작 시와 15분마다 새 버전을 자동으로 확인합니다.</p>
-        <p id="wbUpdateCheckedAt"></p><p id="wbUpdateError" role="status" hidden></p>
-        <progress id="wbUpdateProgress" max="100" aria-label="업데이트 다운로드" hidden></progress>
-        <div class="wb-update-actions"><button type="button" data-action="update-check">업데이트 확인</button><button type="button" data-action="update-install" hidden>업데이트 설치</button><button type="button" data-action="update-release" hidden>버전 안내 보기</button></div>
-        <details id="wbUpdateNotes" hidden><summary>이번 버전의 변경 사항</summary><pre></pre></details>
-      </fieldset>
-      <label>언어 / Language <select id="wbLanguage"><option value="ko">한국어</option><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
-      <label>터미널 글자 크기 <input id="wbFont" type="number" min="11" max="24" step="1" value="14"/></label>
-      <fieldset id="wbAttentionCard" class="wb-analysis-settings"><legend>권한·질문 팝업</legend>
-        <label>오른쪽 아래 응답 창 <input id="wbAttentionEnabled" type="checkbox" role="switch" aria-describedby="wbAttentionDescription wbAttentionStatus" checked/></label>
-        <p id="wbAttentionDescription">AI가 권한이나 답변을 요청하면 다른 창 위에서도 바로 확인하고 응답할 수 있는 작은 창을 표시합니다.</p>
-        <p id="wbAttentionStatus" role="status" aria-live="polite"></p>
-      </fieldset>
-      <label>자동 이해 · 검토 <input id="wbAutoReview" type="checkbox" checked/></label>
-<p class="wb-budget-note">기록만으로 확인할 수 있는 작업은 AI 호출 없이 표시합니다. 해석이 필요한 결과는 변경 이유와 동작 방식을 함께 설명합니다.</p><fieldset class="wb-analysis-settings"><legend>이해·검토용 모델</legend>
-        <label>분석 서비스 <select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="jev">Jev · 판단 분석</option></select></label>
-        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인</legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label>API 키 <input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key"/></label><div><button type="button" data-action="jev-save">키 저장</button><button type="button" data-action="jev-remove">연결 해제</button></div><p id="wbJevStatus" role="status"></p></fieldset>
-        <label data-model-row="claude">Claude 모델 <select id="wbClaudeModel"></select></label>
-        <label id="wbClaudeCustomRow" hidden>모델 ID <input id="wbClaudeCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
-        <label data-model-row="codex">Codex 모델 <select id="wbCodexModel"></select></label>
-        <label id="wbCodexCustomRow" hidden>모델 ID <input id="wbCodexCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
-        <p>다음 분석부터 적용됩니다. 터미널에서 작업 중인 AI의 모델은 바꾸지 않습니다. 선택한 서비스의 로그인과 모델 이용 권한이 필요합니다.</p>
-        <p id="wbModelNotice" role="status"></p>
-      </fieldset>
-      <p>작업 중에도 의미 있는 결과가 수집되면 분석합니다. 근거가 부족하면 기다리고, 같은 결과는 다시 분석하지 않습니다. 결과가 나오기 전에는 분석중 상태만 표시합니다. 고정 사용량 상한은 없으며 자동 이해·검토를 끄면 추가 호출을 멈춥니다.</p>
-      <p>검토는 관찰한 출력에 대한 AI 해석입니다. 코드와 테스트를 별도로 실행해 보증하지 않으며, 화면에서 사라진 내용은 확인할 수 없을 수 있습니다.</p>
-      <button type="button" data-theme-toggle>화면 테마 전환</button>
-      <dl><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl>
+    <dialog id="wbSettings" aria-labelledby="wbSettingsTitle"><form method="dialog" class="wb-settings-form">
+      <header class="wb-settings-header"><div class="wb-settings-heading"><span class="wb-settings-appmark">w.</span><div><h2 id="wbSettingsTitle">설정</h2><small>Whitebox</small></div></div><span id="wbSettingsClose"><button aria-label="설정 닫기">${icon('close')}</button></span></header>
+      <div class="wb-settings-layout"><nav class="wb-settings-nav" aria-label="설정 항목">
+        <button type="button" data-settings-section="general" aria-current="page">${icon('settings')}<span>일반</span></button>
+        <button type="button" data-settings-section="terminal">${icon('terminal')}<span>터미널</span></button>
+        <button type="button" data-settings-section="analysis">${icon('review')}<span>이해 · 검토</span></button>
+        <button type="button" data-settings-section="connections">${icon('plug')}<span>연결</span></button>
+        <button type="button" data-settings-section="shortcuts">${icon('keyboard')}<span>단축키</span></button>
+        <small>whitebox.</small>
+      </nav><div class="wb-settings-content" id="wbSettingsContent">
+      <section data-settings-page="general" aria-labelledby="wbSettingsGeneralTitle"><div class="wb-settings-section-title"><h3 id="wbSettingsGeneralTitle">일반</h3><p>화면과 언어, 알림을 설정합니다.</p></div>
+        <div class="wb-setting-row"><div><strong>모양</strong><p>앱 전체에 적용할 테마</p></div><div id="wbSettingsTheme"></div></div>
+        <div class="wb-setting-row"><label for="wbLanguage"><strong>언어</strong><span>메뉴와 설정 화면의 표시 언어</span></label><select id="wbLanguage"><option value="ko">한국어</option><option value="en">English</option><option value="zh-CN">简体中文</option></select></div>
+        <div id="wbAttentionCard" class="wb-setting-row wb-attention-setting"><div><label for="wbAttentionEnabled"><strong>입력 요청 알림</strong></label><p id="wbAttentionDescription">AI가 권한이나 답변을 요청하면 다른 창 위에서도 바로 확인하고 응답할 수 있는 작은 창을 표시합니다.</p></div><label class="wb-setting-switch"><input id="wbAttentionEnabled" type="checkbox" role="switch" aria-label="입력 요청 알림" aria-describedby="wbAttentionDescription wbAttentionStatus" checked/><span></span></label><p id="wbAttentionStatus" role="status" aria-live="polite"></p></div>
+        <fieldset id="wbUpdateSettings" class="wb-analysis-settings"><legend>앱 업데이트</legend>
+          <p id="wbUpdateVersions"></p><p id="wbUpdateInstalledVersion" hidden></p>
+          <strong id="wbUpdateStatus" role="status" aria-live="polite"></strong>
+          <p>앱 시작 시와 15분마다 새 버전을 자동으로 확인합니다.</p>
+          <p id="wbUpdateCheckedAt"></p><p id="wbUpdateError" role="status" hidden></p>
+          <progress id="wbUpdateProgress" max="100" aria-label="업데이트 다운로드" hidden></progress>
+          <div class="wb-update-actions"><button type="button" data-action="update-check">업데이트 확인</button><button type="button" data-action="update-install" hidden>업데이트 설치</button><button type="button" data-action="update-release" hidden>버전 안내 보기</button></div>
+          <details id="wbUpdateNotes" hidden><summary>이번 버전의 변경 사항</summary><pre></pre></details>
+        </fieldset>
+      </section>
+      <section data-settings-page="terminal" aria-labelledby="wbSettingsTerminalTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsTerminalTitle">터미널</h3><p>편하게 읽고 입력할 수 있도록 조정합니다.</p></div>
+        <div class="wb-setting-row"><label for="wbFontFamily"><strong>글꼴</strong><span>터미널에서 사용할 고정폭 글꼴</span></label><select id="wbFontFamily"><option value="Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace">Cascadia Mono</option><option value="D2Coding, SFMono-Regular, Menlo, Monaco, Consolas, monospace">D2Coding</option><option value="monospace">monospace</option></select></div>
+        <div class="wb-setting-row"><label for="wbFont"><strong>글자 크기</strong><span>모든 터미널에 적용</span></label><div class="wb-font-stepper"><span id="wbFontDecrease"></span><input id="wbFont" type="number" min="11" max="24" step="1" value="14" aria-label="터미널 글자 크기"/><span>px</span><span id="wbFontIncrease"></span></div></div>
+        <p class="wb-font-preview-label">미리보기</p><div id="wbFontPreview" class="wb-font-preview"><small>~/projects/whitebox</small><p>$ 안녕하세요. Hello, Whitebox.</p><p>$ <span aria-hidden="true">▏</span></p></div>
+      </section>
+      <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
+        <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
+        <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
+          <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="jev">Jev · 판단 분석</option></select></div>
+          <label data-model-row="claude">Claude 모델 <select id="wbClaudeModel"></select></label>
+          <label id="wbClaudeCustomRow" hidden>모델 ID <input id="wbClaudeCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
+          <label data-model-row="codex">Codex 모델 <select id="wbCodexModel"></select></label>
+          <label id="wbCodexCustomRow" hidden>모델 ID <input id="wbCodexCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
+          <p>다음 분석부터 적용됩니다. 터미널에서 작업 중인 AI의 모델은 바꾸지 않습니다. 선택한 서비스의 로그인과 모델 이용 권한이 필요합니다.</p><p id="wbModelNotice" role="status"></p>
+        </fieldset>
+        <p class="wb-budget-note">기록만으로 확인할 수 있는 작업은 AI 호출 없이 표시합니다. 해석이 필요한 결과는 변경 이유와 동작 방식을 함께 설명합니다.</p>
+        <details class="wb-settings-detail"><summary>분석과 사용량 안내</summary><p>작업 중에도 의미 있는 결과가 수집되면 분석합니다. 근거가 부족하면 기다리고, 같은 결과는 다시 분석하지 않습니다. 결과가 나오기 전에는 분석중 상태만 표시합니다. 고정 사용량 상한은 없으며 자동 이해·검토를 끄면 추가 호출을 멈춥니다.</p><p>검토는 관찰한 출력에 대한 AI 해석입니다. 코드와 테스트를 별도로 실행해 보증하지 않으며, 화면에서 사라진 내용은 확인할 수 없을 수 있습니다.</p></details>
+      </section>
+      <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
+        <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
+        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인</legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status"></p></fieldset>
+      </section>
+      <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
+      </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
     </form></dialog>
     <dialog id="wbFollowup"><form method="dialog"><header><h2>다음 요청 준비</h2><button aria-label="닫기">${icon('close')}</button></header><p>내용을 확인하고 복사해 터미널에 붙여 넣으세요. 자동으로 전송하지 않습니다.</p><label for="wbFollowupText">요청 내용</label><textarea id="wbFollowupText" rows="7"></textarea><p id="wbFollowupStatus" role="status"></p><div class="wb-dialog-actions"><button type="button" data-action="copy-followup">요청 복사</button><button value="close">닫기</button></div></form></dialog>
     <dialog id="wbRemoveProject"><form method="dialog"><h2>프로젝트를 목록에서 삭제할까요?</h2><p id="wbRemoveDescription"></p><p>실제 프로젝트 폴더와 파일은 그대로 남습니다.</p><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="remove" class="wb-danger">프로젝트 삭제</button></div></form></dialog>
@@ -136,6 +155,55 @@
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
   const $ = selector => root.querySelector(selector);
+  function settingsSection(name = 'general') {
+    if (!$(`[data-settings-page="${name}"]`)) return;
+    for (const page of root.querySelectorAll('[data-settings-page]')) page.hidden = page.dataset.settingsPage !== name;
+    for (const button of root.querySelectorAll('[data-settings-section]')) {
+      if (button.dataset.settingsSection === name) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
+    $('#wbSettingsContent').scrollTop = 0;
+  }
+  function renderSettingsTheme() {
+    ui?.choices?.($('#wbSettingsTheme'), { value: window.WhiteboxTheme?.getPreference?.() || window.WhiteboxTheme?.getTheme() || 'dark',
+      label: t('모양'), options: [{ value: 'light', label: t('라이트') }, { value: 'dark', label: t('다크') }, { value: 'system', label: t('시스템') }],
+      onChange: value => window.WhiteboxTheme.setTheme(value) });
+  }
+  function renderFontPreview() {
+    $('#wbFontPreview').style.setProperty('--wb-settings-font', fontFamily);
+    $('#wbFontPreview').style.setProperty('font-family', fontFamily, 'important');
+    for (const child of $('#wbFontPreview').querySelectorAll('*')) child.style.setProperty('font-family', 'inherit', 'important');
+    $('#wbFontPreview').style.fontSize = `${fontSize}px`;
+    $('#wbFontDecrease button').disabled = fontSize <= 11;
+    $('#wbFontIncrease button').disabled = fontSize >= 24;
+  }
+  function openSettings() {
+    renderModelSettings(); renderSettingsTheme(); renderFontPreview(); settingsSection();
+    $('#wbSettingsSaved').textContent = '';
+    if (!$('#wbSettings').open) $('#wbSettings').showModal();
+    $('#wbSettings').scrollTop = 0;
+  }
+  ui?.actionButton?.($('#wbSettingsClose'), { type: 'submit', variant: 'ghost', ariaLabel: t('설정 닫기'), icon: icon('close'), value: 'close' });
+  ui?.actionButton?.($('#wbSettingsDone'), { type: 'submit', variant: 'primary', label: t('완료'), value: 'close' });
+  ui?.actionButton?.($('#wbFontDecrease'), { action: 'settings-font-smaller', ariaLabel: t('글자 작게'), label: '−' });
+  ui?.actionButton?.($('#wbFontIncrease'), { action: 'settings-font-larger', ariaLabel: t('글자 크게'), label: '+' });
+  ui?.actionButton?.($('#wbJevSave'), { action: 'jev-save', variant: 'primary', label: t('키 저장') });
+  ui?.actionButton?.($('#wbJevRemove'), { action: 'jev-remove', label: t('연결 해제') });
+  function renderJevReveal() {
+    ui?.actionButton?.($('#wbJevReveal'), { action: 'jev-reveal', variant: 'ghost', ariaLabel: t('API 키 표시 전환'), label: t($('#wbJevKey').type === 'password' ? '표시' : '숨기기') });
+  }
+  renderJevReveal();
+  $('#wbSettings').addEventListener('click', event => {
+    const section = event.target.closest('[data-settings-section]');
+    if (section) settingsSection(section.dataset.settingsSection);
+  });
+  $('#wbSettings').addEventListener('change', () => { $('#wbSettingsSaved').textContent = t('설정이 적용되었습니다.'); });
+  function clearSettingsKey() { $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal(); }
+  $('#wbSettings form').addEventListener('submit', clearSettingsKey);
+  $('#wbSettings').addEventListener('cancel', clearSettingsKey);
+  $('#wbSettings').addEventListener('close', clearSettingsKey);
+  window.addEventListener('whitebox:theme-changed', renderSettingsTheme);
+
   function renderUpdates() {
     const update = updateState || {};
     const available = ['available', 'downloading', 'downloaded', 'installing'].includes(update.status);
@@ -264,7 +332,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -581,7 +649,7 @@
         submissions.set(session.id, { id: uuid(), at: Date.now(), request, stamps: { claude: completionStamp(screen, 'claude'), codex: completionStamp(screen, 'codex') } });
         captureReviews();
       },
-      fontSize, inputLabel: msg`${session.title} ${session.id.slice(-5)} 터미널 입력`,
+      fontSize, fontFamily, inputLabel: msg`${session.title} ${session.id.slice(-5)} 터미널 입력`,
       onInputFocus: focused => { if (focused && activeId() !== session.id) selectPane(session.id); },
     }).then(dispose => {
       pane.dispose = dispose; pane.loading = false;
@@ -1158,6 +1226,16 @@
     } finally { reviewBusy = false; }
   }
   async function act(action) {
+    if (action === 'settings-font-smaller' || action === 'settings-font-larger') {
+      $('#wbFont').value = fontSize + (action === 'settings-font-smaller' ? -1 : 1);
+      $('#wbFont').dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (action === 'jev-reveal') {
+      $('#wbJevKey').type = $('#wbJevKey').type === 'password' ? 'text' : 'password';
+      renderJevReveal();
+      return;
+    }
     if (action === 'dismiss-error') $('#wbError').hidden = true;
     if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');
     if (action === 'layout-row' || action === 'layout-column') {
@@ -1219,8 +1297,8 @@
     }
     if (action === 'trash-empty') return emptyTrash();
     if (action === 'trash-close') $('#wbTrash').close();
-    if (action === 'settings') { renderModelSettings(); $('#wbSettings').showModal(); }
-    if (action === 'update-settings') { renderModelSettings(); $('#wbSettings').showModal(); $('#wbSettings').scrollTop = 0; }
+    if (action === 'settings') openSettings();
+    if (action === 'update-settings') openSettings();
     if (action === 'update-check') return runUpdateAction('check');
     if (action === 'update-install') return runUpdateAction('install');
     if (action === 'update-release') {
@@ -1335,7 +1413,11 @@
   });
   $('#wbFont').addEventListener('change', event => {
     fontSize = Math.max(11, Math.min(24, Number(event.target.value) || 14)); event.target.value = fontSize;
-    panes.forEach(pane => pane.dispose?.setFontSize?.(fontSize)); save();
+    panes.forEach(pane => pane.dispose?.setFontSize?.(fontSize)); renderFontPreview(); save();
+  });
+  $('#wbFontFamily').addEventListener('change', event => {
+    fontFamily = event.target.value;
+    panes.forEach(pane => pane.dispose?.setFontFamily?.(fontFamily)); renderFontPreview(); save();
   });
   $('#wbAutoReview').addEventListener('change', event => { autoReview = event.target.checked; save(); renderReview(); captureReviews(); });
 
@@ -1369,6 +1451,9 @@
     renderModelSettings();
     try { const jev = await api.terminalJevStatus?.(); if (jev) $('#wbJevStatus').textContent = jev.configured ? t('Jev 연결됨') : t('API 키를 저장해 연결하세요.'); } catch { /* Explicit setup errors appear when saving a key. */ }
     fontSize = Math.max(11, Math.min(24, Number(saved.fontSize) || 14));
+    if ([...$('#wbFontFamily').options].some(option => option.value === saved.fontFamily)) fontFamily = saved.fontFamily;
+    $('#wbFontFamily').value = fontFamily;
+    renderSettingsTheme(); renderFontPreview();
     setReviewWidth(Number(saved.reviewWidth) || 332);
     autoReview = saved.autoReview !== false;
     const trashIds = new Set();

@@ -24,5 +24,11 @@ function ReviewTabs({value,current,history,onChange}:{value:string,current:strin
  button(target:Element,{label,disabled}:{label:string,disabled:boolean}){render(target,<Button size="sm" icon={<Plus/>} disabled={disabled} data-action="new">{label}</Button>)},
  reviewTabs(target:Element,props:React.ComponentProps<typeof ReviewTabs>){render(target,<ReviewTabs {...props}/>)},
  thinking(target:Element,label:string){render(target,<ThinkingLoader size="sm" variant="plain" phases={[label]} phase={0}/>)},
+ actionButton(target:Element,{label,ariaLabel,action,type='button',variant='secondary',icon,value}:{label?:string,ariaLabel?:string,action?:string,type?:'button'|'submit',variant?:'primary'|'secondary'|'ghost',icon?:string,value?:string}){
+  render(target,<Button size="sm" variant={variant} type={type} value={value} aria-label={ariaLabel} data-action={action} icon={icon?<span dangerouslySetInnerHTML={{__html:icon}}/>:undefined}>{label}</Button>);
+ },
+ choices(target:Element,{value,label,options,onChange}:{value:string,label:string,options:{value:string,label:string}[],onChange:(value:string)=>void}){
+  render(target,<SegmentedControl size="sm" value={value} aria-label={label} options={options} onChange={onChange}/>);
+ },
  clear,
 };
