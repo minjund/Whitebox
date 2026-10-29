@@ -273,6 +273,10 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-action=settings]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 5);
     assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
+    const settingsActions = await evaluate('Object.fromEntries(["wbSettingsClose","wbSettingsDone"].map(id=>{const button=document.querySelector("#"+id+" button"),r=button.getBoundingClientRect();return [id,{width:r.width,height:r.height}]}))');
+    assert(settingsActions.wbSettingsClose.width>=44 && settingsActions.wbSettingsClose.height>=40,'close target has adequate space');
+    assert(settingsActions.wbSettingsDone.width>=88 && settingsActions.wbSettingsDone.height>=40,'Done has comfortable horizontal padding');
+
     await new Promise(resolve => setTimeout(resolve, 600));
     fs.writeFileSync(path.join(settingsShots, 'general-dark.png'), (await win.webContents.capturePage()).toPNG());
     await evaluate('document.querySelector("[data-settings-section=terminal]").click(); document.querySelector("[data-action=settings-font-larger]").click()');
