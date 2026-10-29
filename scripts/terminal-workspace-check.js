@@ -192,8 +192,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
     assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
     assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved key is visibly confirmed even though input is empty');
-    assert.match(await evaluate('document.querySelector("#wbJevKey").placeholder'), /저장된 키/);
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
     assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
+    await evaluate('document.querySelector("[data-settings-section=connections]").click()');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /현재 분석 서비스:/);
+    const selectedBeforeJevLink = await evaluate('document.querySelector("#wbAnalysisProvider").value');
+    await evaluate('document.querySelector("#wbJevAnalysisSettings").click()');
+    assert.equal(await evaluate('document.querySelector("[data-settings-page=analysis]").hidden'), false);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), selectedBeforeJevLink, 'navigation never changes the analysis provider');
     await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
     await waitFor('document.querySelector("#wbJevKey").type === "text" && document.querySelector("#wbJevKey").value === "fixture-jev-key"', 'explicit Show decrypts the saved key');
     assert.equal(jevRevealCalls,1);
@@ -207,6 +213,8 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbJevKey").type === "text"', 'saved key can be shown again');
     await evaluate('document.querySelector("[data-action=jev-reveal]").click()');
     assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'Hide removes saved plaintext from the DOM');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***', 'hidden saved key displays a fixed mask');
+    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'the visual mask is never saved as a replacement key');
     assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
     jevRevealDeferred=true;
     await evaluate('document.querySelector("[data-action=jev-reveal]").click(); document.querySelector("#wbSettingsClose button").click()');
@@ -239,7 +247,7 @@ app.whenReady().then(async () => {
     bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'saved key status restores after renderer reload');
     assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved badge restores from the main process');
-    assert.match(await evaluate('document.querySelector("#wbJevKey").placeholder'), /저장된 키/);
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
     await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
     for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture secure store denied')) errors.splice(index,1);
     console.log('PASS Jev saved-state badge and placeholder; button/Done/Enter save, duplicate suppression, retry and reload without plaintext persistence');
@@ -256,7 +264,7 @@ app.whenReady().then(async () => {
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
     const settingsShots = path.join(root, 'artifacts/settings'); fs.mkdirSync(settingsShots, { recursive: true });
     await evaluate('document.querySelector("[data-action=settings]").click()');
-    assert.equal(await evaluate('document.querySelectorAll("#wbSettings [data-settings-section]").length'), 5);
+    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 5);
     assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
     await new Promise(resolve => setTimeout(resolve, 600));
     fs.writeFileSync(path.join(settingsShots, 'general-dark.png'), (await win.webContents.capturePage()).toPNG());

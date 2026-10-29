@@ -4,6 +4,10 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ['현재 분석 서비스: ', 'Current analysis service: ', '当前分析服务：'],
+  ['. Jev를 사용하려면 분석 설정에서 선택하세요.', '. Select Jev in analysis settings to use it.', '。如需使用 Jev，请在分析设置中选择。'],
+  ['Jev를 분석 서비스로 사용합니다.', 'Jev is selected as the analysis service.', '已选择 Jev 作为分析服务。'],
+  ['분석 설정', 'Analysis settings', '分析设置'],
   ['보기', 'Show', '显示'],
   ['저장된 API 키를 확인할 수 없습니다. 다시 저장해 주세요.', 'Could not read the saved API key. Please save it again.', '无法读取已保存的 API 密钥，请重新保存。'],
   ['API 키 저장됨', 'API key saved', 'API 密钥已保存'],
