@@ -43,6 +43,7 @@
   const owners = () => [...spaces, standalone];
   let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
   let jevConfigured = false, jevSaveTask = null;
+  let jevViewingSavedKey = false, jevRevealBusy = false, jevRevealGeneration = 0;
   let modelCatalog = { claude: [], codex: [] };
   let collaborationJobs = [];
   let updateState = null, updateEventSeen = false, updateRevision = 0, updateOperation = '', updateActionError = '', announcedUpdateVersion = '';
@@ -158,6 +159,7 @@
   const $ = selector => root.querySelector(selector);
   function settingsSection(name = 'general') {
     if (!$(`[data-settings-page="${name}"]`)) return;
+    if (name !== 'connections') concealJevKey();
     for (const page of root.querySelectorAll('[data-settings-page]')) page.hidden = page.dataset.settingsPage !== name;
     for (const button of root.querySelectorAll('[data-settings-section]')) {
       if (button.dataset.settingsSection === name) button.setAttribute('aria-current', 'page');
@@ -179,6 +181,7 @@
     $('#wbFontIncrease button').disabled = fontSize >= 24;
   }
   function openSettings() {
+    if (!$('#wbSettings').open) clearSettingsKey();
     renderModelSettings(); renderSettingsTheme(); renderFontPreview(); settingsSection();
     renderJevControls();
     $('#wbSettingsSaved').textContent = '';
@@ -192,7 +195,7 @@
   ui?.actionButton?.($('#wbJevSave'), { action: 'jev-save', variant: 'primary', label: t('키 저장') });
   ui?.actionButton?.($('#wbJevRemove'), { action: 'jev-remove', label: t('연결 해제') });
   function renderJevReveal() {
-    ui?.actionButton?.($('#wbJevReveal'), { action: 'jev-reveal', variant: 'ghost', ariaLabel: t('API 키 표시 전환'), label: t($('#wbJevKey').type === 'password' ? '표시' : '숨기기') });
+    ui?.actionButton?.($('#wbJevReveal'), { action: 'jev-reveal', variant: 'ghost', ariaLabel: t('API 키 표시 전환'), label: t($('#wbJevKey').type === 'password' ? '보기' : '숨기기') });
   }
   renderJevReveal();
   function renderJevControls() {
@@ -200,8 +203,9 @@
     $('#wbJevSettings').setAttribute('aria-busy', String(busy));
     $('#wbJevSavedBadge').hidden = !jevConfigured;
     $('#wbJevKey').placeholder = jevConfigured ? t('저장된 키 사용 중 · 변경할 때만 입력') : 'TypeSafe API key';
-    $('#wbJevKey').disabled = busy;
-    $('#wbJevSave button').disabled = busy || !$('#wbJevKey').value.trim();
+    $('#wbJevKey').disabled = busy || jevRevealBusy;
+    $('#wbJevReveal button').disabled = busy || jevRevealBusy;
+    $('#wbJevSave button').disabled = busy || jevRevealBusy || jevViewingSavedKey || !$('#wbJevKey').value.trim();
     $('#wbJevRemove button').disabled = busy || !jevConfigured;
     $('#wbSettingsDone button').disabled = busy;
   }
@@ -212,8 +216,37 @@
       : t('API 키를 저장해 연결하세요.');
     renderJevControls();
   }
+  function concealJevKey() {
+    jevRevealGeneration++;
+    if (jevViewingSavedKey) $('#wbJevKey').value = '';
+    jevViewingSavedKey = false;
+    $('#wbJevKey').type = 'password';
+    renderJevReveal(); renderJevControls();
+  }
+  async function revealJevKey() {
+    if (jevRevealBusy || jevSaveTask) return;
+    if ($('#wbJevKey').type === 'text') { concealJevKey(); return; }
+    if ($('#wbJevKey').value || !jevConfigured) { $('#wbJevKey').type = 'text'; renderJevReveal(); return; }
+    const generation = ++jevRevealGeneration;
+    jevRevealBusy = true; renderJevControls();
+    try {
+      const value = await api.terminalJevReveal();
+      // A response arriving after closing or leaving settings must never
+      // repopulate a hidden password field with the decrypted credential.
+      if (generation !== jevRevealGeneration || !$('#wbSettings').open || $('[data-settings-page="connections"]').hidden) return;
+      if (typeof value?.apiKey !== 'string' || !value.apiKey) throw new Error(t('저장된 API 키를 확인할 수 없습니다. 다시 저장해 주세요.'));
+      $('#wbJevKey').value = value.apiKey;
+      $('#wbJevKey').type = 'text'; jevViewingSavedKey = true;
+    } catch (error) {
+      if (generation === jevRevealGeneration) $('#wbJevStatus').textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
+    } finally {
+      jevRevealBusy = false; renderJevReveal(); renderJevControls();
+    }
+  }
   function configureJev(remove = false) {
     if (jevSaveTask) return jevSaveTask;
+    if (!remove && jevViewingSavedKey) return Promise.resolve(true);
+    jevRevealGeneration++;
     const apiKey = $('#wbJevKey').value.trim();
     if (!remove && !apiKey) return Promise.resolve(false);
     $('#wbJevStatus').textContent = t('저장 중…');
@@ -221,6 +254,7 @@
       try {
         const result = await api.terminalJevConfigure(remove ? { remove: true } : { apiKey });
         if (!remove && !result.configured) throw new Error(t('API 키 저장을 확인하지 못했습니다. 다시 시도해 주세요.'));
+        jevViewingSavedKey = false;
         $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal();
         showJevStatus(result);
         if (!result.configured && analysisSettings.provider === 'jev') { analysisSettings.provider = 'auto'; save(); renderModelSettings(); }
@@ -233,7 +267,7 @@
     renderJevControls();
     return jevSaveTask;
   }
-  $('#wbJevKey').addEventListener('input', renderJevControls);
+  $('#wbJevKey').addEventListener('input', () => { jevRevealGeneration++; jevViewingSavedKey = false; renderJevControls(); });
   $('#wbJevKey').addEventListener('keydown', event => {
     if (event.key !== 'Enter' || event.isComposing) return;
     event.preventDefault();
@@ -244,9 +278,9 @@
     if (section) settingsSection(section.dataset.settingsSection);
   });
   $('#wbSettings').addEventListener('change', () => { $('#wbSettingsSaved').textContent = t('설정이 적용되었습니다.'); });
-  function clearSettingsKey() { $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal(); }
+  function clearSettingsKey() { $('#wbJevKey').value = ''; concealJevKey(); }
   $('#wbSettings form').addEventListener('submit', event => {
-    if (event.submitter?.closest('#wbSettingsDone') && $('#wbJevKey').value.trim()) {
+    if (event.submitter?.closest('#wbSettingsDone') && !jevViewingSavedKey && $('#wbJevKey').value.trim()) {
       event.preventDefault();
       configureJev().then(saved => { if (saved && $('#wbSettings').open) $('#wbSettings').close(); });
       return;
@@ -254,7 +288,7 @@
     clearSettingsKey();
   });
   $('#wbSettings').addEventListener('cancel', clearSettingsKey);
-  $('#wbSettings').addEventListener('close', clearSettingsKey);
+  $('#wbSettings').addEventListener('close', () => { if (!$('#wbSettings').open) clearSettingsKey(); });
   window.addEventListener('whitebox:theme-changed', renderSettingsTheme);
 
   function renderUpdates() {
@@ -1285,9 +1319,7 @@
       return;
     }
     if (action === 'jev-reveal') {
-      $('#wbJevKey').type = $('#wbJevKey').type === 'password' ? 'text' : 'password';
-      renderJevReveal();
-      return;
+      return revealJevKey();
     }
     if (action === 'dismiss-error') $('#wbError').hidden = true;
     if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');

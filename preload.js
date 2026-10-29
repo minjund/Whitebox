@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   removeAsideHistoryFolder: folder => ipcRenderer.invoke('sources:remove-history-folder', folder),
   providerUsage: options => ipcRenderer.invoke('providers:usage', options),
   terminalJevStatus: () => ipcRenderer.invoke('terminals:jev-status'),
+  terminalJevReveal: () => ipcRenderer.invoke('terminals:jev-reveal'),
   terminalJevConfigure: payload => ipcRenderer.invoke('terminals:jev-configure', payload),
   onTerminalReview: callback => {
     const listener = (_event, payload) => callback(payload);

@@ -23,6 +23,7 @@ app.whenReady().then(async () => {
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
+  let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
   let forcedReviewCalls = 0;
   let requestSummary = '';
@@ -62,7 +63,8 @@ app.whenReady().then(async () => {
       return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
     });
     ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
-    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevConfigured = !payload.remove && Boolean(payload.apiKey); return { configured: jevConfigured }; });
+    ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevSavedKey = payload.remove ? '' : payload.apiKey; jevConfigured = Boolean(jevSavedKey); return { configured: jevConfigured }; });
+    ipcMain.handle('terminals:jev-reveal', async () => { jevRevealCalls++; if(jevRevealDeferred) await new Promise(resolve=>setTimeout(resolve,250)); return {apiKey:jevSavedKey}; });
     ipcMain.handle('terminals:review-models', () => ({ codex: [{id:'fixture-model',label:'Fixture model'}], claude: [{id:'sonnet',label:'Sonnet'}] }));
     ipcMain.handle('providers:usage', () => { accountUsageCalls++; return ({ providers: {codex:{available:true,updatedAt:new Date().toISOString(),weekly:{label:'주간 한도',usedPercent:12.3}},claude:{available:false}} }); });
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
@@ -191,6 +193,30 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
     assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved key is visibly confirmed even though input is empty');
     assert.match(await evaluate('document.querySelector("#wbJevKey").placeholder'), /저장된 키/);
+    assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
+    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
+    await waitFor('document.querySelector("#wbJevKey").type === "text" && document.querySelector("#wbJevKey").value === "fixture-jev-key"', 'explicit Show decrypts the saved key');
+    assert.equal(jevRevealCalls,1);
+    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'viewing a saved key is not an unsaved edit');
+    assert.equal(await evaluate('JSON.stringify(localStorage).includes("fixture-jev-key")'), false);
+    await evaluate('document.querySelector("#wbSettingsDone button").click()');
+    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false);
+    assert.equal(jevConfigureCalls,1,'Done does not resave a merely revealed key');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '');
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
+    await waitFor('document.querySelector("#wbJevKey").type === "text"', 'saved key can be shown again');
+    await evaluate('document.querySelector("[data-action=jev-reveal]").click()');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'Hide removes saved plaintext from the DOM');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    jevRevealDeferred=true;
+    await evaluate('document.querySelector("[data-action=jev-reveal]").click(); document.querySelector("#wbSettingsClose button").click()');
+    await waitFor('!document.querySelector("[data-action=jev-reveal]").disabled', 'late decrypt request finishes');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'late response cannot repopulate a closed dialog');
+    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
+    jevRevealDeferred=false;
+    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
+    console.log('PASS explicit saved Jev key reveal; no automatic reads, no resave, Hide/close clear plaintext, late responses discarded');
+
     await evaluate('document.querySelector("#wbJevKey").value="fixture-done-key"; document.querySelector("#wbJevKey").dispatchEvent(new Event("input")); document.querySelector("#wbSettingsDone button").click()');
     await waitFor('!document.querySelector("#wbSettings").open', 'Done saves the pending key before closing');
     assert.equal(jevConfigureCalls, 2);
