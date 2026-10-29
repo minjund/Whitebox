@@ -1025,6 +1025,7 @@
     readTerminal: id => {
       const entry = state.terminals.get(id);
       if (!entry || entry.terminal.disposed || entry.outputHydrating) return '';
+      if (entry.terminal.readTextSnapshot) return entry.terminal.readTextSnapshot(window.WhiteboxTerminalReviewTurns?.readinessText).text;
       const buffer = entry.terminal.buffer.active;
       const lines = [];
       for (let row = Math.max(0, buffer.length - 400); row < buffer.length; row += 1) {
@@ -1035,7 +1036,8 @@
     readTerminalSnapshot: id => {
       const entry = state.terminals.get(id);
       const buffer = !entry?.outputHydrating && !entry?.terminal?.disposed && entry?.terminal?.buffer?.active;
-      return { inputDraft: entry?.terminal?.textarea?.value || '', text: window.WhiteboxTerminal.readTerminal(id), readinessText: buffer ? window.WhiteboxTerminalReviewTurns?.readinessText(buffer) : '', bracketedPaste: Boolean(buffer && entry.terminal.wasmTerm?.hasBracketedPaste()), outputSequence: entry?.outputHydrating ? null : entry?.outputSequence };
+      const snapshot = buffer && entry.terminal.readTextSnapshot?.(window.WhiteboxTerminalReviewTurns?.readinessText);
+      return { inputDraft: entry?.terminal?.textarea?.value || '', text: snapshot ? snapshot.text : window.WhiteboxTerminal.readTerminal(id), readinessText: snapshot ? snapshot.readinessText : buffer ? window.WhiteboxTerminalReviewTurns?.readinessText(buffer) : '', bracketedPaste: Boolean(buffer && entry.terminal.wasmTerm?.hasBracketedPaste()), outputSequence: entry?.outputHydrating ? null : entry?.outputSequence };
     },
     focusTerminal: id => state.terminals.get(id)?.terminal.focus(),
   };

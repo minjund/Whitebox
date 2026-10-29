@@ -249,6 +249,25 @@ app.whenReady().then(async () => {
         await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(session.id)}).trim().endsWith('WB>')`, 'deterministic fixture shell prompt');
       }
     }
+    const scanScheduling = await evaluate(`(async () => {
+      await WhiteboxWorkspace.captureReviews(true);
+      const read = WhiteboxTerminal.readTerminalSnapshot;
+      let calls = 0, taskRan = false, yielded = false;
+      WhiteboxTerminal.readTerminalSnapshot = (...args) => {
+        calls++;
+        if (calls === 1) {
+          setTimeout(() => { taskRan = true; }, 0);
+          const until = performance.now() + 12;
+          while (performance.now() < until) {} // model a cold WASM buffer read
+        } else if (taskRan) yielded = true;
+        return read(...args);
+      };
+      try { await WhiteboxWorkspace.captureReviews(true); return {calls, yielded}; }
+      finally { WhiteboxTerminal.readTerminalSnapshot = read; }
+    })()`);
+    assert(scanScheduling.calls >= 2, 'scheduling check requires multiple terminal buffers');
+    assert(scanScheduling.yielded, 'background scans blocked the input task queue across terminals');
+
     const command = marker => process.platform === 'win32' ? `Write-Output '${marker} 한글 입력 확인'\r` : `printf '%s\\n' '${marker} 한글 입력 확인'\r`;
     await manager.write(first.id, command('ONE_ONLY'));
     await manager.write(second.id, command('TWO_ONLY'));

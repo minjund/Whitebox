@@ -936,7 +936,7 @@ function registerTerminalInteractionTests(context) {
       'reconnect 직전 사용 중이던 PTY의 입력 포커스를 새 xterm에 복원하지 않았습니다.');
   });
 
-  test('xterm 입력 pump는 한 프레임의 IME 조각을 묶고 deliveryId로 순서대로 전달한다', async () => {
+  test('xterm 입력 pump는 같은 이벤트 턴의 IME 조각을 묶고 deliveryId로 순서대로 전달한다', async () => {
     const frames = [];
     const session = { id: 'terminal:raw-input-pump', type: 'agent', status: 'running', title: 'Input PTY' };
     const { state, workbench, terminalInstances, rawWrites } = createWorkbench(root, {
@@ -950,10 +950,10 @@ function registerTerminalInteractionTests(context) {
     terminalInstances[0].dataHandler('한');
     terminalInstances[0].dataHandler('글😀');
     terminalInstances[0].dataHandler('\r');
-    assert.equal(rawWrites.length, 0, '같은 화면 프레임의 IME 조각마다 IPC를 즉시 만들었습니다.');
-    assert.equal(frames.length, 1, '입력 pump animation frame을 중복 예약했습니다.');
+    assert.equal(rawWrites.length, 0, '같은 이벤트 턴의 IME 조각마다 IPC를 즉시 만들었습니다.');
+    assert.equal(frames.length, 0, '입력 전송이 화면 프레임을 기다립니다.');
 
-    frames.shift()();
+    await Promise.resolve();
     await entry.writeQueue;
     assert.equal(rawWrites.length, 1);
     assert.equal(rawWrites[0][0], session.id);
@@ -961,8 +961,8 @@ function registerTerminalInteractionTests(context) {
     assert.match(rawWrites[0][2]?.deliveryId || '', /^delivery:raw:/);
 
     terminalInstances[0].dataHandler('다음');
-    assert.equal(frames.length, 1);
-    frames.shift()();
+    assert.equal(frames.length, 0);
+    await Promise.resolve();
     await entry.writeQueue;
     assert.equal(rawWrites.length, 2);
     assert.equal(rawWrites[1][1], '다음');
@@ -997,7 +997,7 @@ function registerTerminalInteractionTests(context) {
     // xterm 6 converts the accepted Shift+Tab event to the VT backtab
     // sequence before raising onData. Verify the app preserves that sequence.
     terminal.dataHandler('\u001b[Z');
-    frames.shift()();
+    await Promise.resolve();
     await entry.writeQueue;
     assert.equal(rawWrites.length, 1);
     assert.equal(rawWrites[0][1], '\u001b[Z');
@@ -1058,7 +1058,8 @@ function registerTerminalInteractionTests(context) {
     state.active = true;
 
     terminalInstances[0].dataHandler('숨기기 직전 입력\r');
-    assert.equal(frames.length, 1, '보이는 동안의 짧은 입력 burst batching을 제거했습니다.');
+    assert.equal(rawWrites.length, 0, '동일 이벤트 턴의 입력을 묶지 않았습니다.');
+    assert.equal(frames.length, 0, '입력이 화면 프레임에 묶였습니다.');
     document.hidden = true;
     document.visibilityState = 'hidden';
     document.dispatchEvent({ type: 'visibilitychange' });
@@ -1067,7 +1068,7 @@ function registerTerminalInteractionTests(context) {
 
     assert.equal(rawWrites.length, 1, 'hidden 전환으로 마지막 PTY 입력이 animation frame에 갇혔습니다.');
     assert.equal(rawWrites[0][1], '숨기기 직전 입력\r');
-    assert.equal(frames.length, 1, '검증 중 animation frame callback을 실행하면 hidden 경계를 확인할 수 없습니다.');
+    assert.equal(frames.length, 0, 'hidden 입력에 animation frame을 예약했습니다.');
   });
 
   test('terminal write IPC unknown envelope는 preload Error 메타데이터를 보존한다', async () => {
@@ -1132,7 +1133,7 @@ function registerTerminalInteractionTests(context) {
 
     terminalInstances[0].dataHandler('A'.repeat(128 * 1024));
     terminalInstances[0].dataHandler('SECOND\r');
-    frames.shift()();
+    await Promise.resolve();
     await entry.writeQueue;
 
     assert.equal(rawWrites.length, 1, '확인 불명 head 뒤 queued suffix를 자동 전송했습니다.');
@@ -1140,8 +1141,8 @@ function registerTerminalInteractionTests(context) {
     assert.equal(notices.some(([, tone]) => tone === 'warning'), true);
 
     terminalInstances[0].dataHandler('RETRY\r');
-    assert.equal(frames.length, 1, '사용자의 다음 명시적 입력으로 pump가 다시 열리지 않았습니다.');
-    frames.shift()();
+    assert.equal(frames.length, 0, '재개한 입력이 화면 프레임을 기다립니다.');
+    await Promise.resolve();
     await entry.writeQueue;
     assert.deepStrictEqual(rawWrites.map(([, data]) => data.length), [128 * 1024, 6]);
     assert.equal(rawWrites[1][1], 'RETRY\r');
@@ -1162,7 +1163,7 @@ function registerTerminalInteractionTests(context) {
     const oldEntry = await workbench.ensureSessionTerminal(session);
     oldEntry.host.classList.remove('hidden');
     terminalInstances[0].dataHandler('OLD_HEAD');
-    frames.shift()();
+    await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
     assert.deepStrictEqual(rawWrites.map(([, data]) => data), ['OLD_HEAD']);
@@ -1171,7 +1172,7 @@ function registerTerminalInteractionTests(context) {
     await workbench.refreshSessions({ change: 'reconnected', sessions: [{ ...session }] });
     const newEntry = await workbench.ensureSessionTerminal(session);
     terminalInstances[1].dataHandler('NEW_INPUT');
-    frames.shift()();
+    await Promise.resolve();
     await Promise.resolve();
     assert.deepStrictEqual(rawWrites.map(([, data]) => data), ['OLD_HEAD'],
       '새 entry 입력이 이전 in-flight write보다 먼저 전달됐습니다.');

@@ -332,27 +332,32 @@
     return `<span class="${className}" data-state="${value.state}" role="img" aria-label="${esc(value.label)}" title="${esc(value.label)}"><i aria-hidden="true"></i></span>`;
   }
   function renderPaneTabs() {
-    $('#wbTabs').innerHTML = layout.ids(canvasLayout()).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
+    const markup = layout.ids(canvasLayout()).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
+    if ($('#wbTabs').innerHTML !== markup) $('#wbTabs').innerHTML = markup;
   }
   function refreshPaneChrome() {
     const visiblePanels = new Set(layout.ids(canvasLayout()).map(panelFor).filter(Boolean));
     for (const [id, pane] of panes) {
       const panel = panelFor(id), separated = visiblePanels.size > 1 && visiblePanels.has(panel);
+      const label = title(id), value = terminalState(id), color = panelColor(panel);
+      const expandTitle = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
+      const key = JSON.stringify([panel?.id, separated, color, label, value.state, value.label, expanded && id === activeId(), expandTitle]);
+      if (pane.chromeKey === key) continue;
+      pane.chromeKey = key;
       pane.node.classList.toggle('is-separate-panel', separated);
-      pane.node.style.setProperty('--wb-panel-color', panelColor(panel));
+      pane.node.style.setProperty('--wb-panel-color', color);
       pane.node.dataset.panelId = panel?.id || '';
       const panelBadge = pane.node.querySelector('.wb-pane-panel');
       panelBadge.hidden = true;
       panelBadge.textContent = '';
       panelBadge.removeAttribute('title');
-      pane.node.querySelector('.wb-pane-title').textContent = title(id);
-      pane.node.querySelector('.wb-pane-title').title = title(id);
-      pane.node.setAttribute('aria-label', `${title(id)} ${t('터미널')}`);
+      pane.node.querySelector('.wb-pane-title').textContent = label;
+      pane.node.querySelector('.wb-pane-title').title = label;
+      pane.node.setAttribute('aria-label', `${label} ${t('터미널')}`);
       const expandButton = pane.node.querySelector('[data-expand-terminal]');
       expandButton.setAttribute('aria-pressed', String(expanded && id === activeId()));
-      expandButton.title = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
+      expandButton.title = expandTitle;
       expandButton.setAttribute('aria-label', expandButton.title);
-      const value = terminalState(id);
       const badge = pane.node.querySelector('.wb-pane-state');
       badge.innerHTML = '<i aria-hidden="true"></i>';
       badge.dataset.state = value.state;
@@ -360,7 +365,10 @@
       badge.setAttribute('aria-label', value.label);
       badge.title = value.label;
     }
-    if (activeId()) $('#wbTerminalStatus').innerHTML = `${esc(title(activeId()))} ${stateBadge(terminalState(activeId()))}`;
+    if (activeId()) {
+      const markup = `${esc(title(activeId()))} ${stateBadge(terminalState(activeId()))}`;
+      if ($('#wbTerminalStatus').innerHTML !== markup) $('#wbTerminalStatus').innerHTML = markup;
+    }
   }
   function terminalPosition(id) {
     for (const owner of owners()) for (const panel of owner.tabs) {
@@ -1037,9 +1045,25 @@
   }
   async function syncCollaborationNow() {
     if (!api.terminalCollaboration) return;
+    const capturedFrames = [];
+    let sliceStarted = performance.now();
+    for (const id of [...panes.keys()]) {
+      const session = sessions.get(id);
+      if (!session || trashed(id) || !panes.has(id)) continue;
+      capturedFrames.push({ id, creationId: session.creationId, ...terminal.readTerminalSnapshot(id) });
+      // A cold screen scan can cost a frame. Let input and paints run between
+      // terminals; each individual snapshot remains an atomic observation.
+      if (performance.now() - sliceStarted >= 8) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        sliceStarted = performance.now();
+      }
+    }
+    // The user may move, close or reconnect a pane while we yield. Send the
+    // current roster, and never attach an old screen to a replacement process.
     const groups = owners().flatMap(owner => owner.tabs.filter(panel => !panel.pending).map(panel => ({ id: panel.id, name: `${owner.name} · ${panel.name}`, cwd: owner.cwd,
       members: layout.ids(panel.layout).map(id => ({ ...sessions.get(id), title: title(id) })).filter(item => item.id && !trashed(item.id)) })));
-    const frames = [...panes.keys()].filter(id => !trashed(id)).map(id => ({ id, creationId: sessions.get(id)?.creationId, ...terminal.readTerminalSnapshot(id) }));
+    const frames = capturedFrames.filter(frame => panes.has(frame.id) && !trashed(frame.id)
+      && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
     const result = await api.terminalCollaboration({ operation: 'sync', groups, frames });
     workStates.clear();
     for (const panel of result.panels || []) for (const member of panel.members || []) {

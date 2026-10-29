@@ -132,16 +132,9 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       entry.writeQueue = task;
     };
     entry.inputPumpFlush = flush;
-    if (documentIsHidden()) {
-      enqueueMicrotask(flush);
-      return;
-    }
-    // Visible xterms still coalesce the short burst of onData fragments in one
-    // paint. The bounded task fallback prevents a stalled paint from holding
-    // input, while visibilitychange switches to a microtask before background
-    // animation-frame throttling can strand the final keystroke.
-    entry.inputPumpFrame = requestAnimationFrame(flush);
-    entry.inputPumpTimer = setTimeout(() => enqueueMicrotask(flush), 32);
+    // Coalesce one input event burst without waiting for a paint. Keep the
+    // delivery barrier and all-or-nothing paste admission unchanged.
+    enqueueMicrotask(flush);
   }
 
   function enqueueRawInput(entry, key, value) {
