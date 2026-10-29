@@ -1,5 +1,4 @@
 html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
-html[data-workspace="terminal"] body > :not(#terminalWorkspace) { display: none !important; }
 #terminalWorkspace { --wb-bg: #13161a; --wb-panel: #20242a; --wb-side: #20242a; --wb-soft: #282f38; --wb-line: #333b46; --wb-text: #e3e9f2; --wb-muted: #a6b2c3; --wb-accent: #98d4b9; --wb-sidebar-width: 220px; position: fixed; inset: 0; display: grid; grid-template-columns: var(--wb-sidebar-width) minmax(0, 1fr) var(--wb-review-width, 280px); color: var(--wb-text); background: var(--wb-bg); font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 [data-theme="light"] #terminalWorkspace { --wb-bg: #fbfcfd; --wb-panel: #f0f2f5; --wb-side: #f0f2f5; --wb-soft: #e8edf3; --wb-line: #dce2e9; --wb-text: #263141; --wb-muted: #637185; --wb-accent: #28745d; }
 #terminalWorkspace * { box-sizing: border-box; }
@@ -464,3 +463,28 @@ html[data-workspace="terminal"] body > :not(#terminalWorkspace) { display: none 
 #terminalWorkspace .wb-pin-panel { flex-shrink: 0; color: var(--wb-muted); }
 #terminalWorkspace .wb-pin-panel[aria-pressed="true"] { color: var(--wb-accent); background: color-mix(in srgb, var(--wb-accent) 12%, transparent); }
 @media (max-width: 1000px) { #wbCanvas.wb-multi-panel { grid-template-columns: minmax(0, 1fr); } }
+
+/* Work in progress is a ring; only a confirmed AI answer gets a green dot. */
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state){min-width:12px;justify-content:center}
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=working]{color:var(--wb-muted)}
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=working] i{width:12px;height:12px;background:transparent;border:1.5px solid currentColor;border-right-color:transparent;animation:wb-terminal-working .85s linear infinite}
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=completed]{color:#75c995}
+[data-theme=light] #terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=completed]{color:#28745d}
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=failed]{color:#e58585}
+#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state):is([data-state=unknown],[data-state=exited],[data-state=stopped]){color:var(--wb-muted)}
+@keyframes wb-terminal-working{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=working] i{animation:none}}
+
+[data-theme=light] #terminalWorkspace :is(.wb-terminal-state,.wb-pane-state)[data-state=working]{color:var(--wb-muted)}
+
+/* A narrow review column must keep the complete analysis toggle clickable. */
+#terminalWorkspace #wbReview > header{display:grid;grid-template-columns:minmax(0,1fr) auto 32px;align-items:center;gap:8px;padding:0 12px;min-width:0}
+#terminalWorkspace #wbReview > header h1{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}
+#terminalWorkspace #wbReview > header #wbReviewAuto{display:inline-flex;align-items:center;justify-content:center;min-width:0;min-height:36px;gap:7px;padding:6px 3px;white-space:nowrap;font-size:11px!important;line-height:1.4}
+#terminalWorkspace #wbReviewAuto > span{flex:0 0 auto}
+#terminalWorkspace #wbReviewAuto .wb-auto-switch{display:block;position:relative;flex:0 0 28px;width:28px;height:16px;padding:0;border-radius:999px;background:var(--wb-accent)}
+#terminalWorkspace #wbReviewAuto .wb-auto-switch::after{position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--wb-bg);transform:translateX(12px);transition:transform .12s ease}
+#terminalWorkspace #wbReviewAuto[aria-pressed=false] .wb-auto-switch{background:var(--wb-muted)}
+#terminalWorkspace #wbReviewAuto[aria-pressed=false] .wb-auto-switch::after{transform:translateX(0)}
+#terminalWorkspace #wbReview > header .wb-review-close{display:grid;place-items:center;width:32px;min-width:32px;min-height:36px;padding:6px}
+@media(prefers-reduced-motion:reduce){#terminalWorkspace #wbReviewAuto .wb-auto-switch::after{transition:none}}

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { randomUUID } = require('crypto');
+const { scanProcesses } = require('./processMonitor');
 const { main: localRequest } = require('../bin/panel-agent');
 class TerminalPanelControl {
   constructor(collaboration) { this.owner = collaboration; this.pending = new Map(); }
@@ -68,7 +69,7 @@ class TerminalPanelControl {
       const live = await c.manager().get(target.id, false), frame = c.frames.get(target.id);
       if (!live || live.creationId !== target.creationId || live.pid !== target.pid || live.status !== 'running'
         || !frame || frame.creationId !== live.creationId || frame.outputSequence !== live.outputSequence || c.now() - frame.at > 10000) throw new Error('Terminal state changed; retry after the next frame.');
-      if (require('./terminalReview').exactProcess(live, c.monitor.scan())) throw new Error('An AI started in this terminal; refresh the panel first.');
+      if (require('./terminalReview').exactProcess(live, await scanProcesses(c.monitor))) throw new Error('An AI started in this terminal; refresh the panel first.');
       if (frame.inputDraft) throw new Error('Terminal has an input draft');
       if (!c.manager().rawWriteDeliverySupported?.()) throw new Error('Terminal host does not support guarded writes');
       let data;

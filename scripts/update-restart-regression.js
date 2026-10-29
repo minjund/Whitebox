@@ -90,29 +90,11 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
 
   }
 
-  let calls=0, resolveInstall;
-  const nodes=new Map();
-  const $=selector=>{
-    if(!nodes.has(selector))nodes.set(selector,{addEventListener(type,action){this[type]=action;}});
-    return nodes.get(selector);
-  };
-  const state={update:{status:'available',asset:{},error:''}};
-  const context={document:{addEventListener(){}},window:{WhiteboxAppFactories:{},WhiteboxI18n:{t:x=>x,errorText:e=>e.message},whitebox:{
-    installDownloadedUpdate:()=>{calls++;return new Promise((resolve,reject)=>{resolveInstall={resolve,reject};});}
-  }}};
-  vm.createContext(context);
-  vm.runInContext(fs.readFileSync(require.resolve('../renderer/app-events-navigation.js'),'utf8'),context);
-  context.window.WhiteboxAppFactories.createNavigationEventBindings({$,state,renderUpdateSettings(){},toast(){}}).bindNavigationAndUpdateEvents();
-  const first=$('#installUpdateBtn').click();
-  await $('#installUpdateBtn').click(); assert.equal(calls,1,'Duplicate clicks must not mutate the in-flight attempt');
-  resolveInstall.reject(new Error('persistent failure')); await first;
-  assert.equal(state.update.error,'persistent failure');assert.equal(state.updateInstallPending,false);
-  const retry=$('#installUpdateBtn').click(); assert.equal(state.update.error,'');
-  resolveInstall.resolve({status:'downloaded',installMode:'manual',error:''}); await retry;
-  assert.equal(calls,2);
+  // Current workspace install-click deduplication, errors and retry are exercised
+  // through the actual renderer in terminal-workspace-check.js.
 
   await assert.rejects(preflightAutomaticUpdate({platform:'darwin',installType:'desktop',
     installerPath:'/tmp/updates/Whitebox-1.8.4-arm64.dmg',downloadsDir:'/tmp/updates',
     appPath:'/Applications/Whitebox.app/Contents/MacOS/Whitebox',access:async()=>{throw Error('EACCES');}}),/쓰기 권한/);
-  console.log('PASS update retry, in-flight and failed cleanup guards, duplicate clicks, persistent errors, macOS write preflight');
+  console.log('PASS update retry, in-flight and failed cleanup guards, macOS write preflight');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -30,7 +30,7 @@ app.whenReady().then(async()=>{
    const writes=[];window.whitebox={terminalGet:async()=>({replay:'',outputSequence:0}),terminalResize:async()=>{},terminalWrite:async(id,data)=>{writes.push({id,data,at:performance.now()});return {deliveryState:'accepted'}}};
    const state={terminals:new Map(),sessions:[],selectedId:'input',platform:{id:'darwin'}};
    const bench=WhiteboxTerminalWorkbench({$:selector=>document.querySelector(selector),state,notice:message=>{throw Error(message)},xtermOptions:()=>({...WhiteboxTerminalEngine.workspaceOptions(14),cols:100,rows:24})});
-   const entry=await bench.ensureSessionTerminal({id:'input',type:'shell'});entry.host.classList.remove('hidden');
+   const entry=await bench.ensureSessionTerminal({id:'input',type:'shell'});entry.host.classList.remove('hidden');entry.host.dataset.groupTerminal='true';
    const views=[entry.terminal];
    for(let i=1;i<16;i++){const host=document.createElement('div');host.style.display='none';document.body.append(host);views.push(WhiteboxTerminalEngine.createView(host,{...WhiteboxTerminalEngine.workspaceOptions(14),cols:100,rows:24,screenReaderMode:false}).terminal)}
    const output=Array.from({length:700},(_,i)=>'line-'+i+' 한글 😀 é '+('sample text '.repeat(5))).join('\\r\\n')+'\\r\\nLAST_MARKER';

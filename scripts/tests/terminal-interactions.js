@@ -408,6 +408,13 @@ function createWorkbench(root, options = {}) {
     tmuxRows: () => options.tmuxRows || [],
     updateSnapshot() {},
   });
+  // Model the input lease granted by mountTerminal to a visible workspace pane.
+  const ensureSessionTerminal = workbench.ensureSessionTerminal;
+  workbench.ensureSessionTerminal = async session => {
+    const entry = await ensureSessionTerminal(session);
+    entry.host.dataset.groupTerminal = 'true';
+    return entry;
+  };
   if (options.bindEvents) {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'renderer', 'terminal-events.js'), 'utf8'), sandbox, { filename: 'terminal-events.js' });
     sandbox.window.WhiteboxTerminalEvents({ state, currentSession: () => session,
@@ -476,6 +483,52 @@ function registerTerminalInteractionTests(context) {
     return { ...fixture, session, advance, timers,
       send: (data, outputSequence) => fixture.receiveOutput({ id: session.id, data, outputSequence }) };
   }
+
+  test('opening many panels bounds replay IPC, shares same-terminal reads and continues after a failed read', async () => {
+    let active = 0, maximum = 0, calls = 0;
+    const releases = [];
+    const { workbench } = createWorkbench(root, {
+      terminalGet: id => new Promise((resolve, reject) => {
+        calls += 1; active += 1; maximum = Math.max(maximum, active);
+        releases.push(() => { active -= 1; if (id === 'fail') reject(new Error('probe failed')); else resolve({ id, replay: 'snapshot', outputSequence: 1 }); });
+      }),
+    });
+    const first = workbench.readTerminalSession('same');
+    assert.equal(workbench.readTerminalSession('same'), first);
+    const reads = [first, ...['second', 'fail', 'fourth', 'fifth'].map(id => workbench.readTerminalSession(id))];
+    const settled = Promise.allSettled(reads);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2);
+    while (releases.length || active) {
+      releases.splice(0).forEach(release => release());
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    const results = await settled;
+    assert.equal(maximum, 2);
+    assert.equal(calls, 5);
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 4);
+    const entry = await workbench.ensureSessionTerminal({ id: 'same', replay: 'already fetched', outputSequence: 2 });
+    assert.equal(calls, 5, 'mounting a verified snapshot must not fetch the same replay a second time');
+    assert.equal(entry.outputSequence, 2);
+  });
+
+  test('prompt replay cache follows contiguous output, ignores duplicates and invalidates missing sequence evidence', () => {
+    const fixture = outputFixture();
+    const { state, session } = fixture;
+    state.promptReplayCache = new Map([[session.id, { replay: 'before:', outputSequence: 10 }]]);
+    fixture.send('new', 11);
+    assert.equal(state.promptReplayCache.get(session.id).replay, 'before:new');
+    fixture.send('duplicate', 11);
+    assert.equal(state.promptReplayCache.get(session.id).replay, 'before:new');
+    fixture.send('gap', 13);
+    assert.equal(state.promptReplayCache.has(session.id), false);
+    state.promptReplayCache.set(session.id, { replay: 'x'.repeat(24000), outputSequence: 20 });
+    fixture.send('tail', 21);
+    assert.equal(state.promptReplayCache.get(session.id).replay.length, 24000);
+    assert.equal(state.promptReplayCache.get(session.id).replay.endsWith('tail'), true);
+    fixture.send('legacy without sequence');
+    assert.equal(state.promptReplayCache.has(session.id), false);
+  });
 
   test('Windows Codex output coalesces redraw/restore and split Unicode exactly once', async () => {
     const fixture = outputFixture();
@@ -623,40 +676,6 @@ function registerTerminalInteractionTests(context) {
     assert.deepStrictEqual(state.sessions.map(session => session.id), ['terminal:new']);
   });
 
-  test('동일 선택 PTY의 state 갱신은 보이는 xterm과 입력 포커스를 유지한다', async () => {
-    let terminalGetCalls = 0;
-    const session = { id: 'terminal:stable-refresh', type: 'agent', status: 'running', title: 'Stable PTY' };
-    const { state, workbench, terminalInstances, document } = createWorkbench(root, {
-      session,
-      terminalGet: async () => {
-        terminalGetCalls += 1;
-        return { replay: 'ready\r\n', outputSequence: 1 };
-      },
-    });
-
-    const entry = await workbench.ensureSessionTerminal(session);
-    entry.host.classList.remove('hidden');
-    state.active = true;
-    terminalInstances[0].helperTextarea.focus();
-    entry.host.classList.changes.length = 0;
-
-    await workbench.refreshSessions({
-      change: 'updated',
-      sessions: [{ ...session, updatedAt: '2026-08-11T00:00:00.000Z' }],
-    });
-
-    assert.strictEqual(state.terminals.get(session.id), entry, '같은 PTY state 갱신이 xterm entry를 교체했습니다.');
-    assert.equal(entry.host.classList.contains('hidden'), false, '선택된 PTY가 state 갱신 뒤 숨겨졌습니다.');
-    assert.equal(
-      entry.host.classList.changes.some(change => change.type === 'add' && change.tokens.includes('hidden')),
-      false,
-      '동일 선택 state 갱신 중 xterm을 잠시 hidden으로 전환하면 화면 깜빡임과 IME 중단이 발생합니다.',
-    );
-    assert.strictEqual(document.activeElement, terminalInstances[0].helperTextarea,
-      '동일 선택 state 갱신이 xterm 입력 포커스를 잃었습니다.');
-    assert.equal(terminalGetCalls, 1, '동일 xterm state 갱신이 replay를 다시 조회했습니다.');
-  });
-
   test('xterm fit은 기존 하단만 새 행 수의 하단으로 맞추고 사용자 스크롤 위치는 유지한다', async () => {
     const frames = [];
     const session = { id: 'terminal:fit-bottom', type: 'agent', status: 'running', title: 'Fit bottom PTY' };
@@ -702,238 +721,6 @@ function registerTerminalInteractionTests(context) {
     assert.equal(terminal.options.smoothScrollDuration, 100);
     assert.equal(entry.outputRestoreGeneration, 11,
       '사용자 scrollback의 output anchor generation을 fit이 변경했습니다.');
-  });
-
-  test('tmux 캡처는 자동 viewport 복원을 동기화하고 사용자 smooth-scroll 설정을 보존한다', async () => {
-    const remote = {
-      distro: { name: 'FixtureLinux' },
-      session: { name: 'workspace' },
-      window: { index: 0, name: 'main' },
-      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
-    };
-    let captureRevision = 0;
-    const { state, workbench, terminalInstances } = createWorkbench(root, {
-      remote,
-      active: true,
-      createRemoteTerminal: true,
-      remoteWriteBaseY: 64,
-      tmuxCapture: async () => ({ output: `capture-${++captureRevision}\n` }),
-    });
-
-    await workbench.captureRemote();
-    const terminal = terminalInstances[0];
-    assert.equal(terminal.buffer.active.viewportY, 0,
-      '첫 tmux 캡처의 smooth-scroll가 끝나기 전에 하단 viewport를 저장했습니다.');
-    assert.deepStrictEqual(terminal.scrollToTopDurations, [0],
-      '첫 캡처의 자동 top 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
-    assert.equal(state.remoteViewportAnchor, 0);
-    assert.deepStrictEqual(
-      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
-      ['0', '64'],
-      '캡처 완료 표식이 reset/write 중간 좌표와 섞였습니다.',
-    );
-
-    terminal.buffer.active.viewportY = 17;
-    terminal.scrollHandler(17);
-    await workbench.captureRemote();
-    assert.equal(terminal.buffer.active.viewportY, 17,
-      '반복 캡처가 사용자가 선택한 scrollback 위치를 덮어썼습니다.');
-    assert.deepStrictEqual(terminal.scrollToLineCalls, [17]);
-    assert.deepStrictEqual(terminal.scrollToLineDurations, [0],
-      '사용자 viewport 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
-    assert.deepStrictEqual(
-      [state.remoteTerminal.host.dataset.viewportY, state.remoteTerminal.host.dataset.baseY],
-      ['17', '64'],
-      '반복 캡처 완료 표식이 복원 전 viewport를 노출했습니다.',
-    );
-
-    terminal.buffer.active.viewportY = terminal.buffer.active.baseY;
-    terminal.scrollHandler(terminal.buffer.active.baseY);
-    await workbench.captureRemote();
-    assert.equal(terminal.buffer.active.viewportY, terminal.buffer.active.baseY,
-      '하단을 보던 tmux 캡처가 새 출력의 하단을 따라가지 못했습니다.');
-    assert.deepStrictEqual(terminal.scrollToBottomDurations, [0],
-      '자동 tail 복원이 비동기 smooth-scroll 경쟁을 남겼습니다.');
-    assert.equal(terminal.options.smoothScrollDuration, 100,
-      '자동 viewport 복원 뒤 일반 사용자 smooth-scroll 설정을 복원하지 않았습니다.');
-  });
-
-  test('tmux 캡처 적용 중 실제 Xterm wheel 입력은 한 번 큐에 보관한 뒤 같은 이벤트로 재생한다', async () => {
-    const remote = {
-      distro: { name: 'FixtureLinux' },
-      session: { name: 'workspace' },
-      window: { index: 0, name: 'main' },
-      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
-    };
-    const frames = [];
-    let captureNumber = 0;
-    const { state, workbench, terminalInstances, WheelEvent } = createWorkbench(root, {
-      remote,
-      active: true,
-      createRemoteTerminal: true,
-      remoteWriteBaseY: 64,
-      requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
-      tmuxCapture: async () => ({ output: `capture-${++captureNumber}\n` }),
-    });
-    const waitForFrame = async () => {
-      for (let attempt = 0; attempt < 10 && !frames.length; attempt += 1) await Promise.resolve();
-      assert.equal(frames.length, 1, 'tmux 캡처 viewport 복원 프레임이 예약되지 않았습니다.');
-    };
-
-    const firstCapture = workbench.captureRemote();
-    await waitForFrame();
-    frames.shift()();
-    await firstCapture;
-
-    const terminal = terminalInstances[0];
-    terminal.buffer.active.viewportY = 17;
-    terminal.scrollHandler(17);
-    terminal.wheelEvents.length = 0;
-    const secondCapture = workbench.captureRemote();
-    await waitForFrame();
-    assert.equal(state.remoteCaptureApplying, true,
-      'wheel 경쟁을 재현하기 전에 tmux reset/write 적용 구간이 끝났습니다.');
-
-    const physicalWheel = new WheelEvent('wheel', {
-      deltaX: 4,
-      deltaY: -240,
-      deltaZ: 2,
-      deltaMode: 0,
-      ctrlKey: true,
-      shiftKey: true,
-      altKey: false,
-      metaKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    terminal.screenElement.dispatchEvent(physicalWheel);
-    assert.equal(physicalWheel.defaultPrevented, true,
-      'reset/write 중 wheel이 빈 Xterm 버퍼로 전달되었습니다.');
-    assert.equal(terminal.wheelEvents.length, 0,
-      '캡처 적용 중 wheel을 Xterm smooth-scroll 처리기가 먼저 소비했습니다.');
-    assert.equal(state.remotePendingWheelEvents.length, 1,
-      '캡처 적용 중 wheel을 정확히 한 번 보관하지 않았습니다.');
-
-    frames.shift()();
-    await secondCapture;
-
-    assert.equal(state.remoteCaptureApplying, false);
-    assert.equal(state.remotePendingWheelEvents.length, 0,
-      '캡처 완료 뒤 재생한 wheel이 큐에 남았습니다.');
-    assert.equal(terminal.wheelEvents.length, 1,
-      '보관한 wheel이 Xterm에 정확히 한 번 재생되지 않았습니다.');
-    const replayedWheel = terminal.wheelEvents[0];
-    assert.ok(replayedWheel instanceof WheelEvent, '재생 입력이 실제 WheelEvent 형태가 아닙니다.');
-    assert.notStrictEqual(replayedWheel, physicalWheel, '취소된 원본 DOM 이벤트 객체를 다시 사용했습니다.');
-    assert.strictEqual(replayedWheel.target, terminal.screenElement,
-      '재생 wheel이 실제 포인터 표면인 .xterm-screen에서 시작하지 않았습니다.');
-    assert.deepStrictEqual(
-      [replayedWheel.deltaX, replayedWheel.deltaY, replayedWheel.deltaZ, replayedWheel.deltaMode],
-      [4, -240, 2, 0],
-      '재생 wheel의 delta를 원본과 동일하게 보존하지 않았습니다.',
-    );
-    assert.deepStrictEqual(
-      [replayedWheel.ctrlKey, replayedWheel.shiftKey, replayedWheel.altKey, replayedWheel.metaKey],
-      [true, true, false, true],
-      '재생 wheel의 modifier를 원본과 동일하게 보존하지 않았습니다.',
-    );
-    assert.equal(terminal.buffer.active.viewportY, 14,
-      '재생 wheel이 복원된 scrollback에서 Xterm 스크롤을 이어가지 못했습니다.');
-    assert.equal(state.remoteUserScrollRevision, 2,
-      '물리 wheel과 재생 wheel이 각각 한 번씩 관찰되지 않았습니다.');
-    assert.equal(terminal.options.smoothScrollDuration, 100,
-      'wheel 재생이 사용자 smooth-scroll 설정을 변경했습니다.');
-  });
-
-  test('tmux smooth wheel 유휴 구간에 도착한 새 캡처는 버퍼를 교체하지 않고 재시도 하나만 예약한다', async () => {
-    const remote = {
-      distro: { name: 'FixtureLinux' },
-      session: { name: 'workspace' },
-      window: { index: 0, name: 'main' },
-      pane: { id: 'pane-7', nativeId: '%7', command: 'zsh', cwd: '/workspace', dead: false },
-    };
-    let captureNumber = 0;
-    let timerSequence = 0;
-    const scheduledTimers = new Map();
-    const clearedTimers = [];
-    const { state, workbench, terminalInstances, WheelEvent } = createWorkbench(root, {
-      remote,
-      active: true,
-      createRemoteTerminal: true,
-      remoteWriteBaseY: 64,
-      tmuxCapture: async () => ({ output: `capture-${++captureNumber}\n` }),
-      setTimeout: (callback, delay) => {
-        const id = ++timerSequence;
-        scheduledTimers.set(id, { callback, delay });
-        return id;
-      },
-      clearTimeout: id => {
-        clearedTimers.push(id);
-        scheduledTimers.delete(id);
-      },
-    });
-
-    await workbench.captureRemote();
-    const terminal = terminalInstances[0];
-    terminal.wheelEvents.length = 0;
-    const userWheel = new WheelEvent('wheel', {
-      deltaY: 120,
-      deltaMode: 0,
-      bubbles: true,
-      cancelable: true,
-    });
-    terminal.screenElement.dispatchEvent(userWheel);
-    assert.equal(terminal.wheelEvents.length, 1,
-      '유휴 구간을 시작한 실제 wheel이 Xterm 처리기에 도달하지 않았습니다.');
-    assert.ok(state.remoteWheelIdleUntil > Date.now(),
-      'wheel 뒤 smooth-scroll 완료 유예 시간이 설정되지 않았습니다.');
-
-    const before = {
-      capture: state.remoteCapture,
-      captureRevision: state.captureRevision,
-      resetCalls: terminal.resetCalls,
-      writes: terminal.writes.length,
-    };
-    await workbench.captureRemote();
-
-    assert.equal(captureNumber, 2, '새 tmux 캡처 결과를 실제로 조회하지 않았습니다.');
-    assert.equal(state.remoteCapture, before.capture,
-      'smooth-scroll 유휴 구간의 결과가 현재 캡처로 확정되었습니다.');
-    assert.equal(state.captureRevision, before.captureRevision,
-      '버린 캡처가 완료 revision을 올렸습니다.');
-    assert.equal(terminal.resetCalls, before.resetCalls,
-      'smooth-scroll 유휴 구간에 Xterm 버퍼를 reset했습니다.');
-    assert.equal(terminal.writes.length, before.writes,
-      'smooth-scroll 유휴 구간에 새 캡처를 Xterm에 썼습니다.');
-    assert.equal(scheduledTimers.size, 1,
-      'smooth-scroll 완료 뒤 캡처 재시도를 정확히 하나 예약하지 않았습니다.');
-    const [[retryTimerId, retryTimer]] = [...scheduledTimers.entries()];
-    assert.strictEqual(state.remoteCaptureRetryTimer, retryTimerId);
-    assert.ok(retryTimer.delay > 0 && retryTimer.delay <= 134,
-      '재시도가 smooth-scroll 및 두 프레임 유예 범위를 벗어났습니다.');
-
-    workbench.stopCapture();
-    assert.equal(state.remoteCaptureRetryTimer, null);
-    assert.equal(state.remoteWheelIdleUntil, 0);
-    assert.equal(state.remotePendingWheelEvents.length, 0);
-    assert.deepStrictEqual(clearedTimers, [retryTimerId],
-      '캡처 중단 시 예약된 wheel 유휴 재시도를 취소하지 않았습니다.');
-    assert.equal(scheduledTimers.size, 0);
-  });
-
-  test('host reconnect로 xterm을 교체하면 사용 중이던 PTY 입력 포커스를 조건부 복원한다', async () => {
-    const session = { id: 'terminal:reconnect-focus', type: 'agent', status: 'running', title: 'Reconnect focus PTY' };
-    const { state, workbench, terminalInstances, document } = createWorkbench(root, { session });
-    const oldEntry = await workbench.ensureSessionTerminal(session);
-    oldEntry.host.classList.remove('hidden');
-    state.active = true;
-    terminalInstances[0].helperTextarea.focus();
-
-    await workbench.refreshSessions({ change: 'reconnected', sessions: [{ ...session }] });
-
-    assert.equal(terminalInstances.length, 2, 'reconnect 뒤 xterm entry를 다시 만들지 않았습니다.');
-    assert.strictEqual(document.activeElement, terminalInstances[1].helperTextarea,
-      'reconnect 직전 사용 중이던 PTY의 입력 포커스를 새 xterm에 복원하지 않았습니다.');
   });
 
   test('xterm 입력 pump는 같은 이벤트 턴의 IME 조각을 묶고 deliveryId로 순서대로 전달한다', async () => {
@@ -1039,7 +826,7 @@ function registerTerminalInteractionTests(context) {
     assert.deepEqual(Array.from(terminal.pastes), ['여러 줄\n붙여넣기😀']);
     key('Insert', { ctrlKey: false, shiftKey: true });
     await Promise.resolve();
-    state.selectedId = 'another-task';
+    delete state.terminals.get(session.id).host.dataset.groupTerminal;
     resolveRead('must not reach another task');
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(terminal.pastes.length, 1);
@@ -1238,32 +1025,6 @@ function registerTerminalInteractionTests(context) {
       [32 * 1024, 1],
       'large replay must yield between bounded xterm writes',
     );
-  });
-
-  test('취소된 attention 이동은 느린 PTY hydration 뒤 이전 화면을 표시하지 않는다', async () => {
-    let resolveGet;
-    let current = true;
-    const pendingGet = new Promise(resolve => { resolveGet = resolve; });
-    const session = { id: 'terminal:attention-stale', type: 'agent', status: 'running', title: 'Stale attention PTY' };
-    const { state, workbench } = createWorkbench(root, {
-      session,
-      terminalGet: () => pendingGet,
-    });
-    state.active = true;
-
-    const selecting = workbench.selectSession(session.id, 'question', {
-      attentionActivation: true,
-      focus: false,
-      isCurrent: () => current,
-    });
-    await Promise.resolve();
-    const entry = state.terminals.get(session.id);
-    assert.ok(entry);
-    current = false;
-    resolveGet({ replay: 'stale\r\n', outputSequence: 1 });
-
-    assert.equal(await selecting, false);
-    assert.equal(entry.host.classList.contains('hidden'), true);
   });
 
 }

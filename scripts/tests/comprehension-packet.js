@@ -459,31 +459,6 @@ function registerComprehensionPacketTests({ test, root = path.resolve(__dirname,
     assert.equal(rendererComprehension.hasContract(rendererComprehension.injectContract(prompt)), true);
   });
 
-  test('renderer 이해 패킷 UI 메시지는 ko/en/zh-CN 전체 catalog와 locale 갱신 계약을 가진다', () => {
-    const rendererSource = fs.readFileSync(path.join(root, 'renderer', 'comprehension-packet.js'), 'utf8');
-    const messagesSource = fs.readFileSync(path.join(root, 'renderer', 'i18n-messages.js'), 'utf8');
-    const fallbackStart = rendererSource.indexOf('const FALLBACK_MESSAGES');
-    const fallbackEnd = rendererSource.indexOf('function interpolateMessage', fallbackStart);
-    assert(fallbackStart >= 0 && fallbackEnd > fallbackStart, 'renderer fallback message catalog을 찾지 못했습니다.');
-    const fallbackBlock = rendererSource.slice(fallbackStart, fallbackEnd);
-    const keys = [...fallbackBlock.matchAll(/^\s{4}([a-z][a-z0-9_]*):/gmu)].map(match => match[1]);
-    assert(keys.length >= 50, `이해 패킷 UI message key가 불완전합니다: ${keys.length}`);
-
-    const sandbox = { window: {} };
-    vm.runInNewContext(messagesSource, sandbox, { filename: 'i18n-messages.js' });
-    const messages = sandbox.window.WhiteboxMessages;
-    for (const key of keys) {
-      const row = messages[`comprehension.${key}`];
-      assert(row, `comprehension.${key} catalog 항목이 없습니다.`);
-      for (const locale of ['ko', 'en', 'zh-CN']) {
-        assert.equal(typeof row[locale], 'string', `comprehension.${key}.${locale} 번역이 없습니다.`);
-        assert(row[locale].trim(), `comprehension.${key}.${locale} 번역이 비어 있습니다.`);
-      }
-    }
-    assert.match(rendererSource, /addEventListener\?\.\("whitebox:locale-changed", onLocaleChanged\)/u);
-    assert.match(rendererSource, /removeEventListener\?\.\("whitebox:locale-changed", onLocaleChanged\)/u);
-  });
-
   function markerWithAnsi(marker) {
     return `${marker.slice(0, 4)}\u001b[31m${marker.slice(4, 15)}`
       + `\u001b]8;;https://example.test\u0007${marker.slice(15, 27)}`

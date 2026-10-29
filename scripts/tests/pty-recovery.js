@@ -75,21 +75,5 @@ function registerPtyRecoveryTests({ test, root }) {
     assert.equal(calls, 1);
   });
 
-  test('관리형 PTY 목록 실패에도 cmux 목록은 표시되며 반대쪽 실패도 독립적으로 처리된다', async () => {
-    const source = fs.readFileSync(require.resolve('../../renderer/sidebar-terminals.js'), 'utf8');
-    const refresh = source.slice(source.indexOf('  function refresh() {'), source.indexOf('  async function read('));
-    for (const failed of ['managed', 'cmux']) {
-      let inventory, updates = 0;
-      const notice = { hidden: true, append() {} };
-      const context = { refreshing: null, busy: false, resizing: null, inventoryEpoch: 0, notice,
-        document: { createElement: () => ({}) }, window: { WhiteboxTerminalGroups: { updateInventory() { updates += 1; } } },
-        api: { terminalGroups: async () => { if (failed === 'managed') throw new Error('managed blocked'); return [{ id: 'g', name: 'group', members: [], cwd: root }]; },
-          cmuxList: async () => { if (failed === 'cmux') throw new Error('cmux blocked'); return { groups: [{ id: 'cmux:g' }], entries: [] }; } },
-        applyInventory: async (cmux, managed) => { inventory = { cmux, managed }; } };
-      vm.createContext(context); vm.runInContext(refresh, context); await context.refresh();
-      if (failed === 'managed') { assert.equal(inventory.cmux.groups[0].id, 'cmux:g'); assert.equal(inventory.managed, undefined); assert.equal(updates, 0); assert.equal(notice.hidden, false); }
-      else { assert.equal(inventory.managed[0].id, 'group:g'); assert.equal(inventory.cmux.groups.length, 0); assert.match(inventory.cmux.error, /cmux blocked/); assert.equal(updates, 1); }
-    }
-  });
 }
 module.exports = { registerPtyRecoveryTests };

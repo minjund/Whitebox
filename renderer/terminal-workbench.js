@@ -1,16 +1,32 @@
 'use strict';
 
-/** Own xterm views, terminal/tmux selection, capture, and management actions. */
+/** Own workspace PTY views, ordered input/output, hydration and resize. */
 window.WhiteboxTerminalWorkbench = function createModule(context) {
   const t = (key, params) => window.WhiteboxI18n.t(key, params);
   const RAW_INPUT_BATCH_CHARS = 128 * 1024;
   const MAX_RAW_INPUT_QUEUE_CHARS = 512 * 1024;
-  const MAX_PENDING_REMOTE_WHEEL_EVENTS = 32;
-  const REMOTE_WHEEL_FRAME_SETTLE_MS = 34;
   const {
-    $, state, notice, currentSession, currentTmux, xtermOptions,
-    guarded, errorMessage, tmuxRows, updateSnapshot,
+    $, state, notice, xtermOptions, errorMessage,
   } = context;
+  // Bound large replay reads across mounting and fallback prompt detection.
+  const replayReads = new Map(), replayQueue = [];
+  let activeReplayReads = 0;
+  function drainReplayReads() {
+    while (activeReplayReads < 2 && replayQueue.length) {
+      const { id, resolve, reject } = replayQueue.shift();
+      activeReplayReads += 1;
+      Promise.resolve().then(() => window.whitebox.terminalGet(id)).then(resolve, reject).finally(() => {
+        activeReplayReads -= 1; replayReads.delete(id); drainReplayReads();
+      });
+    }
+  }
+  function readTerminalSession(id) {
+    if (!replayReads.has(id)) {
+      const pending = new Promise((resolve, reject) => replayQueue.push({ id, resolve, reject }));
+      replayReads.set(id, pending); drainReplayReads();
+    }
+    return replayReads.get(id);
+  }
   const rawInputBarriers = new Map();
   const scheduledRawInputEntries = new Set();
   const enqueueMicrotask = typeof window.queueMicrotask === 'function'
@@ -250,7 +266,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return released;
   }
 
-  function createXtermHost(key, readOnly = false, session = null) {
+  function createXtermHost(key, session = null) {
     const engine = window.WhiteboxTerminalEngine;
     if (!engine?.Terminal || !engine?.FitAddon) throw new Error(t('terminal.error.screen_unavailable'));
     const host = document.createElement('div');
@@ -263,7 +279,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       cols: Number(session.cols) || 120,
       rows: Number(session.rows) || 32,
     } : null;
-    const inputDisabled = readOnly;
+    const inputDisabled = false;
     const { terminal, fit } = engine.createView(host, {
       ...xtermOptions(inputDisabled),
       ...(fixedGrid || {}),
@@ -273,7 +289,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
         const clipboardKey = String(event.key || '').toLowerCase();
         const commandKey = (event.ctrlKey || event.metaKey) && !event.altKey;
         const copy = commandKey && clipboardKey === 'c' && terminal.hasSelection?.();
-        const paste = !readOnly && ((commandKey && clipboardKey === 'v')
+        const paste = !inputDisabled && ((commandKey && clipboardKey === 'v')
           || (clipboardKey === 'insert' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey));
         if (copy || paste) {
           // Own the shortcut once, including keyup/keypress, so neither xterm
@@ -288,7 +304,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
                 const text = await navigator.clipboard.readText();
                 // Clipboard access is asynchronous: never paste into a task
                 // that was switched or closed while permission was pending.
-                if (!host.isConnected || (state.selectedId !== key && state.embeddedTerminalId !== key && !host.dataset.groupTerminal)) return;
+                if (!host.isConnected || (!host.dataset.groupTerminal)) return;
                 terminal.paste(text);
                 terminal.focus();
               }
@@ -317,18 +333,18 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       });
     }
     const entry = {
-      terminal, fit, host, readOnly, inputDisabled, fixedGrid, userScrollRevision: 0, outputWritePending: 0,
+      terminal, fit, host, inputDisabled, fixedGrid, userScrollRevision: 0, outputWritePending: 0,
       outputRestoreGeneration: 0, wheelLineRemainder: 0,
-      coalesceOutput: !readOnly && state.platform?.id === 'win32' && session?.provider === 'codex'
+      coalesceOutput: !inputDisabled && state.platform?.id === 'win32' && session?.provider === 'codex'
         && session?.shell !== 'wsl' && !session?.distro,
       writeQueue: Promise.resolve(), pendingResize: null, resizePromise: null,
       inputQueue: [], inputQueueChars: 0, inputPump: null, inputPumpFrame: 0, inputPumpTimer: 0,
       inputPumpScheduled: false, inputPumpScheduleGeneration: 0, inputPumpFlush: null,
       inputSequence: 0, inputOverflowNotified: false, inputPumpHalted: false, inputClosed: false,
-      outputHydrating: !readOnly,
+      outputHydrating: !inputDisabled,
       outputSequence: null,
       outputHydrationBuffer: [],
-      comprehensionOutputFilter: !readOnly && session?.comprehensionContractInjected === true
+      comprehensionOutputFilter: !inputDisabled && session?.comprehensionContractInjected === true
         ? createComprehensionOutputFilter(key)
         : null,
     };
@@ -352,49 +368,16 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const syncScrollState = viewportY => {
       const normalizedViewport = Number(viewportY) || 0;
       const baseY = Number(terminal.buffer.active.baseY) || 0;
-      // A remote capture replaces the entire xterm buffer. Do not publish the
-      // transient reset/write coordinates as a completed viewport: observers
-      // could otherwise pair the previous capture revision with baseY=0.
-      if (readOnly && state.remoteCaptureApplying) return;
       host.dataset.viewportY = String(normalizedViewport);
       host.dataset.baseY = String(baseY);
       // Xterm may consume wheel events before they bubble to the host. Its
       // scroll event is the reliable source for mouse, keyboard and scrollbar
       // viewport changes.
-      if (readOnly && !state.remoteCaptureApplying) {
-        state.remoteViewportAnchor = normalizedViewport;
-        state.remoteViewportAtBottom = normalizedViewport >= baseY;
-      }
+
     };
     terminal.onScroll(syncScrollState);
     syncScrollState(0);
-    if (readOnly) {
-      host.addEventListener('wheel', event => {
-        state.remoteUserScrollRevision = Number(state.remoteUserScrollRevision || 0) + 1;
-        const smoothDuration = Math.max(0, Number(terminal.options?.smoothScrollDuration) || 0);
-        state.remoteWheelIdleUntil = Date.now() + smoothDuration + REMOTE_WHEEL_FRAME_SETTLE_MS;
-        if (!state.remoteCaptureApplying) return;
-        // reset/write temporarily leaves the replacement buffer without usable
-        // scrollback. Hold wheel input and replay it against the completed xterm
-        // instead of letting the event disappear against baseY=0.
-        event.preventDefault();
-        event.stopPropagation();
-        const queue = Array.isArray(state.remotePendingWheelEvents)
-          ? state.remotePendingWheelEvents
-          : (state.remotePendingWheelEvents = []);
-        if (queue.length >= MAX_PENDING_REMOTE_WHEEL_EVENTS) queue.shift();
-        queue.push({
-          deltaX: Number(event.deltaX) || 0,
-          deltaY: Number(event.deltaY) || 0,
-          deltaZ: Number(event.deltaZ) || 0,
-          deltaMode: Number(event.deltaMode) || 0,
-          ctrlKey: Boolean(event.ctrlKey),
-          shiftKey: Boolean(event.shiftKey),
-          altKey: Boolean(event.altKey),
-          metaKey: Boolean(event.metaKey),
-        });
-      }, { capture: true, passive: false });
-    } else {
+
       const rememberUserScroll = () => { entry.userScrollRevision += 1; };
       host.addEventListener('wheel', event => {
         const deltaY = Number(event.deltaY) || 0;
@@ -423,7 +406,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       }, true);
       if (!inputDisabled) {
         terminal.onData(data => {
-          if (state.selectedId !== key && state.embeddedTerminalId !== key && !host.dataset.groupTerminal) return;
+          if (!host.dataset.groupTerminal) return;
           enqueueRawInput(entry, key, data);
         });
       }
@@ -443,7 +426,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
           window.WhiteboxRendererUtils.reportRecoverableError('terminal-resize', error);
         }).finally(() => { entry.resizePromise = null; });
       });
-    }
+
     return entry;
   }
 
@@ -537,10 +520,10 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       entry.comprehensionOutputFilter = createComprehensionOutputFilter(session.id);
     }
     if (!entry) {
-      entry = createXtermHost(session.id, false, session);
+      entry = createXtermHost(session.id, session);
       state.terminals.set(session.id, entry);
       entry.ready = (async () => {
-        const detail = await window.whitebox.terminalGet(session.id);
+        const detail = Object.hasOwn(session, 'replay') ? session : await readTerminalSession(session.id);
         // Replay contains absolute cursor positions and implicit line wraps,
         // not plain text. Parsing it at the default 80x24 and resizing later
         // irreversibly scatters wide Korean cells across rows.
@@ -594,130 +577,23 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return entry.ready ? await entry.ready : entry;
   }
 
-  async function ensureRemoteTerminal() {
-    if (!window.WhiteboxTerminalEngine.initialized) await window.WhiteboxTerminalEngine.ready();
-    if (!state.remoteTerminal) state.remoteTerminal = createXtermHost('__tmux_remote__', true);
-    return state.remoteTerminal;
-  }
 
-  function hideScreens() {
-    for (const entry of state.terminals.values()) if (!entry.host.dataset.groupTerminal) entry.host.classList.add('hidden');
-    if (state.remoteTerminal) state.remoteTerminal.host.classList.add('hidden');
-  }
 
-  function linkedAgentSession(session) {
-    if (!session) return null;
-    if (state.boundTargetId === session.id && state.boundAgent) return state.boundAgent;
-    const agents = Array.isArray(state.snapshot?.sessions) ? state.snapshot.sessions : [];
-    const bridgeId = String(session.bridgeId || '');
-    const bridged = bridgeId ? agents.find(item => item.id === bridgeId) : null;
-    if (bridged) return bridged;
-    const terminalPid = Number(session.pid || 0);
-    return agents.find(agent => (Array.isArray(agent.runtimePresence) ? agent.runtimePresence : []).some(item => (
-      item.terminalId === session.id
-      || (terminalPid > 0 && Number(item.pid || 0) === terminalPid)
-      || (terminalPid > 0 && Number(item.parentPid || 0) === terminalPid)
-    ))) || null;
-  }
+
+
+
 
   function isAiTerminalSession(session) {
     return Boolean(session && (session.type === 'agent' || linkedAgentSession(session)));
   }
 
-  async function showSelection(options = {}) {
-    const generation = state.captureGeneration;
-    const expectedMode = state.mode;
-    const expectedSessionId = state.selectedId;
-    const expectedTmuxId = state.selectedTmux?.pane?.id || state.selectedTmux?.pane?.nativeId || '';
-    const selectionIsCurrent = () => (!options.isCurrent || options.isCurrent())
-      && generation === state.captureGeneration
-      && expectedMode === state.mode
-      && expectedSessionId === state.selectedId
-      && expectedTmuxId === (state.selectedTmux?.pane?.id || state.selectedTmux?.pane?.nativeId || '');
-    if (!selectionIsCurrent()) return false;
-    const session = currentSession();
-    const remote = currentTmux();
-    const visibleEntry = session
-      ? state.terminals.get(session.id)
-      : remote ? state.remoteTerminal : null;
-    // State snapshots for the currently selected PTY are frequent. Hiding the
-    // already-mounted xterm before awaiting its resolved ready promise causes a
-    // visible flash and can interrupt focus/IME. Keep only that exact selection
-    // visible; genuine selection changes still hide the previous screen while
-    // the new one is prepared.
-    const keepVisible = Boolean(visibleEntry && !visibleEntry.host.classList.contains('hidden'));
-    if (!keepVisible) hideScreens();
-    if (session) {
-      const entry = await ensureSessionTerminal(session);
-      if (!selectionIsCurrent()) return false;
-      for (const [id, other] of state.terminals) {
-        if (id !== session.id) other.host.classList.add('hidden');
-      }
-      if (state.remoteTerminal) state.remoteTerminal.host.classList.add('hidden');
-      entry.host.classList.remove('hidden');
-      if (!keepVisible || entry !== visibleEntry) fitEntry(entry, session.id);
-      stopCapture();
-    } else if (remote) {
-      if (!selectionIsCurrent()) return false;
-      const entry = await ensureRemoteTerminal();
-      if (!selectionIsCurrent()) return false;
-      for (const other of state.terminals.values()) other.host.classList.add('hidden');
-      entry.host.classList.remove('hidden');
-      if (!keepVisible || entry !== visibleEntry) fitEntry(entry);
-      startCapture();
-    } else {
-      if (!selectionIsCurrent()) return false;
-      hideScreens();
-      stopCapture();
-    }
-    if (!selectionIsCurrent()) return false;
-    return true;
-  }
 
-  async function selectSession(id, interactionMode = '', options = {}) {
-    if (options.isCurrent && !options.isCurrent()) return false;
-    if (options.attentionActivation !== true && typeof CustomEvent === 'function') {
-      window.dispatchEvent(new CustomEvent('whitebox:terminal-manual-selection'));
-    }
-    const generation = ++state.captureGeneration;
-    state.selectedId = id;
-    const selectedSession = state.sessions.find(item => item.id === id);
-    state.interactionMode = interactionMode || (isAiTerminalSession(selectedSession) ? 'question' : 'computer');
-    state.selectedTmux = null;
-    if (await showSelection(options) === false) return false;
-    if (options.isCurrent && !options.isCurrent()) return false;
-    if (!state.active || state.captureGeneration !== generation || state.selectedId !== id || state.mode !== 'general') return false;
-    if (options.focus !== false) state.terminals.get(id)?.terminal?.focus();
-    return true;
-  }
 
-  async function selectTmux(distroName, paneId, interactionMode = '') {
-    if (typeof CustomEvent === 'function') {
-      window.dispatchEvent(new CustomEvent('whitebox:terminal-manual-selection'));
-    }
-    const row = tmuxRows().find(item => item.distro.name === distroName && item.pane.nativeId === paneId);
-    if (!row) return notice(t('terminal.error.selected_split_missing'), 'error');
-    clearRemoteWheelState();
-    const generation = ++state.captureGeneration;
-    if (interactionMode) state.interactionMode = interactionMode;
-    state.selectedId = null;
-    state.selectedTmux = row;
-    state.remoteCapture = '';
-    state.remoteViewportAnchor = null;
-    state.remoteViewportAtBottom = false;
-    if (state.remoteTerminal) state.remoteTerminal.terminal.clear();
-    await showSelection();
-    if (!state.active || state.captureGeneration !== generation || state.selectedId || state.mode !== 'tmux'
-      || state.selectedTmux?.distro?.name !== distroName || state.selectedTmux?.pane?.nativeId !== paneId) return;
-    state.remoteTerminal?.terminal?.focus();
-  }
 
-  async function selectTmuxById(paneId) {
-    const row = tmuxRows().find(item => item.pane.id === paneId || item.pane.nativeId === paneId);
-    if (!row) return notice(t('terminal.error.selected_tmux_missing'), 'error');
-    state.mode = 'tmux';
-    return selectTmux(row.distro.name, row.pane.nativeId, 'computer');
-  }
+
+
+
+
 
   async function refreshSessions(payload = null) {
     if (!Number.isSafeInteger(state.terminalSessionRevision)) state.terminalSessionRevision = 0;
@@ -763,9 +639,6 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const reconnectFocus = reconnectEntries
       .find(([, entry]) => entry.host.contains(document.activeElement)) || null;
     const reconnectFocusId = String(reconnectFocus?.[0] || '');
-    const reconnectFocusOrigin = reconnectFocus?.[1]?.host?.contains(document.activeElement)
-      ? document.activeElement
-      : null;
     if (reconnectFocusId && typeof CustomEvent === 'function') {
       window.dispatchEvent(new CustomEvent('whitebox:terminal-reconnect-focus', {
         detail: { terminalId: reconnectFocusId },
@@ -777,21 +650,6 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       entry.terminal.dispose();
       entry.host.remove();
       state.terminals.delete(id);
-      if (!rehydratedIds.has(id)) state.commandDrafts.delete(id);
-    }
-    if (state.selectedId && !state.sessions.some(item => item.id === state.selectedId)) state.selectedId = null;
-    if (state.active) await showSelection();
-    if (reconnectFocusId && state.active && state.selectedId === reconnectFocusId) {
-      const entry = state.terminals.get(reconnectFocusId);
-      const active = document.activeElement;
-      const focusStayedPassive = !active
-        || active === document.body
-        || active === document.documentElement
-        || active === reconnectFocusOrigin
-        || active.isConnected === false;
-      const documentFocused = typeof document.hasFocus !== 'function' || document.hasFocus();
-      const documentVisible = !document.visibilityState || document.visibilityState === 'visible';
-      if (entry && focusStayedPassive && documentFocused && documentVisible) entry.terminal.focus();
     }
     if (typeof CustomEvent === 'function') {
       window.dispatchEvent(new CustomEvent('whitebox:terminal-inventory-changed'));
@@ -799,153 +657,19 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     return true;
   }
 
-  function clearRemoteWheelState() {
-    if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
-    state.remoteCaptureRetryTimer = null;
-    state.remoteWheelIdleUntil = 0;
-    state.remotePendingWheelEvents = [];
-  }
 
-  function scheduleRemoteCaptureRetry(delayMs) {
-    if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
-    state.remoteCaptureRetryTimer = setTimeout(() => {
-      state.remoteCaptureRetryTimer = null;
-      captureRemote();
-    }, Math.max(1, Math.ceil(Number(delayMs) || 0)));
-  }
 
-  function replayRemoteWheelEvents(entry, events) {
-    if (!entry || !events.length || typeof window.WheelEvent !== 'function') return;
-    // Replay from the surface a physical pointer wheel targets. The event then
-    // bubbles through Xterm's overlaid scrollable element into its smooth-wheel
-    // handler by the same route as real input.
-    const target = entry.host.querySelector?.('.xterm-screen')
-      || entry.host.querySelector?.('.xterm-scrollable-element')
-      || entry.host.querySelector?.('.xterm');
-    if (!target) return;
-    for (const event of events) {
-      target.dispatchEvent(new window.WheelEvent('wheel', {
-        ...event,
-        bubbles: true,
-        cancelable: true,
-      }));
-    }
-  }
 
-  async function captureRemote() {
-    if (state.captureInFlight) return;
-    const remote = currentTmux();
-    if (!remote || !state.active || state.selectedId) return;
-    const captureKey = `${remote.distro.name}:${remote.pane.nativeId}`;
-    const captureGeneration = state.captureGeneration;
-    let appliedEntry = null;
-    state.captureInFlight = true;
-    try {
-      const result = await guarded(() => window.whitebox.tmuxCapture({ distro: remote.distro.name, target: remote.pane.nativeId, lines: 1_500 }));
-      const current = currentTmux();
-      if (!state.active || captureGeneration !== state.captureGeneration || state.selectedId
-        || !current || `${current.distro.name}:${current.pane.nativeId}` !== captureKey) return;
-      if (!result || typeof result.output !== 'string' || result.output === state.remoteCapture) return;
-      const wheelSettleRemaining = Number(state.remoteWheelIdleUntil || 0) - Date.now();
-      if (wheelSettleRemaining > 0) {
-        // Discard this now-stale capture. Applying it would reset xterm in the
-        // middle of its smooth wheel animation and cut off the user's target.
-        scheduleRemoteCaptureRetry(wheelSettleRemaining);
-        return;
-      }
-      if (state.remoteCaptureRetryTimer) clearTimeout(state.remoteCaptureRetryTimer);
-      state.remoteCaptureRetryTimer = null;
-      const firstCapture = !state.remoteCapture;
-      const entry = await ensureRemoteTerminal();
-      const readyTarget = currentTmux();
-      if (!state.active || captureGeneration !== state.captureGeneration || state.selectedId
-        || !readyTarget || `${readyTarget.distro.name}:${readyTarget.pane.nativeId}` !== captureKey) return;
-      state.remoteCapture = result.output;
-      appliedEntry = entry;
-      const buffer = entry.terminal.buffer.active;
-      const previousViewport = state.remoteViewportAnchor == null
-        ? Number(buffer && buffer.viewportY || 0)
-        : state.remoteViewportAnchor;
-      const wasAtBottom = state.remoteViewportAnchor == null
-        ? Boolean(buffer && buffer.viewportY >= buffer.baseY)
-        : state.remoteViewportAtBottom;
-      state.remoteCaptureApplying = true;
-      entry.terminal.reset();
-      await new Promise(resolve => entry.terminal.write(result.output.replace(/\n/g, '\r\n'), resolve));
-      const selected = currentTmux();
-      if (!state.active || captureGeneration !== state.captureGeneration || !selected || `${selected.distro.name}:${selected.pane.nativeId}` !== captureKey) {
-        entry.terminal.reset();
-        state.remoteCapture = '';
-        setTimeout(captureRemote, 0);
-        return;
-      }
-      await new Promise(resolve => requestAnimationFrame(() => {
-        try {
-          const latest = currentTmux();
-          if (captureGeneration !== state.captureGeneration || !latest || `${latest.distro.name}:${latest.pane.nativeId}` !== captureKey) return;
-          if (firstCapture) scrollImmediately(entry.terminal, () => entry.terminal.scrollToTop());
-          else if (state.remoteViewportAnchor == null ? wasAtBottom : state.remoteViewportAtBottom) {
-            scrollToBottomImmediately(entry.terminal);
-          } else {
-            const viewportAnchor = state.remoteViewportAnchor == null ? previousViewport : state.remoteViewportAnchor;
-            scrollImmediately(entry.terminal, () => entry.terminal.scrollToLine(viewportAnchor));
-          }
-          const restoredBuffer = entry.terminal.buffer.active;
-          state.remoteViewportAnchor = Number(restoredBuffer.viewportY) || 0;
-          state.remoteViewportAtBottom = !firstCapture && state.remoteViewportAnchor >= Number(restoredBuffer.baseY || 0);
-          entry.host.dataset.viewportY = String(state.remoteViewportAnchor);
-          entry.host.dataset.baseY = String(Number(restoredBuffer.baseY) || 0);
-          state.captureRevision += 1;
-          entry.host.dataset.captureRevision = String(state.captureRevision);
-        } catch (error) {
-          window.WhiteboxRendererUtils.reportRecoverableError('tmux-capture-render', error);
-        } finally {
-          resolve();
-        }
-      }));
-    } finally {
-      state.remoteCaptureApplying = false;
-      state.captureInFlight = false;
-      const pendingWheelEvents = Array.isArray(state.remotePendingWheelEvents)
-        ? state.remotePendingWheelEvents.splice(0)
-        : [];
-      const selected = currentTmux();
-      if (appliedEntry && pendingWheelEvents.length
-        && state.active && captureGeneration === state.captureGeneration && !state.selectedId
-        && selected && `${selected.distro.name}:${selected.pane.nativeId}` === captureKey) {
-        replayRemoteWheelEvents(appliedEntry, pendingWheelEvents);
-      }
-    }
-  }
 
-  function startCapture() {
-    if (state.captureTimer) clearInterval(state.captureTimer);
-    state.captureTimer = null;
-    captureRemote();
-    state.captureTimer = setInterval(captureRemote, 1_000);
-  }
 
-  function stopCapture() {
-    if (state.captureTimer) clearInterval(state.captureTimer);
-    state.captureTimer = null;
-    clearRemoteWheelState();
-  }
 
-  async function refreshSnapshot() {
-    const snapshot = await guarded(() => window.whitebox.snapshot(), t('terminal.tmux.refreshed'), 'tmux-refresh');
-    if (snapshot) updateSnapshot(snapshot, state.workspaces);
-  }
 
-  return {
-    fitEntry,
-    ensureSessionTerminal,
-    selectSession,
-    selectTmux,
-    selectTmuxById,
-    refreshSessions,
-    captureRemote,
-    startCapture,
-    stopCapture,
-    refreshSnapshot,
-  };
+
+
+
+
+
+
+
+  return { fitEntry, ensureSessionTerminal, refreshSessions, readTerminalSession };
 };

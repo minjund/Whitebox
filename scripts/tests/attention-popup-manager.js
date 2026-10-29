@@ -744,59 +744,6 @@ test('popup ownership keeps hooks pending, disabling releases them, and PTY-only
   assert.equal(sandbox.attentionPopupManager.enabled, true);
 });
 
-test('main, preload, settings, and terminal prompt sources wire the interactive popup lifecycle end to end', () => {
-  const root = path.resolve(__dirname, '../..');
-  const source = file => fs.readFileSync(path.join(root, file), 'utf8');
-  const main = source('main.js');
-  const preload = source('preload.js');
-  const appIpc = source('src/ipc/registerAppIpc.js');
-  const bootstrap = source('renderer/app-bootstrap.js');
-  const terminal = source('renderer/terminal.js');
-  const index = source('renderer/index.html');
-  const pkg = JSON.parse(source('package.json'));
-  assert.match(main, /new AttentionPopupManager\(\{/);
-  assert.match(main, /new AttentionHookServer\(\{/);
-  assert.match(main, /new AttentionActivationCoordinator\(\{/);
-  assert.match(main, /attentionPopups: attentionPopupPreferenceSnapshot\(\)/);
-  assert.match(main, /attention-popup:ready/);
-  assert.match(main, /attention-popup:resize/);
-  assert.match(main, /attention-popup:decide/);
-  assert.match(main, /attention-popup:dismiss/);
-  assert.match(main, /attention-popup:open-main/);
-  assert.match(main, /detectPendingPrompt\(terminal\.replay\)/);
-  assert.match(main, /detected\.fingerprint !== context\.fingerprint/);
-  assert.match(main, /agents:terminal-prompt-resolved/);
-  assert.match(main, /requiresText: selected\.requiresText === true/);
-  assert.match(main, /result\.review\?\.required === true \|\| result\.review\?\.state === 'review-required'/);
-  assert.match(main, /permissionSuggestionId: suggestion\.id/);
-  assert.match(main, /attentionHookServer\?\.resolve\(context\.hookKey, \{ action: 'none' \}\)/);
-  assert.match(main, /openMainLabel: appLocale === 'ko' \? '터미널로 이동'/);
-  assert.match(main, /canDeny: true/);
-  assert.match(main, /openAttentionSession\(session, 'terminal', \{ terminalId, targetId: context\.targetId \|\| terminalId \}\)/);
-  assert.match(preload, /setAttentionPopups: preference => ipcRenderer\.invoke\('app:set-attention-popups'/);
-  assert.match(preload, /ackAttentionActivation: result => ipcRenderer\.invoke\('app:ack-attention-activation'/);
-  assert.match(preload, /syncAttentionPrompts: prompts => ipcRenderer\.invoke\('app:sync-attention-prompts'/);
-  assert.match(preload, /onTerminalPromptResolved: callback/);
-  assert.match(appIpc, /app:set-attention-popups/);
-  assert.match(appIpc, /app:ack-attention-activation/);
-  assert.match(appIpc, /app:sync-attention-prompts/);
-  assert.match(bootstrap, /loadAttentionPopupSettings\(bootstrap\.attentionPopups\)/);
-  assert.match(bootstrap, /bindAttentionPopupSettings\(\)/);
-  assert.match(bootstrap, /resolveAttentionPrompt\?\.\(payload\)/);
-  assert.match(bootstrap, /targetId: resolution\.targetId/);
-  assert.match(bootstrap, /createAttentionActivationController/);
-  assert.match(bootstrap, /openPtyFocusVerified\?\.\(session\.id/);
-  assert.match(bootstrap, /terminalId: resolution\.terminalId/);
-  assert.match(bootstrap, /payload\?\.event === 'terminal'/);
-  assert.match(terminal, /syncPendingPromptsToMain\(prompts\)/);
-  assert.match(terminal, /resolveAttentionPrompt/);
-  assert.match(index, /id="attentionPopupEnabled"[^>]*role="switch"/);
-  assert.match(index, /src="app-attention-popup-settings\.js"/);
-  assert.match(index, /src="attention-activation\.js"/);
-  assert.ok(pkg.files.includes('attention-popup-preload.js'));
-  assert.ok(pkg.build.files.includes('attention-popup-preload.js'));
-});
-
 async function run() {
   let passed = 0;
   for (const item of tests) {

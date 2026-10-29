@@ -22,6 +22,7 @@ app.whenReady().then(async () => {
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
+  let completedActivityId = '';
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
@@ -60,6 +61,7 @@ app.whenReady().then(async () => {
       if (payload.operation === 'connect') return { ok: true };
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
+      if (completedActivityId && activity.has(completedActivityId)) activity.set(completedActivityId, { ...activity.get(completedActivityId), state: 'idle', completed: true });
       return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
     });
     ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
@@ -124,8 +126,35 @@ app.whenReady().then(async () => {
       }
       throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
+    const checkResponsiveReview = async () => {
+    assert.equal(await evaluate('document.querySelectorAll(".wb-top-actions [data-action=settings]").length'), 0, 'topbar has no duplicate settings icon');
+    assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-bottom [data-action=settings]").length'), 1, 'sidebar settings entry remains available');
+    const reviewHeaderCopy = await evaluate('({heading:document.querySelector("#wbReview h1").textContent,label:document.querySelector("#wbReviewAuto>span").textContent})');
+    for (const width of [1000, 640, 360]) {
+      win.setContentSize(width, 720);
+      await waitFor(`innerWidth === ${width}`, 'responsive review viewport');
+      if (await evaluate('getComputedStyle(document.querySelector("#wbReview")).display === "none"')) await evaluate('document.querySelector("#wbReviewToggle").click()');
+      await evaluate('document.querySelector("#terminalWorkspace").style.setProperty("--wb-review-width","260px");document.querySelector("#wbReview h1").textContent="Understanding & review";document.querySelector("#wbReviewAuto>span").textContent="Auto analysis"');
+      const geometry = await evaluate(`(() => {
+        const header=document.querySelector('#wbReview>header').getBoundingClientRect(), button=document.querySelector('#wbReviewAuto'), b=button.getBoundingClientRect(), heading=document.querySelector('#wbReview h1').getBoundingClientRect(), close=document.querySelector('.wb-review-close').getBoundingClientRect(), toggle=document.querySelector('.wb-auto-switch').getBoundingClientRect();
+        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width};
+      })()`);
+      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28, JSON.stringify({width,geometry}));
+      await evaluate('document.querySelector("#wbReviewAuto").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'false', 'narrow toggle responds immediately');
+      await evaluate('document.querySelector("#wbReviewAuto").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'true');
+    }
+    await evaluate(`document.querySelector('#wbReview h1').textContent=${JSON.stringify(reviewHeaderCopy.heading)};document.querySelector('#wbReviewAuto>span').textContent=${JSON.stringify(reviewHeaderCopy.label)};document.querySelector('#terminalWorkspace').style.removeProperty('--wb-review-width')`);
+    win.setContentSize(1450, 900);
+    console.log('PASS responsive analysis toggle: 260px review column, 360/640/1000px windows, long labels, hit target, immediate on/off and one sidebar settings entry');
+    };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
+    if (process.argv.includes('--responsive-only')) {
+      await checkResponsiveReview();
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     await evaluate("WhiteboxI18n.setLocale('ko')");
     await win.reload();
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'Korean locale bootstrap');
@@ -350,13 +379,24 @@ app.whenReady().then(async () => {
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(223, 184, 79)');
       await evaluate('document.querySelector("#wbAutoReview").checked = false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
       await manager.command(first.id, 'sleep 3');
-      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work turns green with automatic review disabled');
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work shows a spinner with automatic review disabled');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).animationName`), 'wb-terminal-working');
       assert.equal(await evaluate(`document.querySelector('${activitySelector}').textContent`), '', 'dot has no visible status copy');
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'finished command returns to yellow input waiting');
       assert.equal(manager.get(first.id).pid, first.pid, 'working/idle transition never restarts the shell');
       await evaluate('document.querySelector("#wbAutoReview").checked = true; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
-      console.log('PASS live activity dots: idle yellow → silent working green → input waiting yellow, same PID, automatic review disabled');
+      completedActivityId = first.id;
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'completed'`, 'confirmed AI completion becomes green');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).animationName`), 'none');
+      assert.equal(await evaluate(`document.querySelector('${activitySelector}').getAttribute('aria-label')`), '답변 완료');
+      assert.equal(await evaluate(`document.querySelector('.wb-pane-state').dataset.state`), 'completed');
+      await evaluate("document.documentElement.dataset.theme = 'light'");
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(40, 116, 93)');
+      await evaluate("document.documentElement.dataset.theme = 'dark'");
+      completedActivityId = '';
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'bare idle shell never claims an AI answer');
+      console.log('PASS activity: real silent work spinner, confirmed AI answer green in both themes/sidebar/pane, bare idle shell yellow, same PID');
     }
     await evaluate('document.querySelector("[data-add-panel-terminal]").click()');
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
@@ -740,7 +780,7 @@ app.whenReady().then(async () => {
       win.setContentSize(width, 700);
       await waitFor(`innerWidth === ${width}`, 'window size updated');
       if (width <= 850) {
-        assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'none', 'compact layout leaves terminal unobstructed');
+        await waitFor('getComputedStyle(document.querySelector("#wbReview")).display === "none"', 'compact layout leaves terminal unobstructed after matchMedia change');
         await evaluate('document.querySelector("#wbReviewToggle").click()');
         assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'flex');
         await evaluate('document.querySelector(".wb-review-close").click()');

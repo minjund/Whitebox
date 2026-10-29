@@ -83,7 +83,7 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-layout-controls" role="group" aria-label="터미널 배치"><button data-action="layout-row" aria-label="좌우 분할">${icon('split')}</button><button data-action="layout-column" aria-label="상하 분할">${icon('down')}</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button><button data-action="settings" aria-label="설정">${icon('settings')}</button></div></header>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-layout-controls" role="group" aria-label="터미널 배치"><button data-action="layout-row" aria-label="좌우 분할">${icon('split')}</button><button data-action="layout-column" aria-label="상하 분할">${icon('down')}</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
@@ -486,6 +486,7 @@
     if (session.status === 'running') {
       const activity = workStates.get(id);
       if (activity?.creationId === session.creationId && activity.pid === session.pid && Date.now() - activity.observedAt < 5000) {
+        if (activity.state === 'idle' && activity.completed) return { state: 'completed', label: t('답변 완료') };
         const labels = { working: '작업 중', idle: '입력 대기', waiting: '사용자 응답 대기', unknown: '작업 상태 확인 중' };
         return { state: activity.state, label: t(labels[activity.state] || labels.unknown) };
       }
@@ -764,7 +765,10 @@
     return pane.promise;
   }
   function renderTree(tree) {
-    if (tree.id) return panes.get(tree.id)?.node || document.createElement('div');
+    if (tree.id) {
+      if (!panes.has(tree.id) && sessions.has(tree.id)) ensurePane(sessions.get(tree.id)).catch(report);
+      return panes.get(tree.id)?.node || document.createElement('div');
+    }
     const node = document.createElement('div');
     node.className = `wb-split wb-split-${tree.axis}`;
     const first = renderTree(tree.first), second = renderTree(tree.second);
@@ -1588,11 +1592,12 @@
     for (const owner of owners()) { owner.viewLayout = layout.restore(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.restore(panel.viewLayout, available); }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
     if (pinnedPanels.length) space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
-    for (const session of sessions.values()) if (!archivedIds.has(session.id)) await ensurePane(session);
+    // Hydrate visible panes first; unopened panels retain their PTYs without allocating views.
     $('#wbAutoReview').checked = autoReview; $('#wbFont').value = fontSize;
     renderUpdates();
     $('#wbConnection').innerHTML = t('<i></i>셸 연결됨');
     renderLayout(false);
+    await Promise.all(layout.ids(canvasLayout()).map(id => ensurePane(sessions.get(id))));
     if (!Array.isArray(saved.spaces) && space() && !space().tabs.length && sessions.size === 0 && trash.length === 0) await createTerminal();
     api.onTerminalReview?.(({ id, value }) => {
       const session = sessions.get(id);
@@ -1614,8 +1619,9 @@
     api.onTerminalConnection?.(value => {
       $('#wbConnection').textContent = value.state === 'connected' ? t('셸 연결됨') : t('셸 다시 연결 중…');
       if (value.state === 'connected') {
+        const mountedIds = [...panes.keys()];
         for (const [id, pane] of panes) { pane.dispose?.(); pane.node.remove(); panes.delete(id); }
-        Promise.all([...sessions.values()].filter(session => !trashed(session.id)).map(ensurePane)).then(() => renderLayout()).catch(report);
+        Promise.all(mountedIds.map(id => sessions.get(id)).filter(session => session && !trashed(session.id)).map(session => ensurePane(session))).then(() => renderLayout()).catch(report);
       }
     });
     await api.setLocale?.(window.WhiteboxI18n?.getLocale() || 'ko');

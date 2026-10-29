@@ -57,6 +57,7 @@ app.whenReady().then(async () => {
         notice: message => errors.push(message), xtermOptions: () => options,
       });
       window.entry = await workbench.ensureSessionTerminal(session);
+      entry.host.dataset.groupTerminal = 'true'; // Visible workspace pane input lease.
       WhiteboxTerminalEvents({ state: testState, currentSession: () => session,
         fitEntry() {}, refreshSessions() {}, notice: message => errors.push(message) });
       window.term = entry.terminal;
