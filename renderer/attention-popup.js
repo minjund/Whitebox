@@ -9,19 +9,23 @@
   let busy = false;
   let measureFrame = 0;
   let pushedRequestSeen = false;
+  let refreshQuestionPager = null;
 
   const copy = {
     ko: {
       dismiss: '닫기', other: '기타', required: '필수 답변입니다.', failed: '요청을 처리하지 못했습니다.',
       permissionActions: '권한 선택', questionActions: '질문 응답', terminalActions: '터미널 선택', requestDetail: '요청 내용',
+      previous: '이전', next: '다음', questionPage: '질문',
     },
     en: {
       dismiss: 'Dismiss', other: 'Other', required: 'This answer is required.', failed: 'The request could not be processed.',
       permissionActions: 'Permission choices', questionActions: 'Question response', terminalActions: 'Terminal choices', requestDetail: 'Request details',
+      previous: 'Previous', next: 'Next', questionPage: 'Question',
     },
     'zh-CN': {
       dismiss: '关闭', other: '其他', required: '此项为必答。', failed: '无法处理请求。',
       permissionActions: '权限选择', questionActions: '问题回答', terminalActions: '终端选择', requestDetail: '请求内容',
+      previous: '上一题', next: '下一题', questionPage: '问题',
     },
   };
 
@@ -63,6 +67,7 @@
     busy = Boolean(next);
     card.setAttribute('aria-busy', String(busy));
     for (const control of card.querySelectorAll('button, input, textarea')) control.disabled = busy;
+    refreshQuestionPager?.();
   }
 
   async function perform(operation) {
@@ -283,7 +288,7 @@
     return field;
   }
 
-  function collectAnswers(request, form) {
+  function collectAnswers(request, form, revealInvalid) {
     const answers = [];
     let invalid = null;
     for (const question of request.questions) {
@@ -291,7 +296,7 @@
       if (!question.options.length) {
         const textInput = field.querySelector('[data-free-text="true"]');
         const answerText = textInput.value.trim();
-        if (question.required && !answerText) invalid = textInput;
+        if (question.required && !answerText && !invalid) invalid = textInput;
         answers.push({ questionId: question.id, values: [], otherText: '', text: answerText });
         continue;
       }
@@ -300,11 +305,12 @@
       const otherSelected = checked.some(input => input.dataset.other === 'true');
       const otherInput = field.querySelector('.popup-other-text');
       const otherText = otherSelected && otherInput ? otherInput.value.trim() : '';
-      if (question.required && !values.length && !otherText) invalid = otherSelected && otherInput ? otherInput : checked[0] || field.querySelector('input');
-      if (otherSelected && !otherText) invalid = otherInput;
+      if (question.required && !values.length && !otherText && !invalid) invalid = otherSelected && otherInput ? otherInput : checked[0] || field.querySelector('input');
+      if (otherSelected && !otherText && !invalid) invalid = otherInput;
       answers.push({ questionId: question.id, values, otherText, text: '' });
     }
     if (invalid) {
+      revealInvalid?.(invalid);
       invalid.focus();
       throw new Error(localeText('required'));
     }
@@ -313,10 +319,24 @@
 
   function renderQuestions(container, request) {
     const form = element('form', 'popup-form');
+    // Validation can reveal a missing answer on an earlier page before focus.
+    // Native required validation would try to focus a hidden textarea instead.
+    form.noValidate = true;
+    const paged = request.questions.length > 1;
+    let page = 0;
+    const progress = element('p', 'question-progress');
+    progress.setAttribute('role', 'status');
+    progress.setAttribute('aria-live', 'polite');
+    progress.setAttribute('aria-atomic', 'true');
+    if (paged) form.append(progress);
     const questions = element('div', 'popup-questions');
-    request.questions.forEach((question, index) => questions.append(renderQuestionField(question, index)));
+    const fields = request.questions.map(renderQuestionField);
+    fields.forEach(field => questions.append(field));
     form.append(questions);
-    const actions = actionGroup(`question-actions${request.canDeny ? ' has-deny' : ''}`, localeText('questionActions'));
+    const actions = actionGroup(`question-actions${request.canDeny ? ' has-deny' : ''}${paged ? ' is-paged' : ''}`, localeText('questionActions'));
+    const previous = button(`← ${localeText('previous')}`, 'question-previous', () => showPage(page - 1));
+    const next = button(`${localeText('next')} →`, 'primary question-next', () => showPage(page + 1));
+    if (paged) actions.append(previous, next);
     const submit = button(request.submitLabel, 'primary question-submit');
     submit.type = 'submit';
     actions.append(submit);
@@ -327,11 +347,35 @@
       actions.append(button(request.openMainLabel, 'open-main full-width', () => perform(() => bridge.openMain())));
     }
     form.append(actions);
+    function refreshPager() {
+      fields.forEach((field, index) => { field.hidden = paged && index !== page; });
+      progress.textContent = `${localeText('questionPage')} ${page + 1} / ${fields.length}`;
+      previous.disabled = busy || page === 0;
+      next.disabled = busy;
+      next.hidden = page === fields.length - 1;
+      submit.hidden = paged && page !== fields.length - 1;
+    }
+    function showPage(index) {
+      if (busy) return;
+      page = Math.max(0, Math.min(fields.length - 1, index));
+      refreshPager();
+      const error = card.querySelector('.popup-error');
+      if (error) error.textContent = '';
+      card.scrollTop = 0;
+      fields[page].querySelector('input, textarea')?.focus();
+      scheduleMeasure();
+    }
+    refreshQuestionPager = refreshPager;
+    refreshPager();
     form.addEventListener('submit', event => {
       event.preventDefault();
       if (busy) return;
+      if (paged && page < fields.length - 1) { showPage(page + 1); return; }
       try {
-        const answers = collectAnswers(request, form);
+        const answers = collectAnswers(request, form, invalid => {
+          const index = fields.findIndex(field => field.contains(invalid));
+          if (index >= 0) showPage(index);
+        });
         perform(() => bridge.decide({ action: 'answer', answers }));
       } catch (error) {
         showFailure(error);
@@ -355,6 +399,7 @@
     lifecycle += 1;
     current = request;
     busy = false;
+    refreshQuestionPager = null;
     document.documentElement.lang = request.locale || 'ko';
     document.title = `${request.title || '확인 요청'} · Whitebox`;
     card.replaceChildren();

@@ -533,3 +533,14 @@ label {
 }
 .popup-actions { position: sticky; bottom: 0; padding-top: 8px; padding-bottom: 3px; background: var(--surface-strong); }
 .popup-command { max-height: 110px; }
+
+/* Keep all answer controls mounted so paging never discards an earlier choice. */
+.popup-questions{grid-template-columns:minmax(0,1fr)}
+[hidden]{display:none!important}
+.question-progress{margin:0;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.question-actions.is-paged{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.question-actions.is-paged .popup-button{width:100%;min-width:0}
+.question-actions.is-paged .question-submit,.question-actions.is-paged .full-width{grid-column:auto}
+.question-actions.is-paged .question-previous{grid-column:1}
+.question-actions.is-paged .question-next,.question-actions.is-paged .question-submit{grid-column:2;grid-row:1}
+.question-actions.is-paged:not(.has-deny) .open-main{grid-column:1 / -1}

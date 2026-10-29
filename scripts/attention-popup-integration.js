@@ -165,6 +165,60 @@ async function run() {
   });
 
   manager.reconcile('e2e', [{
+    id: 'paged-questions', type: 'question', title: '여러 질문 확인', canDeny: true,
+    questions: [
+      { id: 'location', question: '어디에서 실행할까요?', options: [{ id: 'local', value: 'local', label: '내 컴퓨터' }, { id: 'remote', value: 'remote', label: '서버' }] },
+      { id: 'checks', question: '어떤 검사를 실행할까요?', multiple: true, allowOther: true, options: ['lint', 'test'] },
+      { id: 'note', question: '추가로 필요한 내용을 알려주세요.' },
+    ],
+  }]);
+  const paged = manager.windows.get('e2e\u0000paged-questions');
+  await waitFor(() => paged?.ready && paged.presented);
+  const pageState = () => paged.window.webContents.executeJavaScript(`({
+    visible:[...document.querySelectorAll('.popup-question:not([hidden])')].map(field=>field.dataset.questionId),
+    progress:document.querySelector('.question-progress').textContent,
+    previousDisabled:document.querySelector('.question-previous').disabled,
+    nextHidden:document.querySelector('.question-next').hidden,
+    submitHidden:document.querySelector('.question-submit').hidden,
+  })`);
+  assert.deepStrictEqual(await pageState(), {visible:['location'],progress:'질문 1 / 3',previousDisabled:true,nextHidden:false,submitHidden:true});
+  await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
+  assert.deepStrictEqual((await pageState()).visible, ['checks']);
+  await paged.window.webContents.executeJavaScript(`(() => {
+    const field=document.querySelector('fieldset[data-question-id="checks"]');
+    field.querySelector('input[value="lint"]').click();field.querySelector('input[value="test"]').click();
+    field.querySelector('input[data-other="true"]').click();field.querySelector('.popup-other-text').value='integration';
+    document.querySelector('.question-next').click();
+    document.querySelector('textarea').value='한글 메모 😀';
+    document.querySelector('.popup-form').requestSubmit();
+  })()`, true);
+  assert.deepStrictEqual((await pageState()).visible, ['location'], 'submit reveals the first required answer, even on a hidden earlier page');
+  assert.equal(await paged.window.webContents.executeJavaScript("document.querySelector('.popup-error').textContent"), '필수 답변입니다.');
+  assert.equal(decisions.some(item=>item.request.id==='paged-questions'), false, 'incomplete pages never send partial answers');
+  await paged.window.webContents.executeJavaScript("document.querySelector('input[value=local]').click();document.querySelector('.question-next').click()", true);
+  const preserved = await paged.window.webContents.executeJavaScript(`(() => {const field=document.querySelector('fieldset[data-question-id="checks"]');return {checked:[...field.querySelectorAll('input:checked')].map(input=>input.dataset.other==='true'?'other':input.value),other:field.querySelector('.popup-other-text').value};})()`);
+  assert.deepStrictEqual(preserved,{checked:['lint','test','other'],other:'integration'});
+  await paged.window.webContents.executeJavaScript("document.querySelector('.question-previous').click()", true);
+  assert.equal(await paged.window.webContents.executeJavaScript("document.querySelector('input[value=local]').checked"), true);
+  await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
+  await paged.window.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  fs.writeFileSync(path.join(artifactDirectory,'attention-popup-paged.png'),(await paged.window.webContents.capturePage()).toPNG());
+  assert(paged.window.getBounds().height<=360,'multi-question pages remain compact');
+  await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
+  assert.deepStrictEqual(await pageState(),{visible:['note'],progress:'질문 3 / 3',previousDisabled:false,nextHidden:true,submitHidden:false});
+  assert.equal(await paged.window.webContents.executeJavaScript("document.querySelector('textarea').value"),'한글 메모 😀');
+  await paged.window.webContents.executeJavaScript("document.querySelector('.popup-form').requestSubmit()",true);
+  await waitFor(()=>decisions.some(item=>item.request.id==='paged-questions'));
+  assert.deepStrictEqual(decisions.find(item=>item.request.id==='paged-questions').decision,{
+    action:'answer',answers:[
+      {questionId:'location',values:['local'],otherText:'',text:''},
+      {questionId:'checks',values:['lint','test'],otherText:'integration',text:''},
+      {questionId:'note',values:[],otherText:'',text:'한글 메모 😀'},
+    ],
+  });
+  console.log('PASS paged questions: one visible page, back/next, retained radio/multi/Other/Unicode text, required-page navigation and one complete response');
+
+  manager.reconcile('e2e', [{
     id: 'permission-suggestion', type: 'permission', title: '권한 요청', detail: 'npm test', toolLabel: 'Bash',
     permissionSuggestions: [{ id: 'always-npm-test', label: '항상 허용 `npm test`' }],
   }]);
