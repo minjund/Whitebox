@@ -92,3 +92,8 @@
 #terminalWorkspace #wbSettings #wbJevSavedBadge[hidden]{display:none}
 #terminalWorkspace #wbSettings .wb-jev-usage{border-top:1px solid var(--settings-line);padding-top:15px;margin-top:18px}
 #terminalWorkspace #wbSettings #wbJevAnalysisSettings{border:1px solid var(--settings-line);background:var(--settings-raised);color:var(--settings-ink);padding:5px 10px;font-size:12px}
+/* Keep the Jev heading below the provider separator; a normal heading avoids
+   native fieldset/legend placement cancelling the intended top spacing. */
+#terminalWorkspace #wbSettings #wbJevSettings{margin-top:24px}
+#terminalWorkspace #wbSettings #wbJevHeading{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 12px;font-size:13px;font-weight:500;line-height:1.6}
+#terminalWorkspace #wbSettings #wbJevHeading #wbJevSavedBadge{margin:0}

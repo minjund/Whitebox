@@ -195,7 +195,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
     assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
     await evaluate('document.querySelector("[data-settings-section=connections]").click()');
-    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /현재 분석 서비스:/);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'jev', 'saving a key automatically selects Jev');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.provider'), 'jev');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Jev를 분석 서비스로/);
+    assert.equal(await evaluate('document.querySelector("#wbJevAnalysisSettings").hidden'), true);
+    const jevSpacing = await evaluate('(() => { const provider=document.querySelector(".wb-settings-provider").getBoundingClientRect(),heading=document.querySelector("#wbJevHeading").getBoundingClientRect();return heading.top-provider.bottom;})()');
+    assert(jevSpacing>=24,'Jev heading must have space below the provider separator');
+    await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Claude/);
     const selectedBeforeJevLink = await evaluate('document.querySelector("#wbAnalysisProvider").value');
     await evaluate('document.querySelector("#wbJevAnalysisSettings").click()');
     assert.equal(await evaluate('document.querySelector("[data-settings-page=analysis]").hidden'), false);

@@ -145,7 +145,7 @@
       </section>
       <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
         <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
-        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인 <span id="wbJevSavedBadge" hidden>API 키 저장됨</span></legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key" aria-describedby="wbJevStatus"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status" aria-live="polite"></p><div class="wb-jev-usage"><p id="wbJevUsage"></p><button type="button" id="wbJevAnalysisSettings" data-settings-section="analysis">분석 설정</button></div></fieldset>
+        <section class="wb-analysis-settings" id="wbJevSettings" role="group" aria-labelledby="wbJevHeading"><h4 id="wbJevHeading">Jev 플러그인 <span id="wbJevSavedBadge" hidden>API 키 저장됨</span></h4><p>API 키를 저장하면 판단 분석에 Jev를 자동으로 사용합니다. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key" aria-describedby="wbJevStatus"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status" aria-live="polite"></p><div class="wb-jev-usage"><p id="wbJevUsage"></p><button type="button" id="wbJevAnalysisSettings" data-settings-section="analysis">분석 설정</button></div></section>
       </section>
       <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
       </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
@@ -263,7 +263,11 @@
         jevViewingSavedKey = false;
         $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal();
         showJevStatus(result);
-        if (!result.configured && analysisSettings.provider === 'jev') { analysisSettings.provider = 'auto'; save(); renderModelSettings(); }
+        if (!remove && result.configured) {
+          analysisSettings.provider = 'jev'; save(); renderModelSettings();
+        } else if (!result.configured && analysisSettings.provider === 'jev') {
+          analysisSettings.provider = 'auto'; save(); renderModelSettings();
+        }
         return true;
       } catch (error) {
         $('#wbJevStatus').textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
