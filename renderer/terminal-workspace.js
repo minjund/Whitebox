@@ -42,6 +42,7 @@
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
   let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
+  let jevConfigured = false, jevSaveTask = null;
   let modelCatalog = { claude: [], codex: [] };
   let collaborationJobs = [];
   let updateState = null, updateEventSeen = false, updateRevision = 0, updateOperation = '', updateActionError = '', announcedUpdateVersion = '';
@@ -143,7 +144,7 @@
       </section>
       <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
         <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
-        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인</legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status"></p></fieldset>
+        <fieldset class="wb-analysis-settings" id="wbJevSettings"><legend>Jev 플러그인 <span id="wbJevSavedBadge" hidden>API 키 저장됨</span></legend><p>API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key" aria-describedby="wbJevStatus"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status" aria-live="polite"></p></fieldset>
       </section>
       <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
       </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
@@ -179,6 +180,7 @@
   }
   function openSettings() {
     renderModelSettings(); renderSettingsTheme(); renderFontPreview(); settingsSection();
+    renderJevControls();
     $('#wbSettingsSaved').textContent = '';
     if (!$('#wbSettings').open) $('#wbSettings').showModal();
     $('#wbSettings').scrollTop = 0;
@@ -193,13 +195,64 @@
     ui?.actionButton?.($('#wbJevReveal'), { action: 'jev-reveal', variant: 'ghost', ariaLabel: t('API 키 표시 전환'), label: t($('#wbJevKey').type === 'password' ? '표시' : '숨기기') });
   }
   renderJevReveal();
+  function renderJevControls() {
+    const busy = Boolean(jevSaveTask);
+    $('#wbJevSettings').setAttribute('aria-busy', String(busy));
+    $('#wbJevSavedBadge').hidden = !jevConfigured;
+    $('#wbJevKey').placeholder = jevConfigured ? t('저장된 키 사용 중 · 변경할 때만 입력') : 'TypeSafe API key';
+    $('#wbJevKey').disabled = busy;
+    $('#wbJevSave button').disabled = busy || !$('#wbJevKey').value.trim();
+    $('#wbJevRemove button').disabled = busy || !jevConfigured;
+    $('#wbSettingsDone button').disabled = busy;
+  }
+  function showJevStatus(value) {
+    jevConfigured = value.configured === true;
+    $('#wbJevStatus').textContent = jevConfigured
+      ? t('API 키가 저장되어 있습니다. 변경할 때만 새 키를 입력하세요.')
+      : t('API 키를 저장해 연결하세요.');
+    renderJevControls();
+  }
+  function configureJev(remove = false) {
+    if (jevSaveTask) return jevSaveTask;
+    const apiKey = $('#wbJevKey').value.trim();
+    if (!remove && !apiKey) return Promise.resolve(false);
+    $('#wbJevStatus').textContent = t('저장 중…');
+    jevSaveTask = Promise.resolve().then(async () => {
+      try {
+        const result = await api.terminalJevConfigure(remove ? { remove: true } : { apiKey });
+        if (!remove && !result.configured) throw new Error(t('API 키 저장을 확인하지 못했습니다. 다시 시도해 주세요.'));
+        $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal();
+        showJevStatus(result);
+        if (!result.configured && analysisSettings.provider === 'jev') { analysisSettings.provider = 'auto'; save(); renderModelSettings(); }
+        return true;
+      } catch (error) {
+        $('#wbJevStatus').textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
+        return false;
+      }
+    }).finally(() => { jevSaveTask = null; renderJevControls(); });
+    renderJevControls();
+    return jevSaveTask;
+  }
+  $('#wbJevKey').addEventListener('input', renderJevControls);
+  $('#wbJevKey').addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    configureJev();
+  });
   $('#wbSettings').addEventListener('click', event => {
     const section = event.target.closest('[data-settings-section]');
     if (section) settingsSection(section.dataset.settingsSection);
   });
   $('#wbSettings').addEventListener('change', () => { $('#wbSettingsSaved').textContent = t('설정이 적용되었습니다.'); });
   function clearSettingsKey() { $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal(); }
-  $('#wbSettings form').addEventListener('submit', clearSettingsKey);
+  $('#wbSettings form').addEventListener('submit', event => {
+    if (event.submitter?.closest('#wbSettingsDone') && $('#wbJevKey').value.trim()) {
+      event.preventDefault();
+      configureJev().then(saved => { if (saved && $('#wbSettings').open) $('#wbSettings').close(); });
+      return;
+    }
+    clearSettingsKey();
+  });
   $('#wbSettings').addEventListener('cancel', clearSettingsKey);
   $('#wbSettings').addEventListener('close', clearSettingsKey);
   window.addEventListener('whitebox:theme-changed', renderSettingsTheme);
@@ -1245,12 +1298,7 @@
     if (action === 'toggle-review') setReviewVisible(root.classList.contains('review-hidden'));
 
     if (action === 'jev-save' || action === 'jev-remove') {
-      try {
-        const result = await api.terminalJevConfigure(action === 'jev-remove' ? { remove: true } : { apiKey: $('#wbJevKey').value });
-        $('#wbJevKey').value = ''; $('#wbJevStatus').textContent = result.configured ? t('Jev 연결됨') : t('Jev 연결 해제됨');
-        if (!result.configured && analysisSettings.provider === 'jev') { analysisSettings.provider = 'auto'; save(); renderModelSettings(); }
-      } catch (error) { $('#wbJevStatus').textContent = String(error.message || error); }
-      return;
+      return configureJev(action === 'jev-remove');
     }
     if (action === 'new') return createTerminal();
     if (action === 'new-independent') return createTerminal('', standalone);
@@ -1449,7 +1497,7 @@
     analysisSettings = { provider: ['claude', 'codex', 'jev'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }
     renderModelSettings();
-    try { const jev = await api.terminalJevStatus?.(); if (jev) $('#wbJevStatus').textContent = jev.configured ? t('Jev 연결됨') : t('API 키를 저장해 연결하세요.'); } catch { /* Explicit setup errors appear when saving a key. */ }
+    try { const jev = await api.terminalJevStatus?.(); if (jev) showJevStatus(jev); } catch { /* Explicit setup errors appear when saving a key. */ }
     fontSize = Math.max(11, Math.min(24, Number(saved.fontSize) || 14));
     if ([...$('#wbFontFamily').options].some(option => option.value === saved.fontFamily)) fontFamily = saved.fontFamily;
     $('#wbFontFamily').value = fontFamily;

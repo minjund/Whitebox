@@ -4,6 +4,11 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ['API 키 저장됨', 'API key saved', 'API 密钥已保存'],
+  ['저장된 키 사용 중 · 변경할 때만 입력', 'Saved key in use · enter only to replace', '正在使用已保存的密钥 · 仅更换时输入'],
+  ['API 키가 저장되어 있습니다. 변경할 때만 새 키를 입력하세요.', 'Your API key is saved. Enter a new key only to replace it.', 'API 密钥已保存。仅在更换时输入新密钥。'],
+  ['API 키 저장을 확인하지 못했습니다. 다시 시도해 주세요.', 'Could not confirm the API key was saved. Please retry.', '无法确认 API 密钥已保存，请重试。'],
+  ['저장 중…', 'Saving…', '正在保存…'],
   ['설정 항목', 'Settings categories', '设置分类'],
   ['설정이 적용되었습니다.', 'Settings applied.', '设置已应用。'],
   ['설정', 'Settings', '设置'],

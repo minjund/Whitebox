@@ -88,3 +88,5 @@
 #terminalWorkspace #wbSettings .ui-segc__opt{height:var(--ui-segc-h);min-height:var(--ui-segc-h);padding:0 var(--ui-segc-px);border-radius:6px;font-size:var(--ui-segc-fs);line-height:var(--ui-segc-lh);color:var(--settings-muted);background:transparent}
 #terminalWorkspace #wbSettings .ui-segc__opt[data-active]{color:var(--settings-ink)}
 #terminalWorkspace #wbSettings #wbSettingsTheme{max-width:100%;min-width:0;flex:none}
+#terminalWorkspace #wbSettings #wbJevSavedBadge{display:inline-block;vertical-align:middle;margin-left:8px;padding:2px 7px;border:1px solid var(--settings-line);border-radius:5px;background:var(--settings-raised);color:var(--settings-ink);font-size:11px;font-weight:400}
+#terminalWorkspace #wbSettings #wbJevSavedBadge[hidden]{display:none}
