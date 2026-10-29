@@ -378,9 +378,26 @@ app.whenReady().then(async () => {
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'idle shell is yellow even while its process remains running');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(223, 184, 79)');
       await evaluate('document.querySelector("#wbAutoReview").checked = false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
-      await manager.command(first.id, 'sleep 3');
+      // Keep quiet foreground work alive until the assertions explicitly finish.
+      // A fixed sleep races slow CI inspection and cannot cover both motion modes.
+      const silentWork = path.join(profile, 'silent-work.cjs');
+      fs.writeFileSync(silentWork, "process.stdin.setRawMode(true);process.stdin.resume();process.stdin.once('data',()=>{process.stdin.setRawMode(false);process.exit(0)});");
+      await manager.command(first.id, "node '" + silentWork.replace(/'/g, "'\\''") + "'");
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work shows a spinner with automatic review disabled');
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).animationName`), 'wb-terminal-working');
+      win.webContents.debugger.attach('1.3');
+      try {
+        for (const motion of ['no-preference', 'reduce']) {
+          await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: motion }] });
+          const appearance = await evaluate(`(() => {const status=document.querySelector('${activitySelector}'),style=getComputedStyle(status.querySelector('i'));return {state:status.dataset.state,animation:style.animationName,ring:style.borderTopWidth};})()`);
+          assert.equal(appearance.state, 'working');
+          assert.equal(appearance.animation, motion === 'reduce' ? 'none' : 'wb-terminal-working');
+          assert(parseFloat(appearance.ring) > 0, 'reduced motion retains the working ring at every device scale');
+        }
+      } finally {
+        await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] });
+        win.webContents.debugger.detach();
+        await manager.write(first.id, 'x');
+      }
       assert.equal(await evaluate(`document.querySelector('${activitySelector}').textContent`), '', 'dot has no visible status copy');
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'finished command returns to yellow input waiting');
       assert.equal(manager.get(first.id).pid, first.pid, 'working/idle transition never restarts the shell');

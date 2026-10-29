@@ -3,10 +3,9 @@
 const { app } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-process-worker-'));
+const temporary = require('./performance-fixture-runner').fixtureRoot(path.basename(__filename));
 app.setPath('userData', path.join(temporary, 'profile'));
 app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
@@ -34,4 +33,3 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });
-app.on('quit', () => fs.rmSync(temporary, { recursive: true, force: true }));

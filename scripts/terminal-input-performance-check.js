@@ -1,5 +1,5 @@
 'use strict';
-// Run with: electron scripts/terminal-input-performance-check.js
+// Run with: node scripts/performance-fixture-runner.js
 // For a baseline, run this same harness in the unmodified baseline checkout
 // with WHITEBOX_PERF_BASELINE=1. That flag only disables fast-path assertions.
 // Dispatch measures the renderer input queue reaching a fake IPC adapter under
@@ -8,10 +8,11 @@
 
 const {app,BrowserWindow}=require('electron');
 const assert=require('node:assert/strict');
-const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const fs=require('node:fs'),path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const root=path.resolve(__dirname,'..');
-const profile=fs.mkdtempSync(path.join(os.tmpdir(),'whitebox-input-performance-'));
+const profile=path.join(require('./performance-fixture-runner').fixtureRoot(path.basename(__filename)),'profile');
+fs.mkdirSync(profile);
 app.setPath('userData',profile);app.disableHardwareAcceleration();
 app.on('window-all-closed',()=>{});
 app.whenReady().then(async()=>{
@@ -64,4 +65,3 @@ app.whenReady().then(async()=>{
   console.log(JSON.stringify(result));clearTimeout(deadline);win.destroy();app.exit(0);
  }catch(error){console.error(error);clearTimeout(deadline);win.destroy();app.exit(1)}
 });
-app.on('quit',()=>fs.rmSync(profile,{recursive:true,force:true}));
