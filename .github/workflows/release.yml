@@ -172,7 +172,7 @@ jobs:
         run: npm run test:drawer-actual-pty
       - name: Upload drawer conversation diagnostics
         if: failure() && runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Diagnostics-drawer-conversation-${{ github.run_attempt }}
           path: |
@@ -232,7 +232,7 @@ jobs:
           git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
           git show "$VALIDATION_SOURCE_SHA:scripts/packaged-update-button.js" > scripts/packaged-update-button.js
           node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed Mac driver "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/packaged-update-button.js")).digest("hex"))'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: runner.os == 'Windows'
         with:
           name: Windows-update-plan-${{ github.run_attempt }}
@@ -244,7 +244,7 @@ jobs:
         run: node scripts/mac-packaged-brand-identity.js release/mac/Whitebox.app
       - if: runner.os == 'macOS'
         run: node scripts/mac-update-cohort-check.js
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.files }}
@@ -252,7 +252,7 @@ jobs:
           overwrite: true
       - name: Preserve the verified native helper for npm Windows clients
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: native-signature-verifier
           path: release/win-unpacked/resources/whitebox-signature-check.exe
