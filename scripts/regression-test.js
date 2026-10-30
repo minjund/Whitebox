@@ -30,6 +30,7 @@ const root = path.resolve(__dirname, '..');
 const fixtures = createRegressionFixtures(root);
 const harness = createTestHarness();
 const context = { ...fixtures, test: harness.test };
+require('./tests/terminal-completion-badge').registerTerminalCompletionBadgeTests(context);
 require('./tests/update-workload-scope').registerUpdateWorkloadScopeTests(context);
 require('./tests/pty-recovery').registerPtyRecoveryTests(context);
 require('./tests/terminal-host-runtime').registerTerminalHostRuntimeTests(context);

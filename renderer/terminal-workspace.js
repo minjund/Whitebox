@@ -15,6 +15,7 @@
     terminal: '<path d="m5 6 6 6-6 6m9 0h5"/>',
     split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
     down: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>',
+    solo: '<rect x="3" y="4" width="18" height="16" rx="2"/>',
     panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
     close: '<path d="m6 6 12 12M6 18 18 6"/>',
     chevron: '<path d="m9 5 7 7-7 7"/>',
@@ -83,7 +84,7 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-layout-controls" role="group" aria-label="터미널 배치"><button data-action="layout-row" aria-label="좌우 분할">${icon('split')}</button><button data-action="layout-column" aria-label="상하 분할">${icon('down')}</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
@@ -507,7 +508,8 @@
       const panel = panelFor(id), separated = visiblePanels.size > 1 && visiblePanels.has(panel);
       const label = title(id), value = terminalState(id), color = panelColor(panel);
       const expandTitle = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
-      const key = JSON.stringify([panel?.id, separated, color, label, value.state, value.label, expanded && id === activeId(), expandTitle]);
+      const splitView = layout.ids(canvasLayout()).length > 1;
+      const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, expanded && id === activeId(), expandTitle]);
       if (pane.chromeKey === key) continue;
       pane.chromeKey = key;
       pane.node.classList.toggle('is-separate-panel', separated);
@@ -520,6 +522,7 @@
       pane.node.querySelector('.wb-pane-title').textContent = label;
       pane.node.querySelector('.wb-pane-title').title = label;
       pane.node.setAttribute('aria-label', `${label} ${t('터미널')}`);
+      pane.node.querySelector('[data-solo-terminal]').hidden = !splitView;
       const expandButton = pane.node.querySelector('[data-expand-terminal]');
       expandButton.setAttribute('aria-pressed', String(expanded && id === activeId()));
       expandButton.title = expandTitle;
@@ -581,7 +584,6 @@
 
   function renderNav() {
     $('#wbBreadcrumbProject').textContent = space()?.name || t('내 작업 공간');
-    root.querySelectorAll('.wb-layout-controls button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.action === `layout-${canvasLayout()?.axis || 'row'}`)));
     renderInstances();
     renderTrash();
     refreshPaneChrome();
@@ -615,6 +617,27 @@
     if (!target) return;
     activatePanel(owner, target, id);
     renderLayout();
+  }
+
+  // Change only the saved view; all PTYs and logical panel memberships survive.
+  function showTerminalAlone(id) {
+    if (!sessions.has(id) || trashed(id)) return;
+    const panel = panelFor(id), owner = panelOwner(panel?.id);
+    if (!owner) return;
+    activatePanel(owner, panel, id);
+    owner.viewLayout = panel.viewLayout = { id };
+    owner.activeSurface = panel.activePane = id;
+    expanded = false; root.classList.remove('terminal-expanded');
+    pinnedPanels = [];
+    renderLayout();
+  }
+  function acknowledgeCompletion(id) {
+    const activity = workStates.get(id);
+    if (!activity?.unreadCompletionId || !api.terminalCompletionRead) return;
+    const completionId = activity.unreadCompletionId;
+    api.terminalCompletionRead({ id, creationId: activity.creationId, pid: activity.pid, completionId })
+      .then(() => { if (activity.unreadCompletionId === completionId) delete activity.unreadCompletionId; })
+      .catch(error => report(error, 'completion'));
   }
 
   function panelOwner(panelId) { return owners().find(owner => owner.tabs.some(item => item.id === panelId)); }
@@ -723,12 +746,14 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
     panes.set(session.id, pane);
-    node.addEventListener('pointerdown', () => selectPane(session.id));
+    node.addEventListener('pointerdown', () => { selectPane(session.id); acknowledgeCompletion(session.id); });
+    node.addEventListener('keydown', () => acknowledgeCompletion(session.id), true);
+    node.addEventListener('wheel', () => acknowledgeCompletion(session.id), { capture: true, passive: true });
     pane.promise = terminal.mountTerminal(session.id, node.querySelector('.wb-terminal-mount'), {
       requireSessionIdentity: restoring ? { creationId: session.creationId, pid: session.pid } : null,
       onUserInput: data => {
@@ -1337,10 +1362,6 @@
     }
     if (action === 'dismiss-error') $('#wbError').hidden = true;
     if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');
-    if (action === 'layout-row' || action === 'layout-column') {
-      const view = canvasLayout();
-      if (view && !view.id) { view.axis = action === 'layout-row' ? 'row' : 'column'; renderLayout(false); }
-    }
     if (action === 'toggle-review') setReviewVisible(root.classList.contains('review-hidden'));
 
     if (action === 'jev-save' || action === 'jev-remove') {
@@ -1408,15 +1429,16 @@
     const button = event.target.closest('button');
     if (!button) return;
     if (button.dataset.action) act(button.dataset.action).catch(report);
-    if (button.dataset.space) { selectedSpace = button.dataset.space; space().collapsed = false; renderLayout(); }
-    if (button.dataset.paneTab) selectPane(button.dataset.paneTab, true);
+    if (button.dataset.space) { selectedSpace = button.dataset.space; space().collapsed = false; renderLayout(); acknowledgeCompletion(activeId()); }
+    if (button.dataset.paneTab) { acknowledgeCompletion(button.dataset.paneTab); selectPane(button.dataset.paneTab, true); }
+    if (button.dataset.soloTerminal) { acknowledgeCompletion(button.dataset.soloTerminal); showTerminalAlone(button.dataset.soloTerminal); }
     if (button.dataset.reviewView) { reviewView = button.dataset.reviewView; renderReview(); }
     if (button.dataset.toggleProject) {
       const project = spaces.find(item => item.id === button.dataset.toggleProject);
       if (project) { project.collapsed = !project.collapsed; renderInstances(); save(); }
     }
-    if (button.dataset.expandTerminal) { selectPane(button.dataset.expandTerminal); act('expand').catch(report); }
-    if (button.dataset.instance) selectInstance(button.dataset.instance);
+    if (button.dataset.expandTerminal) { acknowledgeCompletion(button.dataset.expandTerminal); selectPane(button.dataset.expandTerminal); act('expand').catch(report); }
+    if (button.dataset.instance) { acknowledgeCompletion(button.dataset.instance); selectInstance(button.dataset.instance); }
     if (button.dataset.togglePanel) {
       const owner = panelOwner(button.dataset.togglePanel);
       const panel = owner?.tabs.find(item => item.id === button.dataset.togglePanel);
@@ -1425,7 +1447,7 @@
         renderInstances(); save();
       }
     }
-    if (button.dataset.selectPanel) selectPanel(button.dataset.selectPanel);
+    if (button.dataset.selectPanel) { selectPanel(button.dataset.selectPanel); acknowledgeCompletion(activeId()); }
     if (button.dataset.retryTerminal) {
       const id = button.dataset.retryTerminal, pane = panes.get(id);
       if (pane?.error && sessions.has(id)) {

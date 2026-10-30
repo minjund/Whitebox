@@ -141,6 +141,10 @@ let runner = null;
 let backgroundQuestionnaire = null;
 let terminalReview = null;
 let terminalCollaboration = null;
+const { TerminalCompletionTracker, applyCompletionBadge } = require('./src/terminalCompletionBadge');
+const terminalCompletions = new TerminalCompletionTracker(count => {
+  applyCompletionBadge({ app, window: mainWindow, nativeImage }, count);
+});
 const cmuxClient = new CmuxClient();
 let cmuxMembership = null;
 let questionnairePreferenceStore = null;
@@ -597,6 +601,7 @@ function createWindow() {
   });
   mainWindow.setMenuBarVisibility(false);
   bindWindowNavigation(mainWindow);
+  applyCompletionBadge({ app, window: mainWindow, nativeImage }, terminalCompletions.count);
   mainWindow.webContents.on('did-start-loading', () => {
     rendererBootstrapped = false;
     attentionActivationCoordinator?.rendererUnavailable();
@@ -2421,9 +2426,10 @@ function registerIpcHandlers() {
   });
   handleTrusted('providers:usage', options => collectProviderUsage(options || {}));
   handleTrusted('terminals:review', payload => terminalReview.capture(payload));
+  handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
     if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, directory: userFile('terminal-collaboration') });
-    if (payload?.operation === 'sync') return terminalCollaboration.sync(payload);
+    if (payload?.operation === 'sync') return terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });

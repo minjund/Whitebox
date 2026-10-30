@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, nativeImage } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -25,6 +25,16 @@ app.whenReady().then(async () => {
   try {
     win = new BrowserWindow({ width: 1000, height: 600, show: false,
       webPreferences: { offscreen: true, backgroundThrottling: false, contextIsolation: true, nodeIntegration: false } });
+    const { applyCompletionBadge, badgePng } = require(path.join(root, 'src/terminalCompletionBadge'));
+    for (const count of [1, 2, 12, 100]) {
+      const icon = nativeImage.createFromBuffer(badgePng(count));
+      assert.equal(icon.isEmpty(), false); assert.deepEqual(icon.getSize(), { width: 32, height: 32 });
+      applyCompletionBadge({ app, window: win, nativeImage }, count);
+      if (process.platform === 'darwin') assert.equal(app.getBadgeCount(), count);
+    }
+    applyCompletionBadge({ app, window: win, nativeImage }, 0);
+    if (process.platform === 'darwin') assert.equal(app.getBadgeCount(), 0);
+    console.log('PASS: native completion badge APIs and decoded numeric overlay images');
     const errors = [];
     win.webContents.on('console-message', event => {
       if (event.level === 'error') errors.push(event.message);
@@ -201,6 +211,34 @@ app.whenReady().then(async () => {
     });
     assert.match(mouse, /\x1b\[<64;\d+;\d+M/);
     console.log('PASS: native key encoding, Shift+Tab, Ctrl+C and SGR mouse wheel');
+
+    const trackpad = await evaluate(async () => {
+      term.reset(); await write(Array.from({ length: 150 }, (_, i) => `trackpad-${i}\r\n`).join(''));
+      const canvas = term.renderer.getCanvas(), rect = canvas.getBoundingClientRect();
+      const height = term.renderer.getMetrics().height;
+      const wheel = (deltaY, deltaMode = 0) => canvas.dispatchEvent(new WheelEvent('wheel', {
+        deltaY, deltaMode, clientX: rect.left + 12, clientY: rect.top + 12, bubbles: true, cancelable: true,
+      }));
+      term.scrollToLine(50);
+      for (let i = 0; i < 101; i++) wheel(-height / 100);
+      const normal = 50 - term.buffer.active.viewportY;
+      await write('\x1b[?1000h\x1b[?1006h'); writes.length = 0;
+      for (let i = 0; i < 101; i++) wheel(-height / 100);
+      await delay();
+      const tracking = writes.splice(0).join('').match(/\x1b\[<64;/g)?.length || 0;
+      wheel(-3, 1);
+      await delay();
+      const mouseLines = writes.splice(0).join('').match(/\x1b\[<64;/g)?.length || 0;
+      await write('\x1b[?1000l\x1b[?1006l\x1b[?1049h'); writes.length = 0;
+      for (let i = 0; i < 101; i++) wheel(-height / 100);
+      await delay();
+      const alternate = writes.splice(0).join('').match(/\x1b\[A/g)?.length || 0;
+      await write('\x1b[?1049l');
+      return { normal, tracking, mouseLines, alternate };
+    });
+    for (const mode of ['normal', 'tracking', 'alternate']) assert.equal(trackpad[mode], 1, `${mode}: subpixel events must not accelerate`);
+    assert.equal(trackpad.mouseLines, 3, 'line-mode mouse preserves its declared distance');
+    console.log('PASS: trackpad subpixel distance, mouse lines and alternate-screen scrolling');
 
     await evaluate(async () => { term.reset(); await write(''); writes.length = 0; });
     const nodePty = require(path.join(root, 'node_modules/node-pty'));

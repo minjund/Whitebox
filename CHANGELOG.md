@@ -3,6 +3,16 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.10 - 2026-10-30
+
+- Return a split workspace to a persistent single-terminal view without
+  restarting any terminal or interrupting background work.
+- Remove the top-bar split-orientation buttons; retain drag-and-drop placement.
+- Show unread completed AI tasks on the Dock/taskbar app icon and clear each
+  completion when its terminal is explicitly selected or used.
+- Normalize trackpad wheel distance in scrollback, AI mouse tracking and
+  alternate-screen applications to prevent subpixel events accelerating scroll.
+
 ## 2.0.9 - 2026-10-30
 
 - Explain each task with distinct result, purpose, mechanism and verification

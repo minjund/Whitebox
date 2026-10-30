@@ -79,9 +79,10 @@ class TerminalActivity {
       const providers = (available ? rows.filter(row => ['claude', 'codex'].includes(row.provider) && !utilityProcess(row)) : fallbackSnapshot.processes || []).filter(inSession);
       const roots = providers.filter(row => !providers.some(other => row.ancestorPids?.includes(other.pid)));
       const child = roots.length === 1 ? roots[0] : null;
-      let state = 'unknown', completed = false;
+      let state = 'unknown', completed = false, requestId = '', providerPid = 0;
       if (child && (!frame || frame.creationId === member.creationId && this.now() - frame.at < 5000)) {
         const native = await this.completion.observe(child);
+        if (native.available && native.requestId) { requestId = native.requestId; providerPid = child.pid; }
         // Unopened restored panels have no renderer buffer. Exact native
         // process/turn evidence still describes their activity independently.
         state = frame ? providerActivity({ text: frame.readinessText ?? frame.text, native })
@@ -99,7 +100,7 @@ class TerminalActivity {
           state = /^R/u.test(shell.stat) ? 'working' : 'idle';
         }
       }
-      result.set(member.id, { state, completed, creationId: member.creationId, pid: member.pid });
+      result.set(member.id, { state, completed, ...(requestId ? { requestId, providerPid } : {}), creationId: member.creationId, pid: member.pid });
     }));
     return result;
   }

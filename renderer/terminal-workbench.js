@@ -334,7 +334,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     }
     const entry = {
       terminal, fit, host, inputDisabled, fixedGrid, userScrollRevision: 0, outputWritePending: 0,
-      outputRestoreGeneration: 0, wheelLineRemainder: 0,
+      outputRestoreGeneration: 0,
       coalesceOutput: !inputDisabled && state.platform?.id === 'win32' && session?.provider === 'codex'
         && session?.shell !== 'wsl' && !session?.distro,
       writeQueue: Promise.resolve(), pendingResize: null, resizePromise: null,
@@ -379,25 +379,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     syncScrollState(0);
 
       const rememberUserScroll = () => { entry.userScrollRevision += 1; };
-      host.addEventListener('wheel', event => {
-        const deltaY = Number(event.deltaY) || 0;
-        if (!event.shiftKey && terminal.wasmTerm?.hasMouseTracking()) return;
-        const activeBuffer = terminal.buffer.active;
-        if (!deltaY || Number(activeBuffer.baseY || 0) <= 0) return;
-        const lineDelta = event.deltaMode === 1
-          ? deltaY
-          : event.deltaMode === 2
-            ? deltaY * Math.max(1, terminal.rows - 1)
-            : deltaY / Math.max(16, (state.terminalFontSize || 15) * 1.25);
-        entry.wheelLineRemainder += lineDelta;
-        const lines = Math.trunc(entry.wheelLineRemainder);
-        event.preventDefault();
-        event.stopPropagation();
-        if (!lines) return;
-        entry.wheelLineRemainder -= lines;
-        terminal.scrollLines(lines);
-        rememberUserScroll();
-      }, { capture: true, passive: false });
+      host.addEventListener('wheel', rememberUserScroll, { capture: true, passive: true });
       // Record scrollbar/touch and keyboard scroll intent before xterm moves
       // the viewport, so an already queued fit cannot pull the user to tail.
       host.addEventListener('pointerdown', rememberUserScroll, true);
