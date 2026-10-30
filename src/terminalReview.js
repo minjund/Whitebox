@@ -176,6 +176,18 @@ PRIOR CONTEXT explains scope; latest restriction overrides earlier ones. AI prop
 Connect documented gains, losses and unresolved choices. Relate quantities to their categories and totals; do not confuse a subset count with a total or invent their overlap. A passing suite does not replace a removed check. Do not ask whether a replacement exists when the record already says none. Omitted, inaccessible, unrecorded and unperformed are different states. Generic omission markers are not facts or automatic warnings.
 Whitebox has prepared scoped records. Only if a specific missing record changes the decision, add evidenceRequests:[reference IDs], maximum 4. Never ask the user or original worker to retrieve omitted logs. Otherwise analyze once. Keep explanatory prose compact: fill optional fields only with useful facts absent from the decision; leave duplicate fields empty. No generic extra tests or filler risks. Preserve meaningful why/how and material unknowns.
 ${decisionInstructions}
+WRITING STYLE in ${language}:
+결과부터 쉬운 말로 쓴다. 문장마다 정보를 더하고 칭찬·강조·마지막 요약의 반복은 뺀다.
+actual=결과, why=해결하려던 문제, understanding=작동 방식, impact=사용 상황의 변화, explanation=요청 충족 판단의 근거, verification=관찰된 검사와 한계.
+why·understanding·impact는 decision과 다른 새 정보가 없으면 "". '사용자가 요청해서'나 결과의 재진술로 채우지 않는다. 단순 수정·전달은 빈 항목이 자연스럽다. explanation은 판단 이유만 쓴다. verification은 확인 사실이 없으면 ""이며 검증 완료를 뜻하지 않는다. unverified는 완료에 필요한 미확인 사실만, 없으면 []; nextStep은 필요한 후속 조치가 없으면 "". 실패·진행 상태·숫자·조건·검증 한계는 보존한다.
+예시는 근거나 인용이 아니다. REQUEST와 EVIDENCE로 decision을 포함한 전체 스키마를 ${language}로 채운다. 아래 JSON은 설명 항목 발췌이며 decision의 결론·이유·주의·다음 행동을 중복해서 채우지 않는다.
+<style-examples>
+단순 수정: 요청='탭 제목만 초안으로 바꿔줘'. 기록='탭 제목을 초안으로 변경; 본문 유지. AI: 실행 검사 안 함'.
+나쁜 발췌: {"actual":"제목을 바꿨습니다.","why":"제목 변경 요청 때문입니다.","impact":"새 제목을 봅니다."}
+좋은 항목 발췌: {"actual":"탭 제목을 ‘초안’으로 바꾸고 본문은 유지했습니다.","why":"","understanding":"","impact":"","verification":"AI는 실행 검사를 하지 않았다고 밝혔습니다."}
+기능 변경 발췌: {"actual":"사진 미리보기 캐시를 추가했습니다.","why":"같은 사진의 원본을 매번 읽는 지연을 줄이려는 변경입니다.","understanding":"최근 본 20장의 미리보기를 기기에 보관해 다시 씁니다.","impact":"","verification":"재사용·20장 제한 검사는 통과했지만 실제 기기 속도는 측정하지 않았습니다."}
+문제·방식·검사는 나누고, 미측정 영향은 비웠다.
+</style-examples>
 REQUEST: ${JSON.stringify(request)}
 EVIDENCE:
 ${source}`;

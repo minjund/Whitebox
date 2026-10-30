@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.9 - 2026-10-30
+
+- Explain each task with distinct result, purpose, mechanism and verification
+  fields. Use task-specific JSON examples and leave optional sections empty
+  when they only repeat the decision brief.
+- Preserve failure, work-in-progress state, concrete conditions and verification
+  limits while reducing repeated explanations for small edits and relays.
+
 ## 2.0.8 - 2026-10-29
 
 - Reduce terminal input and background polling costs with cached screen reads,
