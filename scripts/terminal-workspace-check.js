@@ -437,19 +437,42 @@ app.whenReady().then(async () => {
     const scanScheduling = await evaluate(`(async () => {
       await WhiteboxWorkspace.captureReviews(true);
       const read = WhiteboxTerminal.readTerminalSnapshot;
-      let calls = 0, taskRan = false, yielded = false;
-      WhiteboxTerminal.readTerminalSnapshot = (...args) => {
-        calls++;
-        if (calls === 1) {
-          setTimeout(() => { taskRan = true; }, 0);
+      const firstId = ${JSON.stringify(first.id)}, secondId = ${JSON.stringify(second.id)};
+      let probe = null, observed = null;
+      WhiteboxTerminal.readTerminalSnapshot = (id, ...args) => {
+        if (!observed && id === firstId) {
+          const current = { taskRan: false };
+          probe = current;
+          setTimeout(() => { current.taskRan = true; }, 0);
           const until = performance.now() + 12;
           while (performance.now() < until) {} // model a cold WASM buffer read
-        } else if (taskRan) yielded = true;
-        return read(...args);
+        } else if (!observed && probe && id === secondId) {
+          observed = { calls: 2, yielded: probe.taskRan };
+        }
+        return read(id, ...args);
       };
-      try { await WhiteboxWorkspace.captureReviews(true); return {calls, yielded}; }
+      try {
+        // Calibrate the observer: a partial scan must not count, and two
+        // synchronous reads must fail the yield check before testing production.
+        WhiteboxTerminal.readTerminalSnapshot(secondId);
+        const ignoredPartial = observed === null;
+        WhiteboxTerminal.readTerminalSnapshot(firstId);
+        WhiteboxTerminal.readTerminalSnapshot(secondId);
+        const rejectedNoYield = observed?.yielded === false;
+        probe = null; observed = null;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        // A forced review may join a scan that started before instrumentation.
+        // Wait for one complete first/second buffer pair, then stop even if it
+        // failed to yield. Never combine reads or timers from different scans.
+        for (let attempt = 0; attempt < 150 && !observed; attempt++) {
+          await WhiteboxWorkspace.captureReviews(true);
+          if (!observed) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return { ...(observed || { calls: 0, yielded: false }), ignoredPartial, rejectedNoYield };
+      }
       finally { WhiteboxTerminal.readTerminalSnapshot = read; }
     })()`);
+    assert(scanScheduling.ignoredPartial && scanScheduling.rejectedNoYield, 'scan observer must reject partial and non-yielding calibration cases');
     assert(scanScheduling.calls >= 2, 'scheduling check requires multiple terminal buffers');
     assert(scanScheduling.yielded, 'background scans blocked the input task queue across terminals');
 
