@@ -1,0 +1,226 @@
+name: Isolated packaged Windows updater shards
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      candidate_artifact:
+        required: true
+        type: string
+      plan_artifact:
+        required: true
+        type: string
+      validation_sha:
+        type: string
+        default: ''
+    outputs:
+      verified:
+        value: ${{ jobs.collect.outputs.verified }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: artifacts/windows-update-plan
+      - name: Use the reviewed CI-only verifier for immutable-tag recovery
+        if: inputs.validation_sha != ''
+        env:
+          VALIDATION_SOURCE_SHA: ${{ inputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          git show "$VALIDATION_SOURCE_SHA:scripts/windows-update-shards.js" > scripts/windows-update-shards.js
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed CI verifier "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/windows-update-shards.js")).digest("hex"))'
+      - name: Require a complete exact-source shard plan
+        id: plan
+        run: node scripts/windows-update-shards.js plan
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+
+  execute:
+    name: Packaged updater (${{ matrix.id }})
+    needs: plan
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      WHITEBOX_UPDATE_SHARD: ${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.candidate_artifact }}
+          path: release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: artifacts/windows-update-plan
+      - name: Overlay only reviewed test drivers after the candidate has been built
+        if: inputs.validation_sha != ''
+        shell: bash
+        env:
+          VALIDATION_SOURCE_SHA: ${{ inputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git diff --exit-code
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          for file in scripts/windows-update-shards.js scripts/packaged-update-button.js scripts/windows-process-exit-check.js scripts/windows-v173-update-integration.js scripts/windows-legacy-update-bridge-integration.js; do
+            git show "$VALIDATION_SOURCE_SHA:$file" > "$file"
+            node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed driver "+process.env.VALIDATION_SOURCE_SHA+"; "+process.argv[1]+" SHA-256 "+c.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$file"
+          done
+      - name: Verify identical build bytes and export exact installer paths
+        run: node scripts/windows-update-shards.js verify
+      - name: Download only assigned pinned official source installers
+        if: matrix.kind == 'cohort'
+        run: node scripts/windows-update-shards.js download
+      # The official legacy metadata/immutability/byte checks are unchanged.
+      # This attempt owns a separate VM because its immutable native profile
+      # and the per-user NSIS registry must never overlap another shard.
+      - name: Download and verify the official legacy update inputs
+        if: matrix.kind == 'legacy'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $fixtureDir = Join-Path $env:RUNNER_TEMP 'whitebox-legacy-update-inputs'
+          New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
+          function Get-VerifiedReleaseAsset(
+            [string]$Repository,
+            [string]$Tag,
+            [string]$Name,
+            [long]$ExpectedSize,
+            [string]$ExpectedSha256,
+            [bool]$RequireImmutable,
+            [bool]$RequireSoleAsset,
+            [string]$EnvironmentName
+          ) {
+            $release = gh api "repos/$Repository/releases/tags/$Tag" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read $Repository $Tag" }
+            if ($release.tag_name -cne $Tag -or $release.draft -ne $false -or $release.prerelease -ne $false) {
+              throw "Official release state mismatch for $Repository $Tag"
+            }
+            if ($RequireImmutable -and [bool]$release.immutable -ne $true) {
+              throw "Official release is not immutable: $Repository $Tag"
+            }
+            if ($release.html_url -cne "https://github.com/$Repository/releases/tag/$Tag") {
+              throw "Official release URL mismatch for $Repository $Tag"
+            }
+            if ($RequireSoleAsset -and @($release.assets).Count -ne 1) {
+              throw "Official bridge release must contain exactly one asset"
+            }
+            $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
+            if ($matches.Count -ne 1) { throw "Expected exactly one official $Name asset" }
+            $asset = $matches[0]
+            $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$Name"
+            if ($asset.state -cne 'uploaded' -or $asset.browser_download_url -cne $expectedUrl) {
+              throw "Official asset state or URL mismatch for $Name"
+            }
+            if ([long]$asset.size -ne $ExpectedSize -or [string]$asset.digest -cne "sha256:$ExpectedSha256") {
+              throw "Official asset API size or digest mismatch for $Name"
+            }
+            $destination = Join-Path $fixtureDir $Name
+            Invoke-WebRequest -Uri $expectedUrl -OutFile $destination
+            if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize) {
+              throw "Downloaded official asset size mismatch for $Name"
+            }
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+            if ($actualSha256 -cne $ExpectedSha256) {
+              throw "Downloaded official asset SHA-256 mismatch for $Name`: $actualSha256"
+            }
+            "$EnvironmentName=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          Get-VerifiedReleaseAsset 'minjund/Whitebox' 'v1.6.3' 'LoadToAgent-Setup-1.6.3.exe' 92488826 'e38c38698335c2eec4aef8c6da6f1629470addaff1b881fe961172644c86db0f' $false $false 'WHITEBOX_V163_INSTALLER'
+          Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
+      - name: Run assigned packaged source and candidate reinstall attempts
+        if: matrix.kind == 'cohort'
+        timeout-minutes: 150
+        run: node scripts/windows-update-shards.js run
+      - name: Run the official 1.6.3 to immutable bridge to candidate attempt
+        if: matrix.kind == 'legacy'
+        timeout-minutes: 30
+        run: node scripts/windows-update-shards.js run
+      - name: Retain fresh attempt receipts and raw logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: Windows-update-results-${{ github.run_attempt }}-${{ matrix.id }}
+          path: artifacts/windows-update-results
+          if-no-files-found: error
+
+  collect:
+    name: Require every planned packaged attempt
+    needs: [plan, execute]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      verified: ${{ steps.collect.outputs.verified }}
+    steps:
+      - name: Reject skipped, cancelled, failed or missing packaged jobs
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          EXECUTE_RESULT: ${{ needs.execute.result }}
+        run: |
+          set -euo pipefail
+          test "$PLAN_RESULT" = success
+          test "$EXECUTE_RESULT" = success
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: artifacts/windows-update-plan
+      - name: Use the reviewed CI-only verifier for immutable-tag recovery
+        if: inputs.validation_sha != ''
+        env:
+          VALIDATION_SOURCE_SHA: ${{ inputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          git show "$VALIDATION_SOURCE_SHA:scripts/windows-update-shards.js" > scripts/windows-update-shards.js
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed CI verifier "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/windows-update-shards.js")).digest("hex"))'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: Windows-update-results-${{ github.run_attempt }}-*
+          path: artifacts/windows-update-results
+          merge-multiple: true
+      - name: Require all exact-source receipts and complete unique cohort coverage
+        id: collect
+        run: node scripts/windows-update-shards.js collect
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}

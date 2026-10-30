@@ -36,12 +36,27 @@ rejection that occurs before any PTY write; unknown or accepted deliveries are
 never replayed. Product, dependencies, package metadata and updater checks keep
 the immutable tag's bytes and all compatibility gates still run in full.
 
-The serial 50-cohort Windows step has a 150-minute aggregate budget in both
-compatibility CI and Release. This only budgets the complete batch; every
-individual installer, ACK, first renderer-ready relaunch and cleanup deadline
-remains unchanged. A run interrupted by the former 90-minute batch limit is a
-failure and contributes no approval evidence. Recovery also permits the reviewed
-compatibility workflow change; it never overlays that workflow into product bytes.
+Windows compatibility CI and Release build the candidate once and distribute
+the same three verified Windows installers to six independent GitHub-hosted
+Windows cohort jobs and one separate legacy job. The complete `cohortList()` is
+partitioned evenly; versions within a VM still run serially because NSIS registry
+and native profile state are machine-wide. The legacy VM is separate for that
+reason. Each cohort batch retains its 150-minute upper bound and the legacy path
+retains 30 minutes; individual installer, ACK, renderer-ready, relaunch and cleanup
+deadlines are unchanged. Queue time and hosted-runner concurrency still affect
+wall time; no fixed speedup is promised before measuring real CI.
+
+`scripts/windows-update-shards.js` binds the plan to the exact source SHA,
+workflow run/attempt, full immutable input list, target version and installer
+sizes/SHA-256. Every VM verifies those same candidate bytes. An always-run
+collector rejects missing, duplicate, foreign, partial, failed, skipped or
+cancelled attempts and requires all source versions plus the official legacy
+path exactly once. Only its `verified=true` output can satisfy the stable
+`Updater compatibility gate` or unblock the Release draft. Raw per-attempt logs
+and receipts are retained as Actions artifacts and full coverage is shown in
+the job summary. Use a fresh complete workflow run after failure; receipts and
+plans from separate run attempts cannot be combined. See
+[UPDATE-SHARDING.md](UPDATE-SHARDING.md) for the current matrix.
 
 Recovery may also overlay the reviewed core updater regression fixture before
 tests, then restore its immutable tag bytes before packaging. Its Windows log
@@ -70,17 +85,16 @@ The `Windows Frozen-Client Update Compatibility` workflow creates the stable
 `Updater compatibility gate` check on every pull request and push to `main`.
 Its Ubuntu classification job first validates `previousFixed` against the
 unauthenticated public `latest` API and exports the complete validated cohort
-manifest as a job attestation. The Windows job must byte-for-byte match its
+manifest as a job attestation. The candidate build must byte-for-byte match its
 selected SHA's validated manifest to that attestation instead of making a
-second rate-limit-sensitive public API call. `previousFixed` is only that
-public-channel attestation; the `frozen` array alone drives packaged source
-attempts so publishing a new latest release cannot displace a supported old
-client. The Windows job then classifies the complete
-event diff before any path filtering. A non-sensitive
-diff records an explicit N/A success; a sensitive diff builds the exact event
-SHA, downloads the pinned official v1.7.3, v1.7.4, and v1.7.5 installers,
-verifies each filename, size and SHA-256, and runs the packaged scenario once
-from every frozen source cohort with fresh state. It also verifies and executes
+second rate-limit-sensitive public API call. `previousFixed` attests the public
+channel; the full `cohortList()` retains every older supported source even when
+the latest advances. The classification job examines the complete event diff
+before path filtering. A non-sensitive diff records an explicit N/A success;
+a sensitive diff builds the exact event SHA once. Independent Windows shards
+download only their assigned pinned official installers, verify each filename,
+size and SHA-256, and run the unchanged packaged scenario once from every source
+with fresh state. The separate legacy VM also verifies and executes
 the official v1.6.3 installer and immutable official v1.6.23 bridge as the representative
 full legacy path; all 19 published LoadToAgent packages were separately proven
 to contain byte-identical channel, trust, selector, and automatic-name logic.
@@ -227,8 +241,11 @@ candidate has been built may the reviewed
 driver also drives both macOS checks. Windows recovery additionally replaces
 `scripts/windows-v173-update-integration.js`,
 `scripts/windows-legacy-update-bridge-integration.js`, and
-`scripts/windows-process-exit-check.js`. All four are excluded from the product
-package. Record both source SHAs and every driver hash.
+`scripts/windows-process-exit-check.js`. The CI-only shard verifier is overlaid
+after packaging in the build and in planning/execution/collection jobs when
+needed. These verification files are excluded from the product package. Record
+both source SHAs and every driver hash; candidate artifacts still come only from
+the immutable tag's clean product tree.
 
 After terminating processes authenticated by their installed executable paths,
 the Windows test drivers require two successful CIM queries reporting that all

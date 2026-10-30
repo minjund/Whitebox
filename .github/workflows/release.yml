@@ -48,7 +48,7 @@ jobs:
             git diff --name-only --no-renames "$tag_commit" "$GITHUB_SHA" > "$RUNNER_TEMP/validation-changes.txt"
             while IFS= read -r file; do
               case "$file" in
-                .github/workflows/release.yml|.github/workflows/v173-update-compatibility.yml|scripts/terminal-workspace-check.js|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
+                .github/workflows/release.yml|.github/workflows/v173-update-compatibility.yml|.github/workflows/windows-update-shards.yml|scripts/windows-update-shards.js|scripts/tests/windows-update-shards.js|scripts/terminal-workspace-check.js|scripts/packaged-update-button.js|scripts/windows-process-exit-check.js|scripts/windows-v173-update-integration.js|scripts/windows-legacy-update-bridge-integration.js|scripts/tests/packaged-update-driver.js|scripts/regression-test.js|scripts/tests/core-update-workspace.js|docs/RELEASING.md) ;;
                 *) echo "Recovery changes a file outside the verification allowlist: $file"; exit 1 ;;
               esac
             done < "$RUNNER_TEMP/validation-changes.txt"
@@ -203,164 +203,41 @@ jobs:
       - name: Verify packaged Windows Authenticode checks
         if: runner.os == 'Windows'
         run: node scripts/windows-signature-verification-check.js
-      - name: Download every installer pinned by the compatibility cohort manifest
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
-            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
-          }
-          $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
-          if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
-          $sourceDir = Join-Path $env:RUNNER_TEMP 'whitebox-frozen-source'
-          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-          function Assert-PinnedInstaller([string]$Path, [long]$ExpectedSize, [string]$ExpectedSha256) {
-            $item = Get-Item -LiteralPath $Path
-            if ($item.Length -ne $ExpectedSize) { throw "Pinned installer size mismatch for $Path`: $($item.Length)" }
-            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-            if ($actualSha256 -cne $ExpectedSha256) { throw "Pinned installer SHA-256 mismatch for $Path`: $actualSha256" }
-          }
-          foreach ($cohort in $cohorts) {
-            $uri = [Uri][string]$cohort.url
-            $installerName = [System.IO.Path]::GetFileName($uri.AbsolutePath)
-            $installerPath = Join-Path $sourceDir $installerName
-            $environmentName = [string]$cohort.env
-            if ($environmentName -notmatch '^WHITEBOX_V[0-9]+_INSTALLER$') {
-              throw "Unsafe compatibility cohort environment name: $environmentName"
-            }
-            Invoke-WebRequest -Uri $uri.AbsoluteUri -OutFile $installerPath
-            Assert-PinnedInstaller $installerPath ([long]$cohort.size) ([string]$cohort.sha256)
-            "$environmentName=$installerPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
-          $targetVersion = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
-          $targetInstaller = (Resolve-Path -LiteralPath "release/Whitebox-Setup-$targetVersion.exe").Path
-          $manualInstaller = Join-Path (Split-Path -Parent $targetInstaller) "Whitebox-Manual-Setup-$targetVersion-x64.exe"
-          Copy-Item -LiteralPath $targetInstaller -Destination $manualInstaller -Force
-          if ((Get-Item -LiteralPath $targetInstaller).Length -ne (Get-Item -LiteralPath $manualInstaller).Length) { throw 'Manual bridge installer size differs from canonical Setup' }
-          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $manualInstaller).Hash) { throw 'Manual bridge installer digest differs from canonical Setup' }
-          $targetSize = (Get-Item -LiteralPath $targetInstaller).Length
-          $targetSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetInstaller).Hash.ToLowerInvariant()
-          "WHITEBOX_CURRENT_INSTALLER=$targetInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "WHITEBOX_MANUAL_INSTALLER=$manualInstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "WHITEBOX_CURRENT_INSTALLER_SIZE=$targetSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "WHITEBOX_CURRENT_INSTALLER_SHA256=$targetSha256" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "WHITEBOX_LEGACY_CANDIDATE_E2E=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Use the reviewed test driver after building the immutable candidate
-        if: github.event_name == 'workflow_dispatch'
+      - name: Use the reviewed shard verifier after packaging
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
         shell: bash
         env:
           VALIDATION_SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          [[ "$VALIDATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           git diff --exit-code
           git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
-          node <<'NODE'
-          const fs = require('fs');
-          const cp = require('child_process');
-          const sha = process.env.VALIDATION_SOURCE_SHA;
-          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid validation SHA');
-          const drivers = ['scripts/packaged-update-button.js'];
-          if (process.platform === 'win32') drivers.push(
-            'scripts/windows-process-exit-check.js',
-            'scripts/windows-v173-update-integration.js',
-            'scripts/windows-legacy-update-bridge-integration.js',
-          );
-          for (const file of drivers) {
-            fs.writeFileSync(file, cp.execFileSync('git', ['show', sha + ':' + file]));
-            console.log('Reviewed test driver ' + sha + '; ' + file + ' SHA-256 ' + require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
-          }
-          const changed = [
-            cp.execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }),
-            cp.execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' }),
-          ].join('\n').split(/\r?\n/).filter(Boolean);
-          if (changed.some(file => !drivers.includes(file))) throw new Error('Recovery changed more than the test drivers: ' + changed.join(', '));
-          NODE
-      - name: Download and verify the official legacy update inputs
+          git show "$VALIDATION_SOURCE_SHA:scripts/windows-update-shards.js" > scripts/windows-update-shards.js
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed CI verifier "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/windows-update-shards.js")).digest("hex"))'
+      - name: Pin the exact Windows artifacts and complete compatibility plan
         if: runner.os == 'Windows'
-        shell: pwsh
+        run: node scripts/windows-update-shards.js create
         env:
-          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      - name: Use the reviewed packaged Mac test driver after packaging
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        shell: bash
+        env:
+          VALIDATION_SOURCE_SHA: ${{ github.sha }}
         run: |
-          $fixtureDir = Join-Path $env:RUNNER_TEMP 'whitebox-legacy-update-inputs'
-          New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
-          function Get-VerifiedReleaseAsset(
-            [string]$Repository,
-            [string]$Tag,
-            [string]$Name,
-            [long]$ExpectedSize,
-            [string]$ExpectedSha256,
-            [bool]$RequireImmutable,
-            [bool]$RequireSoleAsset,
-            [string]$EnvironmentName
-          ) {
-            $release = gh api "repos/$Repository/releases/tags/$Tag" | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0) { throw "Unable to read $Repository $Tag" }
-            if ($release.tag_name -cne $Tag -or $release.draft -ne $false -or $release.prerelease -ne $false) {
-              throw "Official release state mismatch for $Repository $Tag"
-            }
-            if ($RequireImmutable -and [bool]$release.immutable -ne $true) {
-              throw "Official release is not immutable: $Repository $Tag"
-            }
-            if ($release.html_url -cne "https://github.com/$Repository/releases/tag/$Tag") {
-              throw "Official release URL mismatch for $Repository $Tag"
-            }
-            if ($RequireSoleAsset -and @($release.assets).Count -ne 1) {
-              throw 'Official bridge release must contain exactly one asset'
-            }
-            $matches = @($release.assets | Where-Object { $_.name -ceq $Name })
-            if ($matches.Count -ne 1) { throw "Expected exactly one official $Name asset" }
-            $asset = $matches[0]
-            $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$Name"
-            if ($asset.state -cne 'uploaded' -or $asset.browser_download_url -cne $expectedUrl) {
-              throw "Official asset state or URL mismatch for $Name"
-            }
-            if ([long]$asset.size -ne $ExpectedSize -or [string]$asset.digest -cne "sha256:$ExpectedSha256") {
-              throw "Official asset API size or digest mismatch for $Name"
-            }
-            $destination = Join-Path $fixtureDir $Name
-            Invoke-WebRequest -Uri $expectedUrl -OutFile $destination
-            if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize) {
-              throw "Downloaded official asset size mismatch for $Name"
-            }
-            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
-            if ($actualSha256 -cne $ExpectedSha256) {
-              throw "Downloaded official asset SHA-256 mismatch for $Name`: $actualSha256"
-            }
-            "$EnvironmentName=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
-          Get-VerifiedReleaseAsset 'minjund/Whitebox' 'v1.6.3' 'LoadToAgent-Setup-1.6.3.exe' 92488826 'e38c38698335c2eec4aef8c6da6f1629470addaff1b881fe961172644c86db0f' $false $false 'WHITEBOX_V163_INSTALLER'
-          Get-VerifiedReleaseAsset 'minjund/LodeToAgent' 'v1.6.23' 'LoadToAgent-Setup-1.6.23.exe' 94506459 '29e90370acd3a6f00d3da4a82a79045cf235e716dcccbbf34b2d2b4db9f4e112' $true $true 'WHITEBOX_V1623_INSTALLER'
-      - name: Verify frozen and recent packaged Whitebox compatibility cohorts
+          set -euo pipefail
+          [[ "$VALIDATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git diff --exit-code
+          git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
+          git show "$VALIDATION_SOURCE_SHA:scripts/packaged-update-button.js" > scripts/packaged-update-button.js
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed Mac driver "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/packaged-update-button.js")).digest("hex"))'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: runner.os == 'Windows'
-        shell: pwsh
-        # All 45 cohorts run serially; individual installer/relaunch deadlines stay strict.
-        timeout-minutes: 150
-        run: |
-          $manifest = Get-Content -LiteralPath 'scripts/update-compatibility-cohorts.json' -Raw | ConvertFrom-Json
-          if (@($manifest.frozen).Count -ne 3 -or $null -eq $manifest.previousFixed) {
-            throw 'Compatibility cohort manifest must contain three frozen source cohorts and one previousFixed attestation'
-          }
-          $cohorts = @(node -e "const c=require('./scripts/check-update-compatibility-cohorts');process.stdout.write(JSON.stringify(c.cohortList(c.readCohortManifest())));" | ConvertFrom-Json)
-          if ($cohorts.Count -lt 7) { throw "Expected frozen and recent compatibility cohorts, found $($cohorts.Count)" }
-          $attempt = 0
-          $orderedCohorts = @($cohorts | Where-Object { $_.version -ceq $manifest.previousFixed.version }) + @($cohorts | Where-Object { $_.version -cne $manifest.previousFixed.version })
-          if ($orderedCohorts.Count -ne $cohorts.Count) { throw 'Compatibility ordering changed the source cohort count' }
-          foreach ($cohort in $orderedCohorts) {
-            $attempt += 1
-            $env:WHITEBOX_FROZEN_VERSION = [string]$cohort.version
-            Write-Host "Running packaged cohort $attempt/$($cohorts.Count): $env:WHITEBOX_FROZEN_VERSION ($($cohort.installMode))"
-            & npm.cmd run test:update:win:frozen
-            if ($LASTEXITCODE -ne 0) {
-              throw "Packaged cohort $env:WHITEBOX_FROZEN_VERSION failed with exit code $LASTEXITCODE"
-            }
-          }
-          if ($attempt -ne $cohorts.Count) { throw "Expected $($cohorts.Count) packaged attempts, ran $attempt" }
-      - name: Verify the official v1.6.3 to bridge to candidate path
-        if: runner.os == 'Windows'
-        shell: pwsh
-        timeout-minutes: 30
-        run: npm run test:update:win:legacy-bridge
+        with:
+          name: Windows-update-plan-${{ github.run_attempt }}
+          path: artifacts/windows-update-plan/plan.json
+          if-no-files-found: error
       - if: runner.os == 'macOS'
         run: npm run test:artifacts:mac
       - if: runner.os == 'macOS'
@@ -372,6 +249,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.files }}
           if-no-files-found: error
+          overwrite: true
       - name: Preserve the verified native helper for npm Windows clients
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -379,6 +257,16 @@ jobs:
           name: native-signature-verifier
           path: release/win-unpacked/resources/whitebox-signature-check.exe
           if-no-files-found: error
+
+  verify_windows_update:
+    name: Packaged Windows updater shards
+    needs: [prepare, build-desktop]
+    uses: ./.github/workflows/windows-update-shards.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      candidate_artifact: Whitebox-Windows
+      plan_artifact: Windows-update-plan-${{ github.run_attempt }}
+      validation_sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
 
   verify-mac-arm64:
     needs: [prepare, build-desktop]
@@ -422,7 +310,8 @@ jobs:
           node scripts/mac-update-cohort-check.js
 
   draft-release:
-    needs: [prepare, build-desktop, verify-mac-arm64]
+    needs: [prepare, build-desktop, verify-mac-arm64, verify_windows_update]
+    if: ${{ success() && needs.verify_windows_update.outputs.verified == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -577,7 +466,7 @@ jobs:
         run: |
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
-          for attempt in {1..12}; do
+          for _attempt in {1..12}; do
             published="$(npm view "${package_name}@${package_version}" version 2>/dev/null || true)"
             if [ "$published" = "$package_version" ]; then exit 0; fi
             sleep 5

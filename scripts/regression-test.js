@@ -40,6 +40,7 @@ require('./tests/process-monitor-async').registerProcessMonitorAsyncTests(contex
 require('./tests/terminal-collaboration-performance').registerTerminalCollaborationPerformanceTests(context);
 require('./tests/performance-regressions').registerPerformanceRegressionTests(context);
 require('./tests/packaged-update-driver').registerPackagedUpdateDriverTests(context);
+require('./tests/windows-update-shards').registerWindowsUpdateShardTests(context);
 
 registerCoreUpdateWorkspaceTests(context);
 registerAttentionNotifierTests(context);
