@@ -35,7 +35,11 @@ const { TerminalActivity, providerActivity } = require('../src/terminalActivity'
   table = table.replace('S+', 'T+'); assert.equal(await state(), 'idle', 'job-control stop is yellow');
   table = '100 1 100 101 Ss 00:10 /bin/zsh /bin/zsh\n101 100 101 101 S+ 00:05 /usr/bin/claude claude';
   assert.equal(await state(), 'working');
-  native = completed; assert.equal(await state(), 'idle', 'provider PID stays alive after its turn finishes');
+  native = completed;
+  const proof = (await reader.observe([member], frames)).get('shell');
+  assert.equal(proof.requestId, completed.requestId);
+  assert.equal(proof.providerPid, 101, 'badge evidence identifies the exact native AI process');
+  assert.equal(await state(), 'idle', 'provider PID stays alive after its turn finishes');
   assert.equal((await reader.observe([member],frames)).get('shell').completed,true,'only a confirmed answer becomes a green completion dot');
   native={...completed,state:'interrupted'};assert.equal((await reader.observe([member],frames)).get('shell').completed,false,'interruption never claims answer completion');
   native=completed;

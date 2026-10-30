@@ -147,6 +147,34 @@
       this.backend.focus = () => this.focus();
       this.opening = true;
       try { this.backend.open(element); } finally { this.opening = false; }
+      // Ghostty's mouse protocol sends one step per wheel event. Trackpads emit
+      // many subpixel events, so normalize distance once for every buffer mode.
+      let remainder = 0, lastAt = 0, lastMode = '';
+      this.backend.attachCustomWheelEventHandler(event => {
+        if (event.ctrlKey || event.metaKey || !Number.isFinite(event.deltaY)) return true;
+        const tracking = this.wasmTerm.hasMouseTracking() && !event.shiftKey;
+        const alternate = this.wasmTerm.isAlternateScreen();
+        const mode = `${tracking}:${alternate}:${event.deltaMode}`;
+        const now = performance.now();
+        if (mode !== lastMode || now - lastAt > 250 || Math.sign(remainder) !== Math.sign(event.deltaY)) remainder = 0;
+        lastAt = now; lastMode = mode;
+        const height = Math.max(1, this.renderer.getMetrics().height);
+        remainder += event.deltaMode === 1 ? event.deltaY
+          : event.deltaMode === 2 ? event.deltaY * this.rows : event.deltaY / height;
+        const lines = Math.trunc(remainder);
+        remainder -= lines;
+        if (tracking) {
+          for (let step = 0; step < Math.abs(lines); step++) {
+            this.backend.inputHandler.handleWheelEvent(new WheelEvent('wheel', {
+              deltaY: Math.sign(lines), deltaMode: 1, clientX: event.clientX, clientY: event.clientY,
+              shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+            }));
+          }
+        } else if (alternate) {
+          for (let step = 0; step < Math.abs(lines); step++) this.backend.input(lines < 0 ? '\x1b[A' : '\x1b[B', true);
+        } else if (lines) this.scrollLines(lines);
+        return true;
+      });
       // Native mouse/clipboard handlers must use the same lossless cell reader.
       this.backend.selectionManager.getSelection = () => this.getSelection();
       element.removeAttribute('contenteditable');

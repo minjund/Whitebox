@@ -4,6 +4,7 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ['이 터미널만 보기', 'Show only this terminal', '仅显示此终端'],
   ['답변 완료', 'Answer complete', '回答完成'],
   ['API 키를 저장하면 판단 분석에 Jev를 자동으로 사용합니다. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.', 'Saving an API key automatically selects Jev for judgment analysis. Linked task records are sent to TypeSafe to assess support, coverage changes, recovery and repeated checks.', '保存 API 密钥后，自动使用 Jev 进行判断分析。相关任务记录会发送给 TypeSafe，以判断证据、验证范围变化、恢复和重复检查。'],
   ['현재 분석 서비스: ', 'Current analysis service: ', '当前分析服务：'],

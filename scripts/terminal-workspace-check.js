@@ -24,6 +24,9 @@ app.whenReady().then(async () => {
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
   let completedActivityId = '';
+  const { TerminalCompletionTracker } = require('../src/terminalCompletionBadge');
+  const completionTracker = new TerminalCompletionTracker();
+  const activityOverrides = new Map();
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
@@ -56,6 +59,7 @@ app.whenReady().then(async () => {
       rendererReadyCalls += 1;
       return { ok: true };
     });
+    ipcMain.handle('terminals:completion-read', (_event, payload) => completionTracker.read(payload));
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
@@ -69,7 +73,8 @@ app.whenReady().then(async () => {
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
       if (completedActivityId && activity.has(completedActivityId)) activity.set(completedActivityId, { ...activity.get(completedActivityId), state: 'idle', completed: true });
-      return { jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) };
+      for (const [id, value] of activityOverrides) if (activity.has(id)) activity.set(id, { ...activity.get(id), ...value });
+      return completionTracker.update({ jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) }, payload.groups);
     });
     ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
     ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevSavedKey = payload.remove ? '' : payload.apiKey; jevConfigured = Boolean(jevSavedKey); return { configured: jevConfigured }; });
@@ -562,6 +567,30 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
     assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
+    assert.equal(await evaluate('document.querySelectorAll(".wb-layout-controls").length'), 0, 'obsolete orientation controls removed');
+    await evaluate(`document.querySelector('#wbCanvas [data-solo-terminal="${second.id}"]').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'one click returns to a single terminal');
+    assert.equal(await evaluate(`originalTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${second.id}"]')`), true, 'solo reuses the same live terminal node');
+    assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identityBeforeMoves, 'solo keeps all PTYs alive');
+    await win.reload();
+    await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload single terminal');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'single-terminal view persists');
+    fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-solo-terminal.png'), (await win.webContents.capturePage()).toPNG());
+    for (const id of [first.id, second.id]) activityOverrides.set(id, { state: 'working', completed: false, requestId: 'badge-turn', providerPid: manager.get(id).pid + 100000 });
+    await waitFor(`document.querySelector('[data-instance="${first.id}"] .wb-terminal-state').dataset.state === 'working'`, 'native AI work is observed');
+    for (const id of [first.id, second.id]) activityOverrides.set(id, { state: 'idle', completed: true, requestId: 'badge-turn', providerPid: manager.get(id).pid + 100000 });
+    for (let attempt = 0; completionTracker.count !== 2 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(completionTracker.count, 2, 'two completed AI terminals produce badge 2');
+    await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
+    for (let attempt = 0; completionTracker.count !== 1 && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(completionTracker.count, 1, 'selecting a completed terminal acknowledges only that answer');
+    await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
+    for (let attempt = 0; completionTracker.count !== 0 && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(completionTracker.count, 0, 'all read completions clear the badge');
+    activityOverrides.clear();
+    console.log('PASS single-terminal view persists with the same PTYs; completed AI badge 2 → 1 → 0 through explicit selection');
+    await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`);
+    await evaluate(`window.originalTerminalNode = document.querySelector('[data-terminal-id="${second.id}"]')`);
     const splitView = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)');
     await evaluate(`document.querySelector('[data-drop-panel="${originalPanel}"] [data-instance]').click()`);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)'), splitView, 'panel selection keeps the displayed split');

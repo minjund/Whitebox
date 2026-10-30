@@ -31,7 +31,7 @@ function registerWindowsUpdateShardTests({ test, temp }) {
     assert.deepEqual(cohorts.flatMap(s => s.versions).sort(), plan.cohorts.map(c => c.version).sort());
     assert(Math.max(...cohorts.map(s => s.versions.length)) - Math.min(...cohorts.map(s => s.versions.length)) <= 1);
     assert.equal(cohorts[0].versions[0], plan.manifest.previousFixed.version);
-    for (const version of ['1.7.3', '1.7.4', '1.7.5', '2.0.7', '2.0.8']) assert(cohorts.some(s => s.versions.includes(version)));
+    for (const version of ['1.7.3', '1.7.4', '1.7.5', '2.0.7', '2.0.8', '2.0.9']) assert(cohorts.some(s => s.versions.includes(version)));
   });
   test('업데이트 계획은 다른 SHA·실행·재실행·설치본 핀 및 누락·중복 분배를 거부한다', () => {
     const plan = fixturePlan();
