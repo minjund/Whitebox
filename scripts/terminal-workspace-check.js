@@ -22,6 +22,7 @@ app.whenReady().then(async () => {
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
+  let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
   let completedActivityId = '';
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
@@ -58,6 +59,12 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
+      if (payload.operation === 'sync' && staleCollaborationFrameOnce
+        && payload.frames.some(frame => frame.id === staleCollaborationFrameOnce.id)) {
+        collaborationPayload = { ...payload, frames: payload.frames.map(frame => frame.id === staleCollaborationFrameOnce.id ? staleCollaborationFrameOnce : frame) };
+        staleCollaborationFrameOnce = null;
+        staleCollaborationFramesServed++;
+      }
       if (payload.operation === 'connect') return { ok: true };
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
@@ -1094,6 +1101,10 @@ app.whenReady().then(async () => {
       await waitFor(` /[>%$#]\\s*$/.test(WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).trimEnd())`, 'new shell startup prompt before socket input');
       await forceCapture(); await control.sync(collaborationPayload);
       const before = await client.get(id, false);
+      const marker = 'PANEL_ENV=' + id;
+      const oldFrame = { ...collaborationPayload.frames.find(frame => frame.id === id) };
+      assert.equal(oldFrame.creationId, before.creationId);
+      assert(!oldFrame.text.replace(/\s+/g, '').includes(marker));
       const opts = { directory: control.directory };
       const commandText = process.platform === 'win32' ? 'Write-Output "PANEL_ENV=$env:WHITEBOX_SURFACE_ID"' : 'printf "PANEL_ENV=%s\\n" "$WHITEBOX_SURFACE_ID"';
       // Shell startup/resize output can invalidate a captured frame. Only this
@@ -1114,9 +1125,26 @@ app.whenReady().then(async () => {
       }
       if (!submitted) throw rejectedFrame;
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).replace(/\\s+/g, '').includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env across wrapped rows');
-      await forceCapture(); await control.sync(collaborationPayload);
+      // A forced review can join an older in-flight collaboration capture.
+      // Reproduce that stale observation once, then require the actual output
+      // in a newer same-process frame. Only observations repeat; the accepted
+      // command is never sent again and the existing fixture deadline stays.
+      const servedBefore = staleCollaborationFramesServed;
+      staleCollaborationFrameOnce = oldFrame;
+      collaborationPayload = { ...collaborationPayload, frames: collaborationPayload.frames.map(frame => frame.id === id ? oldFrame : frame) };
+      let observedPayload;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await forceCapture();
+        const payload = collaborationPayload;
+        const frame = payload.frames.find(frame => frame.id === id && frame.creationId === before.creationId);
+        if (frame?.text.replace(/\s+/g, '').includes(marker)) { observedPayload = payload; break; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.equal(staleCollaborationFramesServed, servedBefore + 1, 'the stale in-flight observation was exercised');
+      assert(observedPayload, 'a fresh collaboration frame must contain the real command output');
+      await control.sync(observedPayload);
       const screen = await panelCommand(['read-screen', '--source', id, '--surface', id, '--json'], opts);
-      assert.ok(screen.text.replace(/\s+/g, '').includes('PANEL_ENV=' + id));
+      assert.ok(screen.text.replace(/\s+/g, '').includes(marker));
       const after = await client.get(id, false);
       assert.equal(after.pid, before.pid); assert.equal(after.creationId, before.creationId);
       console.log('PASS real PTY → host socket → panel socket → CLI send/read, automatic surface env, unchanged process identity');
