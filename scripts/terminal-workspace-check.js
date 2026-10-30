@@ -1039,7 +1039,20 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-arrange-instance="${singlePanelId}"]').click();document.querySelector('#wbMoveTarget').value='${beforeAdd.panelId}';document.querySelector('[data-action="move-terminal"]').click()`);
     assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>node.dataset.panelId)).size>1'), 'explicit arrange still shows different panels together');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'), rosterBeforeArrange, 'screen placement never changes collaboration membership');
-    const beforePanelReload = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+    // ConPTY may expose a new session before its native PID is assigned.
+    // Establish real positive PIDs before testing that reload preserves them.
+    // One pending observation is forced locally so the readiness race is also
+    // exercised on systems whose native PTY is ready immediately.
+    const panelIdentities = manager.list().map(({id,creationId})=>({id,creationId}));
+    let beforePanelReload;
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const observed = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+      assert.deepEqual(observed.map(({id,creationId})=>({id,creationId})), panelIdentities, 'waiting for PID must not replace a terminal');
+      if (attempt === 0) observed[observed.length - 1].pid = null;
+      if (observed.every(item => Number.isSafeInteger(item.pid) && item.pid > 0)) { beforePanelReload = observed; break; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert(beforePanelReload, 'all test PTYs must report real native PIDs before reload');
     const visibleBeforePanelReload = await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>({id:node.dataset.terminalId,color:node.style.getPropertyValue("--wb-panel-color")}))');
     const ratioBeforePanelReload = await evaluate('(() => {const divider=document.querySelector("#wbCanvas .wb-divider");divider.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}));return divider.getAttribute("aria-valuenow")})()');
     await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','per-panel arrangement restored');
