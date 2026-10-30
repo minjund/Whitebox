@@ -138,15 +138,33 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-bottom [data-action=settings]").length'), 1, 'sidebar settings entry remains available');
     const reviewHeaderCopy = await evaluate('({heading:document.querySelector("#wbReview h1").textContent,label:document.querySelector("#wbReviewAuto>span").textContent})');
     for (const width of [1000, 640, 360]) {
+      const beforeResize = await evaluate('({compact:matchMedia("(max-width: 850px)").matches,width:innerWidth,height:innerHeight})');
+      const nativeResize = beforeResize.width !== width || beforeResize.height !== 720;
+      if (nativeResize) await evaluate(`(() => {
+        window.__whiteboxFixtureResized = false;
+        const listener = () => { if (innerWidth === ${width}) { window.__whiteboxFixtureResized = true; removeEventListener('resize', listener); } };
+        addEventListener('resize', listener);
+      })()`);
       win.setContentSize(width, 720);
       await waitFor(`innerWidth === ${width}`, 'responsive review viewport');
+      if (nativeResize) {
+        await waitFor('window.__whiteboxFixtureResized === true', 'native resize handlers completed');
+        await evaluate('delete window.__whiteboxFixtureResized');
+      }
+      // CSS viewport size updates before the app's media-query change event.
+      // Wait for its automatic close/open before manually opening the review;
+      // otherwise that queued event can close it during the geometry assertion.
+      if (beforeResize.compact !== (width <= 850)) {
+        await waitFor(`document.querySelector('#wbReviewToggle').getAttribute('aria-expanded') === ${JSON.stringify(String(width > 850))}`, 'responsive review mode transition');
+      }
       if (await evaluate('getComputedStyle(document.querySelector("#wbReview")).display === "none"')) await evaluate('document.querySelector("#wbReviewToggle").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewToggle").getAttribute("aria-expanded")'), 'true');
       await evaluate('document.querySelector("#terminalWorkspace").style.setProperty("--wb-review-width","260px");document.querySelector("#wbReview h1").textContent="Understanding & review";document.querySelector("#wbReviewAuto>span").textContent="Auto analysis"');
       const geometry = await evaluate(`(() => {
         const header=document.querySelector('#wbReview>header').getBoundingClientRect(), button=document.querySelector('#wbReviewAuto'), b=button.getBoundingClientRect(), heading=document.querySelector('#wbReview h1').getBoundingClientRect(), close=document.querySelector('.wb-review-close').getBoundingClientRect(), toggle=document.querySelector('.wb-auto-switch').getBoundingClientRect();
-        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width};
+        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width, columnWidth:document.querySelector('#wbReview').getBoundingClientRect().width};
       })()`);
-      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28, JSON.stringify({width,geometry}));
+      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28&&Math.abs(geometry.columnWidth-260)<.5, JSON.stringify({width,geometry}));
       await evaluate('document.querySelector("#wbReviewAuto").click()');
       assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'false', 'narrow toggle responds immediately');
       await evaluate('document.querySelector("#wbReviewAuto").click()');
