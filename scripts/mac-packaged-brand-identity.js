@@ -48,21 +48,31 @@ async function waitForExit(pid) {
     const observed = await driver.evaluate(`(() => {
       const {app, BrowserWindow} = process.mainModule.require('electron');
       const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html'));
-      return {version:app.getVersion(), profile:app.getPath('userData'), title:win.getTitle()};
+      return {version:app.getVersion(), profile:app.getPath('userData'), windowId:win.id};
     })()`);
     assert.equal(observed.version, require('../package.json').version);
     assert.equal(observed.profile, profile);
-    assert.match(observed.title, /Whitebox/);
-    for (let attempt = 0; attempt < 300 && !fs.existsSync(ready); attempt += 1) {
+    // A window URL can exist before its document title has loaded. Require
+    // both the authenticated renderer signal and the actual branded title of
+    // that same window, within the original 30-second readiness budget.
+    const readinessDeadline = Date.now() + 30000;
+    let title = '';
+    for (let attempt = 0; attempt < 300 && Date.now() < readinessDeadline; attempt += 1) {
+      if (fs.existsSync(ready)) {
+        title = await driver.evaluate(`process.mainModule.require('electron').BrowserWindow.fromId(${JSON.stringify(observed.windowId)}).getTitle()`);
+        if (Date.now() <= readinessDeadline && /Whitebox/.test(title)) break;
+      }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    if (!fs.existsSync(ready)) {
+    if (!fs.existsSync(ready) || !/Whitebox/.test(title) || Date.now() > readinessDeadline) {
       console.error(driver.diagnostics());
       console.error(await driver.evaluate(`(async () => {
         const w = process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/renderer/index.html'));
         return w.webContents.executeJavaScript('JSON.stringify({ready:document.readyState,title:document.title,workspaceReady:!!window.WhiteboxWorkspace,text:document.body.innerText.slice(-1600)})');
       })()`));
     }
+    assert(Date.now() <= readinessDeadline, 'packaged renderer and brand must be ready within 30 seconds');
+    assert.match(title, /Whitebox/);
     const signal = JSON.parse(fs.readFileSync(ready, 'utf8'));
     assert.equal(signal.pid, driver.child.pid);
     assert.equal(signal.version, observed.version);

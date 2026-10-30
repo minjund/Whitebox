@@ -22,6 +22,7 @@ app.whenReady().then(async () => {
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
+  let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
   let completedActivityId = '';
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
@@ -58,6 +59,12 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
+      if (payload.operation === 'sync' && staleCollaborationFrameOnce
+        && payload.frames.some(frame => frame.id === staleCollaborationFrameOnce.id)) {
+        collaborationPayload = { ...payload, frames: payload.frames.map(frame => frame.id === staleCollaborationFrameOnce.id ? staleCollaborationFrameOnce : frame) };
+        staleCollaborationFrameOnce = null;
+        staleCollaborationFramesServed++;
+      }
       if (payload.operation === 'connect') return { ok: true };
       const frames = new Map((payload.frames || []).map(frame => [frame.id, { ...frame, at: Date.now() }]));
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
@@ -131,15 +138,33 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-bottom [data-action=settings]").length'), 1, 'sidebar settings entry remains available');
     const reviewHeaderCopy = await evaluate('({heading:document.querySelector("#wbReview h1").textContent,label:document.querySelector("#wbReviewAuto>span").textContent})');
     for (const width of [1000, 640, 360]) {
+      const beforeResize = await evaluate('({compact:matchMedia("(max-width: 850px)").matches,width:innerWidth,height:innerHeight})');
+      const nativeResize = beforeResize.width !== width || beforeResize.height !== 720;
+      if (nativeResize) await evaluate(`(() => {
+        window.__whiteboxFixtureResized = false;
+        const listener = () => { if (innerWidth === ${width}) { window.__whiteboxFixtureResized = true; removeEventListener('resize', listener); } };
+        addEventListener('resize', listener);
+      })()`);
       win.setContentSize(width, 720);
       await waitFor(`innerWidth === ${width}`, 'responsive review viewport');
+      if (nativeResize) {
+        await waitFor('window.__whiteboxFixtureResized === true', 'native resize handlers completed');
+        await evaluate('delete window.__whiteboxFixtureResized');
+      }
+      // CSS viewport size updates before the app's media-query change event.
+      // Wait for its automatic close/open before manually opening the review;
+      // otherwise that queued event can close it during the geometry assertion.
+      if (beforeResize.compact !== (width <= 850)) {
+        await waitFor(`document.querySelector('#wbReviewToggle').getAttribute('aria-expanded') === ${JSON.stringify(String(width > 850))}`, 'responsive review mode transition');
+      }
       if (await evaluate('getComputedStyle(document.querySelector("#wbReview")).display === "none"')) await evaluate('document.querySelector("#wbReviewToggle").click()');
+      assert.equal(await evaluate('document.querySelector("#wbReviewToggle").getAttribute("aria-expanded")'), 'true');
       await evaluate('document.querySelector("#terminalWorkspace").style.setProperty("--wb-review-width","260px");document.querySelector("#wbReview h1").textContent="Understanding & review";document.querySelector("#wbReviewAuto>span").textContent="Auto analysis"');
       const geometry = await evaluate(`(() => {
         const header=document.querySelector('#wbReview>header').getBoundingClientRect(), button=document.querySelector('#wbReviewAuto'), b=button.getBoundingClientRect(), heading=document.querySelector('#wbReview h1').getBoundingClientRect(), close=document.querySelector('.wb-review-close').getBoundingClientRect(), toggle=document.querySelector('.wb-auto-switch').getBoundingClientRect();
-        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width};
+        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width, columnWidth:document.querySelector('#wbReview').getBoundingClientRect().width};
       })()`);
-      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28, JSON.stringify({width,geometry}));
+      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28&&Math.abs(geometry.columnWidth-260)<.5, JSON.stringify({width,geometry}));
       await evaluate('document.querySelector("#wbReviewAuto").click()');
       assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'false', 'narrow toggle responds immediately');
       await evaluate('document.querySelector("#wbReviewAuto").click()');
@@ -430,19 +455,42 @@ app.whenReady().then(async () => {
     const scanScheduling = await evaluate(`(async () => {
       await WhiteboxWorkspace.captureReviews(true);
       const read = WhiteboxTerminal.readTerminalSnapshot;
-      let calls = 0, taskRan = false, yielded = false;
-      WhiteboxTerminal.readTerminalSnapshot = (...args) => {
-        calls++;
-        if (calls === 1) {
-          setTimeout(() => { taskRan = true; }, 0);
+      const firstId = ${JSON.stringify(first.id)}, secondId = ${JSON.stringify(second.id)};
+      let probe = null, observed = null;
+      WhiteboxTerminal.readTerminalSnapshot = (id, ...args) => {
+        if (!observed && id === firstId) {
+          const current = { taskRan: false };
+          probe = current;
+          setTimeout(() => { current.taskRan = true; }, 0);
           const until = performance.now() + 12;
           while (performance.now() < until) {} // model a cold WASM buffer read
-        } else if (taskRan) yielded = true;
-        return read(...args);
+        } else if (!observed && probe && id === secondId) {
+          observed = { calls: 2, yielded: probe.taskRan };
+        }
+        return read(id, ...args);
       };
-      try { await WhiteboxWorkspace.captureReviews(true); return {calls, yielded}; }
+      try {
+        // Calibrate the observer: a partial scan must not count, and two
+        // synchronous reads must fail the yield check before testing production.
+        WhiteboxTerminal.readTerminalSnapshot(secondId);
+        const ignoredPartial = observed === null;
+        WhiteboxTerminal.readTerminalSnapshot(firstId);
+        WhiteboxTerminal.readTerminalSnapshot(secondId);
+        const rejectedNoYield = observed?.yielded === false;
+        probe = null; observed = null;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        // A forced review may join a scan that started before instrumentation.
+        // Wait for one complete first/second buffer pair, then stop even if it
+        // failed to yield. Never combine reads or timers from different scans.
+        for (let attempt = 0; attempt < 150 && !observed; attempt++) {
+          await WhiteboxWorkspace.captureReviews(true);
+          if (!observed) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return { ...(observed || { calls: 0, yielded: false }), ignoredPartial, rejectedNoYield };
+      }
       finally { WhiteboxTerminal.readTerminalSnapshot = read; }
     })()`);
+    assert(scanScheduling.ignoredPartial && scanScheduling.rejectedNoYield, 'scan observer must reject partial and non-yielding calibration cases');
     assert(scanScheduling.calls >= 2, 'scheduling check requires multiple terminal buffers');
     assert(scanScheduling.yielded, 'background scans blocked the input task queue across terminals');
 
@@ -1032,7 +1080,20 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-arrange-instance="${singlePanelId}"]').click();document.querySelector('#wbMoveTarget').value='${beforeAdd.panelId}';document.querySelector('[data-action="move-terminal"]').click()`);
     assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>node.dataset.panelId)).size>1'), 'explicit arrange still shows different panels together');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'), rosterBeforeArrange, 'screen placement never changes collaboration membership');
-    const beforePanelReload = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+    // ConPTY may expose a new session before its native PID is assigned.
+    // Establish real positive PIDs before testing that reload preserves them.
+    // One pending observation is forced locally so the readiness race is also
+    // exercised on systems whose native PTY is ready immediately.
+    const panelIdentities = manager.list().map(({id,creationId})=>({id,creationId}));
+    let beforePanelReload;
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const observed = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+      assert.deepEqual(observed.map(({id,creationId})=>({id,creationId})), panelIdentities, 'waiting for PID must not replace a terminal');
+      if (attempt === 0) observed[observed.length - 1].pid = null;
+      if (observed.every(item => Number.isSafeInteger(item.pid) && item.pid > 0)) { beforePanelReload = observed; break; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert(beforePanelReload, 'all test PTYs must report real native PIDs before reload');
     const visibleBeforePanelReload = await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>({id:node.dataset.terminalId,color:node.style.getPropertyValue("--wb-panel-color")}))');
     const ratioBeforePanelReload = await evaluate('(() => {const divider=document.querySelector("#wbCanvas .wb-divider");divider.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}));return divider.getAttribute("aria-valuenow")})()');
     await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','per-panel arrangement restored');
@@ -1094,6 +1155,10 @@ app.whenReady().then(async () => {
       await waitFor(` /[>%$#]\\s*$/.test(WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).trimEnd())`, 'new shell startup prompt before socket input');
       await forceCapture(); await control.sync(collaborationPayload);
       const before = await client.get(id, false);
+      const marker = 'PANEL_ENV=' + id;
+      const oldFrame = { ...collaborationPayload.frames.find(frame => frame.id === id) };
+      assert.equal(oldFrame.creationId, before.creationId);
+      assert(!oldFrame.text.replace(/\s+/g, '').includes(marker));
       const opts = { directory: control.directory };
       const commandText = process.platform === 'win32' ? 'Write-Output "PANEL_ENV=$env:WHITEBOX_SURFACE_ID"' : 'printf "PANEL_ENV=%s\\n" "$WHITEBOX_SURFACE_ID"';
       // Shell startup/resize output can invalidate a captured frame. Only this
@@ -1114,9 +1179,26 @@ app.whenReady().then(async () => {
       }
       if (!submitted) throw rejectedFrame;
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).replace(/\\s+/g, '').includes(${JSON.stringify('PANEL_ENV=' + id)})`, 'real panel socket command and terminal env across wrapped rows');
-      await forceCapture(); await control.sync(collaborationPayload);
+      // A forced review can join an older in-flight collaboration capture.
+      // Reproduce that stale observation once, then require the actual output
+      // in a newer same-process frame. Only observations repeat; the accepted
+      // command is never sent again and the existing fixture deadline stays.
+      const servedBefore = staleCollaborationFramesServed;
+      staleCollaborationFrameOnce = oldFrame;
+      collaborationPayload = { ...collaborationPayload, frames: collaborationPayload.frames.map(frame => frame.id === id ? oldFrame : frame) };
+      let observedPayload;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await forceCapture();
+        const payload = collaborationPayload;
+        const frame = payload.frames.find(frame => frame.id === id && frame.creationId === before.creationId);
+        if (frame?.text.replace(/\s+/g, '').includes(marker)) { observedPayload = payload; break; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.equal(staleCollaborationFramesServed, servedBefore + 1, 'the stale in-flight observation was exercised');
+      assert(observedPayload, 'a fresh collaboration frame must contain the real command output');
+      await control.sync(observedPayload);
       const screen = await panelCommand(['read-screen', '--source', id, '--surface', id, '--json'], opts);
-      assert.ok(screen.text.replace(/\s+/g, '').includes('PANEL_ENV=' + id));
+      assert.ok(screen.text.replace(/\s+/g, '').includes(marker));
       const after = await client.get(id, false);
       assert.equal(after.pid, before.pid); assert.equal(after.creationId, before.creationId);
       console.log('PASS real PTY → host socket → panel socket → CLI send/read, automatic surface env, unchanged process identity');
