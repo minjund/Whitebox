@@ -85,5 +85,5 @@
 #terminalWorkspace #wbSpaces .wb-project:focus-within .wb-project-terminals{--wb-tree-line:color-mix(in srgb,var(--clean-muted) 75%,var(--clean-line))}
 @media(max-width:640px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:20px;--wb-tree-branch:12px}}
 #terminalWorkspace .wb-sidebar{container-type:inline-size}
-@container (max-width:200px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:14px;--wb-tree-branch:10px}}
+@container (max-width:200px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:14px;--wb-tree-branch:10px}#terminalWorkspace .wb-panel-members .wb-instance{padding-left:3px;padding-right:3px;gap:4px}#terminalWorkspace .wb-panel-members .wb-instance-copy{gap:3px}}
 @media(prefers-reduced-motion:reduce){#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::before,#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::after{transition:none}}
