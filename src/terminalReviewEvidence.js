@@ -66,6 +66,29 @@ class ReviewEvidenceIndex {
     const current = source.records.filter(item => item.requestId === requestId);
     return { requestId, fingerprint: hash([...new Set(current.filter(item => item.critical).map(item => item.signalDigest))].join(':')), records: current.map(({ start, length, digest, signalDigest, ...record }) => record), omitted: source.omitted };
   }
+  async readScoped(file, requestId) {
+    const source = this.sources.get(file);
+    if (!source) throw Object.assign(new Error('No indexed evidence'), { code: 'unindexed' });
+    const records = source.records.filter(record => record.requestId === requestId);
+    if (records.length > 256 || records.reduce((n, record) => n + record.length, 0) > 2 * 1024 * 1024) {
+      throw Object.assign(new Error('Scoped evidence exceeds local read limit'), { code: 'local-read-limit' });
+    }
+    const handle = await fs.open(file, 'r');
+    try {
+      const stat = await handle.stat();
+      if (stat.ino !== source.ino) throw new Error('Evidence file changed');
+      const result = [];
+      for (const record of records) {
+        const bytes = Buffer.alloc(record.length);
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, record.start);
+        if (bytesRead !== bytes.length || hash(bytes) !== record.digest) throw new Error('Evidence record changed');
+        const text = publicRecord(JSON.parse(bytes.toString('utf8')), record.provider)?.text;
+        if (typeof text !== 'string') throw new Error('Evidence record unavailable');
+        result.push({ id: record.id, role: record.role, requestId, status: 'available', text });
+      }
+      return result;
+    } finally { await handle.close(); }
+  }
   async retrieve(file, requestId, ids, budget = 8000) {
     const source = this.sources.get(file);
     const results = [];

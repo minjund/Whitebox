@@ -164,6 +164,9 @@ async function commandBoundaryChecks() {
 
 async function main() {
   await require('./terminal-review-decision-test')();
+  await require('./terminal-review-reanalysis-test')();
+  await require('./terminal-review-sequential-test').main();
+  await require('./terminal-review-selection-test').main();
   await require('./terminal-review-context-test')();
   await require('./terminal-review-tools-test')();
   await require('./terminal-review-budget-test')();

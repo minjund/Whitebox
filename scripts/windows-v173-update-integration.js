@@ -1070,7 +1070,14 @@ async function main() {
 
   // These pinned official sources need their production terminal host too:
   // capture mode cannot authenticate or close their startup workspace shells.
-  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10'].includes(SOURCE_VERSION);
+  if (SOURCE_VERSION === '2.0.11') {
+    const officialMain = asar.extractFile(installedAsar, 'main.js').toString('utf8');
+    assert.match(officialMain, /if \(isQuitting \|\| !backgroundWorkloadCount\(\)\) return;\s*event\.preventDefault\(\);\s*mainWindow\.hide\(\);/);
+    assert.match(officialMain, /return backgroundTerminalSessions\(\)\.length \+ backgroundAgentRuns\(\)\.length;/);
+    assert.match(officialMain, /terminalManager = demoCapture\s*\? new TerminalManager\(/);
+    console.log(`PASS official 2.0.11 packaged startup-shell tray policy verified;mainSha256=${crypto.createHash('sha256').update(officialMain).digest('hex')}`);
+  }
+  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11'].includes(SOURCE_VERSION);
   if (workspaceSource) delete process.env.WHITEBOX_DEMO_CAPTURE;
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;

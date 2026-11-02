@@ -44,6 +44,13 @@ module.exports = async function decisionChecks() {
   bad.alternatives = [{ option: '고정 너비', tradeoff: '정렬은 쉽지만 긴 문구가 잘릴 수 있습니다.', when: '문구 길이를 제한할 수 있을 때' },
     { option: '가변 너비', tradeoff: '문구는 보이지만 배치가 바뀔 수 있습니다.', when: '다양한 문구 길이를 지원할 때' }];
   assert.ok(parse(bad).decision);
+  bad.action.kind = 'finish'; bad.action.request = '';
+  assert.ok(parse(bad).decision, 'an explanation can finish while retaining meaningful alternatives');
+  bad.action.text = ''; bad.action.why = '';
+  assert.ok(parse(bad).decision, 'finished explanations do not require repeated completion filler');
+  assert.doesNotMatch(render(parse(bad), { t: value => value, esc: value => value, taskKey: 'finished' }), /wb-decision-action|여기서 마쳐도 돼요/u);
+  bad.action.kind = 'choose';
+  assert.equal(parse(bad).decision, null, 'a requested next action must still have text, rationale and follow-up');
   bad = fixture(); bad.complexity = 'simple'; bad.conclusion = '가'.repeat(180);
   assert.ok(parse(bad).decisionIssues.includes('first-screen length'));
   for (const complexity of ['standard', 'complex']) {

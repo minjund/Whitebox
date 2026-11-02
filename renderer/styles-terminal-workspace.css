@@ -93,11 +93,9 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 .wb-review-state { display: flex; align-items: center; gap: 9px; color: var(--wb-muted); font-size: 13px; }
 .wb-review-state strong { font-weight: 550; font-size: 14px; color: var(--wb-text); }
 .wb-review-state > div { min-width: 0; }
-.wb-review-state span { display: block; margin-top: 5px; line-height: 1.6; }
 .wb-review-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--wb-accent); }
 .wb-review-state.is-loading { padding: 15px; border: 1px solid color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line)); background: color-mix(in srgb, var(--wb-accent) 7%, transparent); border-radius: 9px; align-items: flex-start; gap: 12px; }
 .wb-review-state.is-loading strong { color: var(--wb-accent); font-size: 18px; font-weight: 600; display: block; }
-.wb-review-state.is-loading span { display: block; margin-top: 4px; font-size: 13px; line-height: 1.7; }
 .wb-review-state.is-loading i { width: 18px; height: 18px; margin-top: 4px; flex-shrink: 0; background: transparent; border: 2px solid var(--wb-line); border-top-color: var(--wb-accent); animation: wb-spin 1s linear infinite; }
 @keyframes wb-spin { to { transform: rotate(360deg); } }
 .wb-analysis-placeholder { padding: 18px 0; }

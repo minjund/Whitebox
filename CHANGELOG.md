@@ -3,6 +3,21 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.12 - 2026-11-02
+
+- Preserve relevant implementations, actual caller operations, failures and
+  numeric conditions when selecting terminal-analysis evidence. Keep source
+  identity and verified original spans, and expose bounded recovery limits.
+- Keep checking and explanation requests within their scope, report negative
+  checks without assigning unrequested fixes, and retain conditional repair
+  authorization and the latest restrictions.
+- Reduce analysis retries with consistent uncertainty/action fields and less
+  duplicated follow-up text while retaining citation and length validation.
+- Deliver the explicit final Claude review result after provisional messages;
+  preserve request identity across consecutive analyses and queued sessions.
+- Generate a fresh analysis on explicit reanalysis, keep prior usable results
+  after errors, and show one aligned loading indicator.
+
 ## 2.0.11 - 2026-11-02
 
 - Connect project panels with indented tree branches while preserving panel
