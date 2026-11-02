@@ -279,7 +279,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       cols: Number(session.cols) || 120,
       rows: Number(session.rows) || 32,
     } : null;
-    const inputDisabled = false;
+    const inputDisabled = ['stopped', 'exited', 'failed'].includes(session?.status);
     const { terminal, fit } = engine.createView(host, {
       ...xtermOptions(inputDisabled),
       ...(fixedGrid || {}),
@@ -344,7 +344,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       outputHydrating: !inputDisabled,
       outputSequence: null,
       outputHydrationBuffer: [],
-      comprehensionOutputFilter: !inputDisabled && session?.comprehensionContractInjected === true
+      comprehensionOutputFilter: session?.comprehensionContractInjected === true
         ? createComprehensionOutputFilter(key)
         : null,
     };
@@ -395,7 +395,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       terminal.onResize(size => {
         // Restoring the parser's grid must not resize the live PTY. Its saved
         // ANSI cursor positions still refer to the grid returned by terminalGet.
-        if (entry.outputHydrating) return;
+        if (entry.outputHydrating || inputDisabled) return;
         entry.pendingResize = { cols: size.cols, rows: size.rows };
         if (entry.resizePromise) return;
         entry.resizePromise = (async () => {
@@ -490,7 +490,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   async function ensureSessionTerminal(session) {
     if (!window.WhiteboxTerminalEngine.initialized) await window.WhiteboxTerminalEngine.ready();
     let entry = state.terminals.get(session.id);
-    const inputDisabled = false;
+    const inputDisabled = ['stopped', 'exited', 'failed'].includes(session?.status);
     if (entry && entry.inputDisabled !== inputDisabled) {
       closeRawInputEntry(entry);
       entry.terminal.dispose();

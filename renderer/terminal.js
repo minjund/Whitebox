@@ -283,7 +283,9 @@
       const session = await readTerminalSession(id);
       if (!session) throw new Error('터미널 세션을 찾을 수 없습니다.');
       state.promptReplayCache.set(id, { ...session, replay: String(session.replay || '').slice(-24000) });
-      if (options.requireSessionIdentity && (session.status !== 'running'
+      const stoppedRecord = options.allowStoppedRecord === true && !session.pid && !session.terminationPending && !session.terminationUncertain
+        && ['stopped', 'exited', 'failed'].includes(session.status);
+      if (options.requireSessionIdentity && ((!stoppedRecord && session.status !== 'running')
         || session.creationId !== options.requireSessionIdentity.creationId
         || session.pid !== options.requireSessionIdentity.pid)) {
         throw new Error('The original terminal session is no longer running.');

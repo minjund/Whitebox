@@ -54,7 +54,7 @@ on screen. Narrow windows stack the panels vertically and scroll as needed.
 Switching projects or panels, hiding a terminal, and rearranging splits keep the
 same host PTY, renderer buffer, and terminal DOM node. An empty source panel is
 removed automatically. Layout and selection are saved for renderer reloads.
-Explicit permanent deletion still ends the terminal process. The trash has an
+Moving to trash first confirms session termination, including foreground programs, before removing the panel. A failed stop leaves the panel visible. Stopped output and review records remain and can be restored read-only; restoration never restarts the previous program or creates a replacement shell. Stopped sessions no longer consume the 32-session active limit. Permanent deletion removes retained records. The trash has an
 **휴지통 전체 삭제** action: it confirms the current item count before permanently
 deleting all trashed sessions. It never targets panel members outside the trash.
 If any deletion fails, that item stays in the trash and the result shows the

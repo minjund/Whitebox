@@ -25,19 +25,16 @@ if (!app) {
     try {
       assert(fs.statSync(process.env.WHITEBOX_JEV_LIVE_KEY_FILE).isFile(), 'Encrypted application key file is required.');
       const client = new JevAnalysis({ file: process.env.WHITEBOX_JEV_LIVE_KEY_FILE, secure: safeStorage });
-      const request = 'Add a hidden API key field to settings, show the saved key only on request, and verify that hiding clears the displayed saved key.';
       const examples = [
-        { name: 'fulfilled', expected: 'supported', source: 'USER REQUEST: '+request+'\nASSISTANT REPORT: Implemented the hidden API key field. The Show button reads the encrypted saved key on request. Hide removes the displayed saved key and shows a fixed mask.\nTEST RESULT: All three requirements were tested and passed. No tests were removed. No outstanding requirements or failures remain.' },
-        { name: 'unfulfilled', expected: 'unsupported', source: 'USER REQUEST: '+request+'\nASSISTANT REPORT: No implementation was completed. The API key remains exposed in plain text on opening settings. Show and Hide buttons are missing.\nTEST RESULT: All requested behaviors fail. The user requirements remain unimplemented.' },
+        { name: 'simple-observation', expected: false, request: 'Print the first line of README.txt exactly.', source: 'USER: Print the first line of README.txt exactly.\nTOOL RESULT: first line = Welcome\nASSISTANT: Welcome\nNo interpretation or decision was requested.' },
+        { name: 'interpretation-required', expected: true, request: 'Decide whether this release is ready, using the test evidence.', source: 'USER: Decide whether this release is ready, using the test evidence.\nASSISTANT: All tests passed; ready to release.\nTOOL RESULT: The privacy regression test was deleted without replacement. Encryption remains unverified; a previous run reported plaintext exposure. A later test run passed 12 unrelated tests.' },
       ];
       const checks = await Promise.all(examples.map(async example => {
-        const result = await client.analyze({ request, source: example.source, context: {}, locale: 'en' });
-        const task = result.task;
-        assert.equal(task.analysisProvider, 'jev');
-        assert.equal(Object.keys(task.typedAnalysis.judgments).length, 5);
-        for (const probability of Object.values(task.typedAnalysis.probabilities)) assert(Number.isFinite(probability) && probability >= 0 && probability <= 1);
-        return { name: example.name, expected: example.expected, actual: task.typedAnalysis.judgments.fulfilled, probability: task.typedAnalysis.probabilities.fulfilled,
-          model: task.analysisModel, usage: task.analysisUsage, elapsedMs: result.timings.completedAt - result.timings.modelStartedAt };
+        const result = await client.assessNeed({ request: example.request, source: example.source, context: {} });
+        assert(Number.isFinite(result.probability) && result.probability >= 0 && result.probability <= 1);
+        assert.equal(result.task, undefined, 'screening must not produce a review task');
+        return { name: example.name, expected: example.expected, actual: result.needsAnalysis, probability: result.probability,
+          model: result.model, usage: result.usage, elapsedMs: result.timings.completedAt - result.timings.startedAt };
       }));
       const report = { endpoint: ENDPOINT, evidence: 'synthetic fixtures only; no terminal output', calls: checks.length, elapsedMs: Date.now()-startedAt, checks };
       const output = path.join(root, 'artifacts/settings/jev-live-analysis.json');

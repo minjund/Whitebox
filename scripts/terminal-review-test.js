@@ -185,7 +185,7 @@ async function main() {
   const { codexUsageWindows } = require('../src/providerUsage');
   assert.equal(codexUsageWindows({ primary: { used_percent: 56, window_minutes: 10080 } }).weekly.usedPercent, 56, 'a weekly primary window must not be labeled short-term');
   assert.equal(codexUsageWindows({ primary: { used_percent: 7, window_minutes: 300 }, secondary: { used_percent: 3, window_minutes: 10080 } }).shortWindow.usedPercent, 7);
-  assert.deepEqual(normalizeReviewSettings({ provider: 'invalid', models: { codex: '--help', claude: 'sonnet' } }), { provider: 'auto', models: { codex: '', claude: 'sonnet' } });
+  assert.deepEqual(normalizeReviewSettings({ provider: 'invalid', models: { codex: '--help', claude: 'sonnet' } }), { provider: 'auto', jevEnabled: false, models: { codex: '', claude: 'sonnet' } });
   const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
   const modelDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whitebox-review-models-'));
   try {
