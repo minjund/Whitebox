@@ -5,6 +5,9 @@ GitHub release notes remain the authoritative version history.
 
 ## 2.0.11 - 2026-11-02
 
+- Connect project panels with indented tree branches while preserving panel
+  boxes, colors and interactions. Fit the tree within narrow sidebars.
+
 - Show unread completed AI answers as yellow dots and reviewed answers as green
   dots. Keep acknowledgements stable across delayed observations; new answers
   require review again and update the app icon count.

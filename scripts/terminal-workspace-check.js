@@ -584,6 +584,25 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
     assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
+    const checkProjectTree = async () => {
+      const branches = await evaluate(`Array.from(document.querySelectorAll('#wbSpaces .wb-project-terminals:not([hidden]) > .wb-panel-group'), group => {
+        const rect = group.getBoundingClientRect(), project = group.closest('.wb-project').getBoundingClientRect();
+        const before = getComputedStyle(group, '::before'), after = getComputedStyle(group, '::after');
+        return { visible: before.display !== 'none' && after.content === '\"\"',
+          vertical: before.borderLeftWidth, horizontal: after.borderBottomWidth,
+          ignoresInput: before.pointerEvents === 'none' && after.pointerEvents === 'none',
+          indented: rect.left > project.left + 10,
+          branchInside: rect.left + parseFloat(after.left) >= project.left && rect.right <= project.right + 1 };
+      })`);
+      assert(branches.length > 0, 'project tree must contain panel branches');
+      for (const branch of branches) assert(branch.visible && branch.vertical === '1px' && branch.horizontal === '1px' && branch.ignoresInput && branch.indented && branch.branchInside, JSON.stringify(branch));
+    };
+    for (const theme of ['light', 'dark']) {
+      await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
+      await checkProjectTree();
+    }
+    fs.writeFileSync(process.env.WHITEBOX_TREE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-project-tree.png'), (await win.webContents.capturePage()).toPNG());
+    console.log('PASS project panel tree branches in light/dark themes preserve drag/drop and panel controls');
     assert.equal(await evaluate('document.querySelectorAll(".wb-layout-controls").length'), 0, 'obsolete orientation controls removed');
     await evaluate(`document.querySelector('#wbCanvas [data-solo-terminal="${second.id}"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'one click returns to a single terminal');
@@ -942,6 +961,7 @@ app.whenReady().then(async () => {
       return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height };
     })()`);
     assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 100 && sidebarGeometry.plusHeight >= 30, JSON.stringify(sidebarGeometry));
+    await checkProjectTree();
     await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
     for (const width of [780, 640, 1000]) {
       win.setContentSize(width, 700);
