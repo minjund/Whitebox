@@ -86,8 +86,8 @@ async function prepareCorpus() {
   return corpus;
 }
 
-async function indexCase(item) {
-  const file = path.join(directory, `${item.id}-public-records.jsonl`);
+async function indexCase(item, root = directory) {
+  const file = path.join(root, `${item.id}-public-records.jsonl`);
   const rows = item.records.map((record, index) => ({ type: record.role === 'assistant' ? 'assistant' : 'user', sessionId: 'benchmark', uuid: `fixture-${index}`,
     message: { content: record.role === 'tool' ? [{ type: 'tool_result', content: record.text }] : record.text } }));
   const content = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
@@ -230,4 +230,4 @@ function render(corpus, prepared) {
 }
 
 if (require.main === module) run().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { usage };
+module.exports = { usage, indexCase, sourceFor, renderRecords };
