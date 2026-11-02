@@ -574,10 +574,10 @@ class TerminalReview extends EventEmitter {
     this.persist(id, entry);
     this.emit('changed', { id, value: this.project(entry) });
     Promise.resolve().then(async () => {
-      const evidence = await this.completion.prepareEvidence?.(chunk.source, chunk.context);
+      const evidence = await this.completion.prepareEvidence?.(chunk.source, chunk.context, { request: chunk.request, text: chunk.text });
       if (evidence) {
         active.evidence = evidence;
-        const renderRecords = records => records.map(item => `[${item.id} · ${item.role || 'record'} · ${item.requestId || chunk.source.requestId} · ${item.status}]\n${item.text || ''}`).join('\n');
+        const renderRecords = records => records.map(item => `[${item.id} · ${item.role || 'record'} · ${item.requestId || chunk.source.requestId} · ${item.status}${Number.isInteger(item.start) ? ` · chars ${item.start}-${item.end}` : ''}]\n${item.text || ''}`).join('\n');
         active.relatedEvidence = renderRecords(evidence.prior || []);
         // Earlier user conditions already parsed from this exact linked log are
         // valid reason citations too. Keep task evidenceQuote current-only.
@@ -589,7 +589,7 @@ class TerminalReview extends EventEmitter {
         active.relatedEvidence += '\n' + userConditions.filter(item => typeof item === 'string').join('\n');
         active.retrievals += evidence.readCount;
         currentSource += `\nRECOVERED CURRENT RECORDS (roles identify reported claims vs tool results):\n${renderRecords(evidence.recovered)}`;
-        modelSource = `${currentSource}\nLINKED PRIOR VERIFICATIONS (not current execution):\n${active.relatedEvidence}\nPRIOR CONTEXT:\n${compactContext(chunk.context)}\nEVIDENCE COVERAGE:\n${JSON.stringify({ records: evidence.records, linkedPriorRecords: evidence.linkedRecords, omitted: evidence.omitted, omittedFromInput: evidence.omittedFromInput, skippedBytes: evidence.skippedBytes })}`;
+        modelSource = `${currentSource}\nLINKED PRIOR VERIFICATIONS (not current execution):\n${active.relatedEvidence}\nPRIOR CONTEXT:\n${compactContext(chunk.context)}\nEVIDENCE COVERAGE:\n${JSON.stringify({ records: evidence.records, linkedPriorRecords: evidence.linkedRecords, omitted: evidence.omitted, omittedFromInput: evidence.omittedFromInput, skippedBytes: evidence.skippedBytes, selection: evidence.selection })}`;
         prompt = reviewPrompt(modelSource, entry.locale, chunk.request, chunk.lifecycle);
       }
       if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
@@ -689,7 +689,7 @@ class TerminalReview extends EventEmitter {
             analysisModel: raw?.model || settings.models[provider], ...(active.gate ? { analysisGate: active.gate } : {}), analysisInputChars: prompt.length, qualityPasses,
             analysisMetrics: { ...active.timings, validatedAt: this.now(), publishedAt: this.now(), calls: active.calls, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals, retrievedChars: active.evidence?.readChars || 0,
               deferredAttempts: chunk.deferredAttempts || [], knownCurrentUsage: usage },
-            evidenceCoverage: active.evidence ? { omitted: active.evidence.omitted, omittedFromInput: active.evidence.omittedFromInput, skippedBytes: active.evidence.skippedBytes, unavailable: active.evidence.recovered.filter(item => item.status !== 'available').map(item => item.status) } : null });
+            evidenceCoverage: active.evidence ? { omitted: active.evidence.omitted, omittedFromInput: active.evidence.omittedFromInput, skippedBytes: active.evidence.skippedBytes, selection: active.evidence.selection, unavailable: active.evidence.recovered.filter(item => item.status !== 'available').map(item => item.status) } : null });
       }).catch(error => {
         if (this.entries.get(id) !== entry || entry.revision !== active.revision) return;
         if (error.code === 'REVIEW_RATE_LIMITED') {

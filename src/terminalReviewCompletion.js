@@ -7,6 +7,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const runFile = promisify(execFile);
 const { ReviewEvidenceIndex } = require('./terminalReviewEvidence');
+const { selectRefined } = require('./terminalReviewSelectionCoverage');
 const MAX_READ = 2 * 1024 * 1024;
 const { addCall, addResult, toolEvidence } = require('./terminalReviewTools');
 const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = require('./terminalReviewContext');
@@ -148,9 +149,33 @@ class TerminalReviewCompletion {
     return state;
   }
 
-  async prepareEvidence(source, context) {
+  async prepareEvidence(source, context, query = {}) {
     if (!source) return null;
-    const current = await this.evidence.prepare(source.file, source.requestId);
+    let current;
+    try {
+      const records = await this.evidence.readScoped(source.file, source.requestId);
+      // Bound main-process ranking work separately from the verified disk read.
+      if (records.reduce((n, record) => n + record.text.length, 0) > 256000) {
+        throw Object.assign(new Error('Evidence ranking limit'), { code: 'ranking-limit' });
+      }
+      const selected = selectRefined(records, bounded(query.request, 8000), { budget: 8000, searchContext: bounded(query.text, 12000) });
+      if (selected.readChars > 24000) throw Object.assign(new Error('Protected evidence exceeds prompt limit'), { code: 'protected-prompt-limit' });
+      const manifest = this.evidence.manifest(source.file, source.requestId);
+      const ranked = [...manifest.records].sort((a, b) => Number(b.critical) - Number(a.critical));
+      current = { ...manifest, ...selected,
+        records: ranked.slice(0, 64).map(({ id, role, critical }) => ({ id, role, critical })),
+        readCount: records.length, manifestOmitted: Math.max(0, manifest.records.length - 64),
+        selection: { policy: 'protected-bm25-mmr', budget: selected.budget, protectedChars: selected.protectedChars,
+          budgetOverflow: selected.budgetOverflow, partialDefinitions: selected.partialDefinitions,
+          sourceRecords: records.length, selectedSpans: selected.recovered.length,
+          omittedChars: records.filter(record => record.role === 'tool').reduce((n, record) => n + record.text.length, 0) - selected.readChars } };
+    } catch (error) {
+      // Changed/unavailable/oversized records cannot establish complete coverage.
+      // Preserve bounded, independently verified recovery and expose the limit.
+      current = await this.evidence.prepare(source.file, source.requestId);
+      current.selection = { policy: 'bounded-fallback', incomplete: true,
+        reason: ['unindexed', 'local-read-limit', 'ranking-limit', 'protected-prompt-limit'].includes(error.code) ? error.code : 'changed-or-unreadable' };
+    }
     const prior = [];
     for (const item of (context?.items || []).slice(-6)) {
       if (!item.requestId || item.requestId === source.requestId) continue;
