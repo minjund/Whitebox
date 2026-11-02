@@ -70,3 +70,20 @@
 @media(max-width:1200px){#terminalWorkspace #wbCanvas{margin:20px 20px 16px}.wb-top-actions{gap:3px}.wb-topbar{gap:8px}}
 @media(max-width:850px){#terminalWorkspace #wbCanvas{margin:16px}.wb-top-actions{gap:2px}.wb-topbar{padding-left:12px;padding-right:12px}}
 @media(max-width:640px){#terminalWorkspace #wbCanvas{margin:12px}#terminalWorkspace .wb-panel-members .wb-instance{padding:8px 3px}#terminalWorkspace .wb-panel-group>.wb-panel-add{padding-left:4px;padding-right:4px;font-size:9px}#terminalWorkspace .wb-project-terminals{margin-left:0}#terminalWorkspace .wb-pane>header{padding-left:7px;padding-right:5px}}
+
+/* Project tree: retain the existing panel boxes and their interactions. */
+#terminalWorkspace #wbSpaces .wb-project-terminals{position:relative;margin-left:28px;--wb-tree-branch:14px;--wb-tree-line:color-mix(in srgb,var(--clean-muted) 60%,var(--clean-line))}
+#terminalWorkspace #wbSpaces .wb-project-terminals::before{display:none}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::before{content:'';display:block;position:absolute;left:calc(-1 * var(--wb-tree-branch));top:-13px;bottom:-13px;width:0;height:auto;border:0;border-left:1px solid var(--wb-tree-line);border-radius:0;background:none;pointer-events:none}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group:first-child::before{top:-9px}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group:nth-last-child(2)::before{bottom:auto;height:19px}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group:first-child:nth-last-child(2)::before{height:15px}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::after{content:'';position:absolute;left:calc(-1 * var(--wb-tree-branch));top:6px;width:calc(var(--wb-tree-branch) - 3px);height:14px;border:0;border-left:1px solid var(--wb-tree-line);border-bottom:1px solid var(--wb-tree-line);border-bottom-left-radius:7px;pointer-events:none}
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::before,
+#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::after{transition:border-color 140ms ease}
+#terminalWorkspace #wbSpaces .wb-project:hover .wb-project-terminals,
+#terminalWorkspace #wbSpaces .wb-project:focus-within .wb-project-terminals{--wb-tree-line:color-mix(in srgb,var(--clean-muted) 75%,var(--clean-line))}
+@media(max-width:640px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:20px;--wb-tree-branch:12px}}
+#terminalWorkspace .wb-sidebar{container-type:inline-size}
+@container (max-width:200px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:14px;--wb-tree-branch:10px}#terminalWorkspace .wb-panel-members .wb-instance{padding-left:3px;padding-right:3px;gap:4px}#terminalWorkspace .wb-panel-members .wb-instance-copy{gap:3px}}
+@media(prefers-reduced-motion:reduce){#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::before,#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::after{transition:none}}

@@ -8,11 +8,11 @@ A terminal workspace for AI work, with request-scoped understanding and review b
 
 1. Add a project folder in the left sidebar.
 2. Add a panel to create and display one terminal. Panels have colors, without visible names.
-3. Add a terminal inside a panel to split its existing view. Use the layout controls or drag a terminal when you want a different arrangement; terminals from different panels can share a split view.
-4. Run your CLI in the terminal. A spinning ring indicates work in progress; a green dot indicates a confirmed AI answer. Input/approval waiting remains a separate state.
+3. Add a terminal inside a panel to split its existing view. Drag a terminal when you want a different arrangement, or choose Show only this terminal to return to a single view; terminals from different panels can share a split view.
+4. Run your CLI in the terminal. A spinning ring indicates work in progress; a yellow dot indicates an unread completed answer, which turns green when reviewed. Input/approval waiting remains a separate state.
 5. Use the right-hand review area for the current request or its history. Reviews stay attached to the terminal and the request that produced them.
 
-Deleting an instance moves it to the trash while preserving its running session. Permanent deletion requires a separate action. Resizing, switching panels, and renderer reloads preserve PTY identity and output.
+Moving an instance to trash stops its session and running programs, freeing an active-session slot. Output and review records remain; restoring opens them read-only without restarting programs. Permanent deletion removes the retained records. Resizing, switching panels, and renderer reloads preserve PTY identity and output.
 
 ## Settings and input requests
 

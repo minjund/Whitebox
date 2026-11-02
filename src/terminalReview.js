@@ -1,7 +1,7 @@
 'use strict';
 
 const { EventEmitter } = require('events');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { completedTurn, currentTurnEvidence, isStartupRequest } = require('./terminalReviewTurns');
@@ -61,7 +61,8 @@ function mergeTasks(previous, incoming) {
       for (const candidate of [previousTask, task]) {
         for (const run of candidate.analysisRuns || [candidate]) {
           if (run.analysisId) runs.set(run.analysisId, { analysisId: run.analysisId, observedAt: run.observedAt,
-            analysisUsage: run.analysisUsage, analysisProvider: run.analysisProvider, analysisModel: run.analysisModel });
+            analysisUsage: run.analysisUsage, analysisProvider: run.analysisProvider, analysisModel: run.analysisModel,
+            ...(run.analysisGate ? { analysisGate: run.analysisGate, recordOnly: run.recordOnly } : {}) });
         }
       }
       tasks[index] = runs.size > 1 ? { ...task, analysisRuns: [...runs.values()] } : task;
@@ -286,7 +287,7 @@ class TerminalReview extends EventEmitter {
     const seen = entry.seen[chunk.taskId];
     if (entry.failed?.taskId === chunk.taskId && entry.failed.digest === chunk.digest) return;
     if (entry.failed?.taskId === chunk.taskId) { entry.failed = null; entry.message = ''; }
-    const needsFinalAssessment = chunk.lifecycle === 'completed' && seen?.lifecycle === 'in-progress' && seen.mode === 'automatic';
+    const needsFinalAssessment = chunk.lifecycle === 'completed' && seen?.lifecycle === 'in-progress' && ['automatic', 'screened'].includes(seen.mode);
     const active = entry.active?.chunk;
     if (seen?.digest === chunk.digest && !needsFinalAssessment && (seen.mode !== 'deferred' || seen.lifecycle === chunk.lifecycle)
       || active?.taskId === chunk.taskId && active.digest === chunk.digest && !(active.lifecycle === 'in-progress' && chunk.lifecycle === 'completed')) return;
@@ -502,12 +503,12 @@ class TerminalReview extends EventEmitter {
       && classifyEvidence(entry.pending[0], this.records(), entry.locale).mode === 'analyze');
     let nextRetry = Infinity;
     const available = choices.filter(([id, entry]) => {
-      const selected = this.scheduling.get(id).analysis?.provider;
+      const selected = normalizeReviewSettings(this.scheduling.get(id).analysis).provider;
       const provider = !selected || selected === 'auto' ? entry.provider : selected;
       const until = this.cooldowns.get(provider) || 0;
       entry.retryAt = until > this.now() ? until : null;
       if (entry.retryAt) { nextRetry = Math.min(nextRetry, until); return false; }
-      return provider === 'jev' || this.runner.canGenerateTerminalReview?.() !== false;
+      return this.runner.canGenerateTerminalReview?.() !== false;
     });
     available.sort((a, b) => {
       const priority = item => this.priorityRuns < 3 && (this.scheduling.get(item[0]).force ? 2 : this.scheduling.get(item[0]).foreground ? 1 : 0);
@@ -558,12 +559,31 @@ class TerminalReview extends EventEmitter {
         prompt = reviewPrompt(modelSource, entry.locale, chunk.request, chunk.lifecycle);
       }
       if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
-      active.timings.evidenceReadyAt = this.now(); active.timings.modelStartedAt = this.now(); active.calls++;
-      if (provider === 'jev') {
-        if (!this.jev) throw new Error('Jev 분석 연결을 사용할 수 없습니다.');
-        const result = await this.jev.analyze({ request: chunk.request, source: currentSource, context: { conversation: compactContext(chunk.context), priorChecks: active.relatedEvidence || '' }, lifecycle: chunk.lifecycle, locale: entry.locale });
-        return { jevTask: result.task, model: result.task.analysisModel, usage: result.task.analysisUsage, timings: result.timings };
+      active.timings.evidenceReadyAt = this.now();
+      if (settings.jevEnabled && !this.scheduling.get(id)?.force) {
+        active.timings.gateStartedAt = this.now();
+        const gateContext = { conversation: compactContext(chunk.context), priorChecks: active.relatedEvidence || '' };
+        const gateScope = createHash('sha256').update(JSON.stringify([chunk.request, currentSource, gateContext, chunk.lifecycle])).digest('hex');
+        try {
+          if (chunk.gateDecision?.scope === gateScope) active.gate = chunk.gateDecision.result;
+          else {
+            active.gateCalled = true;
+            if (!this.jev) throw new Error('Jev 선별 연결을 사용할 수 없습니다.');
+            active.gate = { provider: 'jev', ...await this.jev.assessNeed({ request: chunk.request, source: currentSource,
+              context: gateContext, lifecycle: chunk.lifecycle }) };
+            chunk.gateDecision = { scope: gateScope, result: active.gate };
+          }
+        } catch (error) {
+          // An unavailable gate cannot establish that interpretation is unnecessary.
+          active.gate = { provider: 'jev', outcome: 'unavailable', needsAnalysis: true, usage: null, error: clip(error.message, 300) };
+        }
+        active.timings.gateCompletedAt = this.now();
+        if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
+        if (active.gate.needsAnalysis === false && active.gate.outcome === 'not-required') return { screened: true };
       }
+      // Only original/linked records enter this prompt. Jev scores and routing
+      // conclusions are diagnostics, never evidence for an LLM decision.
+      active.timings.modelStartedAt = this.now(); active.calls++;
       let raw = await this.runner.generateTerminalReview({ provider, model: settings.models[provider], prompt });
       active.knownUsage = typeof raw === 'object' ? raw.usage ?? null : null;
       // Optional, bounded request for a specific omitted record. No filesystem or
@@ -594,7 +614,13 @@ class TerminalReview extends EventEmitter {
         const current = await this.manager().get(id, false);
         if (this.entries.get(id) !== entry || entry.revision !== active.revision || !current || terminalKey(current) !== entry.key) return;
         active.timings = { ...active.timings, ...raw?.timings, firstResponseAt: raw?.timings?.firstResponseAt ?? null, resultReceivedAt: this.now() };
-        let parsed = raw.jevTask ? { tasks: [raw.jevTask] } : parseReview(typeof raw === 'string' ? raw : raw.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
+        if (raw.screened) {
+          this.publish(id, entry, chunk, { actual: observedFacts(chunk, entry.locale).join('\n'), alignment: 'not-reviewed', recordOnly: true }, zeroUsage(),
+            { analysisId: randomUUID(), analysisDepth: 'screened', analysisProvider: provider, analysisGate: active.gate,
+              analysisMetrics: { ...active.timings, publishedAt: this.now(), calls: 0, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals } });
+          return;
+        }
+        let parsed = parseReview(typeof raw === 'string' ? raw : raw.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
         let usage = typeof raw === 'object' ? raw.usage ?? null : null;
         let qualityPasses = 1;
         if (parsed.tasks[0]?.decisionIssues?.length && active.calls < 2) {
@@ -626,8 +652,8 @@ class TerminalReview extends EventEmitter {
         // separately and never report the later successful call as the full cost.
         this.publish(id, entry, chunk, task, chunk.deferredAttempts?.length ? null : usage,
           { analysisId: randomUUID(), analysisDepth: 'automatic', analysisProvider: provider,
-            analysisModel: raw?.model || settings.models[provider], analysisInputChars: prompt.length, qualityPasses,
-            analysisMetrics: { ...active.timings, validatedAt: this.now(), publishedAt: this.now(), calls: active.calls, retrievals: active.retrievals, retrievedChars: active.evidence?.readChars || 0,
+            analysisModel: raw?.model || settings.models[provider], ...(active.gate ? { analysisGate: active.gate } : {}), analysisInputChars: prompt.length, qualityPasses,
+            analysisMetrics: { ...active.timings, validatedAt: this.now(), publishedAt: this.now(), calls: active.calls, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals, retrievedChars: active.evidence?.readChars || 0,
               deferredAttempts: chunk.deferredAttempts || [], knownCurrentUsage: usage },
             evidenceCoverage: active.evidence ? { omitted: active.evidence.omitted, omittedFromInput: active.evidence.omittedFromInput, skippedBytes: active.evidence.skippedBytes, unavailable: active.evidence.recovered.filter(item => item.status !== 'available').map(item => item.status) } : null });
       }).catch(error => {
@@ -638,7 +664,8 @@ class TerminalReview extends EventEmitter {
           this.cooldowns.set(provider, until); entry.retryAt = until;
           chunk.rateLimitAttempts = (chunk.rateLimitAttempts || 0) + 1;
           chunk.deferredAttempts = [...(chunk.deferredAttempts || []), { startedAt: active.startedAt, endedAt: this.now(),
-            calls: active.calls, knownUsage: active.knownUsage ?? null, usageUnknown: true, reason: 'rate-limit', retryAt: until }];
+            calls: active.calls, gateCalls: active.gateCalled ? 1 : 0, analysisGate: active.gate || null,
+            knownUsage: active.knownUsage ?? null, usageUnknown: true, reason: 'rate-limit', retryAt: until }];
           if (chunk.rateLimitAttempts < 3) {
             if (!entry.pending.some(item => item.taskId === chunk.taskId)) entry.pending.unshift(chunk);
             entry.failed = null; entry.message = ''; return;

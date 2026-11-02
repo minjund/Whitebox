@@ -3,6 +3,23 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.11 - 2026-11-02
+
+- Connect project panels with indented tree branches while preserving panel
+  boxes, colors and interactions. Fit the tree within narrow sidebars.
+
+- Show unread completed AI answers as yellow dots and reviewed answers as green
+  dots. Keep acknowledgements stable across delayed observations; new answers
+  require review again and update the app icon count.
+- Use Jev only to screen whether interpretation is needed. Claude/Codex produce
+  the actual judgment from original records, with citation validation, separate
+  usage, conservative fallback and migration of previous Jev settings.
+- Stop terminal sessions and foreground programs when moving them to trash,
+  freeing active-session capacity. Restore retained output and review records
+  read-only without restarting programs; keep the panel visible if stop fails.
+- Preserve archive scrolling and copying without sending input to stopped
+  processes. Keep permanent deletion and identity checks separate.
+
 ## 2.0.10 - 2026-10-30
 
 - Return a split workspace to a persistent single-terminal view without

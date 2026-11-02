@@ -6,6 +6,23 @@ const { TerminalManager, killPtyTree } = require('../../src/terminalManager');
 const { TerminalGroups } = require('../../src/terminalGroups');
 
 function registerPtyRecoveryTests({ test, root }) {
+  test('32개 작업 한도에서 세션을 종료하면 기록을 남기고 새 작업을 추가할 수 있다', async () => {
+    let pid = 92000;
+    const manager = new TerminalManager({ platform: 'win32',
+      ptyModule: { spawn: () => ({ pid: ++pid, onData() {}, onExit() {}, write() {}, resize() {} }) },
+      killTree: handle => { handle.__whiteboxExited = true; } });
+    try {
+      const terminals = Array.from({ length: 32 }, (_, index) => manager.create({ type: 'cmd', cwd: root, creationId: `workspace:capacity-${index}` }));
+      assert.throws(() => manager.create({ type: 'cmd', cwd: root }), /최대 32개/);
+      const stopped = await manager.stop(terminals[0].id);
+      assert.equal(stopped.status, 'stopped'); assert.equal(stopped.pid, null);
+      assert.equal(manager.sessions.get(stopped.id).process, null);
+      const next = manager.create({ type: 'cmd', cwd: root, creationId: 'workspace:capacity-next' });
+      assert.equal(next.status, 'running');
+      assert.equal(manager.list().length, 33, 'stopped history may remain without using an active slot');
+      assert.equal(manager.list().filter(session => session.status === 'running').length, 32);
+    } finally { await manager.dispose(); }
+  });
   test('종료 ack를 보존한 POSIX PTY는 신호 없이 그룹 부재를 재확인하고 살아 있는 그룹은 차단한다', async () => {
     const calls = [];
     let present = true;

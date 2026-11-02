@@ -4,12 +4,19 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ['Jev로 분석 필요 여부 선별', 'Screen analysis needs with Jev', '用 Jev 筛选分析需求'],
+  ['필요한 경우 선택한 AI가 원문 근거로 판단합니다.', 'When needed, the selected AI reviews the original evidence.', '需要时，由所选 AI 根据原始记录进行判断。'],
+  ['API 키를 저장하면 Jev 선별을 켭니다. Jev는 작업 기록을 받아 분석 필요 여부만 선별하고, 필요한 경우 선택한 Claude 또는 Codex가 원문 근거로 판단합니다.', 'Saving an API key enables Jev screening. Jev screens whether the work record needs analysis; the selected Claude or Codex reviews the original evidence when needed.', '保存 API 密钥后启用 Jev 筛选。Jev 仅判断工作记录是否需要分析；需要时由所选 Claude 或 Codex 根据原始证据进行判断。'],
+  ['Jev 선별 켜짐 · 판단: ', 'Jev screening on · Reviewer: ', 'Jev 筛选已开启 · 判断模型：'],
+  ['Jev 선별 꺼짐 · 판단: ', 'Jev screening off · Reviewer: ', 'Jev 筛选已关闭 · 判断模型：'],
+  ['LLM 호출 없음', 'No LLM call', '未调用 LLM'],
+  ['LLM 분석 없이 작업 기록 표시', 'Work record shown without LLM analysis', '未进行 LLM 分析，仅显示工作记录'],
+  ['이전 Jev 기록 · 재검토 필요', 'Previous Jev record · review needed', '旧 Jev 记录 · 需要重新审查'],
+  ['이전 Jev 결과에는 LLM 판단이 없습니다. 다시 검토해 주세요.', 'This previous Jev result has no LLM judgment. Run review again.', '此旧 Jev 结果不包含 LLM 判断，请重新审查。'],
+  ['분석 필요 여부 선별 사용량입니다. LLM 판단 사용량과 별도입니다.', 'Usage for screening analysis needs, separate from LLM review usage.', '分析需求筛选的用量，与 LLM 判断用量分开计算。'],
   ['이 터미널만 보기', 'Show only this terminal', '仅显示此终端'],
+  ['확인 완료', 'Reviewed', '已查看'],
   ['답변 완료', 'Answer complete', '回答完成'],
-  ['API 키를 저장하면 판단 분석에 Jev를 자동으로 사용합니다. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.', 'Saving an API key automatically selects Jev for judgment analysis. Linked task records are sent to TypeSafe to assess support, coverage changes, recovery and repeated checks.', '保存 API 密钥后，自动使用 Jev 进行判断分析。相关任务记录会发送给 TypeSafe，以判断证据、验证范围变化、恢复和重复检查。'],
-  ['현재 분석 서비스: ', 'Current analysis service: ', '当前分析服务：'],
-  ['. Jev를 사용하려면 분석 설정에서 선택하세요.', '. Select Jev in analysis settings to use it.', '。如需使用 Jev，请在分析设置中选择。'],
-  ['Jev를 분석 서비스로 사용합니다.', 'Jev is selected as the analysis service.', '已选择 Jev 作为分析服务。'],
   ['분석 설정', 'Analysis settings', '分析设置'],
   ['보기', 'Show', '显示'],
   ['저장된 API 키를 확인할 수 없습니다. 다시 저장해 주세요.', 'Could not read the saved API key. Please save it again.', '无法读取已保存的 API 密钥，请重新保存。'],
@@ -76,9 +83,7 @@
   ['분리된 패널', 'Separate panel', '独立面板'],
   ["이 패널 함께 보기", "Show this panel alongside", "同时显示此面板"],
   ["함께 보기 해제", "Unpin panel", "取消固定面板"],
-  ["Jev · 판단 분석", "Jev · Typed analysis", "Jev · 结构化分析"],
   ["Jev 플러그인", "Jev plugin", "Jev 插件"],
-  ["API 키를 저장한 뒤 분석 서비스에서 Jev를 선택하세요. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.", "Save an API key, then select Jev as the analysis service. Linked task records are sent to TypeSafe to assess support, coverage changes, recovery and repeated checks.", "保存 API 密钥后，在分析服务中选择 Jev。相关任务记录会发送给 TypeSafe，以判断证据、验证范围变化、恢复和重复检查。"],
   ["API 키", "API key", "API 密钥"],
   ["키 저장", "Save key", "保存密钥"],
   ["연결 해제", "Disconnect", "断开连接"],
@@ -572,11 +577,14 @@
     "Trash",
     "回收站"
   ],
-  [
-    "삭제한 인스턴스는 실행 상태를 유지합니다. 휴지통에 있는 동안 자동 이해·검토는 멈춥니다.",
-    "Trashed instances keep running. Automatic review pauses while they are in the trash.",
-    "移入回收站的会话保持运行，期间自动审查暂停。"
-  ],
+  ['휴지통으로 옮기면 실행 중인 세션과 프로그램이 종료됩니다. 출력과 검토 기록은 남으며, 복원해도 프로그램을 다시 실행하지 않습니다.', 'Moving to trash stops the session and its programs. Output and review records remain; restoring does not restart programs.', '移入回收站会终止会话及其程序。输出和审查记录会保留；恢复时不会重新启动程序。'],
+  ['종료하고 휴지통으로 이동', 'Stop and move to trash', '终止并移入回收站'],
+  ['세션 종료됨 · 출력과 검토 기록 보관', 'Session stopped · output and review records kept', '会话已终止 · 保留输出和审查记录'],
+  ['종료된 기록', 'Stopped records', '已终止的记录'],
+  ['종료된 기록 복원', 'Restore stopped records', '恢复已终止的记录'],
+  ['종료된 터미널 기록 · 읽기 전용', 'Stopped terminal records · read only', '已终止的终端记录 · 只读'],
+  ['터미널 세션이 바뀌어 종료하지 않았습니다.', 'The terminal identity changed; it was not stopped.', '终端身份已改变，未终止该会话。'],
+  ['세션 종료를 확인하지 못해 휴지통으로 옮기지 않았습니다.', 'The session could not be confirmed stopped, so it was not moved to trash.', '无法确认会话已终止，因此未移入回收站。'],
   [
     "인스턴스를 영구 삭제할까요?",
     "Permanently delete this instance?",

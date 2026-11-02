@@ -152,7 +152,7 @@
       let remainder = 0, lastAt = 0, lastMode = '';
       this.backend.attachCustomWheelEventHandler(event => {
         if (event.ctrlKey || event.metaKey || !Number.isFinite(event.deltaY)) return true;
-        const tracking = this.wasmTerm.hasMouseTracking() && !event.shiftKey;
+        const tracking = !this.options.disableStdin && this.wasmTerm.hasMouseTracking() && !event.shiftKey;
         const alternate = this.wasmTerm.isAlternateScreen();
         const mode = `${tracking}:${alternate}:${event.deltaMode}`;
         const now = performance.now();
@@ -170,7 +170,7 @@
               shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
             }));
           }
-        } else if (alternate) {
+        } else if (alternate && !this.options.disableStdin) {
           for (let step = 0; step < Math.abs(lines); step++) this.backend.input(lines < 0 ? '\x1b[A' : '\x1b[B', true);
         } else if (lines) this.scrollLines(lines);
         return true;

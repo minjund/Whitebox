@@ -42,7 +42,7 @@
   let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
-  let analysisSettings = { provider: 'auto', models: { claude: '', codex: '' } };
+  let analysisSettings = { provider: 'auto', jevEnabled: false, models: { claude: '', codex: '' } };
   let jevConfigured = false, jevSaveTask = null;
   let jevViewingSavedKey = false, jevRevealBusy = false, jevRevealGeneration = 0;
   let modelCatalog = { claude: [], codex: [] };
@@ -64,6 +64,7 @@
   }
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
   const workStates = new Map();
+  const acknowledgedCompletions = new Map();
   const root = document.createElement('div');
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
@@ -133,8 +134,9 @@
       </section>
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
+        <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
-          <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="jev">Jev · 판단 분석</option></select></div>
+          <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
           <label data-model-row="claude">Claude 모델 <select id="wbClaudeModel"></select></label>
           <label id="wbClaudeCustomRow" hidden>모델 ID <input id="wbClaudeCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
           <label data-model-row="codex">Codex 모델 <select id="wbCodexModel"></select></label>
@@ -146,14 +148,14 @@
       </section>
       <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
         <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
-        <section class="wb-analysis-settings" id="wbJevSettings" role="group" aria-labelledby="wbJevHeading"><h4 id="wbJevHeading">Jev 플러그인 <span id="wbJevSavedBadge" hidden>API 키 저장됨</span></h4><p>API 키를 저장하면 판단 분석에 Jev를 자동으로 사용합니다. 요청과 연결된 작업 기록을 TypeSafe에 전송해 근거 충족 여부·검증 범위 변화·복구·중복 확인을 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key" aria-describedby="wbJevStatus"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status" aria-live="polite"></p><div class="wb-jev-usage"><p id="wbJevUsage"></p><button type="button" id="wbJevAnalysisSettings" data-settings-section="analysis">분석 설정</button></div></section>
+        <section class="wb-analysis-settings" id="wbJevSettings" role="group" aria-labelledby="wbJevHeading"><h4 id="wbJevHeading">Jev 플러그인 <span id="wbJevSavedBadge" hidden>API 키 저장됨</span></h4><p>API 키를 저장하면 Jev 선별을 켭니다. Jev는 작업 기록을 받아 분석 필요 여부만 선별하고, 필요한 경우 선택한 Claude 또는 Codex가 원문 근거로 판단합니다.</p><label for="wbJevKey">API 키</label><div class="wb-key-input"><input id="wbJevKey" type="password" autocomplete="off" placeholder="TypeSafe API key" aria-describedby="wbJevStatus"/><span id="wbJevReveal"></span></div><div class="wb-jev-actions"><span id="wbJevSave"><button type="button" data-action="jev-save">키 저장</button></span><span id="wbJevRemove"><button type="button" data-action="jev-remove">연결 해제</button></span></div><p id="wbJevStatus" role="status" aria-live="polite"></p><div class="wb-jev-usage"><p id="wbJevUsage"></p><button type="button" id="wbJevAnalysisSettings" data-settings-section="analysis">분석 설정</button></div></section>
       </section>
       <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
       </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
     </form></dialog>
     <dialog id="wbFollowup"><form method="dialog"><header><h2>다음 요청 준비</h2><button aria-label="닫기">${icon('close')}</button></header><p>내용을 확인하고 복사해 터미널에 붙여 넣으세요. 자동으로 전송하지 않습니다.</p><label for="wbFollowupText">요청 내용</label><textarea id="wbFollowupText" rows="7"></textarea><p id="wbFollowupStatus" role="status"></p><div class="wb-dialog-actions"><button type="button" data-action="copy-followup">요청 복사</button><button value="close">닫기</button></div></form></dialog>
     <dialog id="wbRemoveProject"><form method="dialog"><h2>프로젝트를 목록에서 삭제할까요?</h2><p id="wbRemoveDescription"></p><p>실제 프로젝트 폴더와 파일은 그대로 남습니다.</p><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="remove" class="wb-danger">프로젝트 삭제</button></div></form></dialog>
-    <dialog id="wbTrash"><header><h2>인스턴스 휴지통</h2><button data-action="trash-close" aria-label="휴지통 닫기">${icon('close')}</button></header><p>삭제한 인스턴스는 실행 상태를 유지합니다. 휴지통에 있는 동안 자동 이해·검토는 멈춥니다.</p><div id="wbTrashList"></div><p id="wbTrashNotice" role="status"></p><div class="wb-dialog-actions"><button data-action="trash-empty" class="wb-danger" disabled>휴지통 전체 삭제</button></div></dialog>
+    <dialog id="wbTrash"><header><h2>인스턴스 휴지통</h2><button data-action="trash-close" aria-label="휴지통 닫기">${icon('close')}</button></header><p>휴지통으로 옮기면 실행 중인 세션과 프로그램이 종료됩니다. 출력과 검토 기록은 남으며, 복원해도 프로그램을 다시 실행하지 않습니다.</p><div id="wbTrashList"></div><p id="wbTrashNotice" role="status"></p><div class="wb-dialog-actions"><button data-action="trash-empty" class="wb-danger" disabled>휴지통 전체 삭제</button></div></dialog>
     <dialog id="wbEmptyTrash"><form method="dialog"><h2>휴지통을 비울까요?</h2><p id="wbEmptyTrashDescription"></p><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="empty" class="wb-danger">전체 영구 삭제</button></div></form></dialog>
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
@@ -210,11 +212,11 @@
     $('#wbJevSave button').disabled = busy || jevRevealBusy || jevViewingSavedKey || !$('#wbJevKey').value.trim();
     $('#wbJevRemove button').disabled = busy || !jevConfigured;
     $('#wbSettingsDone button').disabled = busy;
-    const provider = { auto: t('터미널과 같은 서비스'), claude: 'Claude', codex: 'Codex', jev: 'Jev' }[analysisSettings.provider];
-    $('#wbJevUsage').textContent = analysisSettings.provider === 'jev'
-      ? t('Jev를 분석 서비스로 사용합니다.')
-      : msg`현재 분석 서비스: ${provider}. Jev를 사용하려면 분석 설정에서 선택하세요.`;
-    $('#wbJevAnalysisSettings').hidden = analysisSettings.provider === 'jev';
+    const provider = { auto: t('터미널과 같은 서비스'), claude: 'Claude', codex: 'Codex' }[analysisSettings.provider];
+    $('#wbJevEnabled').checked = analysisSettings.jevEnabled;
+    $('#wbJevEnabled').disabled = !jevConfigured || busy;
+    $('#wbJevUsage').textContent = (analysisSettings.jevEnabled ? t('Jev 선별 켜짐 · 판단: ') : t('Jev 선별 꺼짐 · 판단: ')) + provider;
+    $('#wbJevAnalysisSettings').hidden = false;
   }
   function showJevStatus(value) {
     jevConfigured = value.configured === true;
@@ -264,11 +266,8 @@
         jevViewingSavedKey = false;
         $('#wbJevKey').value = ''; $('#wbJevKey').type = 'password'; renderJevReveal();
         showJevStatus(result);
-        if (!remove && result.configured) {
-          analysisSettings.provider = 'jev'; save(); renderModelSettings();
-        } else if (!result.configured && analysisSettings.provider === 'jev') {
-          analysisSettings.provider = 'auto'; save(); renderModelSettings();
-        }
+        analysisSettings.jevEnabled = !remove && result.configured;
+        save(); renderModelSettings(); renderJevControls();
         return true;
       } catch (error) {
         $('#wbJevStatus').textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
@@ -453,7 +452,8 @@
         for (const candidate of [tasks[index], task]) {
           for (const run of candidate.analysisRuns || [candidate]) {
             if (run.analysisId) runs.set(run.analysisId, { analysisId: run.analysisId, observedAt: run.observedAt,
-              analysisUsage: run.analysisUsage, analysisProvider: run.analysisProvider, analysisModel: run.analysisModel });
+              analysisUsage: run.analysisUsage, analysisProvider: run.analysisProvider, analysisModel: run.analysisModel,
+              ...(run.analysisGate ? { analysisGate: run.analysisGate, recordOnly: run.recordOnly } : {}) });
           }
         }
         tasks[index] = runs.size > 1 ? { ...task, analysisRuns: [...runs.values()] } : task;
@@ -487,7 +487,10 @@
     if (session.status === 'running') {
       const activity = workStates.get(id);
       if (activity?.creationId === session.creationId && activity.pid === session.pid && Date.now() - activity.observedAt < 5000) {
-        if (activity.state === 'idle' && activity.completed) return { state: 'completed', label: t('답변 완료') };
+        if (activity.state === 'idle' && activity.completed) return activity.unreadCompletionId
+          && acknowledgedCompletions.get(id) !== activity.unreadCompletionId
+          ? { state: 'needs-review', label: t('확인 필요') }
+          : { state: 'completed', label: t('확인 완료') };
         const labels = { working: '작업 중', idle: '입력 대기', waiting: '사용자 응답 대기', unknown: '작업 상태 확인 중' };
         return { state: activity.state, label: t(labels[activity.state] || labels.unknown) };
       }
@@ -595,7 +598,7 @@
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
-        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="휴지통으로 이동" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
+        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
       }).join('')}</div><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널 추가')}</span></button></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('panel')} <span>패널 추가</span>${icon('plus')}<small>여기로 끌어 분리</small></button>`;
   }
@@ -636,7 +639,16 @@
     if (!activity?.unreadCompletionId || !api.terminalCompletionRead) return;
     const completionId = activity.unreadCompletionId;
     api.terminalCompletionRead({ id, creationId: activity.creationId, pid: activity.pid, completionId })
-      .then(() => { if (activity.unreadCompletionId === completionId) delete activity.unreadCompletionId; })
+      .then(() => {
+        const current = workStates.get(id);
+        if (current?.creationId !== activity.creationId || current?.pid !== activity.pid
+          || current.unreadCompletionId !== completionId) return;
+        // An observation already in flight may still contain this unread token.
+        // Keep its acknowledgement until the next answer supplies a new token.
+        acknowledgedCompletions.set(id, completionId);
+        delete current.unreadCompletionId;
+        refreshPaneChrome(); renderInstances();
+      })
       .catch(error => report(error, 'completion'));
   }
 
@@ -746,7 +758,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="휴지통으로 이동" aria-label="이 인스턴스를 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="종료하고 휴지통으로 이동" aria-label="종료하고 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -756,6 +768,8 @@
     node.addEventListener('wheel', () => acknowledgeCompletion(session.id), { capture: true, passive: true });
     pane.promise = terminal.mountTerminal(session.id, node.querySelector('.wb-terminal-mount'), {
       requireSessionIdentity: restoring ? { creationId: session.creationId, pid: session.pid } : null,
+      allowStoppedRecord: restoring && !session.pid && ['stopped', 'exited', 'failed'].includes(session.status),
+      inputLabel: !session.pid && session.status === 'stopped' ? t('종료된 터미널 기록 · 읽기 전용') : undefined,
       onUserInput: data => {
         if (autoReview && !trashed(session.id) && ['awaiting-answer', 'collecting', 'reviewing'].includes(reviews.get(session.id)?.state)
           && (data === '\x03' || data === '\x1b' && /esc to (?:interrupt|cancel)/iu.test(terminal.readTerminal(session.id)))) {
@@ -936,9 +950,14 @@
   }
 
   function trashed(id) { return trash.some(item => item.id === id && trashSession(item)); }
+  function archiveIdentityMatches(session, item) {
+    return Boolean(session && session.creationId === item.creationId && (item.sessionStopped
+      ? !session.pid && !session.terminationPending && !session.terminationUncertain && ['stopped', 'exited', 'failed'].includes(session.status)
+      : !item.pid || session.pid === item.pid));
+  }
   function trashSession(item) {
     const session = sessions.get(item.id);
-    return session?.creationId === item.creationId ? session : null;
+    return archiveIdentityMatches(session, item) ? session : null;
   }
   function renderTrash() {
     $('#wbTrashCount').textContent = String(trash.length);
@@ -946,8 +965,8 @@
     $('#wbTrashList').innerHTML = [...trash].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)).map(item => {
       const session = trashSession(item);
       const provider = item.provider === 'claude' ? 'Claude' : item.provider === 'codex' ? 'Codex' : t('일반 셸');
-      const restorable = session?.status === 'running';
-      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${restorable ? '' : 'disabled'} aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restorable ? msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div></article>`;
+      const restorable = session?.status === 'running' || item.sessionStopped && Boolean(session);
+      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? item.sessionStopped ? t('세션 종료됨 · 출력과 검토 기록 보관') : session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${restorable ? '' : 'disabled'} aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restorable ? item.sessionStopped ? t('종료된 기록 복원') : msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div></article>`;
     }).join('') || t('<div class="wb-trash-empty">휴지통이 비어 있습니다.</div>');
   }
 
@@ -957,16 +976,40 @@
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     const session = sessions.get(id);
     if (!target || !session) return;
-    trash.push({ id, creationId: session.creationId, pid: session.pid, name: title(id), provider: reviews.get(id)?.provider || '', projectId: owner.id,
-      review: retainReview(session, reviews.get(id)), projectName: owner.name, standalone: owner.standalone === true, cwd: owner.cwd, deletedAt: new Date().toISOString() });
-    detachFromLayout(id);
-    renderLayout();
-    // Invalidates any pending review result without sending new model work.
-    try { const review = await api.terminalReview?.({ id, creationId: session.creationId, enabled: false });
-      const item = trash.find(item => item.id === id);
-      if (item && review?.provider) { item.provider = review.provider; item.providerPid = review.providerPid; save(); renderTrash(); }
-    }
-    catch (error) { report(error); }
+    const item = { id, creationId: session.creationId, pid: session.pid, sourcePid: session.pid || savedReview(session)?.sourcePid || null,
+      name: title(id), provider: reviews.get(id)?.provider || '', projectId: owner.id,
+      review: retainReview(session, reviews.get(id)), projectName: owner.name,
+      standalone: owner.standalone === true, cwd: owner.cwd, deletedAt: new Date().toISOString() };
+    busy = true; renderNav();
+    try {
+      const live = await api.terminalGet(id);
+      if (live) {
+        if (live.creationId !== item.creationId || live.pid !== item.pid) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
+        const stopped = await api.terminalStop(id);
+        if (stopped?.creationId !== item.creationId || stopped.pid || stopped.status !== 'stopped'
+          || stopped.terminationPending || stopped.terminationUncertain) throw new Error(t('세션 종료를 확인하지 못해 휴지통으로 옮기지 않았습니다.'));
+        const current = await api.terminalGet(id);
+        item.sessionStopped = true; item.pid = null;
+        if (current && !archiveIdentityMatches(current, item)) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
+        if (current) sessions.set(id, current); else sessions.delete(id);
+        if (item.review) {
+          item.review = { ...item.review, pid: null, sourcePid: item.sourcePid, archived: true };
+          reviewHistory.set(id, item.review);
+        }
+      } else {
+        if (session.pid || session.terminationPending || session.terminationUncertain || !['stopped', 'exited', 'failed'].includes(session.status)) {
+          throw new Error(t('세션 종료를 확인하지 못해 휴지통으로 옮기지 않았습니다.'));
+        }
+        item.sessionStopped = true; item.pid = null; sessions.delete(id);
+      }
+      trash.push(item);
+      const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove(); panes.delete(id);
+      detachFromLayout(id); renderLayout();
+      // No model work is requested for a stopped archive.
+      try { await api.terminalReview?.({ id, creationId: item.creationId, enabled: false }); }
+      catch (error) { report(error); }
+    } catch (error) { report(error, 'trash'); }
+    finally { busy = false; renderNav(); renderTrash(); }
   }
 
   async function restoreInstance(id) {
@@ -976,17 +1019,16 @@
     busy = true;
     try {
       // Verify the host's current identity, not a possibly stale renderer list.
-      // Restoring must never spawn a replacement shell or reconnect a dead PTY.
+      // Restoring stopped records is read-only; never spawn a shell or reconnect a dead PTY.
       const session = await api.terminalGet(item.id);
-      if (!session || session.creationId !== item.creationId || session.status !== 'running'
-        || (item.pid && session.pid !== item.pid)) {
+      if (!archiveIdentityMatches(session, item) || !item.sessionStopped && session.status !== 'running') {
         throw new Error(t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.'));
       }
       sessions.set(session.id, session);
       await ensurePane(session, true);
       if (item.review?.creationId === session.creationId && item.review?.pid === session.pid && Array.isArray(item.review?.result?.tasks)) reviewHistory.set(session.id, item.review);
       const history = savedReview(session);
-      if (history) reviews.set(session.id, { state: 'watching', provider: history.provider, providerPid: history.providerPid, result: history.result, restored: true });
+      if (history) reviews.set(session.id, { state: session.status === 'stopped' ? 'archived' : 'watching', provider: history.provider, providerPid: history.providerPid, result: history.result, restored: true });
       let owner = item.standalone ? standalone : spaces.find(owner => owner.id === item.projectId) || spaces.find(owner => owner.cwd === item.cwd);
       if (!owner) {
         owner = { id: uuid(), cwd: item.cwd, name: item.projectName, tabs: [], activeTab: '', nextNumber: 1 };
@@ -1007,7 +1049,7 @@
     if (!trash.includes(item)) return;
     const live = await api.terminalGet(item.id);
     if (live) {
-      if (live.creationId !== item.creationId || (item.pid && live.pid !== item.pid)) {
+      if (!archiveIdentityMatches(live, item)) {
         throw new Error(t('터미널 세션이 바뀌어 삭제하지 않았습니다.'));
       }
       await api.terminalClose(item.id);
@@ -1088,9 +1130,11 @@
       : task.observedAt === result.observedAt ? result.usage : null;
     const known = typeof usage?.total === 'number' && Number.isFinite(usage.total) && usage.total >= 0;
     const number = value => Number.isFinite(value) && value >= 0 ? value.toLocaleString(window.WhiteboxI18n.getLocaleTag()) : '—';
-    const label = task.recordOnly ? t('0 토큰 · 호출 없음') : known ? `${number(usage.total)} ${t('토큰')}` : t('토큰 미제공');
+    const label = task.typedAnalysis || task.analysisProvider === 'jev' ? `Jev ${known ? number(usage.total) + ' ' + t('토큰') : t('토큰 미제공')}` : task.recordOnly ? t(task.analysisGate ? 'LLM 호출 없음' : '0 토큰 · 호출 없음') : known ? `${number(usage.total)} ${t('토큰')}` : t('토큰 미제공');
     const detail = known ? `${t('터미널 작업 토큰을 제외한 Whitebox 이해·검토 생성 토큰입니다.')} ${t('입력')} ${number(usage.input)} · ${t('출력')} ${number(usage.output)} · ${t('캐시 읽기')} ${number(usage.cachedInput)} · ${t('캐시 쓰기')} ${number(usage.cacheWrite)}` : t('이 분석의 토큰 사용량이 기록되지 않았습니다.');
-    return `<span class="wb-analysis-tokens" ${inSummary ? '' : 'tabindex="0"'} title="${esc(detail)}" aria-label="${esc(`${label}. ${detail}`)}">${esc(label)}</span>`;
+    const gateUsage = task.analysisGate?.usage;
+    const gateLabel = task.analysisGate ? `Jev ${Number.isFinite(gateUsage?.total) ? number(gateUsage.total) + ' ' + t('토큰') : t('토큰 미제공')}` : '';
+    return `<span class="wb-analysis-tokens" ${inSummary ? '' : 'tabindex="0"'} title="${esc(detail)}" aria-label="${esc(`${label}. ${detail}`)}">${esc(label)}</span>${gateLabel ? `<span class="wb-analysis-tokens" title="${esc(t('분석 필요 여부 선별 사용량입니다. LLM 판단 사용량과 별도입니다.'))}">${esc(gateLabel)}</span>` : ''}`;
   }
 
   function renderModelSettings() {
@@ -1106,6 +1150,7 @@
       $(`#wb${name}CustomRow`).hidden = select.value !== 'custom' || $(`[data-model-row="${provider}"]`).hidden;
     }
   }
+  $('#wbJevEnabled').addEventListener('change', event => { analysisSettings.jevEnabled = jevConfigured && event.target.checked; save(); renderJevControls(); });
   $('#wbAnalysisProvider').addEventListener('change', event => { analysisSettings.provider = event.target.value; save(); renderModelSettings(); renderJevControls(); });
   for (const provider of ['claude', 'codex']) {
     const name = provider === 'claude' ? 'Claude' : 'Codex';
@@ -1139,13 +1184,14 @@
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
-    const analyst = value?.result?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
-    $('#wbReviewModel').textContent = autoReview ? `${{ claude: 'Claude', codex: 'Codex', jev: 'Jev' }[analyst] || t('자동 분석')}${value?.result?.analysisModel ? ` · ${value.result.analysisModel}` : ''}` : t('자동 분석 꺼짐');
+    const latestAnalysis = value?.result?.tasks?.at(-1);
+    const analyst = !latestAnalysis?.typedAnalysis && latestAnalysis?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
+    $('#wbReviewModel').textContent = autoReview ? `${{ claude: 'Claude', codex: 'Codex' }[analyst] || t('자동 분석')}${!latestAnalysis?.typedAnalysis && latestAnalysis?.analysisModel ? ` · ${latestAnalysis.analysisModel}` : ''}` : t('자동 분석 꺼짐');
     const state = !autoReview ? 'paused' : value?.state || 'watching';
     const analyzing = state === 'reviewing';
     const rateLimited = value?.retryAt > Date.now();
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(state);
-    const states = { 'awaiting-answer': t('작업 관찰 중'), paused: t('자동 검토 꺼짐'), watching: t('새 요청을 기다리는 중'), collecting: t('분석 대기'), shell: t('셸 사용 중'), unbound: t('연결 확인 필요'), reviewing: t('분석중…'), ready: t('이번 요청 검토 완료'), error: t('검토를 완료하지 못했습니다') };
+    const states = { archived: t('종료된 기록'), 'awaiting-answer': t('작업 관찰 중'), paused: t('자동 검토 꺼짐'), watching: t('새 요청을 기다리는 중'), collecting: t('분석 대기'), shell: t('셸 사용 중'), unbound: t('연결 확인 필요'), reviewing: t('분석중…'), ready: t('이번 요청 검토 완료'), error: t('검토를 완료하지 못했습니다') };
     const activity = $('#wbReviewActivity');
     activity.hidden = !['awaiting-answer', 'collecting', 'reviewing', 'error', 'unbound'].includes(state);
     const activityLabel = state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state];
@@ -1177,19 +1223,18 @@
         const time = Number.isFinite(observed.getTime()) ? `<time class="wb-task-time" datetime="${observed.toISOString()}" title="${esc(observed.toLocaleString(window.WhiteboxI18n.getLocaleTag()))}">${esc(observed.toLocaleTimeString(window.WhiteboxI18n.getLocaleTag(), { hour: '2-digit', minute: '2-digit' }))}</time>` : '';
         const lifecycleLabel = task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록') : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';
         const lifecycle = lifecycleLabel ? `<p class="wb-record-label">${lifecycleLabel}</p>` : '';
-        if (task.recordOnly) {
-          const record = msg`<article class="wb-task wb-record-only"><div class="wb-task-title"><h2>${esc(task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}${lifecycle}<p class="wb-record-label">${t(task.deferred ? "근거가 확보되면 분석합니다" : "AI 분석 없이 기록")}</p><p>${esc(task.actual)}</p></article>`;
+        if (task.recordOnly || task.typedAnalysis) {
+          const record = msg`<article class="wb-task wb-record-only"><div class="wb-task-title"><h2>${esc(task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}${lifecycle}<p class="wb-record-label">${t(task.typedAnalysis ? "이전 Jev 기록 · 재검토 필요" : task.analysisGate ? "LLM 분석 없이 작업 기록 표시" : task.deferred ? "근거가 확보되면 분석합니다" : "AI 분석 없이 기록")}</p><p>${esc(task.typedAnalysis ? t('이전 Jev 결과에는 LLM 판단이 없습니다. 다시 검토해 주세요.') : task.actual)}</p></article>`;
           return index === 0 ? record : msg`<details class="wb-history" data-review-request="${esc(taskKey)}"><summary><strong>${esc(task.request)}</strong>${analysisTokens(task, value.result, true)}</summary>${record}</details>`;
         }
         const checks = task.reviewSchema === 3
           ? `${task.verification ? `<div class="wb-task-section"><h3>${t('확인된 근거')}</h3><p>${esc(task.verification)}</p></div>` : ''}${task.unverified?.length ? `<div class="wb-remaining"><h3>${t('완료 판단에 필요한 확인')}</h3>${task.unverified.map(item => `<p><strong>${esc(item.item)}</strong><br/>${esc(item.reason)}</p>`).join('')}</div>` : ''}`
           : `${task.verification ? `<div class="wb-task-section"><h3>${t('기록에서 확인한 범위')}</h3><p>${esc(task.verification)}</p></div>` : ''}`;
-        const typed = task.typedAnalysis ? `<section class="wb-task-section wb-typed-analysis"><h3>Jev · ${t('판단 요약')}</h3><p>${esc(task.actual)}</p>${task.typedAnalysis.findings.map(item => `<p>${esc(item.text)}</p>`).join('')}<details><summary>${t('판단의 근거 기록')}</summary><blockquote>${esc(task.evidenceQuote)}</blockquote><pre>${esc(JSON.stringify(task.typedAnalysis.probabilities, null, 2))}</pre></details></section>` : '';
+
         const brief = window.WhiteboxReviewDecision.render(task, { t, esc, taskKey });
         const card = msg`<article class="wb-task">
           <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(task.summary || task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
           ${lifecycle}
-          ${typed}
           ${brief || `<div class="wb-request-comparison"><div class="wb-comparison-row"><h3>${t('요청한 일')}</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}`}
           ${task.decisionIssues?.length ? `<p class="wb-evidence-limit">${t('판단 요약을 확인하지 못해 작업 기록을 표시합니다.')}</p>` : ''}
           ${task.nextStep ? msg`<button class="wb-next-request" data-followup="${esc(taskKey)}">확인할 내용으로 다음 요청 준비</button>` : ''}
@@ -1260,6 +1305,7 @@
       && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
     const result = await api.terminalCollaboration({ operation: 'sync', groups, frames });
     workStates.clear();
+    for (const id of acknowledgedCompletions.keys()) if (!sessions.has(id) || trashed(id)) acknowledgedCompletions.delete(id);
     for (const panel of result.panels || []) for (const member of panel.members || []) {
       if (member.activity) workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
     }
@@ -1325,7 +1371,7 @@
       const ids = force ? [activeId()] : [...panes.keys()];
       for (const id of ids) {
         const session = sessions.get(id);
-        if (!session || trashed(id)) continue;
+        if (!session || trashed(id) || session.status !== 'running') continue;
         if (!session.creationId) {
           reviews.set(id, { state: 'unbound', message: t('이전 터미널에는 검토 연결 식별자가 없습니다. 새 터미널을 열면 이해·검토가 연결됩니다.') });
           continue;
@@ -1562,7 +1608,7 @@
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
     for (const id of saved.handledCollaborations || []) if (typeof id === 'string') handledCollaborations.add(id);
-    analysisSettings = { provider: ['claude', 'codex', 'jev'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
+    analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', jevEnabled: typeof saved.analysisSettings?.jevEnabled === 'boolean' ? saved.analysisSettings.jevEnabled : saved.analysisSettings?.provider === 'jev', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }
     renderModelSettings();
     try { const jev = await api.terminalJevStatus?.(); if (jev) showJevStatus(jev); } catch { /* Explicit setup errors appear when saving a key. */ }
@@ -1586,7 +1632,7 @@
       }) };
       reviewHistory.set(record.id, record);
       const session = sessions.get(record.id);
-      if (savedReview(session)) reviews.set(record.id, { state: 'watching', provider: record.provider, providerPid: record.providerPid, result: record.result, restored: true });
+      if (savedReview(session)) reviews.set(record.id, { state: session.status === 'stopped' ? 'archived' : 'watching', provider: record.provider, providerPid: record.providerPid, result: record.result, restored: true });
     }
     const archivedIds = new Set(trash.filter(trashSession).map(item => item.id));
     const available = new Set([...sessions.keys()].filter(id => !archivedIds.has(id))), seen = new Set(archivedIds);

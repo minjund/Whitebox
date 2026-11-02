@@ -69,21 +69,20 @@ module.exports = async function analysisPipelineChecks() {
     const jev = new JevAnalysis({ file: keyFile, secure, fetchImpl: async (url, options) => {
       requests++; assert.equal(url, 'https://api.typesafe.ai/v1/systemone'); assert.equal(options.redirect, 'error');
       assert.equal(options.headers.Authorization, 'Bearer fixture-secret');
-      const body = JSON.parse(options.body); assert.equal(body.model, 'jev-latest'); assert.equal(Object.keys(body.questions).length, 5);
-      return { ok: true, text: async () => JSON.stringify({ model: 'fixture-jev', answers: Object.fromEntries(Object.keys(body.questions).map(name => [name, { type: 'noul', noul: name === 'lostCoverage' ? .9 : .5 }])), usage: { input_tokens: 120, output_tokens: 10 } }) };
+      const body = JSON.parse(options.body); assert.equal(body.model, 'jev-latest'); assert.deepEqual(Object.keys(body.questions), ['needsAnalysis']);
+      return { ok: true, text: async () => JSON.stringify({ model: 'fixture-jev', answers: Object.fromEntries(Object.keys(body.questions).map(name => [name, { type: 'noul', noul: .5 }])), usage: { input_tokens: 120, output_tokens: 10 } }) };
     } });
     assert.deepEqual(jev.configure({ apiKey: 'fixture-secret' }), { configured: true, model: 'jev-latest' });
     assert.doesNotMatch(await fs.readFile(keyFile, 'utf8'), /fixture-secret/);
     if (process.platform !== 'win32') assert.equal((await fs.stat(keyFile)).mode & 0o777, 0o600, 'POSIX key file permissions');
-    const result = await jev.analyze({ request: '정리해줘', source: '검사를 제거하고 대체하지 않았다.' });
-    assert.equal(result.task.typedAnalysis.judgments.fulfilled, 'uncertain');
-    assert.equal(result.task.typedAnalysis.findings[0].kind, 'lostCoverage');
-    assert.equal(result.task.analysisUsage.total, 130); assert.equal(result.task.alignment, 'unknown');
+    const result = await jev.assessNeed({ request: '정리해줘', source: '검사를 제거하고 대체하지 않았다.' });
+    assert.equal(result.outcome, 'uncertain'); assert.equal(result.needsAnalysis, true);
+    assert.equal(result.usage.total, 130); assert.equal(result.task, undefined, 'Jev never creates a final task or conclusion');
     const successTransport = jev.fetchImpl;
     jev.fetchImpl = async () => ({ ok: false, status: 401 });
-    await assert.rejects(jev.analyze({ request: 'r', source: 's' }), /HTTP 401/);
+    await assert.rejects(jev.assessNeed({ request: 'r', source: 's' }), /HTTP 401/);
     jev.fetchImpl = async () => ({ ok: true, text: async () => '{"answers":{}}' });
-    await assert.rejects(jev.analyze({ request: 'r', source: 's' }), /판단 응답/);
+    await assert.rejects(jev.assessNeed({ request: 'r', source: 's' }), /선별 응답/);
     assert.equal(jev.configure({ remove: true }).configured, false);
 
     let remoteGets = 0;
@@ -186,20 +185,12 @@ module.exports = async function analysisPipelineChecks() {
     const hugeId = oversized.manifest('owned-large-log', 'large').records[0].id;
     assert.equal((await oversized.retrieve('owned-large-log', 'large', [hugeId]))[0].status, 'limit', 'read-size limits remain explicit unknowns');
     jev.fetchImpl = successTransport; jev.configure({ apiKey: 'fixture-secret' });
-    const jevService = new TerminalReview({ jev, manager: () => ({ get: id => ({ id, creationId: 'c', pid: 1, status: 'running' }) }), completion: {},
-      runner: { canGenerateTerminalReview: () => false, generateTerminalReview: () => { throw new Error('Jev must not launch a CLI'); } } });
-    const jevChunk = { taskId: 'typed', request: 'request typed', text: 'ASSISTANT: Implemented the requested output and confirmed that the visible message now includes the missing context for users.', lifecycle: 'completed', submittedAt: 1, observedAt: 1, queuedAt: 1 };
-    jevService.entries.set('typed', { key: JSON.stringify(['typed', 'c', 1, undefined]), pending: [jevChunk], revision: 0, state: 'collecting', latest: {}, seen: {}, locale: 'en' });
-    jevService.scheduling.set('typed', { session: { id: 'typed' }, analysis: { provider: 'jev' } });
-    jevService.drain(); await wait(() => !jevService.busy);
-    assert.equal(jevService.entries.get('typed').result.tasks[0].analysisProvider, 'jev');
-    assert.equal(jevService.entries.get('typed').result.tasks[0].typedAnalysis.judgments.fulfilled, 'uncertain');
-    assert.equal(requests, 2, 'each typed analysis bundles its five judgments in one fixture request');
+    const gateFixtureCalls = await require('./jev-gate-test')({ jev, session });
 
     const out = path.resolve(__dirname, '../artifacts/analysis-pipeline-benchmark.json');
     await fs.mkdir(path.dirname(out), { recursive: true });
-    await fs.writeFile(out, JSON.stringify({ kind: 'local fixtures; no live-model quality or latency claim', timings, reports, sourceReads: evidence.readCount, readChars: evidence.readChars, baselineFinalChars: baseline.length, preparedEvidenceChars: JSON.stringify(evidence).length, realModelCalls: 0, jevFixtureCalls: requests }, null, 2));
-    console.log('PASS source recovery, earlier verification reuse, changed/deleted/foreign record rejection, private reasoning exclusion; encrypted Jev key, typed uncertainty/HTTP errors/usage; collaboration zero remote polling gets; queue priority and automatic draining.');
+    await fs.writeFile(out, JSON.stringify({ kind: 'local fixtures; no live-model quality or latency claim', timings, reports, sourceReads: evidence.readCount, readChars: evidence.readChars, baselineFinalChars: baseline.length, preparedEvidenceChars: JSON.stringify(evidence).length, realModelCalls: 0, jevFixtureCalls: requests + gateFixtureCalls }, null, 2));
+    console.log('PASS source recovery, earlier verification reuse, changed/deleted/foreign record rejection, private reasoning exclusion; encrypted Jev key, screening uncertainty/HTTP errors/separate usage; collaboration zero remote polling gets; queue priority and automatic draining.');
     console.log(`BENCHMARK ${out}`);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 };

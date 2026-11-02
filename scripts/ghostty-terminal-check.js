@@ -240,6 +240,21 @@ app.whenReady().then(async () => {
     assert.equal(trackpad.mouseLines, 3, 'line-mode mouse preserves its declared distance');
     console.log('PASS: trackpad subpixel distance, mouse lines and alternate-screen scrolling');
 
+    const archivedScroll = await evaluate(async () => {
+      term.scrollToLine(50); term.options.disableStdin = true;
+      await write('\x1b[?1000h\x1b[?1006h'); writes.length = 0;
+      const canvas = term.renderer.getCanvas(), rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1,
+        clientX: rect.left + 12, clientY: rect.top + 12, bubbles: true, cancelable: true }));
+      await delay();
+      const result = { viewport: term.buffer.active.viewportY, sent: writes.splice(0).join('') };
+      term.options.disableStdin = false; await write('\x1b[?1000l\x1b[?1006l');
+      return result;
+    });
+    assert.equal(archivedScroll.viewport, 47, 'read-only archives scroll locally even when replay enabled mouse tracking');
+    assert.equal(archivedScroll.sent, '', 'reading an archive never sends mouse input to a stopped process');
+    console.log('PASS: read-only archived scrollback ignores live mouse protocols and sends no input');
+
     await evaluate(async () => { term.reset(); await write(''); writes.length = 0; });
     const nodePty = require(path.join(root, 'node_modules/node-pty'));
     pty = nodePty.spawn(process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',

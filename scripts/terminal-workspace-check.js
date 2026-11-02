@@ -27,14 +27,16 @@ app.whenReady().then(async () => {
   const { TerminalCompletionTracker } = require('../src/terminalCompletionBadge');
   const completionTracker = new TerminalCompletionTracker();
   const activityOverrides = new Map();
+  let holdCollaborationReply = false, releaseCollaborationReply;
   let jevConfigured = false, jevConfigureCalls = 0, jevConfigureFailure = '';
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
   let forcedReviewCalls = 0;
   let requestSummary = '';
+  let gateFixture = null, legacyTyped = false;
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
   let toolEvidence = { source: 'session', items: Array.from({ length: 3 }, () => ({ name: 'WebFetch', status: 'returned', target: 'https://arxiv.org/html/2610.28380v1', excerpt: 'Received 395.7KB (200 OK)' })), omitted: 0 };
-  let reviewState, suppressReview = false, rejectRestoreIdentity = false, rejectedCloseId = '', collaborationFailure = '';
+  let reviewState, suppressReview = false, rejectRestoreIdentity = false, missingSessionId = '', rejectedCloseId = '', rejectedStopId = '', stopCalls = 0, collaborationFailure = '';
   const otherProject = path.join(profile, 'other-project');
   fs.mkdirSync(otherProject);
   let workspaces = [{ name: 'Whitebox test', path: profile }, { name: 'Other project', path: otherProject }];
@@ -74,7 +76,9 @@ app.whenReady().then(async () => {
       const activity = await activityReader.observe((payload.groups || []).flatMap(group => group.members), frames);
       if (completedActivityId && activity.has(completedActivityId)) activity.set(completedActivityId, { ...activity.get(completedActivityId), state: 'idle', completed: true });
       for (const [id, value] of activityOverrides) if (activity.has(id)) activity.set(id, { ...activity.get(id), ...value });
-      return completionTracker.update({ jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) }, payload.groups);
+      const result = completionTracker.update({ jobs: [], connected: [], panels: (payload.groups || []).map(group => ({ ...group, members: group.members.map(member => ({ ...member, activity: activity.get(member.id) })) })) }, payload.groups);
+      if (holdCollaborationReply) { holdCollaborationReply = false; await new Promise(resolve => { releaseCollaborationReply = resolve; }); }
+      return result;
     });
     ipcMain.handle('terminals:jev-status', () => ({ configured: jevConfigured }));
     ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevSavedKey = payload.remove ? '' : payload.apiKey; jevConfigured = Boolean(jevSavedKey); return { configured: jevConfigured }; });
@@ -96,10 +100,11 @@ app.whenReady().then(async () => {
       if (rejectCreation) throw new Error('fixture creation failure');
       return providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
     });
+    ipcMain.handle('terminals:stop', (_event, id) => { stopCalls++; if (id === rejectedStopId) throw new Error('fixture stop failure'); return manager.stop(id); });
     ipcMain.removeHandler('terminals:close');
     ipcMain.handle('terminals:close', (_event, id) => { if (id === rejectedCloseId) throw new Error('fixture close failure'); return manager.close(id); });
     ipcMain.removeHandler('terminals:get');
-    ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
+    ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); if (id === missingSessionId) return null; return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
     ipcMain.handle('terminals:review', (_event, payload) => {
       if(payload.force)forcedReviewCalls++;
       if (payload.enabled === false) return { state: 'paused', provider: 'claude' };
@@ -109,7 +114,7 @@ app.whenReady().then(async () => {
       captured.set(payload.id, payload.text);
       const observedText = payload.text.replace(/\s+/g, '');
       const marker = observedText.includes('ONE_ONLY') ? 'ONE_ONLY' : observedText.includes('TWO_ONLY') ? 'TWO_ONLY' : observedText.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
-      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
+      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, analysisGate: gateFixture, ...(legacyTyped ? { typedAnalysis: { findings: [{ text: 'JEV_OLD_CONCLUSION_SENTINEL' }], probabilities: { fulfilled: .987654321 } } } : {}), recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     win.setContentSize(1450, 900);
@@ -246,7 +251,7 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbUpdateInstalledVersion").textContent.includes("확인 불가")', 'unknown installed version shown explicitly');
     assert.equal(await evaluate('document.querySelector("[data-action=update-install]").hidden'), true, 'blocked updater has no install action');
     assert.equal(updateInstallCalls, 1, 'state changes never install automatically');
-    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('#wbJevKey').dispatchEvent(new Event('input')); document.querySelector('[data-action=jev-save]').click()`);
+    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbAnalysisProvider').value='claude'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('#wbJevKey').dispatchEvent(new Event('input')); document.querySelector('[data-action=jev-save]').click()`);
     await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('API 키가 저장되어')`, 'Jev key saved through main IPC');
     assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
     assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
@@ -254,10 +259,16 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
     assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
     await evaluate('document.querySelector("[data-settings-section=connections]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'jev', 'saving a key automatically selects Jev');
-    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.provider'), 'jev');
-    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Jev를 분석 서비스로/);
-    assert.equal(await evaluate('document.querySelector("#wbJevAnalysisSettings").hidden'), true);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude', 'saving a key preserves the selected LLM');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.provider'), 'claude');
+    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Jev 선별 켜짐.*Claude/);
+    assert.equal(await evaluate('document.querySelector("#wbJevAnalysisSettings").hidden'), false);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider option[value=jev]")'), null, 'Jev cannot replace the reviewer');
+    assert.equal(await evaluate('document.querySelector("#wbJevEnabled").checked'), true);
+    await evaluate('document.querySelector("#wbJevEnabled").click()');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.jevEnabled'), false);
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude');
+    await evaluate('document.querySelector("#wbJevEnabled").click()');
     const jevSpacing = await evaluate('(() => { const provider=document.querySelector(".wb-settings-provider").getBoundingClientRect(),heading=document.querySelector("#wbJevHeading").getBoundingClientRect();return heading.top-provider.bottom;})()');
     assert(jevSpacing>=24,'Jev heading must have space below the provider separator');
     await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
@@ -318,8 +329,14 @@ app.whenReady().then(async () => {
     for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture secure store denied')) errors.splice(index,1);
     console.log('PASS Jev saved-state badge and placeholder; button/Done/Enter save, duplicate suppression, retry and reload without plaintext persistence');
 
-    await evaluate(`document.querySelector('#wbAnalysisProvider').value='jev'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('[data-action=jev-remove]').click()`);
-    await waitFor(`document.querySelector('#wbAnalysisProvider').value === 'auto'`, 'disconnect resets Jev selection');
+    await evaluate(`(() => {const key='whitebox:workspace:v2',saved=JSON.parse(localStorage.getItem(key));saved.analysisSettings.provider='jev';delete saved.analysisSettings.jevEnabled;localStorage.setItem(key,JSON.stringify(saved));})()`);
+    await win.reload();
+    await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore legacy Jev selection');
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'auto', 'legacy Jev reviewer migrates to the terminal LLM');
+    assert.equal(await evaluate('document.querySelector("#wbJevEnabled").checked'), true, 'legacy selection enables only screening');
+    await evaluate(`document.querySelector('[data-action=settings]').click();document.querySelector('[data-settings-section=connections]').click();document.querySelector('#wbAnalysisProvider').value='claude';document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change'));document.querySelector('[data-action=jev-remove]').click()`);
+    await waitFor(`!document.querySelector('#wbJevEnabled').checked && document.querySelector('#wbJevEnabled').disabled`, 'disconnect disables only Jev screening');
+    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude');
     await evaluate('document.querySelector("#wbSettings").close()');
     bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
     await evaluate('document.querySelector("#wbSettings").close()');
@@ -436,7 +453,7 @@ app.whenReady().then(async () => {
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'completed'`, 'confirmed AI completion becomes green');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).animationName`), 'none');
-      assert.equal(await evaluate(`document.querySelector('${activitySelector}').getAttribute('aria-label')`), '답변 완료');
+      assert.equal(await evaluate(`document.querySelector('${activitySelector}').getAttribute('aria-label')`), '확인 완료');
       assert.equal(await evaluate(`document.querySelector('.wb-pane-state').dataset.state`), 'completed');
       await evaluate("document.documentElement.dataset.theme = 'light'");
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(40, 116, 93)');
@@ -567,6 +584,25 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
     assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
+    const checkProjectTree = async () => {
+      const branches = await evaluate(`Array.from(document.querySelectorAll('#wbSpaces .wb-project-terminals:not([hidden]) > .wb-panel-group'), group => {
+        const rect = group.getBoundingClientRect(), project = group.closest('.wb-project').getBoundingClientRect();
+        const before = getComputedStyle(group, '::before'), after = getComputedStyle(group, '::after');
+        return { visible: before.display !== 'none' && after.content === '\"\"',
+          vertical: before.borderLeftWidth, horizontal: after.borderBottomWidth,
+          ignoresInput: before.pointerEvents === 'none' && after.pointerEvents === 'none',
+          indented: rect.left > project.left + 10,
+          branchInside: rect.left + parseFloat(after.left) >= project.left && rect.right <= project.right + 1 };
+      })`);
+      assert(branches.length > 0, 'project tree must contain panel branches');
+      for (const branch of branches) assert(branch.visible && branch.vertical === '1px' && branch.horizontal === '1px' && branch.ignoresInput && branch.indented && branch.branchInside, JSON.stringify(branch));
+    };
+    for (const theme of ['light', 'dark']) {
+      await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
+      await checkProjectTree();
+    }
+    fs.writeFileSync(process.env.WHITEBOX_TREE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-project-tree.png'), (await win.webContents.capturePage()).toPNG());
+    console.log('PASS project panel tree branches in light/dark themes preserve drag/drop and panel controls');
     assert.equal(await evaluate('document.querySelectorAll(".wb-layout-controls").length'), 0, 'obsolete orientation controls removed');
     await evaluate(`document.querySelector('#wbCanvas [data-solo-terminal="${second.id}"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'one click returns to a single terminal');
@@ -581,13 +617,58 @@ app.whenReady().then(async () => {
     for (const id of [first.id, second.id]) activityOverrides.set(id, { state: 'idle', completed: true, requestId: 'badge-turn', providerPid: manager.get(id).pid + 100000 });
     for (let attempt = 0; completionTracker.count !== 2 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(completionTracker.count, 2, 'two completed AI terminals produce badge 2');
+    const completionDot = (id, part = 'sidebar') => part === 'sidebar'
+      ? `[data-instance="${id}"] .wb-terminal-state` : `#wbCanvas [data-terminal-id="${id}"] .wb-pane-state`;
+    const assertCompletionDot = async (id, expected, part = 'sidebar') => {
+      const selector = completionDot(id, part);
+      await waitFor(`document.querySelector(${JSON.stringify(selector)})?.dataset.state === ${JSON.stringify(expected)}`, `${part} completion state ${expected}`);
+      const result = await evaluate(`(() => {const dot=document.querySelector(${JSON.stringify(selector)});return {label:dot.getAttribute('aria-label'),color:getComputedStyle(dot.querySelector('i')).backgroundColor,animation:getComputedStyle(dot.querySelector('i')).animationName};})()`);
+      assert.equal(result.label, expected === 'needs-review' ? '확인 필요' : '확인 완료');
+      const light = await evaluate("document.documentElement.dataset.theme === 'light'");
+      assert.equal(result.color, expected === 'needs-review'
+        ? light ? 'rgb(167, 125, 18)' : 'rgb(223, 184, 79)'
+        : light ? 'rgb(40, 116, 93)' : 'rgb(117, 201, 149)');
+      assert.equal(result.animation, 'none', 'review status is a dot, not a working spinner');
+    };
+    for (const theme of ['dark', 'light']) {
+      await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
+      await assertCompletionDot(first.id, 'needs-review');
+      await assertCompletionDot(second.id, 'needs-review');
+      await assertCompletionDot(second.id, 'needs-review', 'pane');
+    }
+    await evaluate("document.documentElement.dataset.theme = 'dark'");
+    holdCollaborationReply = true;
+    for (let attempt = 0; !releaseCollaborationReply && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(typeof releaseCollaborationReply, 'function', 'hold an unread observation already in flight');
     await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
     for (let attempt = 0; completionTracker.count !== 1 && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(completionTracker.count, 1, 'selecting a completed terminal acknowledges only that answer');
+    await assertCompletionDot(second.id, 'completed');
+    await assertCompletionDot(second.id, 'completed', 'pane');
+    await assertCompletionDot(first.id, 'needs-review');
+    await evaluate(`(() => {window.reviewDotStates=[];window.reviewDotObserver=new MutationObserver(()=>{const dot=document.querySelector('${completionDot(second.id)}');if(dot)reviewDotStates.push(dot.dataset.state);});reviewDotObserver.observe(document.querySelector('#wbInstances'),{subtree:true,childList:true,attributes:true});})()`);
+    releaseCollaborationReply(); releaseCollaborationReply = null;
+    await evaluate('new Promise(resolve => setTimeout(resolve, 1300))');
+    await assertCompletionDot(second.id, 'completed');
+    const replayStates = await evaluate('reviewDotObserver.disconnect();reviewDotStates');
+    assert(!replayStates.includes('needs-review'), 'a late unread snapshot cannot turn an acknowledged answer yellow again');
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
     for (let attempt = 0; completionTracker.count !== 0 && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(completionTracker.count, 0, 'all read completions clear the badge');
+    await assertCompletionDot(first.id, 'completed');
+    await evaluate("document.documentElement.dataset.theme = 'light'");
+    await assertCompletionDot(first.id, 'completed');
+    await evaluate("document.documentElement.dataset.theme = 'dark'");
+    activityOverrides.set(first.id, { state: 'working', completed: false, requestId: 'next-badge-turn', providerPid: manager.get(first.id).pid + 100000 });
+    await waitFor(`document.querySelector('${completionDot(first.id)}').dataset.state === 'working'`, 'a new AI turn keeps its working spinner');
+    activityOverrides.set(first.id, { state: 'idle', completed: true, requestId: 'next-badge-turn', providerPid: manager.get(first.id).pid + 100000 });
+    await assertCompletionDot(first.id, 'needs-review');
+    assert.equal(completionTracker.count, 1, 'new answer requires review again');
+    await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
+    await assertCompletionDot(first.id, 'completed');
+    assert.equal(completionTracker.count, 0);
     activityOverrides.clear();
+    console.log('PASS completed answers need yellow review dots; explicit review turns them green and the next answer becomes yellow again, in both themes/sidebar/pane');
     console.log('PASS single-terminal view persists with the same PTYs; completed AI badge 2 → 1 → 0 through explicit selection');
     await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`);
     await evaluate(`window.originalTerminalNode = document.querySelector('[data-terminal-id="${second.id}"]')`);
@@ -774,6 +855,17 @@ app.whenReady().then(async () => {
     reportedUsage = { input: 0, output: 0, cachedInput: 0, cacheWrite: 0, total: 0 };
     await forceCapture();
     assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /0 토큰 · 호출 없음/u);
+    gateFixture = { provider: 'jev', outcome: 'not-required', probability: .0123456789, usage: { input: 120, output: 10, total: 130 } };
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /LLM 호출 없음.*Jev 130 토큰.*LLM 분석 없이 작업 기록 표시/su);
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /0\.0123456789|판단의 근거 기록/);
+    legacyTyped = true; gateFixture = null;
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /이전 Jev 기록.*LLM 판단이 없습니다/su);
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /0\.987654321|JEV_OLD_CONCLUSION_SENTINEL|판단의 근거 기록/);
+    legacyTyped = false;
+    await forceCapture();
+
     assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /AI 분석 없이 기록/u);
     recordOnly = false;
     reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
@@ -869,6 +961,7 @@ app.whenReady().then(async () => {
       return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height };
     })()`);
     assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 100 && sidebarGeometry.plusHeight >= 30, JSON.stringify(sidebarGeometry));
+    await checkProjectTree();
     await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
     for (const width of [780, 640, 1000]) {
       win.setContentSize(width, 700);
@@ -910,9 +1003,42 @@ app.whenReady().then(async () => {
     await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
     const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
+    const trashChild = path.join(profile, 'trash-child.cjs'), trashChildPidFile = path.join(profile, 'trash-child.pid');
+    fs.writeFileSync(trashChild, `require('fs').writeFileSync(${JSON.stringify(trashChildPidFile)},String(process.pid));setInterval(()=>{},1000);`);
+    await manager.command(last, "node '" + trashChild.replace(/'/g, process.platform === 'win32' ? "''" : "'\\''") + "'");
+    for (let attempt=0; !fs.existsSync(trashChildPidFile) && attempt<100; attempt++) await new Promise(resolve=>setTimeout(resolve,100));
+    assert(fs.existsSync(trashChildPidFile), 'start a real foreground child before trashing');
+    const trashChildPid = Number(fs.readFileSync(trashChildPidFile, 'utf8'));
+    assert.doesNotThrow(()=>process.kill(trashChildPid,0));
+
+    missingSessionId = last;
     await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
+    await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelector("#wbError").textContent.includes("세션 종료를 확인하지 못해")', 'missing host identity cannot establish termination');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 0);
+    assert.equal(manager.get(last).pid, lastPid);
+    missingSessionId = '';
+    await evaluate('document.querySelector("[data-action=dismiss-error]").click()');
+    for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('세션 종료를 확인하지 못해')) errors.splice(index,1);
+    rejectedStopId = last;
+    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click();document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
+    await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelector("#wbError").textContent.includes("fixture stop failure")', 'failed stop remains visible');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 0, 'failed termination never pretends to move to trash');
+    assert.equal(manager.get(last).pid, lastPid);
+    assert.equal(manager.get(last).status, 'running');
+    assert.equal(await evaluate(`Boolean(document.querySelector('#wbSpaces [data-instance="${last}"]'))`), true);
+    rejectedStopId = '';
+    await evaluate('document.querySelector("[data-action=dismiss-error]").click()');
+    for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture stop failure')) errors.splice(index,1);
+    const stopsBeforeTrash = stopCalls;
+    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click();document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'move to trash');
-    assert.equal(manager.get(last).pid, lastPid, 'soft deletion preserves live process');
+    assert.equal(stopCalls, stopsBeforeTrash + 1, 'double click terminates only once');
+    assert.equal(manager.get(last).pid, null);
+    assert.equal(manager.get(last).status, 'stopped');
+    assert.equal(manager.sessions.get(last).process, null, 'trash releases the actual PTY');
+    assert.equal(manager.list().filter(session=>!['exited','stopped','failed'].includes(session.status)).length, 3, 'trash frees a running-session slot');
+    if (process.platform !== 'win32') assert.throws(() => process.kill(lastPid, 0), {code:'ESRCH'}, 'original shell no longer exists');
+    assert.throws(()=>process.kill(trashChildPid,0), {code:'ESRCH'}, 'the foreground program also exits');
     assert.equal(await evaluate(`Boolean(document.querySelector('[data-instance="${last}"]'))`), false);
     captured.delete(last);
     await evaluate('WhiteboxWorkspace.captureReviews()');
@@ -923,7 +1049,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 1);
     assert.equal(await evaluate(`Boolean(document.querySelector('[data-instance="${last}"]'))`), false, 'trash survives restart without reappearing');
     await evaluate('document.querySelector("[data-action=trash]").click()');
-    await waitFor('document.querySelector("#wbTrashList").textContent.includes("Claude")', 'trash identifies the running AI');
+    await waitFor('document.querySelector("#wbTrashList").textContent.includes("Claude")', 'trash identifies the archived AI');
     assert.ok((await evaluate('document.querySelector("#wbTrashList").textContent')).includes(last.slice(-5)));
     rejectRestoreIdentity = true;
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
@@ -933,15 +1059,18 @@ app.whenReady().then(async () => {
     rejectRestoreIdentity = false;
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore project terminal');
-    assert.equal(manager.get(last).pid, lastPid);
+    assert.equal(manager.get(last).pid, null);
+    assert.equal(manager.get(last).status, 'stopped');
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
     assert.ok(restoredReview.includes(reviewBeforeTrash), `original review cards and observation time survive trash and renderer restart: ${JSON.stringify({before:reviewBeforeTrash,after:restoredReview})}`);
     await evaluate('WhiteboxWorkspace.captureReviews()');
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u, 'empty backend poll cannot erase restored review');
     suppressReview = false;
-    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'restore keeps output');
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'restore keeps the stopped output');
     assert.equal(await evaluate(`Boolean(document.querySelector('#wbSpaces [data-instance="${last}"]'))`), true, 'restored terminal belongs to original project');
+    assert.equal(await evaluate(`document.querySelector('[data-terminal-id="${last}"] textarea').readOnly`), true, 'restored output is read only');
+    assert.equal(manager.get(last).pid, null, 'restoring records never restarts a program');
     await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash restored terminal');
     await evaluate('document.querySelector("[data-action=trash]").click()');
@@ -949,7 +1078,8 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbClose").open', 'permanent delete confirmation');
     await evaluate('window.purgeBeforeCancel = document.querySelector("[data-purge-instance]"); document.querySelector("#wbClose button[value=cancel]").click()');
     await waitFor('!window.purgeBeforeCancel.isConnected', 'cancel purge settled');
-    assert.equal(manager.get(last).pid, lastPid);
+    assert.equal(manager.get(last).pid, null);
+    assert.equal(manager.get(last).status, 'stopped');
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     await evaluate(`document.querySelector('[data-purge-instance="${last}"]').click()`);
     await waitFor('document.querySelector("#wbClose").open', 'purge confirmation again');
@@ -968,7 +1098,8 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-action=trash]").click()');
     await evaluate(`document.querySelector('[data-restore-instance="${independent}"]').click()`);
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(independent)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore independent instance');
-    assert.equal(manager.get(independent).pid, independentPid);
+    assert.equal(manager.get(independent).pid, null);
+    assert.equal(manager.get(independent).status, 'stopped');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 1);
     assert.equal(await evaluate('document.querySelectorAll("#wbSpaces [data-instance]").length'), 3);
     await evaluate('document.querySelector("[data-remove-project]").click()');
@@ -988,7 +1119,8 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("#wbRemoveProject button[value=remove]").click()');
     await waitFor('WhiteboxWorkspace.getState().spaces.length === 0', 'last project removed');
     assert.equal(manager.list().length, 1, 'only project terminals close; independent instance remains');
-    assert.equal(manager.get(independent).pid, independentPid);
+    assert.equal(manager.get(independent).pid, null);
+    assert.equal(manager.get(independent).status, 'stopped');
     assert.equal(fs.existsSync(profile), true, 'actual project folder preserved');
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore empty workspace');
@@ -1276,7 +1408,8 @@ app.whenReady().then(async () => {
     console.log('PASS delayed mount visibility, failed mount retry without duplicate PTYs, and live exit state in pane/sidebar/footer');
     console.log('PASS empty-trash confirmation/cancel, missing sessions, changed identity protection, partial failure/retry and empty state');
     console.log('PASS button-free automatic panel membership, scoped roster/frames without prompt injection');
-    console.log('PASS locale switching and session persistence; trash/restore/PID/output persistence/purge, independent and project ownership, SVG icons, deletion/cancel/reload, token usage, responsive widths and expansion; real PTY workspace: shell creation, Unicode, nested splits, per-terminal review focus/evidence, reload persistence, tabs and exact close');
+    console.log('PASS trash stops the real PTY, frees active capacity, preserves read-only output/review records, and handles failed termination without hiding the live terminal');
+    console.log('PASS locale switching and session persistence; trash/restore/stopped output persistence/purge, independent and project ownership, SVG icons, deletion/cancel/reload, token usage, responsive widths and expansion; real PTY workspace: shell creation, Unicode, nested splits, per-terminal review focus/evidence, reload persistence, tabs and exact close');
     await win.loadURL('about:blank');
     const readyBeforeFailure = rendererReadyCalls;
     const readsBeforeFailure = initialInventoryReads;
