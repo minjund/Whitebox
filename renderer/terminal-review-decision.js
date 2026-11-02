@@ -14,7 +14,7 @@
       ${section('현재 결론', decision.conclusion, 'wb-decision-conclusion')}
       ${reasons}
       ${decision.caution ? section('판단 전에 알아둘 점', decision.caution, 'wb-decision-caution') : ''}
-      <div class="wb-task-section wb-decision-action"><h3>${esc(t(decision.action.kind === 'finish' ? '여기서 마쳐도 돼요' : '권하는 다음 행동'))}</h3><p><strong>${esc(decision.action.text)}</strong></p><p>${esc(decision.action.why)}</p></div>
+      ${decision.action.text ? `<div class="wb-task-section wb-decision-action"><h3>${esc(t(decision.action.kind === 'finish' ? '여기서 마쳐도 돼요' : '권하는 다음 행동'))}</h3><p><strong>${esc(decision.action.text)}</strong></p>${decision.action.why ? `<p>${esc(decision.action.why)}</p>` : ''}</div>` : ''}
       ${alternatives}
     </section>`;
   }

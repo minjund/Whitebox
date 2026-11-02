@@ -32,6 +32,8 @@ app.whenReady().then(async () => {
   let jevSavedKey = '', jevRevealCalls = 0, jevRevealDeferred = false;
   let reviewRetryAt = null;
   let forcedReviewCalls = 0;
+  const manualReviewCalls = [];
+  let manualReviewDeferred = false, releaseManualReview;
   let requestSummary = '';
   let gateFixture = null, legacyTyped = false;
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
@@ -105,8 +107,13 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:close', (_event, id) => { if (id === rejectedCloseId) throw new Error('fixture close failure'); return manager.close(id); });
     ipcMain.removeHandler('terminals:get');
     ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); if (id === missingSessionId) return null; return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
-    ipcMain.handle('terminals:review', (_event, payload) => {
+    ipcMain.handle('terminals:review', async (_event, payload) => {
       if(payload.force)forcedReviewCalls++;
+      if (payload.reanalyze) {
+        manualReviewCalls.push({ id: payload.id, creationId: payload.creationId, enabled: payload.enabled });
+        if (manualReviewDeferred) await new Promise(resolve => { releaseManualReview = resolve; });
+        analysisRevision++;
+      }
       if (payload.enabled === false) return { state: 'paused', provider: 'claude' };
       analysisOptions = payload.analysis;
       if (payload.detail) lastDetail = payload.detail;
@@ -882,6 +889,36 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
+    const manualBefore = manualReviewCalls.length;
+    holdCollaborationReply = true; releaseCollaborationReply = null;
+    await evaluate('WhiteboxWorkspace.captureReviews(); true');
+    for (let attempt = 0; !releaseCollaborationReply && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(typeof releaseCollaborationReply, 'function');
+    manualReviewDeferred = true; releaseManualReview = null;
+    await evaluate('document.querySelector("[data-action=refresh]").click(); document.querySelector("[data-action=refresh]").click()');
+    assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), true, 'manual button disables immediately while waiting for a background observation');
+    await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
+    releaseCollaborationReply(); releaseCollaborationReply = null;
+    for (let attempt = 0; !releaseManualReview && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(typeof releaseManualReview, 'function');
+    assert.equal(manualReviewCalls.length, manualBefore + 1, 'duplicate clicks issue one manual request');
+    assert.equal(manualReviewCalls.at(-1).id, first.id, 'queued manual request keeps the clicked terminal despite selection changes');
+    releaseManualReview(); releaseManualReview = null; manualReviewDeferred = false;
+    await waitFor('!document.querySelector("[data-action=refresh]").disabled', 'manual IPC completes');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
+    await evaluate('document.querySelector("[data-action=auto-review]").click()');
+    await forceCapture();
+    const offManualBefore = manualReviewCalls.length;
+    await evaluate('document.querySelector("[data-action=refresh]").click()');
+    for (let attempt = 0; manualReviewCalls.length === offManualBefore && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(manualReviewCalls.length, offManualBefore + 1);
+    assert.equal(manualReviewCalls.at(-1).id, second.id);
+    assert.equal(manualReviewCalls.at(-1).enabled, true, 'manual reanalysis runs once with automatic analysis off');
+    await waitFor('!document.querySelector("[data-action=refresh]").disabled', 'one-off analysis finishes');
+    assert.equal(await evaluate('document.querySelector("#wbAutoReview").checked'), false, 'manual action leaves the automatic preference off');
+    await evaluate('document.querySelector("[data-action=auto-review]").click()');
+    await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
+    console.log('PASS reanalysis button: explicit intent, immediate duplicate protection, pinned terminal during queued observation, and automatic-off one-shot');
     reviewState = 'collecting';
     await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석 대기/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting state renders after selection refresh');
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 대기/u);

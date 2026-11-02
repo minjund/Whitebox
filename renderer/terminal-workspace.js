@@ -38,6 +38,7 @@
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
   let reviewView = 'current';
   let reviewTask = null;
+  const reanalysisRequests = new Map();
   let pinnedPanels = [];
   let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
@@ -1172,7 +1173,8 @@
   function renderReview() {
     renderCollaborationStatus();
     const id = activeId(), value = reviews.get(id);
-    const key = JSON.stringify([id, title(id), selectedSpace, tab()?.id, value, autoReview, reviewView]);
+    const requesting = reanalysisRequests.get(id)?.creationId === sessions.get(id)?.creationId && reanalysisRequests.has(id);
+    const key = JSON.stringify([id, title(id), selectedSpace, tab()?.id, value, autoReview, reviewView, requesting]);
     if (key === lastReviewKey) return;
     lastReviewKey = key;
     $('#wbReviewTarget').innerHTML = msg`<span class="wb-target-icon">${icon('terminal')}</span><div><strong>${esc(id ? t('선택한 터미널') : t('선택한 터미널 없음'))}</strong><small>${esc(id ? title(id) : t('터미널을 먼저 열어 주세요'))}</small></div>`;
@@ -1186,8 +1188,8 @@
     });
     const latestAnalysis = value?.result?.tasks?.at(-1);
     const analyst = !latestAnalysis?.typedAnalysis && latestAnalysis?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
-    $('#wbReviewModel').textContent = autoReview ? `${{ claude: 'Claude', codex: 'Codex' }[analyst] || t('자동 분석')}${!latestAnalysis?.typedAnalysis && latestAnalysis?.analysisModel ? ` · ${latestAnalysis.analysisModel}` : ''}` : t('자동 분석 꺼짐');
-    const state = !autoReview ? 'paused' : value?.state || 'watching';
+    $('#wbReviewModel').textContent = autoReview || value?.manual ? `${{ claude: 'Claude', codex: 'Codex' }[analyst] || t('자동 분석')}${!latestAnalysis?.typedAnalysis && latestAnalysis?.analysisModel ? ` · ${latestAnalysis.analysisModel}` : ''}` : t('자동 분석 꺼짐');
+    const state = !autoReview && !value?.manual ? 'paused' : value?.state || 'watching';
     const analyzing = state === 'reviewing';
     const rateLimited = value?.retryAt > Date.now();
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(state);
@@ -1201,7 +1203,8 @@
     activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}">${hasThinkingLoader ? '' : '<i aria-hidden="true"></i>'}<div><strong class="wb-review-state-label">${esc(activityLabel)}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
     if (hasThinkingLoader) ui.thinking(activity.querySelector('.wb-review-state-label'), activityLabel);
     $('#wbReviewContent').setAttribute('aria-busy', String(analyzing));
-    $('[data-action="refresh"]').disabled = analyzing;
+    $('[data-action="refresh"]').disabled = analyzing || requesting || Boolean(value?.manual && state === 'collecting');
+    $('[data-action="refresh"]').setAttribute('aria-busy', String(analyzing || requesting || Boolean(value?.manual && state === 'collecting')));
     $('[data-action="refresh"]').title = state === 'awaiting-answer' ? t('답변 완료 다시 확인') : t('지금 검토');
     let html = '';
     if (value?.message && ['error', 'unbound'].includes(state)) html += `<p class="wb-review-notice">${esc(value.message)}</p>`;
@@ -1354,31 +1357,46 @@
     const markup = job => `<div><strong>${esc(job.terminal && job.state === 'completed' ? t('새 터미널 열림') : labels[job.state] || job.state)}</strong><span>${esc((job.targetId || '').slice(-5))} · ${esc(job.request || t('새 터미널'))}</span>${job.error ? `<small>${esc(job.error)}</small>` : ''}</div>`;
     status.innerHTML = jobs.map(markup).join('');
   }
-  function captureReviews(force = false) {
+  function requestReanalysis() {
+    const id = activeId(), session = sessions.get(id);
+    if (!session?.creationId || session.status !== 'running' || trashed(id)) return Promise.resolve();
+    const pending = reanalysisRequests.get(id);
+    if (pending?.creationId === session.creationId) return pending.task;
+    const request = { id, creationId: session.creationId };
+    reanalysisRequests.set(id, request);
+    renderReview();
+    request.task = captureReviews(true, request).finally(() => {
+      if (reanalysisRequests.get(id) === request) reanalysisRequests.delete(id);
+      renderReview();
+    });
+    return request.task;
+  }
+  function captureReviews(force = false, manualTarget = null) {
     if (!api.terminalReview) return Promise.resolve();
     // A manual refresh must observe its selected terminal after an in-flight
     // background observation, rather than silently dropping the request.
-    if (reviewBusy) return force ? reviewTask.then(() => captureReviews(true)) : reviewTask;
-    reviewTask = captureReviewsNow(force);
+    if (reviewBusy) return force ? reviewTask.then(() => captureReviews(true, manualTarget)) : reviewTask;
+    reviewTask = captureReviewsNow(force, manualTarget);
     return reviewTask;
   }
-  async function captureReviewsNow(force) {
+  async function captureReviewsNow(force, manualTarget) {
     reviewBusy = true;
     try {
       try { await syncCollaboration(); } catch (error) {
         $('#wbCollaborationStatus').hidden = false;
         $('#wbCollaborationStatus').textContent = `${t('협업 연결 확인 필요')}: ${String(error.message || error)}`;
       }
-      const ids = force ? [activeId()] : [...panes.keys()];
+      const ids = manualTarget ? [manualTarget.id] : force ? [activeId()] : [...panes.keys()];
       for (const id of ids) {
         const session = sessions.get(id);
         if (!session || trashed(id) || session.status !== 'running') continue;
+        if (manualTarget && session.creationId !== manualTarget.creationId) continue;
         if (!session.creationId) {
           reviews.set(id, { state: 'unbound', message: t('이전 터미널에는 검토 연결 식별자가 없습니다. 새 터미널을 열면 이해·검토가 연결됩니다.') });
           continue;
         }
         let result;
-        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview ? terminal.readTerminal(id) : '', enabled: autoReview, force: force && id === activeId(), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget ? terminal.readTerminal(id) : '', enabled: autoReview || Boolean(manualTarget), force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
         } catch (error) {
           if (sessions.get(id)?.creationId === session.creationId) reviews.set(id, { ...reviews.get(id), state: 'error', message: String(error.message || error) });
           continue;
@@ -1470,7 +1488,7 @@
       $('#wbAutoReview').checked = !autoReview;
       $('#wbAutoReview').dispatchEvent(new Event('change'));
     }
-    if (action === 'refresh') await captureReviews(true);
+    if (action === 'refresh') await requestReanalysis();
   }
   root.addEventListener('click', event => {
     const button = event.target.closest('button');

@@ -7,14 +7,18 @@ More model input and checking must not turn into a longer first screen.
 ## First screen and detail
 
 The first screen shows a conclusion, one to three reasons, a material caution
-when needed, and one recommended action with its reason. Valid action kinds
-are finish, verify, choose, and continue. Finishing needs no follow-up request.
+when needed, and a useful recommended action with its reason. Valid action kinds
+are finish, verify, choose, and continue. Finishing needs no follow-up request;
+its action text and reason may be empty when they would only repeat the answer.
+The UI omits that empty action section.
 Recommendations never authorize execution: the existing follow-up button opens
 a draft for the user to review.
 
 Choose is reserved for an actual unresolved choice. It requires two or three
 alternatives, each explaining its tradeoff and the condition that favors it.
-Alternatives are collapsed. Original requests, reported work, explanations,
+Completed explanations and recommendations can also retain supported alternatives
+without forcing an unresolved choice or an implementation request. Alternatives
+are collapsed. Original requests, reported work, explanations,
 verification, and exact evidence excerpts remain in the detailed record.
 Decision-changing uncertainty stays visible in the short caution.
 
@@ -26,6 +30,26 @@ There is no minimum: the model must not pad the answer. These initial product
 budgets are design choices, not experimentally established readability scores.
 The backend rejects an overlong brief instead of cutting a sentence in half.
 The source may still have bounded evidence omissions, explicitly marked.
+
+Necessity and design questions separate the operation one caller needs from
+shared consumers' needs. Reasons connect operations to consequences instead of
+repeating a return type or saying another caller uses it. Declaration-only
+changes, behavior changes and changes to a shared/downstream contract must not
+be treated as interchangeable. A short question with meaningful tradeoffs uses
+the standard budget; a completed label edit does not need invented alternatives.
+
+## Explicit reanalysis
+
+The footer button sends a separate `reanalyze` intent, pinned to the clicked
+terminal's creation identity even if selection changes while observation waits.
+Selection and automatic polling still deduplicate identical evidence. A manual
+request generates fresh analysis for the same completed task, bypasses Jev
+screening, and retains earlier results and each run's usage. Duplicate requests
+join an active/queued analysis. Failed manual requests retain the previous
+result and require another explicit retry; selection does not retry them.
+It also works once while automatic review is off, without enabling that setting.
+An unfinished answer is never completed by the button. Restarting during a
+manual call records an unconfirmed result instead of silently billing again.
 
 The analysis body uses 15px text with 1.8 line height. Short headings and
 paragraph wrapping establish hierarchy. More detailed work stays available

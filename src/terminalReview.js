@@ -15,6 +15,13 @@ const { decisionInstructions, assessDecision, repairPrompt, combinedUsage } = re
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
 const terminalKey = session => JSON.stringify([session.id, session.creationId, session.pid, session.createdAt]);
 
+function analysisPolicy(chunk, records, locale) {
+  const policy = classifyEvidence(chunk, records, locale);
+  // Explicit analysis can interpret a completed mechanically recorded result;
+  // insufficient or unfinished evidence still waits for a real result.
+  return chunk.reanalyze && chunk.lifecycle === 'completed' && policy.mode === 'record' ? { mode: 'analyze' } : policy;
+}
+
 // Compare adjacent rendered screens, never globally deduplicate lines: a repeated
 // command or failure can be a new event. Include nearby lines for attribution.
 // A CLI status bar clock is not new work. Normalize only the clock in the
@@ -188,6 +195,10 @@ why·understanding·impact는 decision과 다른 새 정보가 없으면 "". '�
 좋은 항목 발췌: {"actual":"탭 제목을 ‘초안’으로 바꾸고 본문은 유지했습니다.","why":"","understanding":"","impact":"","verification":"AI는 실행 검사를 하지 않았다고 밝혔습니다."}
 기능 변경 발췌: {"actual":"사진 미리보기 캐시를 추가했습니다.","why":"같은 사진의 원본을 매번 읽는 지연을 줄이려는 변경입니다.","understanding":"최근 본 20장의 미리보기를 기기에 보관해 다시 씁니다.","impact":"","verification":"재사용·20장 제한 검사는 통과했지만 실제 기기 속도는 측정하지 않았습니다."}
 문제·방식·검사는 나누고, 미측정 영향은 비웠다.
+설계 설명: 요청='여기서도 재시도 3회가 꼭 필요해? 설명만 해줘'. 기록='공통 기본값은 3회. 상태 조회는 읽기만 한다. 파일 생성은 요청을 반복하면 파일이 추가로 생긴다. 중복 방지 키 사용 여부는 기록에 없다'.
+나쁜 판단 발췌: {"conclusion":"다른 기능도 3회라 유지하면 됩니다.","reasons":[{"text":"공통 설정이 3회입니다."}]}
+좋은 판단 발췌: {"conclusion":"상태 조회와 파일 생성은 재시도할 때의 영향이 다릅니다.","reasons":[{"text":"조회는 상태만 읽지만 파일 생성은 반복 실행이 추가 파일로 이어지므로 같은 기본값만으로 적절성을 판단할 수 없습니다."}],"caution":"파일 생성 요청에 중복 방지 키가 있는지는 확인되지 않았습니다."}
+설명 요청에 작업을 지시하지 않고, 공통 설정의 존재보다 해당 사용처의 실제 영향과 판단 조건을 남겼다.
 </style-examples>
 REQUEST: ${JSON.stringify(request)}
 EVIDENCE:
@@ -285,17 +296,18 @@ class TerminalReview extends EventEmitter {
       this.persist(id, entry);
     }
     const seen = entry.seen[chunk.taskId];
-    if (entry.failed?.taskId === chunk.taskId && entry.failed.digest === chunk.digest) return;
+    if (!chunk.reanalyze && entry.failed?.taskId === chunk.taskId && entry.failed.digest === chunk.digest) return;
     if (entry.failed?.taskId === chunk.taskId) { entry.failed = null; entry.message = ''; }
     const needsFinalAssessment = chunk.lifecycle === 'completed' && seen?.lifecycle === 'in-progress' && ['automatic', 'screened'].includes(seen.mode);
     const active = entry.active?.chunk;
-    if (seen?.digest === chunk.digest && !needsFinalAssessment && (seen.mode !== 'deferred' || seen.lifecycle === chunk.lifecycle)
+    if (!chunk.reanalyze && seen?.digest === chunk.digest && !needsFinalAssessment && (seen.mode !== 'deferred' || seen.lifecycle === chunk.lifecycle)
       || active?.taskId === chunk.taskId && active.digest === chunk.digest && !(active.lifecycle === 'in-progress' && chunk.lifecycle === 'completed')) return;
     chunk.queuedAt ||= this.now();
     const queued = entry.pending.findIndex(item => item.taskId === chunk.taskId);
     if (queued >= 0) {
       const previous = entry.pending[queued];
       chunk.queuedAt = previous.queuedAt;
+      chunk.reanalyze = chunk.reanalyze || previous.reanalyze;
       if (previous.digest === chunk.digest) {
         chunk.rateLimitAttempts = previous.rateLimitAttempts;
         chunk.deferredAttempts = previous.deferredAttempts;
@@ -319,7 +331,8 @@ class TerminalReview extends EventEmitter {
     return turn.taskId;
   }
 
-  async captureNow({ id, creationId, text = '', enabled = true, force = false, analysis = {}, submission = null, interruption = null, foreground = false } = {}) {
+  async captureNow({ id, creationId, text = '', enabled = true, force = false, reanalyze = false, analysis = {}, submission = null, interruption = null, foreground = false } = {}) {
+    reanalyze = reanalyze === true;
     const session = await this.manager().get(String(id || ''), false);
     if (!session || !creationId || session.creationId !== creationId) {
       this.entries.delete(String(id || ''));
@@ -331,14 +344,14 @@ class TerminalReview extends EventEmitter {
       const saved = this.saved[id]?.key === key ? this.saved[id] : {};
       entry = { key, pending: [], revision: 0, state: 'watching', result: null, seen: {}, roots: {}, latest: {},
         observedSince: this.now(), ...saved };
-      if (saved.pendingCall && (saved.seen?.[saved.pendingCall.taskId]?.digest !== saved.pendingCall.digest
+      if (saved.pendingCall && (saved.pendingCall.reanalyze || saved.seen?.[saved.pendingCall.taskId]?.digest !== saved.pendingCall.digest
         || saved.seen?.[saved.pendingCall.taskId]?.lifecycle !== saved.pendingCall.lifecycle)) {
         entry.failed = saved.pendingCall;
         entry.message = '이전 분석의 완료를 확인하지 못했어요. 같은 기록으로 자동 재호출하지 않습니다.';
       }
       this.entries.set(id, entry);
     }
-    this.scheduling.set(id, { session, analysis, foreground, force });
+    this.scheduling.set(id, { session, analysis, foreground, force: force || reanalyze });
     entry.locale = analysis.locale || 'ko';
     const snapshot = await scanProcesses(this.monitor);
     // OS observation now yields. A close/restart while it runs must not revive
@@ -349,7 +362,14 @@ class TerminalReview extends EventEmitter {
       return { state: 'unbound', message: '터미널 실행 상태가 바뀌어 관찰을 다시 확인합니다.' };
     }
     const process = exactProcess(session, snapshot);
-    if (!enabled) {
+    const manualPending = entry.active?.chunk.reanalyze || entry.pending.some(item => item.reanalyze) || entry.failed?.reanalyze;
+    // Automatic polling with review disabled must not cancel an explicitly
+    // requested one-off analysis or silently discard its error.
+    if (!enabled && !reanalyze && manualPending) {
+      this.drain();
+      return this.project(entry);
+    }
+    if (!enabled && !reanalyze) {
       if (entry.state !== 'paused') entry.revision++;
       entry.state = 'paused'; entry.pending = []; entry.turn = null; entry.following = null; entry.failed = null; entry.message = '';
       entry.lastSubmission = submission?.id || entry.lastSubmission;
@@ -470,17 +490,31 @@ class TerminalReview extends EventEmitter {
         else { entry.turn = turn; entry.following = null; }
       }
     }
-    if (force && entry.roots[rootKey] && !isStartupRequest(completion.request)
+    if ((force || reanalyze) && (entry.roots[rootKey] || reanalyze && rootKey) && !isStartupRequest(completion.request)
       && !entry.turn && !entry.pending.length && !entry.active && completion.state === 'completed') {
       const taskId = entry.roots[rootKey] || `${binding}:${nativeKey}`;
-      this.enqueue(id, entry, { taskId, terminalId: id, request: completion.request, text: completion.evidence,
-        lifecycle: 'completed', submittedAt: completion.requestAt, observedAt: this.now(),
-        context: completion.context, updates: completion.updates, tools: completion.tools, source: completion.source });
+      const previous = entry.latest[taskId] || (entry.following?.taskId === taskId ? entry.following.latest : null);
+      const chunk = { ...previous, taskId, terminalId: id, request: this.task(entry, taskId)?.request || previous?.request || completion.request, text: completion.evidence,
+        lifecycle: 'completed', submittedAt: this.task(entry, taskId)?.submittedAt || previous?.submittedAt || completion.requestAt, observedAt: this.now(),
+        context: completion.context, updates: completion.updates, tools: completion.tools, source: completion.source,
+        reanalyze };
+      entry.roots[rootKey] = taskId;
+      if (reanalyze) entry.following = { ...entry.following, taskId, request: chunk.request, submittedAt: chunk.submittedAt, latest: chunk };
+      this.enqueue(id, entry, chunk);
+    } else if (reanalyze && !completion.available && !entry.turn && !entry.pending.length && !entry.active
+      && entry.following?.latest?.lifecycle === 'completed') {
+      this.enqueue(id, entry, { ...entry.following.latest, reanalyze: true, observedAt: this.now() });
     }
-    if (force && entry.failed) { entry.pending.push({ ...entry.failed, rateLimitAttempts: 0 }); entry.failed = null; }
+    if (entry.failed && (reanalyze || force && !entry.failed.reanalyze)) {
+      if (!entry.pending.some(item => item.taskId === entry.failed.taskId)) entry.pending.push({ ...entry.failed, rateLimitAttempts: 0, reanalyze: reanalyze || entry.failed.reanalyze });
+      entry.failed = null;
+    }
+    if (reanalyze && !entry.active) for (const chunk of entry.pending) {
+      if (chunk.taskId === entry.following?.taskId && chunk.lifecycle === 'completed') chunk.reanalyze = true;
+    }
     const chunk = entry.pending[0];
     if (chunk) {
-      const policy = classifyEvidence(chunk, this.records(), entry.locale);
+      const policy = analysisPolicy(chunk, this.records(), entry.locale);
       if (policy.mode !== 'analyze') {
         entry.pending.shift();
         const previous = this.task(entry, chunk.taskId);
@@ -500,7 +534,7 @@ class TerminalReview extends EventEmitter {
     if (this.busy) return;
     clearTimeout(this.retryTimer); this.retryTimer = null;
     const choices = [...this.entries].filter(([id, entry]) => entry.pending.length && !entry.active && entry.state !== 'paused' && this.scheduling.has(id)
-      && classifyEvidence(entry.pending[0], this.records(), entry.locale).mode === 'analyze');
+      && analysisPolicy(entry.pending[0], this.records(), entry.locale).mode === 'analyze');
     let nextRetry = Infinity;
     const available = choices.filter(([id, entry]) => {
       const selected = normalizeReviewSettings(this.scheduling.get(id).analysis).provider;
@@ -560,7 +594,7 @@ class TerminalReview extends EventEmitter {
       }
       if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
       active.timings.evidenceReadyAt = this.now();
-      if (settings.jevEnabled && !this.scheduling.get(id)?.force) {
+      if (settings.jevEnabled && !chunk.reanalyze && !this.scheduling.get(id)?.force) {
         active.timings.gateStartedAt = this.now();
         const gateContext = { conversation: compactContext(chunk.context), priorChecks: active.relatedEvidence || '' };
         const gateScope = createHash('sha256').update(JSON.stringify([chunk.request, currentSource, gateContext, chunk.lifecycle])).digest('hex');
@@ -651,7 +685,7 @@ class TerminalReview extends EventEmitter {
         // A rate-limited attempt has no final usage record. Preserve known usage
         // separately and never report the later successful call as the full cost.
         this.publish(id, entry, chunk, task, chunk.deferredAttempts?.length ? null : usage,
-          { analysisId: randomUUID(), analysisDepth: 'automatic', analysisProvider: provider,
+          { analysisId: randomUUID(), analysisDepth: chunk.reanalyze ? 'manual' : 'automatic', analysisProvider: provider,
             analysisModel: raw?.model || settings.models[provider], ...(active.gate ? { analysisGate: active.gate } : {}), analysisInputChars: prompt.length, qualityPasses,
             analysisMetrics: { ...active.timings, validatedAt: this.now(), publishedAt: this.now(), calls: active.calls, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals, retrievedChars: active.evidence?.readChars || 0,
               deferredAttempts: chunk.deferredAttempts || [], knownCurrentUsage: usage },
@@ -688,6 +722,7 @@ class TerminalReview extends EventEmitter {
     entry.projectionRevision = (entry.projectionRevision || 0) + 1;
     return { revision: entry.projectionRevision, terminalPid: JSON.parse(entry.key)[2], creationId: JSON.parse(entry.key)[1], state: entry.state, message: entry.message || '', provider: entry.provider || '', providerPid: entry.providerPid || null,
       currentTaskId,
+      manual: Boolean(entry.active?.chunk.reanalyze || entry.pending.some(item => item.reanalyze) || entry.failed?.reanalyze),
       phase: entry.active ? entry.active.timings.modelStartedAt ? 'model' : 'evidence' : entry.pending.length ? entry.retryAt > this.now() ? 'backoff' : 'queue' : 'idle',
       retryAt: entry.retryAt || null,
       stale: Boolean(entry.turn || entry.pending.length), startedAt: entry.active?.startedAt || null,
