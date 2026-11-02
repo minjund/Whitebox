@@ -1195,10 +1195,11 @@
     const activity = $('#wbReviewActivity');
     activity.hidden = !['awaiting-answer', 'collecting', 'reviewing', 'error', 'unbound'].includes(state);
     const activityLabel = state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state];
+    const hasThinkingLoader = analyzing && typeof ui?.thinking === 'function';
     const previousLoader = activity.querySelector('.wb-review-state-label');
     if (previousLoader) ui?.clear(previousLoader);
-    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}"><i aria-hidden="true"></i><div><strong class="wb-review-state-label">${esc(activityLabel)}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
-    if (analyzing) ui?.thinking(activity.querySelector('.wb-review-state-label'), activityLabel);
+    activity.innerHTML = activity.hidden ? '' : `<div class="wb-review-state ${pending ? 'is-loading' : ''}">${hasThinkingLoader ? '' : '<i aria-hidden="true"></i>'}<div><strong class="wb-review-state-label">${esc(activityLabel)}</strong>${rateLimited ? `<small>${t('다시 시도까지')} ${Math.ceil((value.retryAt - Date.now()) / 1000)}s</small>` : ''}</div></div>`;
+    if (hasThinkingLoader) ui.thinking(activity.querySelector('.wb-review-state-label'), activityLabel);
     $('#wbReviewContent').setAttribute('aria-busy', String(analyzing));
     $('[data-action="refresh"]').disabled = analyzing;
     $('[data-action="refresh"]').title = state === 'awaiting-answer' ? t('답변 완료 다시 확인') : t('지금 검토');

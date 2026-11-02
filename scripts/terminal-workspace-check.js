@@ -895,6 +895,22 @@ app.whenReady().then(async () => {
     await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
     assert.equal(await evaluate('Boolean(document.querySelector("#wbReviewActivity .ui-tlc"))'), true, 'official thinking loader shows real review state');
+    for (const theme of ['light', 'dark']) {
+      await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
+      const loadingLayout = await evaluate(`(() => {
+        const host = document.querySelector('#wbReviewActivity');
+        const loader = host.querySelector('.ui-tlc'), icon = loader.querySelector('.ui-tlc__icon').getBoundingClientRect();
+        const text = loader.querySelector('.ui-tlc__text').getBoundingClientRect(), label = loader.querySelector('.ui-tlc__label').getBoundingClientRect();
+        return { legacySpinners: host.querySelectorAll('.wb-review-state > i').length,
+          spinners: host.querySelectorAll('.ui-tlc__spinner').length,
+          horizontal: icon.right <= text.left && Math.abs((icon.top + icon.bottom - text.top - text.bottom) / 2) < 2,
+          fullLabel: label.top >= text.top - 1 && label.bottom <= text.bottom + 1 && label.width <= text.width + 1,
+          height: loader.getBoundingClientRect().height };
+      })()`);
+      assert(loadingLayout.legacySpinners === 0 && loadingLayout.spinners === 1 && loadingLayout.horizontal && loadingLayout.fullLabel && loadingLayout.height <= 24, JSON.stringify({theme, ...loadingLayout}));
+    }
+    console.log('PASS review analysis uses one loader with an aligned, unclipped label in light/dark themes');
+
     assert.equal(await evaluate('document.querySelector(".wb-review-preview")'), null, 'no redundant observed-facts preview');
     if (process.env.WHITEBOX_REVIEW_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_REVIEW_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
     assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), false);
