@@ -985,7 +985,17 @@ class AgentRunner extends EventEmitter {
         : event.type === 'assistant' ? (Array.isArray(event.message?.content) ? event.message.content.filter(item => item.type === 'text').map(item => item.text).join('') : typeof event.message?.content === 'string' ? event.message.content : '')
           : event.type === 'content_block_delta' && event.delta?.type === 'text_delta' ? event.delta.text : '';
       if (run.internalQuestionnaire && !run.firstAssistantAt && typeof assistantText === 'string' && assistantText.trim()) run.firstAssistantAt = Date.now();
-      if (run.provider === 'claude') handleClaude(run.state, event);
+      if (run.provider === 'claude') {
+        handleClaude(run.state, event);
+        // Isolated reviews use the CLI's explicit final result, as the result
+        // may arrive without an assistant frame or after a provisional message.
+        // Keep malformed final JSON visible to validation; never fall back to a
+        // different draft to make a failed review look successful.
+        if (run.terminalReview && event.type === 'result' && !event.is_error
+          && typeof event.result === 'string' && event.result.trim()) {
+          rememberAssistantResponse(run.state, event.result, 'claude:review-result');
+        }
+      }
       else if (run.provider === 'codex') handleCodex(run.state, event);
       else if (run.provider === 'gemini') handleGemini(run.state, event);
       else handleGrok(run.state, event);

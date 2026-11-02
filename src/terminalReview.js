@@ -187,7 +187,7 @@ ${decisionInstructions}
 WRITING STYLE in ${language}:
 결과부터 쉬운 말로 쓴다. 문장마다 정보를 더하고 칭찬·강조·마지막 요약의 반복은 뺀다.
 actual=결과, why=해결하려던 문제, understanding=작동 방식, impact=사용 상황의 변화, explanation=요청 충족 판단의 근거, verification=관찰된 검사와 한계.
-why·understanding·impact는 decision과 다른 새 정보가 없으면 "". '사용자가 요청해서'나 결과의 재진술로 채우지 않는다. 단순 수정·전달은 빈 항목이 자연스럽다. explanation은 판단 이유만 쓴다. verification은 확인 사실이 없으면 ""이며 검증 완료를 뜻하지 않는다. unverified는 완료에 필요한 미확인 사실만, 없으면 []; nextStep은 필요한 후속 조치가 없으면 "". 실패·진행 상태·숫자·조건·검증 한계는 보존한다.
+why·understanding·impact는 decision과 다른 새 정보가 없으면 "". '사용자가 요청해서'나 결과의 재진술로 채우지 않는다. 단순 수정·전달은 빈 항목이 자연스럽다. explanation은 판단 이유만 쓴다. verification은 확인 사실이 없으면 ""이며 검증 완료를 뜻하지 않는다. unverified는 완료에 필요한 미확인 사실만, 없으면 []; nextStep은 ""로 두고 후속 지시는 decision.action.request에만 쓴다. 실패·진행 상태·숫자·조건·검증 한계는 보존한다.
 예시는 근거나 인용이 아니다. REQUEST와 EVIDENCE로 decision을 포함한 전체 스키마를 ${language}로 채운다. 아래 JSON은 설명 항목 발췌이며 decision의 결론·이유·주의·다음 행동을 중복해서 채우지 않는다.
 <style-examples>
 단순 수정: 요청='탭 제목만 초안으로 바꿔줘'. 기록='탭 제목을 초안으로 변경; 본문 유지. AI: 실행 검사 안 함'.
