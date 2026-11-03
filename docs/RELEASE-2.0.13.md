@@ -1,7 +1,7 @@
 # 2.0.13 compatibility and release record
 
 Candidate is based on immutable v2.0.12 commit 16e8f384b437714f40d23d6c11f0a8478a62cbdc.
-Only terminal creation, drag/drop handling, compact popup presentation, version
+Only terminal creation, drag/drop handling, compact popup presentation, IME paste handling, version
 metadata and compatibility-test inputs change. Existing 2.0.12 settings, review
 logic, process workers, VT paste handling, completion badges, app identity,
 profile paths, terminal host protocol and stored layout schema remain intact.
@@ -114,3 +114,24 @@ installed app.asar version, renderer readiness, relaunch and exact cleanup.
 - Both Mac architecture release/check results.
 - Unauthenticated live latest API and public asset HEAD size/digest checks.
 - Canonical Setup and manual alias verified byte-identical.
+
+## Korean input follow-up (public release paused)
+
+The user paused public deployment and then requested the paste/IME fix in the
+same 2.0.13 candidate. Previously cancelled compatibility runs are not passes;
+no tag or public release was created. A resumed release needs fresh complete
+checks against the final candidate SHA, including the IME follow-up.
+
+Paste now commits an active or pending composition before clipboard bytes,
+resets the browser textarea and selection, and preserves focus ownership.
+Unflagged Hangul jamo keydowns are left to the browser's native IME rather than
+encoded immediately by Ghostty. Pasted text is not normalized or rewritten.
+
+Regression coverage includes active/deferred preedit at paste, stale selection,
+background focus, unflagged jamo keys, and Chromium-generated ㅇ→이 composition
+followed by the reported Korean sentence. The clipboard probe uses Electron
+44's asynchronous ClipboardItem API and restores its saved clipboard contents.
+Synthetic DOM/CDP checks establish renderer behavior; they are not evidence of
+native Windows keyboard/IME behavior. Native macOS automation also produced
+uncomposed jamo in the plain browser reference field, so that automation trace
+is not treated as proof that OS keyboard composition is fixed.

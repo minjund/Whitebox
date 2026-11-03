@@ -2,7 +2,7 @@
 
 // Real Electron clipboard + embedded Ghostty, with an isolated profile and
 // a captured terminalWrite boundary (no commands reach a user's live shell).
-const { app, BrowserWindow, clipboard } = require('electron');
+const { app, BrowserWindow, clipboard, ClipboardItem } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -15,7 +15,8 @@ app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
 
 app.whenReady().then(async () => {
-  const savedClipboard = clipboard.availableFormats().map(format => [format, clipboard.readBuffer(format)]);
+  const savedClipboard = await Promise.all((await clipboard.read()).map(async item =>
+    new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)]))))));
   const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
   win.webContents.on('console-message', event => {
     if (event.level === 'error' || event.level >= 3) process.stderr.write(String(event.message) + '\n');
@@ -38,8 +39,8 @@ app.whenReady().then(async () => {
     win.focus();
     win.webContents.focus();
     await new Promise(resolve => setTimeout(resolve, 200));
-    clipboard.writeText('whitebox-native-clipboard-probe');
-    assert.equal(clipboard.readText(), 'whitebox-native-clipboard-probe',
+    await clipboard.writeText('whitebox-native-clipboard-probe');
+    assert.equal(await clipboard.readText(), 'whitebox-native-clipboard-probe',
       'Host clipboard unavailable: direct Electron write/read failed before terminal creation');
     await evaluate(`(async () => {
       window.writes = []; window.errors = [];
@@ -59,6 +60,7 @@ app.whenReady().then(async () => {
         notice: message => errors.push(message), xtermOptions: () => ({ cols: 100, rows: 24 }),
       });
       window.entry = await workbench.ensureSessionTerminal(session);
+      entry.host.dataset.groupTerminal = 'true';
       window.term = entry.terminal;
       term.focus();
       window.key = (key, extra = {}) => {
@@ -80,12 +82,12 @@ app.whenReady().then(async () => {
     const copied = await evaluate('expectedCopy');
     await waitFor('errors.length === 0');
     assert(copied.length > 8000, JSON.stringify(await evaluate('({length: expectedCopy.length, base: term.buffer.active.baseY, rows: term.rows, bufferLength: term.buffer.active.length, selected: term.backend.getSelectionPosition()})')));
-    const clipboardMatches = () => clipboard.readText().replace(/\r\n/g, '\n') === copied.replace(/\r\n/g, '\n');
-    for (let attempt = 0; attempt < 100 && !clipboardMatches(); attempt += 1) {
+    const clipboardMatches = async () => (await clipboard.readText()).replace(/\r\n/g, '\n') === copied.replace(/\r\n/g, '\n');
+    for (let attempt = 0; attempt < 100 && !await clipboardMatches(); attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    assert(clipboardMatches(), 'Selection was truncated or not copied; ' + JSON.stringify({expectedLength: copied.length, actualLength: clipboard.readText().length, formats: clipboard.availableFormats(), renderer: await evaluate('({errors, focused: document.hasFocus(), selected: term.hasSelection()})')}));
-    clipboard.writeText('첫 줄😀\n둘째 줄');
+    assert(await clipboardMatches(), 'Selection was truncated or not copied; ' + JSON.stringify({expectedLength: copied.length, actualLength: (await clipboard.readText()).length, formats: (await clipboard.read()).flatMap(item => item.types), renderer: await evaluate('({errors, focused: document.hasFocus(), selected: term.hasSelection()})')}));
+    await clipboard.writeText('첫 줄😀\n둘째 줄');
     await evaluate(`(async () => {
       term.clearSelection();
       await new Promise(resolve => term.write('\x1b[?2004h', resolve));
@@ -114,7 +116,7 @@ app.whenReady().then(async () => {
   } finally {
     win.destroy();
     clipboard.clear();
-    for (const [format, data] of savedClipboard) clipboard.writeBuffer(format, data);
+    if (savedClipboard.length) await clipboard.write(savedClipboard);
   }
 }).then(() => app.exit(0)).catch(error => { process.stderr.write(error.stack + '\n'); app.exit(1); });
 

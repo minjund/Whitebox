@@ -5,6 +5,9 @@ GitHub release notes remain the authoritative version history.
 
 ## 2.0.13 - 2026-11-03
 
+- Fix Korean input after paste: finish preceding IME text before clipboard bytes,
+  reset the native input context and shadow selection, and let Hangul jamo keys
+  reach the browser IME even when macOS omits its composition flags.
 - Open additional Codex/Claude panes with `whitebox new-terminal codex --count 3`
   or the panel MCP tool. Adopt each terminal before launching its provider so
   its Whitebox tools are discoverable. Failed or uncertain launches never replay.

@@ -259,3 +259,10 @@ surfaces follow the system appearance, with visible keyboard focus and unchanged
 approval/question routing. Design references: affectUI's free MIT Clean
 [Notification Stack](https://www.affectui.com/components/notification-stack)
 and [Button](https://www.affectui.com/r/button-clean.json). No remote UI is loaded.
+
+
+Korean input after paste (2.0.13): clipboard insertion ends the prior IME
+composition before sending pasted bytes and clears its browser-side selection.
+The next Korean composition starts from an empty shadow input. Hangul jamo keys
+without composition flags stay with the browser IME, while shortcuts continue
+to use terminal key handling. Clipboard text itself is preserved.
