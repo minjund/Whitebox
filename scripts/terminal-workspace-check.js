@@ -1369,6 +1369,28 @@ app.whenReady().then(async () => {
     if (process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
     await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
     console.log('PASS real pointer drag across panels/projects, complete-panel display, three-panel together-view and horizontal panel-add labels at 176px');
+    // A foreign visible target may still remember its old single-panel view.
+    // Moving beside it must preserve the rest of the current shared canvas.
+    const crossProject = await evaluate(`(() => {
+      const key='whitebox:workspace:v2', saved=JSON.parse(localStorage.getItem(key));
+      sessionStorage.setItem('fixture:before-cross-project-drag',localStorage.getItem(key));
+      const panels=[...saved.spaces,saved.standalone].flatMap(o=>o.tabs), a=panels.find(p=>WhiteboxWorkspaceLayout.ids(p.layout).length>1), b=panels.find(p=>p!==a);
+      const aIds=WhiteboxWorkspaceLayout.ids(a.layout), bId=WhiteboxWorkspaceLayout.ids(b.layout)[0], cwd=saved.spaces[0]?.cwd||saved.standalone.cwd;
+      const visible=[...aIds,bId], shared=WhiteboxWorkspaceLayout.reconcile(a.layout,[{id:bId}],new Set(visible));
+      saved.spaces=[{id:'fixture-cross-a',name:'Cross project A',cwd,tabs:[{...a,activePane:aIds[0],viewLayout:shared}],activeTab:a.id,activeSurface:aIds[0],viewLayout:shared},{id:'fixture-cross-b',name:'Cross project B',cwd,tabs:[{...b,activePane:bId,viewLayout:{id:bId}}],activeTab:b.id,activeSurface:bId,viewLayout:{id:bId}}];
+      const rest=panels.filter(p=>p!==a&&p!==b);saved.standalone={...saved.standalone,tabs:rest,activeTab:rest[0]?.id||'',activeSurface:WhiteboxWorkspaceLayout.ids(rest[0]?.layout)[0]||'',viewLayout:rest[0]?.layout||null};
+      saved.selectedSpace='fixture-cross-a';saved.pinnedPanels=[];localStorage.setItem(key,JSON.stringify(saved));
+      return {moving:aIds[1],target:bId,targetPanel:b.id,visible};
+    })()`);
+    await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','cross-project shared-canvas fixture');
+    await nativeDrag(crossProject.moving, `#wbCanvas [data-terminal-id="${crossProject.target}"] .wb-terminal-mount`);
+    assert.deepEqual((await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),n=>n.dataset.terminalId)')).sort(),crossProject.visible.sort(),'a foreign target keeps every existing shared-canvas terminal');
+    await nativeDrag(crossProject.moving, `[data-drop-panel="${crossProject.targetPanel}"]`);
+    assert.deepEqual((await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),n=>n.dataset.terminalId)')).sort(),crossProject.visible.sort(),'a visible foreign sidebar panel also keeps the shared canvas');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'cross-project target placement retains every native PTY');
+    await evaluate(`(() => {const saved=sessionStorage.getItem('fixture:before-cross-project-drag');if(!saved)throw Error('Missing fixture snapshot');localStorage.setItem('whitebox:workspace:v2',saved);sessionStorage.removeItem('fixture:before-cross-project-drag');})()`);
+    await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','original panel fixture restored');
+    console.log('PASS dragging onto a foreign-project pane preserves the complete shared canvas');
     // Desktop drags can blur the window, and terminal renderers own drop events.
     await evaluate(`(() => {
       const source=document.querySelector('[data-instance="${singlePanelId}"]'), target=document.querySelector('[data-terminal-id="${foreignId}"] .wb-terminal-mount');

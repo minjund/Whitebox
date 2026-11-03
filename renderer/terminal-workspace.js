@@ -720,7 +720,12 @@
     if (!target) return null;
     if (draggingPanelId && (target.dataset.dropOwner || target.dataset.dropPanel)) return null;
     if (target.dataset.dropOwner) return { node: target, ownerId: target.dataset.dropOwner, direction: 'new' };
-    if (target.dataset.dropPanel) return { node: target, panelId: target.dataset.dropPanel, direction: 'right' };
+    if (target.dataset.dropPanel) {
+      const panelId = target.dataset.dropPanel;
+      const members = layout.ids(panelOwner(panelId)?.tabs.find(panel => panel.id === panelId)?.layout);
+      const targetId = layout.ids(canvasLayout()).find(id => id !== draggingId && members.includes(id));
+      return { node: target, panelId: targetId ? tab()?.id : panelId, targetId, direction: 'right' };
+    }
     if (target.id === 'wbCanvas') {
       const sourceIds = draggingPanelId
         ? layout.ids(panelOwner(draggingPanelId)?.tabs.find(panel => panel.id === draggingPanelId)?.layout)
@@ -732,7 +737,9 @@
     const bounds = target.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
     const direction = y < .25 ? 'up' : y > .75 ? 'down' : x < .5 ? 'left' : 'right';
-    return { node: target, panelId: target.dataset.panelId, targetId: target.dataset.terminalId, direction };
+    // Place within the shared canvas. The target's logical project may still
+    // remember an older, smaller view; activating it would discard other panes.
+    return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction };
   }
   function placePanel(panelId, target) {
     const panel = panelOwner(panelId)?.tabs.find(item => item.id === panelId);
