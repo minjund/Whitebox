@@ -37,5 +37,20 @@
     }
     return result;
   }
-  return { ids, split, remove, restore, reconcile };
+  function place(node, incoming, target, axis = 'row', before = false) {
+    const incomingIds = ids(incoming);
+    if (!incomingIds.length || incomingIds.includes(target)) return node;
+    incoming = restore(incoming, new Set(incomingIds));
+    let remaining = node;
+    for (const id of incomingIds) remaining = remove(remaining, id);
+    if (!remaining) return incoming;
+    if (!ids(remaining).includes(target)) target = ids(remaining)[0];
+    const insert = branch => branch.id
+      ? branch.id === target
+        ? { axis, ratio: .5, first: before ? incoming : branch, second: before ? branch : incoming }
+        : branch
+      : { ...branch, first: insert(branch.first), second: insert(branch.second) };
+    return insert(remaining);
+  }
+  return { ids, split, remove, restore, reconcile, place };
 });

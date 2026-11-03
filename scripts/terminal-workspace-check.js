@@ -560,34 +560,68 @@ app.whenReady().then(async () => {
       source.dispatchEvent(event('dragend'));
       return accepted;
     })()`);
-    // Chromium's native drag initiation must work too, including draggable buttons.
-    const nativeDrag = async (id, selector) => {
+    // Ordinary mouse clicks still select terminals; Escape cancels only a drag.
+    win.webContents.debugger.attach('1.3');
+    try {
+      const mouse = params => win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', params);
+      for (const id of [second.id, first.id]) {
+        const point = await evaluate(`(() => {const r=document.querySelector('[data-instance="${id}"]').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+        await mouse({type:'mousePressed',...point,button:'left',buttons:1,clickCount:1});
+        await mouse({type:'mouseReleased',...point,button:'left',buttons:0,clickCount:1});
+        assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), id, 'real click selects its terminal without starting a drag');
+      }
+      const before = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(o=>({id:o.id,view:o.viewLayout,active:o.activeSurface})))');
+      const point = await evaluate(`(() => {const r=document.querySelector('[data-instance="${second.id}"]').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+      await mouse({type:'mousePressed',...point,button:'left',buttons:1,clickCount:1});
+      await mouse({type:'mouseMoved',x:point.x+12,y:point.y+12,button:'left',buttons:1});
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await mouse({type:'mouseReleased',...point,button:'left',buttons:0,clickCount:1});
+      assert.equal(await evaluate('document.querySelector("#terminalWorkspace").classList.contains("is-dragging-terminal")'), false);
+      assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(o=>({id:o.id,view:o.viewLayout,active:o.activeSurface})))'),before,'Escape keeps layout and selection unchanged');
+    } finally { win.webContents.debugger.detach(); }
+    // Use real mouse input, including a polling interval between press and move.
+    // HTML5-only synthesized drag events miss both source replacement and the
+    // native desktop drag service that prevented real cross-panel placement.
+    const nativeDrag = async (id, selector, sourceSelector = `[data-instance="${id}"]`, hold = false) => {
       win.webContents.debugger.attach('1.3');
       const send = (method, params) => win.webContents.debugger.sendCommand(method, params);
-      let intercepted;
-      const listener = (_event, method, params) => { if (method === 'Input.dragIntercepted') intercepted = params.data; };
-      win.webContents.debugger.on('message', listener);
       try {
-        await send('Input.setInterceptDrags', { enabled: true });
         const points = await evaluate(`(() => {
-          const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
-          return { source: rect('[data-instance="${id}"]'), target: rect(${JSON.stringify(selector)}) };
+          const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); const border=selector.startsWith('[data-drag-panel='); return { x: r.left + (border ? 2 : r.width / 2), y: r.top + (border ? 2 : r.height / 2) }; };
+          window.heldDragSource = document.querySelector(${JSON.stringify(sourceSelector)});
+          return { source: rect(${JSON.stringify(sourceSelector)}), target: rect(${JSON.stringify(selector)}) };
         })()`);
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...points.source });
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...points.source, button: 'left', buttons: 1, clickCount: 1 });
+        if (hold) {
+          activityOverrides.set(id, { state: 'working', completed: false, requestId: 'drag-held-poll', providerPid: manager.get(id).pid + 100000 });
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          assert.equal(await evaluate('heldDragSource.isConnected'), true, 'polling preserves the pressed source before movement');
+          activityOverrides.delete(id);
+        }
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: points.source.x + 12, y: points.source.y + 12, button: 'left', buttons: 1 });
+        assert.equal(await evaluate('document.querySelector("#terminalWorkspace").classList.contains("is-dragging-terminal")'), true, 'mouse movement starts a workspace drag');
+        for (const narrow of [false, true]) {
+          await evaluate(`document.querySelector('#terminalWorkspace').style.${narrow ? "setProperty('--wb-sidebar-width','176px')" : "removeProperty('--wb-sidebar-width')"}`);
+          const dropLabels = await evaluate(`Array.from(document.querySelectorAll('.wb-new-panel-drop'), button => {
+            const label = button.querySelector('span'), text = document.createRange(); text.selectNodeContents(label);
+            const boxes = [...text.getClientRects()]; return { lines: boxes.length, fits: label.clientWidth >= text.getBoundingClientRect().width, writingMode: getComputedStyle(button).writingMode, width: button.getBoundingClientRect().width };
+          })`);
+          assert(dropLabels.every(label => label.lines === 1 && label.fits && label.writingMode === 'horizontal-tb' && label.width > 90), 'panel-add labels stay horizontal in normal/narrow sidebars during a real drag');
+          if (hold && process.env.WHITEBOX_PANEL_DROP_SCREENSHOT_DIR) {
+            fs.mkdirSync(process.env.WHITEBOX_PANEL_DROP_SCREENSHOT_DIR,{recursive:true});
+            fs.writeFileSync(path.join(process.env.WHITEBOX_PANEL_DROP_SCREENSHOT_DIR,`drag-${narrow?'narrow':'normal'}.png`),(await win.webContents.capturePage()).toPNG());
+          }
+        }
+        await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...points.target, button: 'left', buttons: 1 });
-        for (let attempt = 0; !intercepted && attempt < 30; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
-        assert.ok(intercepted, 'native drag starts from sidebar terminal');
-        for (const type of ['dragEnter', 'dragOver', 'drop']) await send('Input.dispatchDragEvent', { type, ...points.target, data: intercepted });
         await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...points.target, button: 'left', buttons: 0, clickCount: 1 });
       } finally {
-        await send('Input.setInterceptDrags', { enabled: false });
-        win.webContents.debugger.removeListener('message', listener);
         win.webContents.debugger.detach();
       }
     };
-    await nativeDrag(second.id, `[data-drop-owner="${originalOwner}"]`);
+    await nativeDrag(second.id, `[data-drop-owner="${originalOwner}"]`, undefined, true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'dragging out creates an independent panel');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2, 'separate panels stay together on the split canvas');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
@@ -698,6 +732,8 @@ app.whenReady().then(async () => {
     await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 0);
+    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
+    assert.equal(await evaluate(`Boolean(document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]'))`),true,'together-view can open a panel from an empty project');
     assert.equal(await drag(second.id, `[data-drop-panel="${originalPanel}"]`), true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
@@ -708,7 +744,7 @@ app.whenReady().then(async () => {
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
     const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))');
-    await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
+    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'explicit together-view preserves cross-project panel display');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'),2);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'together-view retains logical panel membership');
@@ -1013,9 +1049,11 @@ app.whenReady().then(async () => {
       const group = document.querySelector('.wb-panel-group').getBoundingClientRect();
       const plus = document.querySelector('.wb-panel-group .wb-panel-add').getBoundingClientRect();
       const name = document.querySelector('.wb-instance-copy strong').getBoundingClientRect();
-      return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height };
+      const together=document.querySelector('.wb-panel-group .wb-panel-together').getBoundingClientRect();
+      const label=document.querySelector('.wb-panel-group .wb-panel-add>span'), text=document.createRange();text.selectNodeContents(label);
+      return { nameWidth:name.width, inside:plus.left>=group.left&&together.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height, togetherWidth:together.width, labelFits:label.clientWidth>=text.getBoundingClientRect().width, labelLines:text.getClientRects().length };
     })()`);
-    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 100 && sidebarGeometry.plusHeight >= 30, JSON.stringify(sidebarGeometry));
+    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 76 && sidebarGeometry.plusHeight >= 30 && sidebarGeometry.togetherWidth >= 24 && sidebarGeometry.labelFits && sidebarGeometry.labelLines === 1, JSON.stringify(sidebarGeometry));
     await checkProjectTree();
     await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
     for (const width of [780, 640, 1000]) {
@@ -1292,6 +1330,10 @@ app.whenReady().then(async () => {
     await evaluate(`document.querySelector('[data-instance="${singlePanelId}"]').click()`);
     await waitFor(`document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
     // Intentional mixed-panel placement must still work after fresh-panel isolation.
+    await evaluate('WhiteboxWorkspace.createTerminal(null)');
+    await waitFor('!WhiteboxWorkspace.getState().busy', 'third independent panel ready');
+    const thirdPanel = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return [...s.spaces,s.standalone].find(o=>o.id===s.selectedSpace).activeTab;})()');
+    await evaluate(`document.querySelector('[data-instance="${singlePanelId}"]').click(); document.querySelector('[data-solo-terminal="${singlePanelId}"]').click()`);
     const rosterBeforeArrange = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))');
     const foreignId = originalRoster[0];
     const livePtyBeforeDrag = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
@@ -1299,6 +1341,16 @@ app.whenReady().then(async () => {
     assert.ok(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane')).some(node=>node.dataset.terminalId==='${foreignId}')`), 'native drag shows a hidden terminal from another panel on the active canvas');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'native canvas drop preserves panel membership');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'native canvas drop preserves every PTY');
+    await nativeDrag(foreignId, `#wbCanvas [data-terminal-id="${singlePanelId}"] .wb-terminal-mount`, `[data-drag-panel="${beforeAdd.panelId}"]`);
+    assert.equal(await evaluate(`${JSON.stringify(originalRoster)}.every(id=>Boolean(document.querySelector('#wbCanvas [data-terminal-id="'+id+'"]')))`), true, 'dragging a panel card displays every member of that panel');
+    await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
+    const togetherState = await evaluate(`(() => {const s=WhiteboxWorkspace.getState();return {visible:[...document.querySelectorAll('#wbCanvas .wb-pane')].map(n=>({id:n.dataset.terminalId,panel:n.dataset.panelId})), panels:[...s.spaces,s.standalone].flatMap(o=>o.tabs).map(p=>({id:p.id,ids:WhiteboxWorkspaceLayout.ids(p.layout)})), third:${JSON.stringify(thirdPanel)}, pins:s.pinnedPanels, selected:s.selectedSpace, button:document.querySelector('[data-pin-panel="${thirdPanel}"]')?.outerHTML};})()`);
+    assert(new Set(togetherState.visible.map(n=>n.panel)).size>=3, 'sidebar together-view adds a third panel without replacing the current view: '+JSON.stringify(togetherState));
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'panel dragging and together-view preserve all memberships');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'three-panel display preserves every PTY');
+    if (process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
+    await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
+    console.log('PASS real pointer drag across panels/projects, complete-panel display, three-panel together-view and horizontal panel-add labels at 176px');
     // Desktop drags can blur the window, and terminal renderers own drop events.
     await evaluate(`(() => {
       const source=document.querySelector('[data-instance="${singlePanelId}"]'), target=document.querySelector('[data-terminal-id="${foreignId}"] .wb-terminal-mount');

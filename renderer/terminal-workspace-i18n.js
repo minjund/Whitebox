@@ -82,6 +82,7 @@
   ['분할 배치', 'Arrange split view', '分屏布局'],
   ['분리된 패널', 'Separate panel', '独立面板'],
   ["이 패널 함께 보기", "Show this panel alongside", "同时显示此面板"],
+  ["함께 보기", "Show together", "同时显示"],
   ["함께 보기 해제", "Unpin panel", "取消固定面板"],
   ["Jev 플러그인", "Jev plugin", "Jev 插件"],
   ["API 키", "API key", "API 密钥"],
