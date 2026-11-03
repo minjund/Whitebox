@@ -87,3 +87,20 @@
 #terminalWorkspace .wb-sidebar{container-type:inline-size}
 @container (max-width:200px){#terminalWorkspace #wbSpaces .wb-project-terminals{margin-left:14px;--wb-tree-branch:10px}#terminalWorkspace .wb-panel-members .wb-instance{padding-left:3px;padding-right:3px;gap:4px}#terminalWorkspace .wb-panel-members .wb-instance-copy{gap:3px}}
 @media(prefers-reduced-motion:reduce){#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::before,#terminalWorkspace #wbSpaces .wb-project-terminals>.wb-panel-group::after{transition:none}}
+
+/* Keep multi-panel display available directly beside terminal creation. */
+#terminalWorkspace .wb-panel-actions{display:flex;gap:2px;margin-top:5px;border-top:1px solid var(--clean-line)}
+#terminalWorkspace .wb-panel-actions>button{display:flex;align-items:center;justify-content:center;gap:4px;min-width:0;min-height:34px;padding:7px 4px;margin:0;border:0;border-radius:0;background:transparent;color:var(--clean-muted);font-size:10px;white-space:nowrap;cursor:pointer}
+#terminalWorkspace .wb-panel-actions>.wb-panel-add{flex:1;width:auto;max-width:none;min-width:0;height:auto}
+#terminalWorkspace .wb-panel-actions>.wb-panel-together{flex:1}
+#terminalWorkspace .wb-panel-actions>button:hover{background:var(--clean-wash);color:var(--clean-text)}
+#terminalWorkspace .wb-panel-together[aria-pressed=true]{color:var(--wb-panel-color)}
+#terminalWorkspace .wb-panel-actions .wb-icon{width:12px;height:12px;flex-shrink:0}
+#terminalWorkspace .wb-panel-actions>button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#terminalWorkspace .wb-new-panel-drop{display:grid;grid-template-columns:13px minmax(0,1fr);column-gap:7px;row-gap:4px;width:100%;min-width:0;max-width:100%;box-sizing:border-box;writing-mode:horizontal-tb}
+#terminalWorkspace .wb-new-panel-drop>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#terminalWorkspace .wb-new-panel-drop>small{grid-column:1/-1;min-width:0;padding:0 0 0 20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px}
+#terminalWorkspace .wb-new-panel-drop>.wb-icon{flex-shrink:0;width:13px;height:13px}
+@container (max-width:200px){#terminalWorkspace .wb-panel-actions>.wb-panel-together{flex:0 0 25px}#terminalWorkspace .wb-panel-together>span{display:none}}
+[data-drag-terminal],[data-drag-panel]{user-select:none;-webkit-user-select:none;cursor:grab}
+.is-dragging-terminal,.is-dragging-terminal *{cursor:grabbing!important}

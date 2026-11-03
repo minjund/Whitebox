@@ -1077,7 +1077,7 @@ async function main() {
     assert.match(officialMain, /terminalManager = demoCapture\s*\? new TerminalManager\(/);
     console.log(`PASS official 2.0.11 packaged startup-shell tray policy verified;mainSha256=${crypto.createHash('sha256').update(officialMain).digest('hex')}`);
   }
-  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11', '2.0.12'].includes(SOURCE_VERSION);
+  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11', '2.0.12', '2.0.13'].includes(SOURCE_VERSION);
   if (workspaceSource) delete process.env.WHITEBOX_DEMO_CAPTURE;
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;

@@ -411,7 +411,7 @@
   }
   let lastReviewKey = '';
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
-  let draggingId = '';
+  let draggingId = '', draggingPanelId = '', pointerDrag = null, suppressDragClick = false, consumedDragEscape = false;
   let arrangingId = '';
   let pendingCreation = null;
 
@@ -597,15 +597,16 @@
   function instanceRows(owner) {
     return owner.tabs.map(item => {
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
-      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
+      const shown = ids.length > 0 && ids.every(id => layout.ids(canvasLayout()).includes(id));
+      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
-        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="true" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
-      }).join('')}</div><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널 추가')}</span></button></section>`;
-    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('panel')} <span>패널 추가</span>${icon('plus')}<small>여기로 끌어 분리</small></button>`;
+        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
+      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button><button class="wb-panel-together" data-pin-panel="${esc(item.id)}" aria-pressed="${shown}" title="${t(shown ? '함께 보기 해제' : '이 패널 함께 보기')}" aria-label="${t(shown ? '함께 보기 해제' : '이 패널 함께 보기')}" ${busy || item.pending ? 'disabled' : ''}>${icon('split')}<span>${t('함께 보기')}</span></button></div></section>`;
+    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
   function renderInstances() {
-    if (draggingId) return; // Keep the native drag source and drop targets attached during polling.
+    if (draggingId || pointerDrag) return; // Keep pressed sources attached before the drag threshold too.
     const matchingProjects = spaces.filter(item => !projectQuery || [item.name, item.cwd, ...item.tabs.flatMap(panel => layout.ids(panel.layout).map(title))].some(value => String(value).toLocaleLowerCase().includes(projectQuery)));
     const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" title="${esc(item.cwd)}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
     const independentMarkup = instanceRows(standalone) || t('<p class="wb-no-instances">프로젝트 없는 세션이 여기에 표시됩니다.</p>');
@@ -712,23 +713,119 @@
     root.querySelectorAll('[data-drop-direction]').forEach(node => { delete node.dataset.dropDirection; delete node.dataset.dropLabel; });
   }
   function finishDrag() {
-    draggingId = ''; clearDrop(); root.classList.remove('is-dragging-terminal'); renderInstances();
+    draggingId = ''; draggingPanelId = ''; clearDrop(); root.classList.remove('is-dragging-terminal'); renderInstances();
   }
   function dropTarget(event) {
     const target = event.target.closest('[data-drop-owner], [data-drop-panel], #wbCanvas .wb-pane, #wbCanvas');
     if (!target) return null;
+    if (draggingPanelId && (target.dataset.dropOwner || target.dataset.dropPanel)) return null;
     if (target.dataset.dropOwner) return { node: target, ownerId: target.dataset.dropOwner, direction: 'new' };
-    if (target.dataset.dropPanel) return { node: target, panelId: target.dataset.dropPanel, direction: 'right' };
+    if (target.dataset.dropPanel) {
+      const panelId = target.dataset.dropPanel;
+      const members = layout.ids(panelOwner(panelId)?.tabs.find(panel => panel.id === panelId)?.layout);
+      const targetId = layout.ids(canvasLayout()).find(id => id !== draggingId && members.includes(id));
+      return { node: target, panelId: targetId ? tab()?.id : panelId, targetId, direction: 'right' };
+    }
     if (target.id === 'wbCanvas') {
-      const targetId = layout.ids(canvasLayout()).find(id => id !== draggingId);
+      const sourceIds = draggingPanelId
+        ? layout.ids(panelOwner(draggingPanelId)?.tabs.find(panel => panel.id === draggingPanelId)?.layout)
+        : [draggingId];
+      const targetId = layout.ids(canvasLayout()).find(id => !sourceIds.includes(id));
       return targetId ? { node: target, panelId: tab()?.id, targetId, direction: 'right' } : null;
     }
-    if (target.dataset.terminalId === draggingId) return null;
+    if (target.dataset.terminalId === draggingId || draggingPanelId && layout.ids(panelOwner(draggingPanelId)?.tabs.find(panel => panel.id === draggingPanelId)?.layout).includes(target.dataset.terminalId)) return null;
     const bounds = target.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
     const direction = y < .25 ? 'up' : y > .75 ? 'down' : x < .5 ? 'left' : 'right';
+    // Place within the shared canvas. The target's logical project may still
+    // remember an older, smaller view; activating it would discard other panes.
     return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction };
   }
+  function placePanel(panelId, target) {
+    const panel = panelOwner(panelId)?.tabs.find(item => item.id === panelId);
+    if (!panel || busy || !layout.ids(panel.layout).length) return;
+    const current = canvasLayout();
+    const targetId = target.targetId || layout.ids(current).find(id => !layout.ids(panel.layout).includes(id));
+    if (!targetId) return;
+    const direction = target.direction || 'right';
+    space().viewLayout = layout.place(current, panel.layout, targetId,
+      ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
+    pinnedPanels = [...new Set([...layout.ids(space().viewLayout).map(id => panelFor(id)?.id)].filter(Boolean))];
+    rememberCanvas();
+    expanded = false; root.classList.remove('terminal-expanded'); renderLayout(false);
+  }
+  const pointerDropTarget = event => {
+    const node = document.elementFromPoint(event.clientX, event.clientY);
+    return node ? dropTarget({ target: node, clientX: event.clientX, clientY: event.clientY }) : null;
+  };
+  root.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !event.isPrimary || busy) return;
+    suppressDragClick = false;
+    const source = event.target.closest('[data-drag-terminal], [data-drag-panel]');
+    if (!source || event.target.closest('button:not([data-drag-terminal]), input, select, textarea, a')) return;
+    const panel = source.dataset.dragPanel && panelOwner(source.dataset.dragPanel)?.tabs.find(item => item.id === source.dataset.dragPanel);
+    const id = source.dataset.dragTerminal || panel?.activePane || layout.ids(panel?.layout)[0];
+    if (!id || !sessions.has(id)) return;
+    pointerDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, id, panelId: panel?.id || '', started: false };
+  }, true);
+  root.addEventListener('pointermove', event => {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    if (!pointerDrag.started && Math.hypot(event.clientX - pointerDrag.x, event.clientY - pointerDrag.y) < 6) return;
+    if (!pointerDrag.started) root.setPointerCapture(event.pointerId);
+    pointerDrag.started = true; draggingId = pointerDrag.id; draggingPanelId = pointerDrag.panelId;
+    root.classList.add('is-dragging-terminal'); clearDrop();
+    const target = pointerDropTarget(event);
+    if (target) {
+      target.node.dataset.dropDirection = target.direction;
+      target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치' }[target.direction]);
+    }
+    event.preventDefault();
+  });
+  const finishPointerDrag = (event, cancelled = false) => {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    const drag = pointerDrag, target = !cancelled && drag.started ? pointerDropTarget(event) : null;
+    pointerDrag = null;
+    if (root.hasPointerCapture(event.pointerId)) root.releasePointerCapture(event.pointerId);
+    if (!drag.started) {
+      // Preserve the original button until Chromium has dispatched its click.
+      setTimeout(renderInstances, 0);
+      return;
+    }
+    if (drag.started) {
+      suppressDragClick = true;
+      event.preventDefault(); event.stopPropagation();
+    }
+    finishDrag();
+    if (target) {
+      if (drag.panelId && !target.ownerId) placePanel(drag.panelId, target);
+      else moveTerminal(drag.id, target);
+    }
+  };
+  root.addEventListener('pointerup', event => finishPointerDrag(event), true);
+  root.addEventListener('pointercancel', event => finishPointerDrag(event, true), true);
+  root.addEventListener('lostpointercapture', event => finishPointerDrag(event, true));
+  window.addEventListener('blur', () => {
+    if (pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
+  });
+  root.addEventListener('click', event => {
+    if (suppressDragClick && event.isTrusted && event.detail > 0) {
+      suppressDragClick = false;
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+  }, true);
+  root.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    if (!event.repeat && !pointerDrag) consumedDragEscape = false;
+    if (!pointerDrag && !consumedDragEscape) return;
+    consumedDragEscape = true;
+    if (pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
+    event.preventDefault(); event.stopImmediatePropagation();
+  }, true);
+  root.addEventListener('keyup', event => {
+    if (event.key !== 'Escape' || !consumedDragEscape) return;
+    consumedDragEscape = false;
+    event.preventDefault(); event.stopImmediatePropagation();
+  }, true);
   root.addEventListener('dragstart', event => {
     const source = event.target.closest('[data-drag-terminal]');
     if (!source || busy || event.target.closest('header button')) { if (source) event.preventDefault(); return; }
@@ -766,7 +863,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="true"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="종료하고 휴지통으로 이동" aria-label="종료하고 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="종료하고 휴지통으로 이동" aria-label="종료하고 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -850,15 +947,24 @@
     return [...new Set([...pinnedPanels.map(id => all.find(panel => panel.id === id)), tab()].filter(Boolean))];
   }
   function togglePanelView(id) {
-    const target = panelOwner(id)?.tabs.find(panel => panel.id === id);
+    const owner = panelOwner(id), target = owner?.tabs.find(panel => panel.id === id);
     if (!target) return;
-    if (pinnedPanels.includes(id)) {
-      pinnedPanels = pinnedPanels.filter(item => item !== id);
-      if (target !== tab()) for (const member of layout.ids(target.layout)) space().viewLayout = layout.remove(space().viewLayout, member);
+    if (!tab()) { activatePanel(owner, target); renderLayout(false); return; }
+    const current = canvasLayout(), targetIds = layout.ids(target.layout);
+    const shown = targetIds.every(member => layout.ids(current).includes(member));
+    if (shown && target !== tab()) {
+      for (const member of targetIds) space().viewLayout = layout.remove(space().viewLayout, member);
+    } else if (!shown) {
+      space().viewLayout = layout.reconcile(current, [target.layout], new Set([...layout.ids(current), ...targetIds]));
     } else {
-      pinnedPanels = [...new Set([...pinnedPanels, tab()?.id, id].filter(Boolean))];
-      space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
+      // Hiding the focused panel retains one of the other visible panels.
+      const otherId = layout.ids(current).find(member => !targetIds.includes(member));
+      if (!otherId) return;
+      for (const member of targetIds) space().viewLayout = layout.remove(space().viewLayout, member);
+      selectPane(otherId);
     }
+    pinnedPanels = [...new Set(layout.ids(space().viewLayout).map(member => panelFor(member)?.id).filter(Boolean))];
+    rememberCanvas();
     expanded = false; root.classList.remove('terminal-expanded'); renderLayout(false);
   }
   function renderLayout(focus = true) {
@@ -1685,7 +1791,9 @@
     pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
     for (const owner of owners()) { owner.viewLayout = layout.restore(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.restore(panel.viewLayout, available); }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
-    if (pinnedPanels.length) space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
+    // The saved canvas can intentionally show only some members of a panel.
+    // Older profiles without a canvas may still recover their pinned panels.
+    if (pinnedPanels.length && !space()?.viewLayout && !tab()?.viewLayout) space().viewLayout = layout.reconcile(canvasLayout(), visiblePanels().map(panel => panel.layout));
     // Hydrate visible panes first; unopened panels retain their PTYs without allocating views.
     $('#wbAutoReview').checked = autoReview; $('#wbFont').value = fontSize;
     renderUpdates();
