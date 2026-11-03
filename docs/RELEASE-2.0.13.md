@@ -115,12 +115,11 @@ installed app.asar version, renderer readiness, relaunch and exact cleanup.
 - Unauthenticated live latest API and public asset HEAD size/digest checks.
 - Canonical Setup and manual alias verified byte-identical.
 
-## Korean input follow-up (public release paused)
+## Korean input follow-up validation
 
-The user paused public deployment and then requested the paste/IME fix in the
-same 2.0.13 candidate. Previously cancelled compatibility runs are not passes;
-no tag or public release was created. A resumed release needs fresh complete
-checks against the final candidate SHA, including the IME follow-up.
+The final 2.0.13 candidate includes the paste/IME fix. Previously cancelled
+compatibility runs are not passes. Publication requires fresh complete checks
+against the final candidate SHA, including this IME follow-up.
 
 Paste now commits an active or pending composition before clipboard bytes,
 resets the browser textarea and selection, and preserves focus ownership.
