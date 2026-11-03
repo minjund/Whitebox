@@ -67,12 +67,18 @@ module.exports = async function checkTerminalRightEdge(evaluate, webContents) {
   const keyboard = await evaluate(async () => {
     const bar = term.element.querySelector('[role=scrollbar]');
     writes.length = 0;
-    for (const key of ['End', 'ArrowUp']) bar.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    for (const key of ['End', 'ArrowUp', 'ArrowLeft', 'x', 'Escape']) bar.dispatchEvent(new KeyboardEvent('keydown', { key, code: key === 'x' ? 'KeyX' : key, bubbles: true, cancelable: true }));
     await delay();
     const state = { position: term.buffer.active.viewportY, maximum: term.buffer.active.baseY, input: writes.join('') };
+    await write('\x1b[?1000h\x1b[?1006h'); writes.length = 0;
+    const rect = bar.getBoundingClientRect();
+    bar.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1, clientX: rect.left + rect.width / 2, clientY: rect.top + 20, bubbles: true, cancelable: true }));
+    await delay(); state.wheel = { position: term.buffer.active.viewportY, input: writes.join('') };
+    await write('\x1b[?1000l\x1b[?1006l');
     term.reset(); term.resize(80, 20); return state;
   });
   assert.equal(keyboard.position, keyboard.maximum - 1);
-  assert.equal(keyboard.input, '', 'Scrollback navigation must never send key input to the terminal program');
+  assert.deepEqual({ keyInput: keyboard.input, wheelInput: keyboard.wheel.input, wheelPosition: keyboard.wheel.position },
+    { keyInput: '', wheelInput: '', wheelPosition: keyboard.maximum - 4 }, 'The separate scroll control must isolate keyboard and wheel input from the terminal program');
   return results;
 };

@@ -153,7 +153,8 @@
       let remainder = 0, lastAt = 0, lastMode = '';
       this.backend.attachCustomWheelEventHandler(event => {
         if (event.ctrlKey || event.metaKey || !Number.isFinite(event.deltaY)) return true;
-        const tracking = !this.options.disableStdin && this.wasmTerm.hasMouseTracking() && !event.shiftKey;
+        const tracking = !this.options.disableStdin && this.wasmTerm.hasMouseTracking() && !event.shiftKey
+          && !this.scrollbarElement?.contains(event.target);
         const alternate = this.wasmTerm.isAlternateScreen();
         const mode = `${tracking}:${alternate}:${event.deltaMode}`;
         const now = performance.now();
@@ -244,6 +245,7 @@
       thumb.className = 'ghostty-scrollbar-thumb';
       rail.appendChild(thumb);
       this.element.appendChild(rail);
+      this.scrollbarElement = rail;
       let geometry = null;
       let drag = null;
       let lastGeometry = '';
@@ -285,6 +287,9 @@
       rail.addEventListener('pointercancel', finish);
       rail.addEventListener('lostpointercapture', finish);
       rail.addEventListener('keydown', event => {
+        // This UI control never owns input for the terminal program. Leave
+        // unhandled browser defaults (for example Tab) free to move focus.
+        event.stopPropagation();
         const movements = { ArrowUp: -1, ArrowDown: 1, PageUp: -this.rows, PageDown: this.rows };
         if (!(event.key in movements) && !['Home', 'End'].includes(event.key)) return;
         event.preventDefault(); event.stopPropagation();
