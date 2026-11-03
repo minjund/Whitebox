@@ -221,3 +221,41 @@ including cancellation and failure; it does not install a published artifact.
 Packaged installer compatibility and release approval still require the full
 AGENTS.md updater compatibility gate. No release approval is claimed by the
 workspace UI tests.
+
+
+## Opening more AI terminals (2.0.13)
+
+Inside an existing Whitebox terminal:
+
+```sh
+whitebox new-terminal codex --count 3 --json
+# For every returned jobs[].id:
+whitebox wait <creation-job-id> 30
+whitebox list-panels --json
+# After the new surface reports provider=codex and ready=true:
+whitebox ask <exact-surface-id> 'ㅎㅇ'
+whitebox wait <reply-job-id> 30
+```
+
+`whitebox_new_terminals` exposes the same operation to panel MCP clients.
+Count defaults to one, accepts 1–8, and never replaces an existing terminal.
+New PTYs inherit the requesting panel's directory. The renderer adopts each
+PTY into that panel before its provider starts, so the provider adapter can
+identify its surface and attach Whitebox tools. A completed creation job means
+the launch command was delivered; use the live roster's provider and readiness
+before asking it to work. Failure, timeout and uncertain delivery are reported
+explicitly and never retried automatically. Existing providers can use the CLI;
+new interactive provider launches discover the additional MCP tool.
+
+Drag terminal headers or sidebar terminal rows onto the left, right, top or
+bottom of another terminal, including one in a different panel. This changes
+screen placement and preserves collaboration membership. A window blur during
+a native drag does not cancel it; workspace drops take precedence over terminal
+content handlers. Explicit “join panel” remains the membership-changing action.
+
+Attention dialogs use a 320px width and at most 420px height (also bounded by
+small displays). Long command previews scroll independently. Light and dark
+surfaces follow the system appearance, with visible keyboard focus and unchanged
+approval/question routing. Design references: affectUI's free MIT Clean
+[Notification Stack](https://www.affectui.com/components/notification-stack)
+and [Button](https://www.affectui.com/r/button-clean.json). No remote UI is loaded.

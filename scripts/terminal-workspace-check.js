@@ -21,6 +21,7 @@ app.whenReady().then(async () => {
   const adapterDirectory = path.join(profile, 'panel-bin');
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
+  let livePanelControl;
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
   let completedActivityId = '';
@@ -67,6 +68,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
+      if (livePanelControl) return livePanelControl.sync(payload);
       if (payload.operation === 'sync' && staleCollaborationFrameOnce
         && payload.frames.some(frame => frame.id === staleCollaborationFrameOnce.id)) {
         collaborationPayload = { ...payload, frames: payload.frames.map(frame => frame.id === staleCollaborationFrameOnce.id ? staleCollaborationFrameOnce : frame) };
@@ -1291,6 +1293,27 @@ app.whenReady().then(async () => {
     await waitFor(`document.querySelector("#wbCanvas .is-selected .wb-pane-state").getAttribute("aria-label") === ${JSON.stringify(process.platform === 'win32' ? '작업 상태 확인 중' : '입력 대기')}`, 'connected shell activity is observed without assuming work');
     // Intentional mixed-panel placement must still work after fresh-panel isolation.
     const rosterBeforeArrange = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))');
+    const foreignId = originalRoster[0];
+    const livePtyBeforeDrag = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+    await nativeDrag(foreignId, `#wbCanvas [data-terminal-id="${singlePanelId}"] .wb-terminal-mount`);
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane')).some(node=>node.dataset.terminalId==='${foreignId}')`), 'native drag shows a hidden terminal from another panel on the active canvas');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'native canvas drop preserves panel membership');
+    assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'native canvas drop preserves every PTY');
+    // Desktop drags can blur the window, and terminal renderers own drop events.
+    await evaluate(`(() => {
+      const source=document.querySelector('[data-instance="${singlePanelId}"]'), target=document.querySelector('[data-terminal-id="${foreignId}"] .wb-terminal-mount');
+      const transfer=new DataTransfer();
+      source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+      window.dispatchEvent(new Event('blur'));
+      const stop=event=>event.stopImmediatePropagation(); target.addEventListener('drop',stop,{once:true});
+      const rect=target.getBoundingClientRect();
+      const options={bubbles:true,cancelable:true,dataTransfer:transfer,clientX:rect.left+rect.width*.2,clientY:rect.top+rect.height*.5};
+      target.dispatchEvent(new DragEvent('dragover',options)); target.dispatchEvent(new DragEvent('drop',options));
+      source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:transfer}));
+    })()`);
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'blur and nested terminal handlers do not swallow cross-panel placement');
+
+
     await evaluate(`document.querySelector('[data-arrange-instance="${singlePanelId}"]').click();document.querySelector('#wbMoveTarget').value='${beforeAdd.panelId}';document.querySelector('[data-action="move-terminal"]').click()`);
     assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>node.dataset.panelId)).size>1'), 'explicit arrange still shows different panels together');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'), rosterBeforeArrange, 'screen placement never changes collaboration membership');
@@ -1416,7 +1439,62 @@ app.whenReady().then(async () => {
       const after = await client.get(id, false);
       assert.equal(after.pid, before.pid); assert.equal(after.creationId, before.creationId);
       console.log('PASS real PTY → host socket → panel socket → CLI send/read, automatic surface env, unchanged process identity');
-    } finally { await control?.control.close(); client.dispose({ preserveHost: true }); host.dispose(); }
+      if (process.platform !== 'win32') {
+        const fixtureBin=path.join(profile,'provider-fixture'); fs.mkdirSync(fixtureBin);
+        const fixture=path.join(root,'scripts/fixtures/panel-creation-provider.cjs');
+        const quote=value=>"'"+value.replace(/'/g,"'\"'\"'")+"'";
+        fs.writeFileSync(path.join(fixtureBin,'codex'),`#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${quote(process.execPath)} ${quote(fixture)} "$@"\n`,{mode:0o755});
+        const newIds=[];
+        control.createTerminal=async options=>{
+          const session=await providerAdapter.createWorkspaceTerminal(client,options,adapterDirectory);
+          newIds.push(session.id);
+          await client.command(session.id,` export PATH=${quote(adapterDirectory)}:${quote(fixtureBin)}:"$PATH"; export WHITEBOX_PANEL_DIRECTORY=${quote(control.directory)}`);
+          return session;
+        };
+        control.monitor={scan:()=>({available:true,processes:newIds.map(id=>({pid:manager.get(id).pid+1000,ancestorPids:[manager.get(id).pid],provider:'codex'}))})};
+        control.completion={observe:async()=>({available:false})};
+        livePanelControl=control;
+        const originalIds=manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
+        const batch=await panelCommand(['new-terminal','codex','--count','3','--source',id,'--json'],opts);
+        assert.equal(batch.jobs.length,3);
+        await waitFor('WhiteboxWorkspace.getState().sessions.length === '+(originalIds.length+3),'CLI-created PTYs adopted by renderer');
+        for(const job of batch.jobs) {
+          await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(job.terminal.id)}).replace(/\\s+/g,'').includes('PANEL_TOOLS_READY')`,'new provider receives its Whitebox MCP configuration');
+          const done=await panelCommand(['wait',job.id,'0','--source',id],opts); assert.equal(done.state,'completed');
+        }
+        assert.deepEqual(manager.list().filter(session=>originalIds.some(old=>old.id===session.id)).map(({id,pid,creationId})=>({id,pid,creationId})),originalIds,'creation never restarts existing PTYs');
+        const sourceGroup=control.groups.get(batch.workspace_id);
+        assert.ok(newIds.every(id=>sourceGroup.members.some(member=>member.id===id)),'all new providers belong to the requesting panel');
+        // Deliver the greeting through the public CLI and read matched replies.
+        const greeted=[];
+        for(const target of newIds) {
+          await evaluate(`WhiteboxWorkspace.selectPane('${target}'); if(!document.querySelector('#terminalWorkspace').classList.contains('terminal-expanded')) document.querySelector('[data-expand-terminal="${target}"]').click()`);
+          await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(target)}).replace(/\\s+/g,'').includes('AskCodextodoanything')`,'provider input prompt');
+          await evaluate('WhiteboxWorkspace.captureReviews(true)');
+          let stableSequence=null, stableSince=Date.now(), ready=false;
+          for(let attempt=0;attempt<100;attempt++) {
+            const frame=control.frames.get(target), live=manager.get(target);
+            if(frame?.outputSequence!==stableSequence) { stableSequence=frame?.outputSequence; stableSince=Date.now(); }
+            ready=frame?.outputSequence===live.outputSequence && Date.now()-stableSince>300
+              && require('../src/terminalReviewTurns').inputReady(frame.readinessText,'codex') && !frame.inputDraft;
+            if(ready) break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+          }
+          assert.ok(ready,`provider has a current idle frame after resize: ${JSON.stringify(control.frames.get(target))}`);
+          const greeting=await panelCommand(['ask','--source',id,'--surface',target,'--','ㅎㅇ'],opts); greeted.push(greeting.id);
+          await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(target)}).includes('반가워요')`,'expanded fixture answer');
+          await evaluate('WhiteboxWorkspace.captureReviews(true)');
+        }
+        for(const jobId of greeted) {
+          await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(control.jobs.get(jobId).targetId)}).replace(/\\s+/g,'').includes('반가워요')`,'fixture greeting answer');
+          await evaluate('WhiteboxWorkspace.captureReviews(true)');
+          const result=await panelCommand(['wait',jobId,'0','--source',id],opts);
+          assert.equal(result.state,'completed'); assert.match(result.answer,/반가워요/u);
+        }
+        console.log('PASS CLI new-terminal --count 3 → real PTYs → renderer adoption → provider adapter/MCP discovery → same-panel greeting/three matched replies (fixture providers)');
+      }
+
+    } finally { livePanelControl=null; await control?.control.close(); client.dispose({ preserveHost: true }); host.dispose(); }
     // Bulk deletion must never touch a live terminal outside the trash.
     const batchIds = manager.list().slice(-2).map(item => item.id);
     const survivor = manager.list().find(item => !batchIds.includes(item.id));

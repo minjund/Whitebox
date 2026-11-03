@@ -12,8 +12,9 @@ const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
+  constructor({ manager, directory, createTerminal = options => manager().create(options), monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
     Object.assign(this, { manager, directory, monitor, completion, now });
+    this.createTerminal = createTerminal;
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
     this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
@@ -50,7 +51,7 @@ class TerminalCollaboration {
       const members = [];
       for (const member of (group.members || []).slice(0, 64)) {
         const live = liveById ? liveById.get(member.id) : await manager.get(member.id, false);
-        if (live && live.creationId === member.creationId && live.pid === member.pid && live.status === 'running') members.push({ id: live.id, creationId: live.creationId, pid: live.pid, title: String(member.title || live.title).slice(0, 120) });
+        if (live && live.creationId === member.creationId && live.pid === member.pid && live.status === 'running') members.push({ id: live.id, creationId: live.creationId, pid: live.pid, outputSequence: live.outputSequence, title: String(member.title || live.title).slice(0, 120) });
       }
       this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members });
     }
@@ -76,7 +77,8 @@ class TerminalCollaboration {
       const child = exactProcess({ ...member, status: 'running' }, snapshot), frame = this.frames.get(member.id);
       member.provider = child?.provider || '';
       member.providerPid = child?.pid || null;
-      member.ready = Boolean(child && frame && !frame.inputDraft && inputReady(frame.readinessText ?? frame.text, child.provider));
+      member.ready = Boolean(child && frame && frame.creationId === member.creationId && frame.outputSequence === member.outputSequence
+        && this.now() - frame.at <= 10000 && !frame.inputDraft && inputReady(frame.readinessText ?? frame.text, child.provider));
       member.activity = activity.get(member.id);
     }
     for (const [id, connection] of this.connected) {
@@ -161,7 +163,7 @@ class TerminalCollaboration {
       if (fs.statSync(file).size > 24000) continue;
       let request; try { request = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
       if (name !== `${request.id}.request.json` || this.jobs.has(request.id)) continue;
-      const job = { id: request.id, sourceId: request.sourceId, targetId: request.targetId, groupId: request.groupId, request: String(request.message || '').trim(), state: 'queued', createdAt: this.now() };
+      const job = { id: request.id, operation: request.operation, sourceId: request.sourceId, targetId: request.targetId, groupId: request.groupId, request: String(request.message || '').trim(), state: 'queued', createdAt: this.now() };
       this.jobs.set(job.id, job); this.save(job);
       try {
         const connection = this.connected.get(request.sourceId);
@@ -169,11 +171,11 @@ class TerminalCollaboration {
         const { group } = this.member(request.groupId, request.sourceId);
         if (request.operation === 'new') {
           if (!['claude', 'codex'].includes(request.provider)) throw new Error('지원하지 않는 AI입니다.');
-          const terminal = await this.manager().create({ type: process.platform === 'win32' ? 'powershell' : 'shell', cwd: group.cwd, creationId: `workspace:collaboration:${job.id}`, cols: 100, rows: 30 });
-          job.terminal = terminal; job.targetId = terminal.id;
-          this.save(job);
-          await this.manager().command(terminal.id, request.provider, { deliveryId: `collaboration-launch:${job.id}` });
-          Object.assign(job, { state: 'completed', answer: `새 터미널 ${terminal.id}을 열었습니다. list에서 준비 상태를 확인한 다음 ask 하세요.` });
+          const terminal = await this.createTerminal({ type: process.platform === 'win32' ? 'powershell' : 'shell', cwd: group.cwd, creationId: `workspace:collaboration:${job.id}`, cols: 100, rows: 30 });
+          if (!terminal?.id || terminal.creationUnavailable || terminal.status !== 'running') throw new Error('새 터미널의 실행 상태를 확인하지 못했습니다.');
+          // The renderer must adopt the PTY into this panel before the provider
+          // adapter identifies itself and attaches its panel MCP tools.
+          Object.assign(job, { terminal, targetId: terminal.id, provider: request.provider, state: 'starting' });
         } else {
           if (request.operation !== 'ask' || !job.request || job.request.length > 8000 || /[\x00-\x08\x0b-\x1f\x7f]/u.test(job.request)) throw new Error('올바른 작업 요청을 입력해 주세요.');
           if (job.targetId === job.sourceId) throw new Error('자기 터미널로 전달할 수 없습니다.');
@@ -181,6 +183,25 @@ class TerminalCollaboration {
           Object.assign(job, { state: 'sending', sentAt: this.now() }); this.save(job);
           Object.assign(job, await this.send(job.groupId, job.targetId, job.request, `collaboration:${job.id}`, request), { state: 'running' });
         }
+      } catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
+      this.save(job);
+    }
+    for (const job of this.jobs.values()) if (job.operation === 'new' && job.state === 'starting') {
+      try {
+        const live = await this.manager().get(job.targetId, false);
+        if (!live || live.creationId !== job.terminal.creationId || live.pid !== job.terminal.pid || live.status !== 'running') throw new Error('새 터미널의 실행 세션이 바뀌었습니다.');
+        const group = this.groups.get(job.groupId);
+        if (!group?.members.some(member => member.id === job.sourceId)) throw new Error('생성 요청을 보낸 터미널이 패널에서 이동했습니다.');
+        if (!group.members.some(member => member.id === live.id && member.creationId === live.creationId)) {
+          if (this.now() - job.createdAt > 30000) throw new Error('새 터미널의 패널 연결을 확인하지 못했습니다. 자동 재시작하지 않습니다.');
+          continue;
+        }
+        // Persist the launch boundary before writing. Restart must never replay
+        // a command whose acknowledgement was lost.
+        job.state = 'sending'; this.save(job);
+        const result = await this.manager().command(live.id, job.provider, { deliveryId: `collaboration-launch:${job.id}` });
+        if (result?.ok === false || result?.deliveryState === 'unknown') throw Object.assign(new Error('AI 실행 명령의 전달 상태를 확인하지 못했습니다.'), { deliveryState: result.deliveryState });
+        Object.assign(job, { state: 'completed', answer: `새 터미널 ${live.id}에서 ${job.provider} 실행을 요청했습니다. list-panels에서 ready를 확인한 다음 ask 하세요.` });
       } catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
       this.save(job);
     }

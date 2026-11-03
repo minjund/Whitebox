@@ -55,6 +55,21 @@ class TerminalPanelControl {
     if (method === 'system.identify') return { workspace_id: group.id, surface_id: member.id, panelName: group.name };
     if (method === 'surface.list') return { workspace_id: group.id, surface_id: member.id, surfaces: group.members };
     if (method === 'job.read') return localRequest([member.id, 'wait', params.jobId, '0'], c.directory);
+    if (method === 'surface.create') {
+      const count = params.count ?? 1;
+      if (!['codex', 'claude'].includes(params.provider) || !Number.isInteger(count) || count < 1 || count > 8) throw new Error('Choose codex or claude and a count from 1 to 8.');
+      const pending = [...c.jobs.values()].filter(job => job.groupId === group.id && job.operation === 'new' && ['queued', 'starting'].includes(job.state) && !group.members.some(item => item.id === job.targetId)).length;
+      if (group.members.length + pending + count > 64) throw new Error('This panel supports at most 64 terminals.');
+      const jobs = [];
+      for (let index = 0; index < count; index++) {
+        const job = await localRequest([member.id, 'new', params.provider], c.directory);
+        await c.poll();
+        const current = c.jobs.get(job.id);
+        jobs.push({ id: current.id, state: current.state, terminal: current.terminal, error: current.error });
+        if (current.state === 'failed' || current.state === 'interrupted') break;
+      }
+      return { workspace_id: group.id, jobs, next: 'Wait for each creation job, then list-panels and check ready before ask.' };
+    }
     const targetId = params.surface_id || member.id;
     const matches = group.members.filter(item => item.id === targetId || (['claude', 'codex'].includes(targetId) && item.provider === targetId && item.id !== member.id));
     if (matches.length !== 1) throw new Error('Choose an exact surface ID from whitebox list-panels in this panel.');

@@ -56,7 +56,12 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   const disconnected = new TerminalCollaboration(options); sessions[0].creationId='replacement'; await disconnected.sync(payload());
   assert.equal(disconnected.connected.get('terminal:source').creationId, 'replacement', 'replacement source receives a fresh app binding'); sessions[0].creationId='epoch-source';
   await c.sync(payload()); c.jobs.get(job.id).state='interrupted';
-  const created=await cli(['terminal:source','new','codex'],directory); await c.sync(payload()); assert.equal(c.jobs.get(created.id).terminal.id,'terminal:new'); assert.equal(writes.at(-1).command,'codex');
+  const created=await cli(['terminal:source','new','codex'],directory); await c.sync(payload());
+  assert.equal(c.jobs.get(created.id).terminal.id,'terminal:new');
+  assert.equal(c.jobs.get(created.id).state,'starting','launch waits for renderer adoption');
+  const adopted = payload(); adopted.groups[0].members.push(sessions.find(s=>s.id==='terminal:new'));
+  await c.sync(adopted); assert.equal(writes.at(-1).command,'codex');
+  assert.equal(c.jobs.get(created.id).state,'completed');
   assert.equal(inputReady('› ㅎㅇ','codex'),false);
   const before=completionStamp('› ㅎㅇ','codex');
   assert.equal(completedTurn('› 다른말\n• 답\nWorked for 2s • 3:42 PM\n› ', 'ㅎㅇ','codex',before,{exactRequest:true}),'');
@@ -168,6 +173,42 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   await shell.sync(pendingShell);
   await control([...args('send-key'), 'enter'], shellOptions);
   assert.equal(autoWrites.at(-1).data, '\r');
+  // Batch creation through the public socket, with exact adoption/launch order.
+  let creationClock = Date.now(), launchUnknown = false;
+  const peers = [{ id:'terminal:creator',creationId:'creator',pid:501,status:'running',outputSequence:1 }], launches=[];
+  const creatorDirectory=path.join(directory,'creation');
+  const creationManager={get:async id=>peers.find(p=>p.id===id),command:async(id,command)=>{
+    assert.ok(creator.groups.get('creation-panel').members.some(p=>p.id===id),'provider starts after panel membership is published');
+    launches.push({id,command}); if(launchUnknown) throw Object.assign(Error('launch acknowledgement lost'),{deliveryState:'unknown'});
+  }};
+  const creator=new TerminalCollaboration({directory:creatorDirectory,manager:()=>creationManager,now:()=>creationClock,
+    monitor:{scan:()=>({available:true,processes:[]})},completion:{observe:async()=>({available:false})},
+    createTerminal:async options=>{const peer={id:`terminal:created-${peers.length}`,creationId:options.creationId,pid:501+peers.length,status:'running',outputSequence:1};peers.push(peer);return peer;}});
+  controls.push(creator.control);
+  const creationPayload=(adopt=true)=>({groups:[{id:'creation-panel',cwd:directory,members:adopt?peers:peers.slice(0,1)}],frames:[]});
+  await creator.sync(creationPayload());
+  const creationOptions={directory:creatorDirectory};
+  const batch=await control(['new-terminal','codex','--count','3','--source','terminal:creator','--json'],creationOptions);
+  assert.equal(batch.jobs.length,3); assert.ok(batch.jobs.every(job=>job.state==='starting'));
+  assert.equal(launches.length,0,'never launches an undiscoverable provider');
+  await creator.sync(creationPayload()); assert.equal(launches.length,3);
+  await creator.sync(creationPayload()); assert.equal(launches.length,3,'polling does not launch again');
+  const complete=await control(['wait',batch.jobs[0].id,'0','--source','terminal:creator'],creationOptions);
+  assert.equal(complete.state,'completed'); assert.equal(complete.terminal.id,batch.jobs[0].terminal.id);
+  assert.equal((await control(['list-panels','--source','terminal:creator'],creationOptions)).surfaces.length,4);
+  for(const count of ['0','9','1.5','no']) await assert.rejects(control(['new-terminal','codex','--count',count,'--source','terminal:creator'],creationOptions),/count/);
+  await assert.rejects(control(['new-terminal','rm -rf','--source','terminal:creator'],creationOptions),/Usage/);
+  await assert.rejects(control(['new-terminal','codex','--source','terminal:outside'],creationOptions),/inside a panel/);
+  const late=await control(['new-terminal','codex','--source','terminal:creator'],creationOptions);
+  creationClock+=31000; await creator.sync(creationPayload(false));
+  assert.equal(creator.jobs.get(late.jobs[0].id).state,'failed','adoption timeout cannot count as launch success');
+  await creator.sync(creationPayload()); assert.equal(launches.length,3,'late adoption never replays timed-out launch');
+  launchUnknown=true;
+  const uncertainCreation=await control(['new-terminal','claude','--source','terminal:creator'],creationOptions);
+  await creator.sync(creationPayload());
+  assert.equal(creator.jobs.get(uncertainCreation.jobs[0].id).state,'interrupted');
+  await creator.sync(creationPayload()); assert.equal(launches.length,4,'lost launch acknowledgement never replays');
+  console.log('PASS new-terminal batch: same-panel creation, adoption before launch, wait IDs, validation, timeout and uncertain delivery without replay');
   console.log('Panel control: real socket/CLI, source ancestry, same-panel routing, paste/Enter, edited draft protection, moves, no instruction injection passed');
   console.log('Terminal collaboration: scoped delivery, drafts, busy targets, exact replies, deduplication, timeout, restart and creation passed');
  } finally { await Promise.all(controls.map(control => control.close())); fs.rmSync(directory,{recursive:true,force:true}); }

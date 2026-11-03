@@ -3,6 +3,19 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.13 - 2026-11-03
+
+- Open additional Codex/Claude panes with `whitebox new-terminal codex --count 3`
+  or the panel MCP tool. Adopt each terminal before launching its provider so
+  its Whitebox tools are discoverable. Failed or uncertain launches never replay.
+- Restore reliable cross-panel dragging during native window blur and drops
+  into terminal content, keeping panel membership and live PTYs intact.
+- Compact attention dialogs to 320px with neutral light/dark surfaces and
+  scrollable commands, keeping the shipped multi-question pager and answers.
+- Build on the published 2.0.12 code, preserving its review, settings, process
+  monitor, shell paste, completion badge, and data/layout behavior. Add official
+  2.0.12 Windows and both Mac architecture installers to packaged update checks.
+
 ## 2.0.12 - 2026-11-02
 
 - Preserve relevant implementations, actual caller operations, failures and
