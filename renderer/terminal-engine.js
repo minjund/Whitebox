@@ -177,12 +177,25 @@
       });
       // Native mouse/clipboard handlers must use the same lossless cell reader.
       this.backend.selectionManager.getSelection = () => this.getSelection();
+      this.installScrollbar();
       element.removeAttribute('contenteditable');
       element.removeAttribute('tabindex');
       element.setAttribute('role', 'group');
       this.renderer.getCanvas().classList.add('xterm-screen', 'ghostty-screen');
       this.textarea.classList.add('xterm-helper-textarea', 'ghostty-input');
       this.textarea.readOnly = this.options.disableStdin;
+      this.textarea.addEventListener('keydown', event => {
+        // Ghostty returns before its custom handler for Process/229 keys.
+        // Native Korean IMEs can label Cmd/Ctrl+V that way while marked text
+        // is active. Give clipboard shortcuts to the app before IME routing.
+        const key = String(event.key || '').toLowerCase();
+        const command = (event.ctrlKey || event.metaKey) && !event.altKey;
+        const clipboard = command && (['KeyC', 'KeyV'].includes(event.code) || ['c', 'v'].includes(key))
+          || event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && (event.code === 'Insert' || event.key === 'Insert');
+        if (clipboard && this.customKeyHandler?.(event) === false) {
+          event.preventDefault(); event.stopImmediatePropagation();
+        }
+      }, true);
       this.textarea.addEventListener('paste', event => {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -208,12 +221,84 @@
       this.refresh();
     }
 
+    installScrollbar() {
+      // Pinned 0.4.6 clears the last 14 canvas pixels when painting its
+      // scrollbar, including when there is no scrollback. FitAddon already
+      // reserves a gutter outside the grid; paint and hit-test there instead.
+      if (typeof this.renderer.renderScrollbar !== 'function'
+        || typeof this.backend.handleMouseDown !== 'function') throw new Error('Ghostty scrollbar API changed');
+      this.renderer.renderScrollbar = () => {};
+      this.element.removeEventListener('mousedown', this.backend.handleMouseDown, true);
+      const rail = document.createElement('div');
+      rail.className = 'ghostty-scrollbar';
+      rail.setAttribute('role', 'scrollbar');
+      rail.setAttribute('aria-label', 'Terminal scrollback');
+      rail.setAttribute('aria-orientation', 'vertical');
+      rail.setAttribute('aria-valuemin', '0');
+      rail.tabIndex = 0;
+      const thumb = document.createElement('div');
+      thumb.className = 'ghostty-scrollbar-thumb';
+      rail.appendChild(thumb);
+      this.element.appendChild(rail);
+      let geometry = null;
+      let drag = null;
+      let lastGeometry = '';
+      const sync = () => {
+        const buffer = this.buffer.active;
+        const maximum = buffer.type === 'normal' ? buffer.baseY : 0;
+        const metrics = this.renderer.getMetrics();
+        const canvas = this.renderer.getCanvas();
+        const height = this.rows * metrics.height;
+        const track = Math.max(0, height - 8);
+        const thumbHeight = Math.min(track, Math.max(20, track * this.rows / (maximum + this.rows)));
+        geometry = { maximum, range: Math.max(0, track - thumbHeight), offset: buffer.viewportY };
+        const signature = `${maximum}:${buffer.viewportY}:${this.cols}:${this.rows}:${metrics.width}:${metrics.height}:${canvas.offsetLeft}:${canvas.offsetTop}`;
+        if (signature === lastGeometry) return;
+        lastGeometry = signature;
+        rail.hidden = maximum <= 0;
+        Object.assign(rail.style, { left: `${canvas.offsetLeft + this.cols * metrics.width}px`, top: `${canvas.offsetTop}px`, height: `${height}px` });
+        Object.assign(thumb.style, { top: `${4 + (maximum ? buffer.viewportY / maximum * geometry.range : 0)}px`, height: `${thumbHeight}px` });
+        rail.setAttribute('aria-valuemax', String(maximum));
+        rail.setAttribute('aria-valuenow', String(buffer.viewportY));
+      };
+      rail.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || !geometry?.maximum) return;
+        event.preventDefault(); event.stopPropagation();
+        if (event.target !== thumb) {
+          const fraction = (event.clientY - rail.getBoundingClientRect().top - 4) / Math.max(1, this.rows * this.renderer.getMetrics().height - 8);
+          this.scrollToLine(Math.round(Math.max(0, Math.min(1, fraction)) * geometry.maximum));
+        }
+        drag = { y: event.clientY, offset: this.buffer.active.viewportY };
+        rail.setPointerCapture(event.pointerId);
+      });
+      rail.addEventListener('pointermove', event => {
+        if (!drag || !rail.hasPointerCapture(event.pointerId) || !geometry?.range) return;
+        this.scrollToLine(Math.max(0, Math.min(geometry.maximum,
+          Math.round(drag.offset + (event.clientY - drag.y) / geometry.range * geometry.maximum))));
+      });
+      const finish = () => { drag = null; };
+      rail.addEventListener('pointerup', finish);
+      rail.addEventListener('pointercancel', finish);
+      rail.addEventListener('lostpointercapture', finish);
+      rail.addEventListener('keydown', event => {
+        const movements = { ArrowUp: -1, ArrowDown: 1, PageUp: -this.rows, PageDown: this.rows };
+        if (!(event.key in movements) && !['Home', 'End'].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        this.scrollToLine(event.key === 'Home' ? 0 : event.key === 'End' ? geometry.maximum
+          : Math.max(0, Math.min(geometry.maximum, this.buffer.active.viewportY + movements[event.key])));
+      });
+      this.onRender(sync);
+      this.onScroll(sync);
+      sync();
+    }
+
     focus() {
       if (!this.opening && !this.disposed) this.textarea?.focus({ preventScroll: true });
     }
     blur() { this.textarea?.blur(); }
     loadAddon(addon) { addon.activate(this); this.addons.push(addon); }
     attachCustomKeyEventHandler(handler) {
+      this.customKeyHandler = handler;
       this.backend.attachCustomKeyEventHandler(event => {
         if (handler(event) === false) return true;
         // 0.4 encodes Shift+Tab as Tab. Preserve the TUI backtab key.

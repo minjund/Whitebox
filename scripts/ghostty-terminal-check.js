@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const checkTerminalRightEdge = require('./tests/terminal-right-edge');
 const workspace = path.resolve(__dirname, '..');
 const root = process.env.WHITEBOX_GHOSTTY_APP_ROOT || workspace;
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-ghostty-'));
@@ -75,6 +76,9 @@ app.whenReady().then(async () => {
     });
     assert.deepEqual(engine, { name: 'ghostty', wasm: true, canvas: true, xtermLoaded: false });
     console.log('PASS: bundled Ghostty WASM loads under the production CSP with no xterm runtime');
+
+    await checkTerminalRightEdge(evaluate, win.webContents);
+    console.log('PASS: final CJK cells remain fully painted at multiple fonts, with and without scrollback');
 
     const vt = await evaluate(async () => {
       await write('한글😀 ABC\x1b[31m RED\x1b[0m');

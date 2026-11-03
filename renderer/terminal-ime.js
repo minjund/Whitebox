@@ -79,6 +79,10 @@ window.WhiteboxTerminalIme = {
           textarea.value = '';
           textarea.setSelectionRange(0, 0);
           if (focused) terminal.focus();
+          // Ghostty's native context-menu cleanup can leave this focused
+          // textarea fixed, behind the canvas and 0×0. Restore a usable native
+          // candidate anchor now, before another key or PTY echo is required.
+          render();
         };
         terminal.preparePaste = preparePaste;
         const render = () => {
@@ -94,6 +98,7 @@ window.WhiteboxTerminalIme = {
           const screenLeft = screen.offsetLeft;
           const screenTop = screen.offsetTop;
           const screenWidth = screen.clientWidth;
+          Object.assign(textarea.style, { position: 'absolute', zIndex: '2', pointerEvents: 'none' });
           if (!composing || !text || doc.activeElement !== textarea) {
             hide();
             Object.assign(textarea.style, { position: 'absolute', left: `${screenLeft + column * cellWidth}px`,
@@ -186,7 +191,7 @@ window.WhiteboxTerminalIme = {
           event.stopPropagation();
           if (composing || event.isComposing) return;
           if (pending) { flush(); return; }
-          if (event.inputType === 'insertText' && event.data) {
+          if (['insertText', 'insertReplacementText', 'insertFromComposition'].includes(event.inputType) && event.data) {
             const duplicate = reconciliation && textarea.value === reconciliation.value;
             clearReconciliation();
             if (!duplicate) terminal.input(event.data, true);
@@ -238,7 +243,9 @@ window.WhiteboxTerminalIme = {
           composing = false;
           text = '';
           hide();
+          scheduleRender();
         });
+        listen('focus', scheduleRender);
         const subscriptions = [terminal.onRender(scheduleRender), terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
         cleanup = () => {
           disposed = true;

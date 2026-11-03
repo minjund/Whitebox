@@ -256,6 +256,7 @@ function createWorkbench(root, options = {}) {
         onResize() {}
         attachCustomKeyEventHandler(callback) { this.keyEventHandler = callback; }
         hasSelection() { return Boolean(this.selection); }
+        get textarea() { return this.helperTextarea; }
         getSelection() { return this.selection || ''; }
         paste(text) { this.pastes = [...(this.pastes || []), text]; this.dataHandler?.(text); }
         focus() { this.helperTextarea?.focus(); }
@@ -796,7 +797,7 @@ function registerTerminalInteractionTests(context) {
     let reads = 0;
     let resolveRead;
     const session = { id: 'terminal:clipboard', type: 'agent', status: 'running' };
-    const { state, workbench, terminalInstances, notices } = createWorkbench(root, {
+    const { state, workbench, terminalInstances, notices, document } = createWorkbench(root, {
       session,
       clipboard: {
         writeText: async text => copied.push(text),
@@ -805,6 +806,7 @@ function registerTerminalInteractionTests(context) {
     });
     await workbench.ensureSessionTerminal(session);
     const terminal = terminalInstances[0];
+    terminal.focus();
     const key = (name, overrides = {}) => {
       const event = { type: 'keydown', key: name, ctrlKey: true,
         preventDefault() { this.prevented = true; }, stopPropagation() {}, ...overrides };
@@ -824,6 +826,15 @@ function registerTerminalInteractionTests(context) {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(reads, 1);
     assert.deepEqual(Array.from(terminal.pastes), ['여러 줄\n붙여넣기😀']);
+    key('Process', { code: 'KeyV', keyCode: 229, isComposing: true });
+    await Promise.resolve();
+    const otherInput = document.createElement('textarea');
+    otherInput.focus();
+    resolveRead('must not steal focus from another visible pane');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(terminal.pastes.length, 1);
+    assert.equal(document.activeElement, otherInput);
+    terminal.focus();
     key('Insert', { ctrlKey: false, shiftKey: true });
     await Promise.resolve();
     delete state.terminals.get(session.id).host.dataset.groupTerminal;
