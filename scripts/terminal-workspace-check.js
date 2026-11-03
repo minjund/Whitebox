@@ -589,12 +589,23 @@ app.whenReady().then(async () => {
       try {
         const points = await evaluate(`(() => {
           const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); const border=selector.startsWith('[data-drag-panel='); return { x: r.left + (border ? 2 : r.width / 2), y: r.top + (border ? 2 : r.height / 2) }; };
-          window.heldDragSource = document.querySelector(${JSON.stringify(sourceSelector)});
+          window.prePressDragSource = document.querySelector(${JSON.stringify(sourceSelector)});
+          window.heldDragSource = null;
+          document.addEventListener('pointerdown', event => {
+            window.heldDragSource = event.target.closest('[data-drag-terminal], [data-drag-panel]');
+          }, {capture:true,once:true});
           return { source: rect(${JSON.stringify(sourceSelector)}), target: rect(${JSON.stringify(selector)}) };
         })()`);
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...points.source });
+        if (hold) {
+          // Calibrate the observer against a replacement before the press.
+          // It must watch the actual pointerdown target, not this stale lookup.
+          await evaluate('prePressDragSource.replaceWith(prePressDragSource.cloneNode(true))');
+          assert.equal(await evaluate('prePressDragSource.isConnected'),false);
+        }
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...points.source, button: 'left', buttons: 1, clickCount: 1 });
         if (hold) {
+          assert.equal(await evaluate('heldDragSource?.dataset.dragTerminal'),id,'the observer captures the actual pressed terminal');
           activityOverrides.set(id, { state: 'working', completed: false, requestId: 'drag-held-poll', providerPid: manager.get(id).pid + 100000 });
           await new Promise(resolve => setTimeout(resolve, 1200));
           assert.equal(await evaluate('heldDragSource.isConnected'), true, 'polling preserves the pressed source before movement');
