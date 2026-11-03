@@ -286,7 +286,7 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     });
     if (typeof terminal.attachCustomKeyEventHandler === 'function') {
       terminal.attachCustomKeyEventHandler(event => {
-        const clipboardKey = String(event.key || '').toLowerCase();
+        const clipboardKey = ({ KeyC: 'c', KeyV: 'v', Insert: 'insert' })[event.code] || String(event.key || '').toLowerCase();
         const commandKey = (event.ctrlKey || event.metaKey) && !event.altKey;
         const copy = commandKey && clipboardKey === 'c' && terminal.hasSelection?.();
         const paste = !inputDisabled && ((commandKey && clipboardKey === 'v')
@@ -298,13 +298,15 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
           event.stopPropagation();
           if (event.type === 'keydown' && !event.repeat) {
             const selection = copy ? terminal.getSelection() : '';
+            const inputOwner = document.activeElement;
             Promise.resolve().then(async () => {
               if (copy) await navigator.clipboard.writeText(selection);
               else {
                 const text = await navigator.clipboard.readText();
                 // Clipboard access is asynchronous: never paste into a task
                 // that was switched or closed while permission was pending.
-                if (!host.isConnected || (!host.dataset.groupTerminal)) return;
+                if (!host.isConnected || (!host.dataset.groupTerminal)
+                  || inputOwner !== terminal.textarea || document.activeElement !== inputOwner) return;
                 terminal.paste(text);
                 terminal.focus();
               }

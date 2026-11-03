@@ -45,14 +45,14 @@ module.exports = async function checkImeOwnership(evaluate) {
     result.nativeCommit = [];
     for (const screenReaderMode of [true, false]) {
       term.options.screenReaderMode = screenReaderMode;
-      for (const late of [false, true]) {
+      for (const inputType of ['insertText', 'insertReplacementText', 'insertFromComposition']) for (const late of [false, true]) {
         await prepare();
         // Real composition starts with Process; keyup clears _keyDownSeen.
         key('Process', 229);
         start(term); update(term, '한'); end(term, '한');
         term.textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'Process', keyCode: 229, bubbles: true }));
         if (late) await new Promise(resolve => setTimeout(resolve, 0));
-        input('한'); await delay();
+        input('한', inputType); await delay();
         result.nativeCommit.push(writes.join(''));
       }
     }
@@ -176,7 +176,7 @@ module.exports = async function checkImeOwnership(evaluate) {
   });
   assert.deepEqual({ ...result, preeditWidth: undefined, gridWidth: undefined }, {
     processBeforeComposition: '한', midlineDigit: '2', cancelReplacement: '',
-    nativeCommit: ['한', '한', '한', '한'],
+    nativeCommit: Array(12).fill('한'),
     identicalNewNativeText: '한한', processWithKeypress: '2',
     orcaWindowsTrace: '가\r나',
     metaDuringPreedit: { writes: '', visible: true }, metaFinal: '한',

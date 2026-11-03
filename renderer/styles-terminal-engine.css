@@ -2,5 +2,9 @@
 .ghostty-terminal { position: relative; height: 100%; width: 100%; overflow: hidden; outline: none; }
 .ghostty-terminal .ghostty-screen { display: block; position: relative; cursor: text; }
 .ghostty-input { font-family: inherit; outline: none; }
+.ghostty-scrollbar { position: absolute; width: 14px; touch-action: none; cursor: default; outline: none; }
+.ghostty-scrollbar[hidden] { display: none; }
+.ghostty-scrollbar-thumb { position: absolute; left: 4px; width: 6px; border-radius: 3px; background: #80808066; }
+.ghostty-scrollbar:hover .ghostty-scrollbar-thumb,.ghostty-scrollbar:focus-visible .ghostty-scrollbar-thumb { background: #808080aa; }
 .ghostty-accessibility { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: pre; }
 .ghostty-terminal .whitebox-ime-view { position: absolute; z-index: 2; pointer-events: none; white-space: pre; overflow: hidden; }

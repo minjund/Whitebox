@@ -79,13 +79,20 @@ window.WhiteboxTerminalIme = {
           textarea.value = '';
           textarea.setSelectionRange(0, 0);
           if (focused) terminal.focus();
+          // Ghostty's native context-menu cleanup can leave this focused
+          // textarea fixed, behind the canvas and 0×0. Restore a usable native
+          // candidate anchor now, before another key or PTY echo is required.
+          render();
         };
         terminal.preparePaste = preparePaste;
         const render = () => {
           if (disposed || !screen.isConnected) { hide(); return; }
           const buffer = terminal.buffer.active;
-          const row = buffer.baseY + buffer.cursorY - buffer.viewportY;
-          if (row < 0 || row >= terminal.rows) { hide(); return; }
+          const cursorRow = buffer.baseY + buffer.cursorY - buffer.viewportY;
+          const cursorInViewport = cursorRow >= 0 && cursorRow < terminal.rows;
+          // Reading scrollback can put the real cursor outside the viewport.
+          // Hide its overlay, but keep the native input anchor usable there.
+          const row = Math.max(0, Math.min(terminal.rows - 1, cursorRow));
           const { width: cellWidth, height: cellHeight } = terminal.renderer.getMetrics();
           const options = terminal.options;
           const theme = options.theme;
@@ -94,7 +101,8 @@ window.WhiteboxTerminalIme = {
           const screenLeft = screen.offsetLeft;
           const screenTop = screen.offsetTop;
           const screenWidth = screen.clientWidth;
-          if (!composing || !text || doc.activeElement !== textarea) {
+          Object.assign(textarea.style, { position: 'absolute', zIndex: '2', pointerEvents: 'none' });
+          if (!cursorInViewport || !composing || !text || doc.activeElement !== textarea) {
             hide();
             Object.assign(textarea.style, { position: 'absolute', left: `${screenLeft + column * cellWidth}px`,
               top: `${screenTop + row * cellHeight}px`, width: `${cellWidth}px`, height: `${cellHeight}px` });
@@ -186,7 +194,7 @@ window.WhiteboxTerminalIme = {
           event.stopPropagation();
           if (composing || event.isComposing) return;
           if (pending) { flush(); return; }
-          if (event.inputType === 'insertText' && event.data) {
+          if (['insertText', 'insertReplacementText', 'insertFromComposition'].includes(event.inputType) && event.data) {
             const duplicate = reconciliation && textarea.value === reconciliation.value;
             clearReconciliation();
             if (!duplicate) terminal.input(event.data, true);
@@ -238,7 +246,9 @@ window.WhiteboxTerminalIme = {
           composing = false;
           text = '';
           hide();
+          scheduleRender();
         });
+        listen('focus', scheduleRender);
         const subscriptions = [terminal.onRender(scheduleRender), terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
         cleanup = () => {
           disposed = true;
