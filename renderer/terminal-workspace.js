@@ -411,7 +411,7 @@
   }
   let lastReviewKey = '';
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
-  let draggingId = '', draggingPanelId = '', pointerDrag = null, suppressDragClick = false;
+  let draggingId = '', draggingPanelId = '', pointerDrag = null, suppressDragClick = false, consumedDragEscape = false;
   let arrangingId = '';
   let pendingCreation = null;
 
@@ -722,7 +722,10 @@
     if (target.dataset.dropOwner) return { node: target, ownerId: target.dataset.dropOwner, direction: 'new' };
     if (target.dataset.dropPanel) return { node: target, panelId: target.dataset.dropPanel, direction: 'right' };
     if (target.id === 'wbCanvas') {
-      const targetId = layout.ids(canvasLayout()).find(id => id !== draggingId);
+      const sourceIds = draggingPanelId
+        ? layout.ids(panelOwner(draggingPanelId)?.tabs.find(panel => panel.id === draggingPanelId)?.layout)
+        : [draggingId];
+      const targetId = layout.ids(canvasLayout()).find(id => !sourceIds.includes(id));
       return targetId ? { node: target, panelId: tab()?.id, targetId, direction: 'right' } : null;
     }
     if (target.dataset.terminalId === draggingId || draggingPanelId && layout.ids(panelOwner(draggingPanelId)?.tabs.find(panel => panel.id === draggingPanelId)?.layout).includes(target.dataset.terminalId)) return null;
@@ -804,7 +807,17 @@
     }
   }, true);
   root.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
+    if (event.key !== 'Escape') return;
+    if (!event.repeat && !pointerDrag) consumedDragEscape = false;
+    if (!pointerDrag && !consumedDragEscape) return;
+    consumedDragEscape = true;
+    if (pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
+    event.preventDefault(); event.stopImmediatePropagation();
+  }, true);
+  root.addEventListener('keyup', event => {
+    if (event.key !== 'Escape' || !consumedDragEscape) return;
+    consumedDragEscape = false;
+    event.preventDefault(); event.stopImmediatePropagation();
   }, true);
   root.addEventListener('dragstart', event => {
     const source = event.target.closest('[data-drag-terminal]');

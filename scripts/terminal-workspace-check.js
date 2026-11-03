@@ -571,11 +571,14 @@ app.whenReady().then(async () => {
         assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), id, 'real click selects its terminal without starting a drag');
       }
       const before = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(o=>({id:o.id,view:o.viewLayout,active:o.activeSurface})))');
-      const point = await evaluate(`(() => {const r=document.querySelector('[data-instance="${second.id}"]').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+      const point = await evaluate(`(() => {const r=document.querySelector('[data-terminal-id="${first.id}"]>header').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
       await mouse({type:'mousePressed',...point,button:'left',buttons:1,clickCount:1});
       await mouse({type:'mouseMoved',x:point.x+12,y:point.y+12,button:'left',buttons:1});
+      await evaluate(`(() => {window.dragEscapeLeaks=[];window.dragEscapeInput=document.querySelector('[data-terminal-id="${first.id}"] textarea');for(const type of ['keydown','keyup'])dragEscapeInput.addEventListener(type,event=>{if(event.key==='Escape')dragEscapeLeaks.push(type);},true);dragEscapeInput.focus();})()`);
+      assert.equal(await evaluate('document.activeElement===dragEscapeInput && document.querySelector("#terminalWorkspace").classList.contains("is-dragging-terminal")'),true,'cancel is checked while the real terminal input owns keyboard focus');
       await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
       await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      assert.deepEqual(await evaluate('dragEscapeLeaks'),[],'drag cancellation never sends Escape down/up to the terminal input');
       await mouse({type:'mouseReleased',...point,button:'left',buttons:0,clickCount:1});
       assert.equal(await evaluate('document.querySelector("#terminalWorkspace").classList.contains("is-dragging-terminal")'), false);
       assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(o=>({id:o.id,view:o.viewLayout,active:o.activeSurface})))'),before,'Escape keeps layout and selection unchanged');
@@ -1352,8 +1355,12 @@ app.whenReady().then(async () => {
     assert.ok(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane')).some(node=>node.dataset.terminalId==='${foreignId}')`), 'native drag shows a hidden terminal from another panel on the active canvas');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'native canvas drop preserves panel membership');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'native canvas drop preserves every PTY');
-    await nativeDrag(foreignId, `#wbCanvas [data-terminal-id="${singlePanelId}"] .wb-terminal-mount`, `[data-drag-panel="${beforeAdd.panelId}"]`);
+    await nativeDrag(foreignId, `#wbCanvas [data-terminal-id="${singlePanelId}"] .wb-pane-title`, `[data-drag-panel="${beforeAdd.panelId}"]`);
     assert.equal(await evaluate(`${JSON.stringify(originalRoster)}.every(id=>Boolean(document.querySelector('#wbCanvas [data-terminal-id="'+id+'"]')))`), true, 'dragging a panel card displays every member of that panel');
+    await nativeDrag(foreignId, '#wbCanvas .wb-divider', `[data-drag-panel="${beforeAdd.panelId}"]`);
+    const gapPlacement = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return [...s.spaces,s.standalone].find(o=>o.id===s.selectedSpace).viewLayout;})()');
+    assert.equal(gapPlacement.axis,'row','whole-panel gap drop arranges against another panel, never one of its own members');
+    assert.equal(gapPlacement.first.id,singlePanelId);
     await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
     const togetherState = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return {visible:[...document.querySelectorAll("#wbCanvas .wb-pane")].map(n=>({id:n.dataset.terminalId,panel:n.dataset.panelId})), panels:[...s.spaces,s.standalone].flatMap(o=>o.tabs).map(p=>({id:p.id,ids:WhiteboxWorkspaceLayout.ids(p.layout)})), pins:s.pinnedPanels, selected:s.selectedSpace};})()');
     assert(new Set(togetherState.visible.map(n=>n.panel)).size>=3, 'sidebar together-view adds a third panel without replacing the current view: '+JSON.stringify({thirdPanel,...togetherState}));
