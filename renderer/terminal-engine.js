@@ -230,6 +230,8 @@
       // escape sequence ending the application's bracketed-paste envelope.
       let text = String(data).replace(/\r\n|\n/g, '\r');
       if (this.wasmTerm.hasBracketedPaste()) text = text.replace(/\x1b/g, '');
+      if (!text) return;
+      this.preparePaste?.();
       this.backend.paste(text);
     }
     write(data, callback) {

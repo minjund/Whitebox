@@ -715,10 +715,14 @@
     draggingId = ''; clearDrop(); root.classList.remove('is-dragging-terminal'); renderInstances();
   }
   function dropTarget(event) {
-    const target = event.target.closest('[data-drop-owner], [data-drop-panel], #wbCanvas .wb-pane');
+    const target = event.target.closest('[data-drop-owner], [data-drop-panel], #wbCanvas .wb-pane, #wbCanvas');
     if (!target) return null;
     if (target.dataset.dropOwner) return { node: target, ownerId: target.dataset.dropOwner, direction: 'new' };
     if (target.dataset.dropPanel) return { node: target, panelId: target.dataset.dropPanel, direction: 'right' };
+    if (target.id === 'wbCanvas') {
+      const targetId = layout.ids(canvasLayout()).find(id => id !== draggingId);
+      return targetId ? { node: target, panelId: tab()?.id, targetId, direction: 'right' } : null;
+    }
     if (target.dataset.terminalId === draggingId) return null;
     const bounds = target.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
@@ -737,9 +741,10 @@
     const target = dropTarget(event); clearDrop();
     if (!target) return;
     event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+    event.stopPropagation();
     target.node.dataset.dropDirection = target.direction;
     target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치' }[target.direction]);
-  });
+  }, true);
   root.addEventListener('dragleave', event => { if (!event.target.contains(event.relatedTarget)) clearDrop(); });
   root.addEventListener('drop', event => {
     if (!draggingId || !event.dataTransfer.types.includes(DRAG_TYPE)) return;
@@ -747,9 +752,11 @@
     event.preventDefault(); event.stopPropagation();
     const valid = id === draggingId; finishDrag();
     if (valid && target) moveTerminal(id, target);
-  });
+  }, true);
   root.addEventListener('dragend', finishDrag);
-  window.addEventListener('blur', () => { if (draggingId) finishDrag(); });
+  // Native desktop drags may blur the window. Keep the source identity until
+  // drop/dragend; terminal engines can consume bubbling drop events themselves,
+  // so workspace movement above runs in capture phase.
 
   async function ensurePane(session, restoring = false) {
     let pane = panes.get(session.id);
@@ -1353,7 +1360,7 @@
     const related = collaborationJobs.filter(job => job.sourceId === activeId() || job.targetId === activeId());
     const jobs = related.filter(job => job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now()).slice(-3);
     const status = $('#wbCollaborationStatus'); status.hidden = !jobs.length;
-    const labels = { queued: t('전달 대기'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
+    const labels = { queued: t('전달 대기'), starting: t('시작 중…'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
     const markup = job => `<div><strong>${esc(job.terminal && job.state === 'completed' ? t('새 터미널 열림') : labels[job.state] || job.state)}</strong><span>${esc((job.targetId || '').slice(-5))} · ${esc(job.request || t('새 터미널'))}</span>${job.error ? `<small>${esc(job.error)}</small>` : ''}</div>`;
     status.innerHTML = jobs.map(markup).join('');
   }

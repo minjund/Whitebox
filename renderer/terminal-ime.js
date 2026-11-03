@@ -62,6 +62,25 @@ window.WhiteboxTerminalIme = {
           sent.timer = setTimeout(() => { if (reconciliation === sent) reconciliation = null; }, 0);
           if (input) terminal.input(input, true);
         };
+        const previousPreparePaste = terminal.preparePaste;
+        const preparePaste = () => {
+          if (disposed) return;
+          const focused = doc.activeElement === textarea;
+          // Clipboard text bypasses the browser's editable value. Finish any
+          // marked text before those bytes, then reset both the native input
+          // context and our shadow selection before the next IME composition.
+          if (composing && !pending) pending = { start: startOffset, suffix: suffixLength, timer: null };
+          if (focused) textarea.blur();
+          flush();
+          clearReconciliation();
+          composing = false;
+          text = '';
+          hide();
+          textarea.value = '';
+          textarea.setSelectionRange(0, 0);
+          if (focused) terminal.focus();
+        };
+        terminal.preparePaste = preparePaste;
         const render = () => {
           if (disposed || !screen.isConnected) { hide(); return; }
           const buffer = terminal.buffer.active;
@@ -176,7 +195,13 @@ window.WhiteboxTerminalIme = {
           }
         });
         listen('keydown', event => {
-          if (event.isComposing || event.keyCode === 229
+          // After clipboard/input-source transitions macOS can report a Hangul
+          // jamo with its physical keyCode and isComposing=false. Let the
+          // browser IME interpret it; Ghostty would otherwise preventDefault
+          // and send each consonant/vowel as a finished terminal character.
+          const nativeJamo = !event.ctrlKey && !event.altKey && !event.metaKey
+            && /^[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\ud7b0-\ud7ff]$/u.test(event.key);
+          if (event.isComposing || event.keyCode === 229 || nativeJamo
             || (composing && ['Meta', 'Shift', 'Control', 'Alt'].includes(event.key))) {
             event.stopPropagation();
             return;
@@ -222,6 +247,10 @@ window.WhiteboxTerminalIme = {
           clearReconciliation();
           if (frame) cancelAnimationFrame(frame);
           for (const [type, listener] of listeners) textarea.removeEventListener(type, listener, true);
+          if (terminal.preparePaste === preparePaste) {
+            if (previousPreparePaste === undefined) delete terminal.preparePaste;
+            else terminal.preparePaste = previousPreparePaste;
+          }
           subscriptions.forEach(subscription => subscription.dispose());
           view.remove();
         };

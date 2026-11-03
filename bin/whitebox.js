@@ -21,6 +21,7 @@ function usage() {
     '  whitebox run <claude|codex|gemini|grok> [-- 옵션]  앱 브리지에서 AI 실행',
     '  whitebox codex-endpoint                              공유 Codex 서버 주소 확인',
     '  whitebox list-panels [--json]                      같은 패널의 터미널 목록',
+    '  whitebox new-terminal <codex|claude> [--count 3]     같은 패널에 새 AI 터미널 열기',
     '  whitebox send --surface <ID> <text>                 텍스트 입력 (끝에 개행을 넣으면 제출)',
     '  whitebox send-key --surface <ID> enter              입력한 텍스트 제출',
     '  whitebox read-screen --surface <ID> [--lines 100]   터미널 출력 읽기',

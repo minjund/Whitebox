@@ -108,6 +108,49 @@ module.exports = async function checkImeOwnership(evaluate) {
     end(term, '하'); await delay();
     result.backspaceFinal = writes.join('');
 
+    // A paste is an explicit input boundary. The marked syllable must commit
+    // before clipboard bytes, and its browser selection must not survive into
+    // the next Korean composition (including a pending deferred commit).
+    result.afterPaste = [];
+    for (const deferred of [false, true]) {
+      await prepare();
+      start(term); update(term, '한');
+      if (deferred) end(term, '한');
+      term.paste('바꿈(이후 감사·결과가 저장값과 일치하도록)');
+      const shadow = { value: term.textarea.value, start: term.textarea.selectionStart, end: term.textarea.selectionEnd };
+      start(term); update(term, '이'); end(term, '이');
+      start(term); update(term, '게', '이게'); end(term, '게');
+      await delay();
+      result.afterPaste.push({ text: writes.join(''), shadow, focused: document.activeElement === term.textarea, visible: snapshot().visible });
+    }
+
+    await prepare();
+    term.textarea.value = '복사했던 이전 문장😀'; term.textarea.select();
+    term.paste('복사한 본문\n');
+    result.selectedShadowAfterPaste = { value: term.textarea.value, start: term.textarea.selectionStart, end: term.textarea.selectionEnd };
+    start(term); update(term, '저'); end(term, '저');
+    start(term); update(term, '장', '저장'); end(term, '장');
+    await delay();
+    result.selectionPasteText = writes.join('');
+
+    await prepare();
+    term.textarea.blur();
+    term.paste('background paste');
+    result.backgroundPasteStealsFocus = document.activeElement === term.textarea;
+
+    await prepare();
+    result.nativeJamoKeyDefaults = [];
+    for (const [character, keyCode, code] of [['ㅇ', 68, 'KeyD'], ['ㅣ', 76, 'KeyL']]) {
+      const event = new KeyboardEvent('keydown', { key: character, keyCode, code, isComposing: false, bubbles: true, cancelable: true });
+      term.textarea.dispatchEvent(event);
+      result.nativeJamoKeyDefaults.push(event.defaultPrevented);
+      if (character === 'ㅇ') start(term);
+      update(term, character === 'ㅇ' ? 'ㅇ' : '이');
+    }
+    result.jamoPreeditWrites = writes.join('');
+    end(term, '이'); await delay();
+    result.nativeJamoCommit = writes.join('');
+
     await prepare();
     start(term); update(term, '한글'); await delay();
     const state = snapshot();
@@ -138,6 +181,10 @@ module.exports = async function checkImeOwnership(evaluate) {
     orcaWindowsTrace: '가\r나',
     metaDuringPreedit: { writes: '', visible: true }, metaFinal: '한',
     composingBackspace: { writes: '', visible: true }, backspaceFinal: '하',
+    afterPaste: [false, true].map(() => ({ text: '한바꿈(이후 감사·결과가 저장값과 일치하도록)이게', shadow: { value: '', start: 0, end: 0 }, focused: true, visible: false })),
+    selectedShadowAfterPaste: { value: '', start: 0, end: 0 },
+    selectionPasteText: '복사한 본문\r저장', backgroundPasteStealsFocus: false,
+    nativeJamoKeyDefaults: [false, false], jamoPreeditWrites: '', nativeJamoCommit: '이',
     disposal: { restored: true, writes: '', overlays: 0 },
     preeditWidth: undefined, gridWidth: undefined,
   });

@@ -21,7 +21,7 @@ async function main(argv = process.argv.slice(2), directory = __dirname) {
       if (Date.now() >= deadline) break;
       await new Promise(resolve => setTimeout(resolve, 400));
     } while (true);
-    return { id: job.id, state: job.state, targetId: job.targetId, answer: job.answer, error: job.error };
+    return { id: job.id, state: job.state, targetId: job.targetId, terminal: job.terminal, answer: job.answer, error: job.error };
   }
   if (!['ask', 'new'].includes(op)) throw new Error('Usage: <terminal ID> list | ask <target ID> "request" | wait <job ID> [seconds <= 60] | new <claude|codex>');
   const id = randomUUID();

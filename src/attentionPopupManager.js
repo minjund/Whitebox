@@ -2,8 +2,9 @@
 
 const { pathToFileURL } = require('url');
 
-const POPUP_WIDTH = 660;
-const DEFAULT_HEIGHT = 240;
+const POPUP_WIDTH = 320;
+const MAX_HEIGHT = 420;
+const DEFAULT_HEIGHT = 208;
 const MIN_HEIGHT = 96;
 const WORK_AREA_RATIO = 0.9;
 const EDGE_MARGIN = 8;
@@ -387,7 +388,7 @@ class AttentionPopupManager {
     const display = this.displayFor(record.request);
     const workArea = display.workArea;
     const width = Math.max(1, Math.min(POPUP_WIDTH, Math.floor(workArea.width * WORK_AREA_RATIO)));
-    const maxHeight = Math.max(1, Math.min(360, Math.floor(workArea.height * WORK_AREA_RATIO)));
+    const maxHeight = Math.max(1, Math.min(MAX_HEIGHT, Math.floor(workArea.height * WORK_AREA_RATIO)));
     const height = Math.min(record.request.initialHeight, maxHeight);
     return {
       width,
@@ -548,7 +549,7 @@ class AttentionPopupManager {
     for (const { display, entries } of groups.values()) {
       const workArea = display.workArea;
       const maxWidth = Math.max(1, Math.floor(workArea.width * WORK_AREA_RATIO));
-      const maxHeight = Math.max(1, Math.min(360, Math.floor(workArea.height * WORK_AREA_RATIO)));
+      const maxHeight = Math.max(1, Math.min(MAX_HEIGHT, Math.floor(workArea.height * WORK_AREA_RATIO)));
       let cursor = workArea.y + workArea.height - EDGE_MARGIN;
       for (let index = entries.length - 1; index >= 0; index -= 1) {
         const entry = entries[index];
@@ -619,7 +620,7 @@ class AttentionPopupManager {
       error: { code: 'ATTENTION_POPUP_STALE', message: 'This popup is no longer active.' },
     };
     const display = this.displayFor(entry.record.request, entry);
-    const maxHeight = Math.max(1, Math.floor(display.workArea.height * WORK_AREA_RATIO));
+    const maxHeight = Math.max(1, Math.min(MAX_HEIGHT, Math.floor(display.workArea.height * WORK_AREA_RATIO)));
     entry.height = boundedNumber(payload.height, entry.height, Math.min(MIN_HEIGHT, maxHeight), maxHeight);
     const previousInput = entry.hasTextInput;
     entry.hasTextInput = entry.baseHasTextInput || payload.hasTextInput === true;

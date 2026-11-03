@@ -163,6 +163,7 @@
       if (commandText) {
         const command = element('pre', 'popup-command', commandText);
         command.id = 'popupCommand';
+        command.tabIndex = 0;
         command.setAttribute('role', 'region');
         command.setAttribute('aria-label', localeText('requestDetail'));
         descriptionIds.push(command.id);

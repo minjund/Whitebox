@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, nativeTheme } = require('electron');
 const { AttentionPopupManager } = require('../src/attentionPopupManager');
 
 const root = path.resolve(__dirname, '..');
@@ -86,8 +86,8 @@ async function run() {
   await waitFor(() => questionEntry.window.webContents.executeJavaScript(`document.querySelector('#popupCard').dataset.type === 'question' && document.querySelectorAll('.popup-option').length >= 2`));
   await questionEntry.window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   await waitFor(() => questionEntry.height >= 180);
-  assert.ok(questionEntry.window.getBounds().width > questionEntry.window.getBounds().height, 'question popup is horizontal');
-  assert.ok(questionEntry.window.getBounds().height <= 360, 'long questionnaires stay compact and scroll');
+  assert.equal(questionEntry.window.getBounds().width, 320, 'question popup uses a compact corner width');
+  assert.ok(questionEntry.window.getBounds().height <= 420, 'long questionnaires stay compact and scroll');
   const artifactDirectory = path.join(root, 'artifacts');
   fs.mkdirSync(artifactDirectory, { recursive: true });
   const questionImage = await questionEntry.window.webContents.capturePage();
@@ -137,6 +137,31 @@ async function run() {
   const permissionImage = await permissionEntry.window.webContents.capturePage();
   const permissionScreenshot = path.join(artifactDirectory, 'attention-popup-permission.png');
   fs.writeFileSync(permissionScreenshot, permissionImage.toPNG());
+
+  assert.equal(permissionEntry.window.getBounds().width, 320);
+  assert.ok(permissionEntry.window.getBounds().height < 280, 'ordinary approval remains compact');
+  nativeTheme.themeSource = 'light';
+  await waitFor(() => permissionEntry.window.webContents.executeJavaScript("getComputedStyle(document.querySelector('.popup-card')).backgroundColor === 'rgb(255, 255, 255)'", true));
+  const lightImage = await waitFor(async () => {
+    const image = await permissionEntry.window.webContents.capturePage(), size = image.getSize();
+    const offset = (30 * size.width + size.width - 5) * 4, pixel = image.toBitmap().subarray(offset, offset + 3);
+    return [...pixel].every(channel => channel > 240) ? image : null;
+  });
+  fs.writeFileSync(path.join(artifactDirectory, 'attention-popup-permission-light.png'), lightImage.toPNG());
+  nativeTheme.themeSource = 'dark';
+
+  const longCommand = Array.from({ length: 80 }, (_, index) => `line ${index}: npm test -- --filter='한글 명령 ${index}'`).join('\n');
+  manager.upsert({ id: 'long-command', type: 'permission', provider: 'Codex', title: '긴 명령 확인', detail: longCommand, openMain: true }, 'overflow');
+  await waitFor(() => [...manager.windows.values()].some(entry => entry.record.request.id === 'long-command' && entry.ready && entry.presented));
+  const longEntry = [...manager.windows.values()].find(entry => entry.record.request.id === 'long-command');
+  const commandLayout = await longEntry.window.webContents.executeJavaScript(`(() => {
+    const command = document.querySelector('.popup-command'); command.focus(); command.scrollTop = command.scrollHeight;
+    return { text: command.textContent, height: command.clientHeight, overflow: command.scrollHeight > command.clientHeight, scrolled: command.scrollTop > 0, focused: document.activeElement === command, cardHeight: document.querySelector('.popup-card').getBoundingClientRect().height };
+  })()`, true);
+  assert.equal(commandLayout.text, longCommand, 'the complete command is retained');
+  assert.ok(commandLayout.height <= 112 && commandLayout.overflow && commandLayout.scrolled && commandLayout.focused, 'long commands scroll and accept keyboard focus');
+  assert.ok(commandLayout.cardHeight <= 420 && longEntry.window.getBounds().height <= 420, 'long content cannot create an oversized window');
+  manager.remove('overflow', 'long-command');
 
   const questionUi = await questionEntry.window.webContents.executeJavaScript(`(() => {
     const card = document.querySelector('#popupCard');
@@ -203,7 +228,7 @@ async function run() {
   await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
   await paged.window.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   fs.writeFileSync(path.join(artifactDirectory,'attention-popup-paged.png'),(await paged.window.webContents.capturePage()).toPNG());
-  assert(paged.window.getBounds().height<=360,'multi-question pages remain compact');
+  assert(paged.window.getBounds().height<=420,'multi-question pages remain compact');
   await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
   assert.deepStrictEqual(await pageState(),{visible:['note'],progress:'질문 3 / 3',previousDisabled:false,nextHidden:true,submitHidden:false});
   assert.equal(await paged.window.webContents.executeJavaScript("document.querySelector('textarea').value"),'한글 메모 😀');

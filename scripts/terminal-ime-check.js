@@ -344,6 +344,27 @@ app.whenReady().then(async () => {
     checks.push('Chromium CDP ㅎ→한 composition emits no preedit and exactly one 한 commit through terminalWrite');
     checks.push('Chromium composition cancellation emits no text and clears overlay');
 
+    // Browser-generated IME events after the same paste boundary used by the
+    // native clipboard, including punctuation/newline and existing shadow text.
+    const pastePrefix = '바꿈(이후 감사·결과가 저장값과 일치하도록)\n';
+    const followup = '이게 저장 과정에서 필요해? 둘 다?';
+    win.webContents.debugger.attach('1.3');
+    await evaluate(async prefix => {
+      await reset(term); writes.length = 0; term.focus();
+      term.textarea.value = '앞서 입력한 내용😀'; term.textarea.select();
+      term.paste(prefix);
+    }, pastePrefix);
+    await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: 'ㅇ', selectionStart: 1, selectionEnd: 1 });
+    await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '이', selectionStart: 1, selectionEnd: 1 });
+    const pastedPreedit = await evaluate(async () => { await delay(); return { text: writes.join(''), preedit: snapshot().text }; });
+    assert.equal(pastedPreedit.text, pastePrefix.replace(/\n/g, '\r'));
+    assert.equal(pastedPreedit.preedit, '이');
+    await win.webContents.debugger.sendCommand('Input.insertText', { text: followup });
+    const pastedCommit = await evaluate(async () => { await delay(); return { text: writes.join(''), visible: snapshot().visible }; });
+    assert.deepEqual(pastedCommit, { text: pastePrefix.replace(/\n/g, '\r') + followup, visible: false });
+    win.webContents.debugger.detach();
+    checks.push('paste followed by Chromium ㅇ→이 composition and the reported Korean sentence preserves exact Unicode without jamo leaks');
+
     const ownership = await checkImeOwnership(evaluate);
     checks.push('IME native input owns commits once, preserves midline edits, modifiers and composing Backspace, and uses terminal cell widths');
 

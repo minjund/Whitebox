@@ -4,6 +4,7 @@
 const readline = require('readline');
 const { main: control } = require('./panel-control');
 const tools = [
+  { name: 'whitebox_new_terminals', description: 'Open additional Codex or Claude terminal panes in this Whitebox panel when the user asks to add terminals or windows. Returns creation jobs; wait for each job, then list terminals and check ready before asking them. Existing busy terminals must not be replaced.', inputSchema: { type: 'object', properties: { provider: { type: 'string', enum: ['codex', 'claude'] }, count: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['provider'], additionalProperties: false } },
   { name: 'whitebox_list_terminals', description: 'List live Claude/Codex terminals in this Whitebox panel. Use this when the user mentions the same panel or asks to contact another AI. Provider-native teammate lists and tmux do not describe Whitebox panel membership.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'whitebox_ask', description: 'Send the user-authorized request to another idle AI in the same Whitebox panel. Use a terminal ID from whitebox_list_terminals, or an unambiguous codex/claude name. Returns a job ID; use whitebox_wait for the actual reply. Never create a replacement agent merely because a target is busy.', inputSchema: { type: 'object', properties: { target: { type: 'string' }, message: { type: 'string' } }, required: ['target', 'message'], additionalProperties: false } },
   { name: 'whitebox_wait', description: 'Read the matched reply to a Whitebox job. A running state is not completion. Return the received answer to the user once completed.', inputSchema: { type: 'object', properties: { jobId: { type: 'string' }, seconds: { type: 'integer', minimum: 0, maximum: 45 } }, required: ['jobId'], additionalProperties: false } },
@@ -16,7 +17,8 @@ async function dispatch(method, params = {}, run = control) {
   if (method !== 'tools/call') throw new Error('Unsupported method');
   const a = params.arguments || {};
   let args;
-  if (params.name === 'whitebox_list_terminals') args = ['list-panels', '--json'];
+  if (params.name === 'whitebox_new_terminals' && ['codex', 'claude'].includes(a.provider) && (a.count === undefined || Number.isInteger(a.count) && a.count >= 1 && a.count <= 8)) args = ['new-terminal', a.provider, '--count', String(a.count ?? 1), '--json'];
+  else if (params.name === 'whitebox_list_terminals') args = ['list-panels', '--json'];
   else if (params.name === 'whitebox_ask' && typeof a.target === 'string' && typeof a.message === 'string' && a.message.trim()) args = ['ask', '--surface', a.target, '--', a.message];
   else if (params.name === 'whitebox_wait' && typeof a.jobId === 'string' && /^[a-f0-9-]{36}$/iu.test(a.jobId)) args = ['wait', a.jobId, String(Math.max(0, Math.min(45, Number(a.seconds) || 0)))];
   else if (params.name === 'whitebox_read_terminal' && typeof a.target === 'string') args = ['read-screen', '--surface', a.target, '--lines', String(Math.max(1, Math.min(200, Number(a.lines) || 100))), '--json'];
