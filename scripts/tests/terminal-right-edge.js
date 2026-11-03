@@ -34,10 +34,12 @@ module.exports = async function checkTerminalRightEdge(evaluate, webContents) {
     for (const type of ['pointerdown', 'pointermove', 'pointerup']) bar.addEventListener(type, event => edgePointerTrace.push({ type, target: event.target.className, y: event.clientY, captured: bar.hasPointerCapture(event.pointerId) }));
     const rect = bar.getBoundingClientRect(), thumb = bar.firstChild.getBoundingClientRect();
     return { outsideGrid: rect.left >= canvas.right, visible: !bar.hidden, maximum: term.buffer.active.baseY,
+      controlsGrid: document.getElementById(bar.getAttribute('aria-controls')) === term.renderer.getCanvas(),
       x: rect.left + rect.width / 2, y: thumb.top + thumb.height / 2, top: rect.top + 4,
       ariaMaximum: bar.getAttribute('aria-valuemax') };
   });
   assert(scroll.outsideGrid && scroll.visible, 'Scrollback controls belong outside the terminal text grid');
+  assert.equal(scroll.controlsGrid, true, 'Accessible scroll controls identify their terminal grid');
   assert.equal(Number(scroll.ariaMaximum), scroll.maximum);
   webContents.debugger.attach('1.3');
   try {

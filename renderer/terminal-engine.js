@@ -6,6 +6,7 @@
   let initialization;
   let ghostty;
   let ghosttyWeb;
+  let nextGridId = 0;
   function ready() {
     if (!initialization) {
       initialization = import('../node_modules/@crunchloop/ghostty-web/dist/ghostty-web.es.js')
@@ -234,6 +235,9 @@
       rail.setAttribute('role', 'scrollbar');
       rail.setAttribute('aria-label', 'Terminal scrollback');
       rail.setAttribute('aria-orientation', 'vertical');
+      const screen = this.renderer.getCanvas();
+      if (!screen.id) screen.id = `whitebox-terminal-grid-${++nextGridId}`;
+      rail.setAttribute('aria-controls', screen.id);
       rail.setAttribute('aria-valuemin', '0');
       rail.tabIndex = 0;
       const thumb = document.createElement('div');

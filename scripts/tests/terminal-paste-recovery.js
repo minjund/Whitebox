@@ -3,9 +3,13 @@ const assert = require('node:assert/strict');
 
 module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
   const results = [];
-  for (const contextMenu of [false, true]) for (const activeComposition of [false, true]) {
-    await evaluate(async contextMenu => {
+  for (const contextMenu of [false, true]) for (const activeComposition of [false, true]) for (const history of [false, true]) {
+    await evaluate(async ({ contextMenu, history }) => {
       await reset(term); term.focus(); writes.length = 0;
+      if (history) {
+        await outputTo(term, Array.from({ length: 40 }, (_, i) => `paste-history-${i}\r\n`).join(''));
+        term.scrollToTop();
+      }
       window.pasteEvents = [];
       window.recordPasteEvent = event => { if (event.target === term.textarea) pasteEvents.push({ type: event.type, data: event.data, inputType: event.inputType, isComposing: event.isComposing }); };
       for (const type of ['compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input']) {
@@ -16,7 +20,7 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
         canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left + 30, clientY: bounds.top + 20 }));
         await new Promise(resolve => setTimeout(resolve, 20));
       }
-    }, contextMenu);
+    }, { contextMenu, history });
     if (activeComposition) await debuggerSession.sendCommand('Input.imeSetComposition', { text: '한', selectionStart: 1, selectionEnd: 1 });
     await evaluate(() => {
       const data = new DataTransfer(); data.setData('text/plain', '붙여넣은 본문\n');
@@ -24,8 +28,10 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
     });
     const input = await evaluate(() => {
       const rect = term.textarea.getBoundingClientRect();
+      const screen = term.renderer.getCanvas().getBoundingClientRect();
       return { width: rect.width, height: rect.height, position: term.textarea.style.position,
-        zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea };
+        zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea,
+        insideViewport: rect.left >= screen.left - 1 && rect.right <= screen.right + 1 && rect.top >= screen.top - 1 && rect.bottom <= screen.bottom + 1 };
     });
     await debuggerSession.sendCommand('Input.imeSetComposition', { text: 'ㅇ', selectionStart: 1, selectionEnd: 1 });
     await debuggerSession.sendCommand('Input.imeSetComposition', { text: '이', selectionStart: 1, selectionEnd: 1 });
@@ -35,9 +41,9 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
       for (const type of ['compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input']) document.removeEventListener(type, recordPasteEvent, true);
       return { text: writes.join(''), events: pasteEvents };
     });
-    results.push({ contextMenu, activeComposition, input, ...result });
-    assert(input.focused && input.width > 0 && input.height > 0 && input.position === 'absolute' && Number(input.zIndex || 0) >= 0,
-      `Paste must restore a usable native input anchor before typing: ${JSON.stringify(results)}`);
+    results.push({ contextMenu, activeComposition, history, input, ...result });
+    assert(input.focused && input.insideViewport && input.width > 0 && input.height > 0 && input.position === 'absolute' && Number(input.zIndex || 0) >= 0,
+      `Paste must restore a usable native input anchor before typing: ${JSON.stringify({ contextMenu, activeComposition, history, input })}`);
     assert.equal(result.text, (activeComposition ? '한' : '') + '붙여넣은 본문\r이게 한글 입력');
   }
   const nativeReplacement = await evaluate(async () => {
