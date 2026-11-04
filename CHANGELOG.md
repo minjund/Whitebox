@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.16 - 2026-11-04
+
+- Combine self-contained analysis summaries, visible limits and source-backed next requests with single-attempt format recovery and internal-summary filtering.
+- Add terminal close commands; make X close directly and improve trash restore feedback and reliability.
+- Show per-terminal AI token usage and compact badges for active background jobs.
+- Repair Korean input after delayed paste-menu cleanup and reduce terminal creation/deletion overhead while preserving durable storage.
+- Retain previous panel dragging, clipping and update behavior; verify official 2.0.15 clients alongside every earlier supported updater cohort.
+
 ## 2.0.13 - 2026-11-03
 
 - Fix Korean input after paste: finish preceding IME text before clipboard bytes,

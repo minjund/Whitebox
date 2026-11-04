@@ -36,7 +36,7 @@ function fixture({ retrieval = false } = {}) {
   service.enqueue(session.id, entry, chunk);
   service.drain();
   return { service, session, entry, previous, chunk, calls, get reads() { return reads; },
-    async reply(index, text, tokens = usage) { calls[index].resolve({ text, usage: tokens }); await settle(); } };
+    async reply(index, text, tokens = usage, contract = {}) { calls[index].resolve({ text, usage: tokens, ...contract }); await settle(); } };
 }
 
 module.exports = async function formatChecks() {
@@ -62,6 +62,20 @@ module.exports = async function formatChecks() {
     const recovered = f.entry.result.tasks.find(item => item.taskId === 'current');
     assert.ok(recovered.decision); assert.equal(recovered.qualityPasses, 2);
     assert.equal(recovered.analysisUsage.total, 240); assert.equal(recovered.analysisMetrics.calls, 2);
+  }
+  const answerFirst = task(); delete answerFirst.decision;
+  answerFirst.content = { version: 2,
+    answer: { text: '버튼 문구 변경이 보고됐습니다.', basis: 'reported', quote: evidence },
+    details: [], limitations: [], deliverables: [], background: [],
+    handoff: { kind: 'finish', temporal: null, priority: { text: '요청한 변경이 보고되어 추가 요청은 필요하지 않습니다.', basis: 'inference', quote: evidence }, prompt: null } };
+  const contract = { reviewFormat: 'answer-first-v2', handoffRequired: true };
+  for (const malformed of [false, true]) {
+    const f = fixture(); await settle();
+    if (malformed) await f.reply(0, '{"tasks":[]}', usage, contract);
+    await f.reply(malformed ? 1 : 0, JSON.stringify({ tasks: [answerFirst] }), usage, contract);
+    assert.equal(f.entry.state, 'ready', 'compact content and handoff survive format recovery');
+    assert.equal(f.calls.length, malformed ? 2 : 1, 'valid answer-first content needs no unused legacy decision repair');
+    assert.equal(f.entry.result.tasks.find(item => item.taskId === 'current').content.version, 2);
   }
   const correct = fixture(); await settle(); await correct.reply(0, valid());
   assert.equal(correct.calls.length, 1, 'valid output has no extra call');

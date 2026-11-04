@@ -20,7 +20,8 @@
       && (content.handoff.temporal == null || typeof content.handoff.temporal.text === 'string')
       && (content.handoff.kind === 'finish' ? content.handoff.prompt == null : typeof content.handoff.prompt?.text === 'string'));
   function displayTitle(task) {
-    return validContent(task.content) && task.content.subject?.text || task.summary || task.request || '';
+    const title = validContent(task.content) && task.content.subject?.text || task.summary || task.request || '';
+    return typeof window !== 'undefined' && window.WhiteboxTerminalReviewTurns?.isNonTaskRequest(title) ? task.request || '' : title;
   }
   function applyHistoryContent(task, entries, sessionId, creationId) {
     if (!Array.isArray(entries)) return task;

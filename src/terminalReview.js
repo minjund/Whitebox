@@ -699,7 +699,7 @@ class TerminalReview extends EventEmitter {
         if (parsed && requiresHandoff && !parsed.tasks[0]?.content?.handoff) parsed.tasks[0].contentIssues.push('missing time, first decision and next-request handoff');
         let usage = typeof raw === 'object' ? raw.usage ?? null : null;
         let qualityPasses = 1;
-        const repairIssues = formatError?.reviewIssues || [...(parsed.tasks[0]?.decisionIssues || []), ...(parsed.tasks[0]?.contentIssues || [])];
+        const repairIssues = formatError?.reviewIssues || [...(!parsed.tasks[0]?.content ? parsed.tasks[0]?.decisionIssues || [] : []), ...(parsed.tasks[0]?.contentIssues || [])];
         // One replacement only, shared by format and decision repair. A scoped
         // evidence retrieval may already have used the second model call; its
         // malformed response still needs a single format-recovery opportunity.
