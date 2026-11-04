@@ -103,6 +103,10 @@ Earlier official pins in scripts/mac-packaged-update-button.js remain required, 
 
 Both artifacts use https://github.com/minjund/Whitebox/releases/download/v2.0.15/ with their exact filenames. Require source/candidate updater execution, profile sentinel, app.asar version, renderer-ready relaunch and cleanup on both architectures.
 
+## Official 2.0.15 fixture preparation
+
+The first 2.0.15 attempt failed its strict 30-second parent-exit assertion because it was omitted from the source workspace preparation list. Its initial shell made the published app keep a window close in the tray. Add only pinned 2.0.15 to the existing authenticated idle-workspace preparation, and assert the tray/workload/capture-host policy directly in its extracted official app.asar, recording that packaged main.js SHA-256. No timeout is accepted as success, and no installed source bytes are patched. The new exact-source run must repeat the complete matrix and retain parent exit, helper acknowledgement, version, renderer-ready relaunch and cleanup proofs.
+
 ## Approval evidence
 
 Record exact candidate SHA and Actions URLs in the PR approval. Main rules must continue requiring the exact `Updater compatibility gate` check. A missing/skipped/cancelled required packaged path, timeout, ambiguous identity or absent cleanup blocks approval. Repeat all required Windows attempts in the tag workflow before publication. After publication verify unauthenticated public latest, uploaded/stable asset names, HEAD responses, sizes/digests, full selection and decoy rejection, and byte-identical canonical/manual installers against verified CI payloads.
