@@ -4,6 +4,21 @@ The analysis should let a reader identify the current result, why it matters,
 the uncertainty that could change the judgment, and one useful next action.
 More model input and checking must not turn into a longer first screen.
 
+Provider continuation summaries are bookkeeping, not new user requests. Claude's
+`isCompactSummary` rows and its anchored "This session is being continued from a
+previous conversation that ran out of context." envelope (including a Markdown
+heading or wrapped header) do not replace the current native request, enter the
+evidence index, or trigger review calls. Ordinary user requests quoting that text
+remain tasks. Stored internal-summary turns, queued/failed calls and cards are
+removed on capture; an in-flight stale publication is invalidated without freeing
+the runner slot early. Renderer history also removes older internal cards on
+reload and suppresses their observation indicator. Actual task history remains.
+
+`scripts/terminal-review-continuation-test.js` checks request continuity,
+evidence exclusion, saved-state repair and no automatic/manual model calls for
+the summary. The Electron workspace check covers an incoming internal-summary
+event and a legacy localStorage record while retaining the actual user task.
+
 ## First screen and detail
 
 The first screen shows a conclusion, one to three reasons, a material caution
@@ -76,6 +91,17 @@ uncertainty. An invalid new decision object gets one replacement call from the
 same evidence and the failed check names; the bad draft is not supplied as new
 evidence. Both calls' reported usage is added. If either usage is unknown, the
 total remains unknown. There is no unbounded improvement loop.
+
+Malformed JSON, conflicting result objects, and zero or multiple tasks for one
+submitted request share that single replacement opportunity. Format recovery
+uses the unchanged scoped evidence and static failure labels, never the invalid
+draft. It also applies to a malformed response after the one optional evidence
+retrieval, for at most three model calls in that path. Existing decision-only
+repair retains its two-call budget. A second format failure keeps the last usable
+review and reports the error; polling unchanged evidence cannot restart recovery.
+Replacement output still passes the original citation, decision and session
+identity checks, and all reported usage is accumulated without treating unknown
+usage as zero.
 
 A second invalid brief is hidden and cannot supply a follow-up draft. The
 observed-work record remains available with a notice. Failed runner calls keep

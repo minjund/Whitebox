@@ -52,5 +52,15 @@ const { TerminalActivity, providerActivity } = require('../src/terminalActivity'
   assert.equal(await state(), 'unknown', 'stale screens cannot claim work or readiness');
   const failed = new TerminalActivity({ execute: async () => { throw new Error('probe unavailable'); } });
   assert.equal((await failed.observe([member], new Map())).get('shell').state, 'unknown');
+  const tokenMembers = [member, { id: 'other', creationId: 'other-epoch', pid: 200 }];
+  const tokenReader = new TerminalActivity({ platform: 'win32', completion: { observe: async child => ({
+    available: true, conversationId: `conversation-${child.pid}`, state: 'working', requestId: `turn-${child.pid}`,
+    usage: { input: child.pid, output: 1, total: child.pid + 1, cachedInput: 0, cacheWrite: 0 },
+  }) } });
+  const tokenSnapshot = { available: true, processes: [{ provider: 'claude', pid: 101, ancestorPids: [100] }, { provider: 'codex', pid: 201, ancestorPids: [200] }] };
+  const tokenStates = await tokenReader.observe(tokenMembers, new Map(), tokenSnapshot);
+  assert.equal(tokenStates.get('shell').usage.total, 102); assert.equal(tokenStates.get('other').usage.total, 202);
+  assert.equal(tokenStates.get('shell').usageStatus, 'observed');
+  assert.equal(tokenStates.get('shell').conversationId, 'conversation-101');
   console.log('PASS terminal activity: provider work/idle/drafts/approval/background, quiet commands, stopped jobs, identity, stale screens and probe failures');
 })().catch(error => { console.error(error); process.exitCode = 1; });

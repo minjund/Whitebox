@@ -21,7 +21,10 @@ app.whenReady().then(async () => {
   const adapterDirectory = path.join(profile, 'panel-bin');
   const providerAdapter = require('../bin/panel-provider');
   providerAdapter.install({ directory: adapterDirectory });
-  let livePanelControl;
+  let livePanelControl, suppressedRemovalId = '';
+  let heldReplayId = '', releaseHeldReplay;
+  const terminalGetReads = [];
+  let heldPauseReviewId = '', releaseHeldPauseReview;
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
   let completedActivityId = '';
@@ -108,7 +111,14 @@ app.whenReady().then(async () => {
     ipcMain.removeHandler('terminals:close');
     ipcMain.handle('terminals:close', (_event, id) => { if (id === rejectedCloseId) throw new Error('fixture close failure'); return manager.close(id); });
     ipcMain.removeHandler('terminals:get');
-    ipcMain.handle('terminals:get', (_event, id) => { const session = manager.get(id, true); if (id === missingSessionId) return null; return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session; });
+    ipcMain.handle('terminals:get', async (_event, id, includeReplay = true) => {
+      const full = includeReplay !== false;
+      terminalGetReads.push({ id, full });
+      const session = manager.get(id, full);
+      if (id === heldReplayId && full) await new Promise(resolve => { releaseHeldReplay = resolve; });
+      if (id === missingSessionId) return null;
+      return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session;
+    });
     ipcMain.handle('terminals:review', async (_event, payload) => {
       if(payload.force)forcedReviewCalls++;
       if (payload.reanalyze) {
@@ -116,7 +126,10 @@ app.whenReady().then(async () => {
         if (manualReviewDeferred) await new Promise(resolve => { releaseManualReview = resolve; });
         analysisRevision++;
       }
-      if (payload.enabled === false) return { state: 'paused', provider: 'claude' };
+      if (payload.enabled === false) {
+        if (payload.id === heldPauseReviewId) await new Promise(resolve => { releaseHeldPauseReview = resolve; });
+        return { state: 'paused', provider: 'claude' };
+      }
       analysisOptions = payload.analysis;
       if (payload.detail) lastDetail = payload.detail;
       if (payload.submission) lastSubmission = payload.submission;
@@ -129,7 +142,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1450, 900);
     win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
     manager.on('data', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:data', payload); });
-    manager.on('state', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:state', payload); });
+    manager.on('state', payload => { if (!win.isDestroyed() && !(payload.change === 'removed' && payload.session?.id === suppressedRemovalId)) win.webContents.send('terminals:state', payload); });
     const evaluate = async expression => {
       try { return await win.webContents.executeJavaScript(expression, true); }
       catch (error) { throw new Error(`${expression}: ${error.message}; console=${JSON.stringify(errors)}`); }
@@ -474,7 +487,46 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-add-panel-terminal]").click()');
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
     const second = manager.list().find(item => item.id !== first.id);
+    assert.equal(terminalGetReads.filter(item=>item.id===second.id&&item.full).length,1,'adding a terminal transfers replay only for its mount, not for post-mount PID reconciliation');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
+    const tokenSelector = id => `[data-terminal-id="${id}"] .wb-pane-tokens`;
+    const usageForPane = (provider, providerPid, conversationId, input, output, cachedInput = 0, partial = false) => ({
+      provider, providerPid, conversationId, usageStatus: 'observed',
+      usage: { input, output, cachedInput, cacheWrite: 0, total: input + output, partial, observedAt: '2026-11-04T01:00:00Z' },
+    });
+    activityOverrides.set(first.id, usageForPane('claude', first.pid + 100000, 'terminal-tokens-first', 12000, 345, 8000));
+    activityOverrides.set(second.id, usageForPane('codex', second.pid + 100000, 'terminal-tokens-second', 2100, 300, 1700));
+    await evaluate('document.querySelector("#wbAutoReview").checked=false;document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent === '12.3K 토큰' && document.querySelector('${tokenSelector(second.id)}').textContent === '2,400 토큰'`, 'separate conversation tokens update with automatic analysis disabled');
+    assert.match(await evaluate(`document.querySelector('${tokenSelector(first.id)}').title`), /12,345.*12,000.*345/u);
+    assert.match(await evaluate(`document.querySelector('${tokenSelector(first.id)}').title`), /8,000/u);
+    assert.equal(await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).terminalUsageHistory.find(r=>r.id==='${first.id}').usage.total`), 12345, 'native terminal counters persist independently of review tokens');
+    for (const theme of ['dark', 'light']) {
+      await evaluate(`document.documentElement.dataset.theme='${theme}';document.querySelector('[data-terminal-id="${first.id}"]').style.maxWidth='220px'`);
+      await evaluate('new Promise(resolve=>setTimeout(resolve,150))');
+      const geometry = await evaluate(`(() => {const badge=document.querySelector('${tokenSelector(first.id)}'),title=badge.previousElementSibling,r=badge.getBoundingClientRect(),header=badge.closest('header'),h=header.getBoundingClientRect(),text=document.createRange();text.selectNodeContents(badge);return {inside:r.left>=h.left&&r.right<=h.right,afterTitle:r.left>=title.getBoundingClientRect().right-1,oneLine:text.getClientRects().length===1,badgeWidth:r.width,textWidth:text.getBoundingClientRect().width,controls:[...header.querySelectorAll('button')].filter(b=>!b.hidden).every(b=>{const r=b.getBoundingClientRect();return r.top>=h.top&&r.bottom<=h.bottom&&r.left>=h.left&&r.right<=h.right})};})()`);
+      assert(geometry.inside && geometry.afterTitle && geometry.oneLine && geometry.badgeWidth + 0.02 >= geometry.textWidth && geometry.controls, 'tokens and every action remain readable in a 220px pane: '+JSON.stringify(geometry));
+    }
+    await evaluate(`document.documentElement.dataset.theme='dark';document.querySelector('[data-terminal-id="${first.id}"]').style.removeProperty('max-width')`);
+    await evaluate('new Promise(resolve=>setTimeout(resolve,150))');
+    fs.writeFileSync(path.join(root, 'artifacts/terminal-tokens-header.png'), (await win.webContents.capturePage()).toPNG());
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload pane token metrics');
+    await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent==='12.3K 토큰'`, 'same terminal usage survives reload');
+    activityOverrides.set(first.id, { provider: 'claude', providerPid: first.pid + 200000, usageStatus: 'unavailable', usage: null });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent==='— 토큰'`, 'new provider identity cannot inherit earlier conversation usage');
+    assert.equal(await evaluate(`document.querySelector('${tokenSelector(second.id)}').textContent`), '2,400 토큰');
+    activityOverrides.set(first.id, usageForPane('claude', first.pid + 200000, 'terminal-tokens-new', 0, 0));
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent==='0 토큰'`, 'reported zero differs from missing counters');
+    activityOverrides.set(first.id, usageForPane('claude', first.pid + 200000, 'terminal-tokens-new', 1000, 100, 0, true));
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent==='≥1,100 토큰'`, 'partial history is labeled as a lower bound');
+    for (const session of [first, second]) activityOverrides.set(session.id, { usageStatus: 'unavailable', usage: null, providerPid: session.pid + 300000 });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)'); activityOverrides.clear();
+    await evaluate('document.querySelector("#wbAutoReview").checked=true;document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
+    console.log('PASS per-terminal header tokens: distinct conversations, tooltip breakdown, automatic-review independence, 220px dark/light geometry, persistence and ownership/zero/partial handling');
     if (process.platform !== 'win32') {
       // Keep the fixture independent of personal login-shell prompt themes.
       // Long cwd prompts redraw multiple rows during rapid pane resizing.
@@ -483,6 +535,67 @@ app.whenReady().then(async () => {
         await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(session.id)}).trim().endsWith('WB>')`, 'deterministic fixture shell prompt');
       }
     }
+    const backgroundSelector = `[data-background-terminal="${first.id}"]`;
+    const backgroundRows = await evaluate(`[...document.querySelectorAll('#wbSpaces .wb-instance-row')].map(row=>row.getBoundingClientRect().height)`);
+    const backgroundActiveId = await evaluate('WhiteboxWorkspace.getState().activeId');
+    if (process.platform !== 'win32') {
+      const jobFile = path.join(profile, 'badge-job.cjs'), jobPidFile = path.join(profile, 'badge-job.pid');
+      fs.writeFileSync(jobFile, `require('fs').writeFileSync(${JSON.stringify(jobPidFile)},String(process.pid));setInterval(()=>{},1000);`);
+      await manager.command(first.id, "node '" + jobFile.replace(/'/g,"'\\''") + "' &");
+      for (let attempt=0; !fs.existsSync(jobPidFile) && attempt<100; attempt++) await new Promise(resolve=>setTimeout(resolve,20));
+      assert(fs.existsSync(jobPidFile));
+      const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
+      try {
+        await waitFor(`document.querySelector('${backgroundSelector}')?.textContent.trim()==='1'`, 'real background shell group appears in its own sidebar badge');
+        assert.equal(await evaluate(`document.querySelector('[data-instance="${first.id}"] .wb-terminal-state').dataset.state`), 'idle', 'quiet background command does not change the main input-waiting dot');
+        await evaluate(`document.querySelector('${backgroundSelector}').click()`);
+        assert.match(await evaluate('document.querySelector("#wbBackgroundJobs").textContent'), /node/u);
+        assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), backgroundActiveId, 'background details never switch the terminal receiving input');
+      } finally { process.kill(jobPid, 'SIGTERM'); }
+      await waitFor(`!document.querySelector('${backgroundSelector}')&&document.querySelector('#wbBackgroundPopover').hidden`, 'exited background process removes badge and closes its details');
+    }
+    const observedBackground = { count: 2, items: [
+      { id:'test-command',kind:'command',label:'회귀 테스트 실행',state:'running',startedAt:new Date(Date.now()-134000).toISOString() },
+      { id:'test-agent',kind:'agent',label:'버튼 동작 확인',state:'waiting',startedAt:new Date(Date.now()-46000).toISOString() },
+    ] };
+    activityOverrides.set(first.id, { background: observedBackground });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${backgroundSelector}')?.textContent.trim()==='2'`, 'two native background tasks render as one small badge');
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('#wbSpaces .wb-instance-row')].map(row=>row.getBoundingClientRect().height)`), backgroundRows, 'badge does not add a row or change sidebar density');
+    await evaluate(`document.querySelector('${backgroundSelector}').click()`);
+    for (const theme of ['dark','light']) for (const width of [230,176]) {
+      await evaluate(`document.documentElement.dataset.theme='${theme}';document.querySelector('#terminalWorkspace').style.gridTemplateColumns='${width}px minmax(0,1fr) 332px'`);
+      await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
+      const geometry = await evaluate(`(() => {const b=document.querySelector('${backgroundSelector}'),r=b.getBoundingClientRect(),row=b.closest('.wb-instance-row'),title=row.querySelector('strong'),dot=row.querySelector('.wb-terminal-state').getBoundingClientRect(),trash=row.querySelector('[data-trash-instance]').getBoundingClientRect(),p=document.querySelector('#wbBackgroundPopover').getBoundingClientRect();return {badgeFits:r.left>=row.getBoundingClientRect().left&&r.right<=dot.left,notTrash:r.right<trash.left,readable:title.clientWidth-parseFloat(getComputedStyle(title).paddingRight)>8,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('[data-background-terminal]')===b,popupFits:p.left>=0&&p.right<=innerWidth&&p.top>=0&&p.bottom<=innerHeight};})()`);
+      assert(Object.values(geometry).every(Boolean), 'quiet badge and popover fit narrow sidebar in '+theme+': '+JSON.stringify(geometry));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("#wbBackgroundJobs li").length'), 2);
+    assert.match(await evaluate('document.querySelector("#wbBackgroundJobs").textContent'), /회귀 테스트 실행.*버튼 동작 확인.*입력 대기/su);
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), backgroundActiveId);
+    await evaluate(`document.documentElement.dataset.theme='dark';document.querySelector('#terminalWorkspace').style.removeProperty('grid-template-columns')`);
+    await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
+    fs.writeFileSync(path.join(root,'artifacts/terminal-background-badge.png'),(await win.webContents.capturePage()).toPNG());
+    await evaluate(`document.querySelector('#wbBackgroundPopover button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
+    assert.equal(await evaluate(`document.querySelector('#wbBackgroundPopover').hidden&&document.activeElement===document.querySelector('${backgroundSelector}')`),true,'Escape closes and restores badge focus');
+    await evaluate(`document.querySelector('${backgroundSelector}').click();document.querySelector('#wbCanvas').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
+    assert.equal(await evaluate('document.querySelector("#wbBackgroundPopover").hidden'),true,'outside click closes task details');
+    activityOverrides.set(first.id, { background: { ...observedBackground, count:120 } });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`document.querySelector('${backgroundSelector}')?.textContent.trim()==='99+'`, 'large counts stay compact');
+    await evaluate(`document.querySelector('#terminalWorkspace').style.gridTemplateColumns='176px minmax(0,1fr) 332px'`);
+    await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
+    const manyBackgroundGeometry = await evaluate(`(() => {const b=document.querySelector('${backgroundSelector}'),r=b.getBoundingClientRect(),text=b.querySelector('span').getBoundingClientRect(),dot=b.closest('.wb-instance-row').querySelector('.wb-terminal-state').getBoundingClientRect();return {left:r.left,right:r.right,textLeft:text.left,textRight:text.right,dotLeft:dot.left,width:r.width,font:getComputedStyle(b).fontSize};})()`);
+    assert(manyBackgroundGeometry.textLeft >= manyBackgroundGeometry.left && manyBackgroundGeometry.textRight <= manyBackgroundGeometry.right && manyBackgroundGeometry.right <= manyBackgroundGeometry.dotLeft, '99+ and its icon do not overlap the existing state dot in a narrow sidebar: '+JSON.stringify(manyBackgroundGeometry));
+    await evaluate(`document.querySelector('#terminalWorkspace').style.removeProperty('grid-template-columns')`);
+    activityOverrides.set(first.id, { background: { count:1,items:[{...observedBackground.items[0],label:'<img src=x onerror="window.backgroundInjected=true">'}] } });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await evaluate(`document.querySelector('${backgroundSelector}').click()`);
+    assert.equal(await evaluate('document.querySelectorAll("#wbBackgroundJobs img").length'),0,'job titles are text, never executable markup');
+    activityOverrides.set(first.id, { background: { count:0,items:[] } });
+    await evaluate('WhiteboxWorkspace.captureReviews(true)');
+    await waitFor(`!document.querySelector('${backgroundSelector}')&&document.querySelector('#wbBackgroundPopover').hidden`, 'completed tasks leave no badge');
+    activityOverrides.delete(first.id);
+    console.log('PASS background badges: real POSIX job lifecycle, exact terminal, unchanged dots/row height/active input, two jobs, dark/light 176px geometry, popover/Escape/outside close and safe titles');
     const scanScheduling = await evaluate(`(async () => {
       await WhiteboxWorkspace.captureReviews(true);
       const read = WhiteboxTerminal.readTerminalSnapshot;
@@ -661,6 +774,7 @@ app.whenReady().then(async () => {
     fs.writeFileSync(process.env.WHITEBOX_TREE_SCREENSHOT || path.join(os.tmpdir(), 'whitebox-project-tree.png'), (await win.webContents.capturePage()).toPNG());
     console.log('PASS project panel tree branches in light/dark themes preserve drag/drop and panel controls');
     assert.equal(await evaluate('document.querySelectorAll(".wb-layout-controls").length'), 0, 'obsolete orientation controls removed');
+    assert.equal(await evaluate('document.querySelectorAll("[data-pin-panel], [data-action=pin-arranged]").length'), 0, 'together-view buttons are removed; drag placement remains available');
     await evaluate(`document.querySelector('#wbCanvas [data-solo-terminal="${second.id}"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'one click returns to a single terminal');
     assert.equal(await evaluate(`originalTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${second.id}"]')`), true, 'solo reuses the same live terminal node');
@@ -746,8 +860,8 @@ app.whenReady().then(async () => {
     await manager.write(first.id, process.platform === 'win32' ? "Start-Sleep -Milliseconds 300; Write-Output ('HIDDEN_' + 'PROGRESS')\r" : "sleep 0.3; printf 'HIDDEN_%s\\n' 'PROGRESS'\r");
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first.id)}).split('\\n').join('').includes('HIDDEN_PROGRESS')`, 'hidden PTY continues producing output');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 0);
-    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
-    assert.equal(await evaluate(`Boolean(document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]'))`),true,'together-view can open a panel from an empty project');
+    await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
+    assert.equal(await evaluate(`Boolean(document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]'))`),true,'sidebar selection opens its panel from an empty project');
     assert.equal(await drag(second.id, `[data-drop-panel="${originalPanel}"]`), true);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
@@ -758,7 +872,7 @@ app.whenReady().then(async () => {
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
     const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))');
-    await evaluate(`document.querySelector('[data-pin-panel="${originalPanel}"]').click()`);
+    await drag(first.id, `#wbCanvas [data-terminal-id="${second.id}"]`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'explicit together-view preserves cross-project panel display');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'),2);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'together-view retains logical panel membership');
@@ -773,7 +887,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'cross-project shared view survives reload');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),identityBeforeMoves,'shared focus and reload retain every PTY');
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'shared focus and reload preserve memberships');
-    await evaluate(`document.querySelector('[data-arrange-instance="${first.id}"]').click(); document.querySelector('#wbMoveTarget').value='${otherPanel}'; document.querySelector('[data-action="pin-arranged"]').click()`);
+    await evaluate(`document.querySelector('[data-solo-terminal="${first.id}"]').click()`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),1,'explicit unpin returns to this project panel');
     await drag(second.id, `[data-drop-panel="${originalPanel}"]`);
     await evaluate(`document.querySelector('[data-arrange-instance="${second.id}"]').click(); document.querySelector('#wbMoveTarget').value='${originalPanel}'; document.querySelector('[data-action="join-panel"]').click()`);
@@ -846,6 +960,25 @@ app.whenReady().then(async () => {
     assert.equal(clipboardText, '수정한 문구만 확인해줘', 'the user can edit the follow-up before copying');
     assert.equal(manager.get(first.id, true).output, beforeFollowup, 'preparing a follow-up never sends terminal input');
     await evaluate('document.querySelector("#wbFollowup").close()');
+    const continuationSummary = '## This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n<system-reminder> <tools-used-before-summary>Bash, Skill, ToolSearch, mcp__claude_ai_Notion__notion-create-pages';
+    const beforeContinuation = await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory.find(r=>r.id==='${first.id}')`);
+    const bogusTask = { taskId: 'compaction-internal', request: continuationSummary, actual: 'INTERNAL_COMPACTION_SENTINEL', lifecycle: 'in-progress', recordOnly: true, submittedAt: Date.now() };
+    win.webContents.send('terminals:review-state', { id: first.id, value: {
+      state: 'awaiting-answer', provider: beforeContinuation.provider, providerPid: beforeContinuation.providerPid,
+      currentTaskId: bogusTask.taskId, preview: { request: continuationSummary },
+      result: { ...beforeContinuation.result, observedAt: '2026-11-04T04:00:00Z', tasks: [...beforeContinuation.result.tasks, bogusTask] },
+    } });
+    await waitFor(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory.find(r=>r.id==='${first.id}').result.observedAt==='2026-11-04T04:00:00Z'`, 'continuation event reached renderer history');
+    await waitFor('document.querySelector("#wbReviewActivity").hidden', 'internal continuation is not work observation');
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
+    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u, 'the actual previous request stays visible during continuation');
+    assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'internal summaries are not retained in new renderer history or digests');
+    await evaluate(`(() => {const key='whitebox:workspace:v2',data=JSON.parse(localStorage.getItem(key)),record=data.reviewHistory.find(r=>r.id==='${first.id}');record.result.tasks.push(${JSON.stringify(bogusTask)});record.digest=JSON.stringify(record.result);localStorage.setItem(key,JSON.stringify(data));})()`);
+    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'legacy summary history migration');
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
+    assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'reload removes older internal-summary cards and digests');
+    await forceCapture();
+    console.log('PASS continuation UI: no internal summary/title/observation, real task retained, new history and legacy reload cache sanitized');
     requestSummary = '다음 요청 제목';
     analysisStamp = 'second';
     reportedUsage = { input: 2400, output: 400, cachedInput: 0, cacheWrite: 0, total: 2800 };
@@ -1063,11 +1196,10 @@ app.whenReady().then(async () => {
       const group = document.querySelector('.wb-panel-group').getBoundingClientRect();
       const plus = document.querySelector('.wb-panel-group .wb-panel-add').getBoundingClientRect();
       const name = document.querySelector('.wb-instance-copy strong').getBoundingClientRect();
-      const together=document.querySelector('.wb-panel-group .wb-panel-together').getBoundingClientRect();
       const label=document.querySelector('.wb-panel-group .wb-panel-add>span'), text=document.createRange();text.selectNodeContents(label);
-      return { nameWidth:name.width, inside:plus.left>=group.left&&together.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height, togetherWidth:together.width, labelFits:label.clientWidth>=text.getBoundingClientRect().width, labelLines:text.getClientRects().length };
+      return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height, labelFits:label.clientWidth>=text.getBoundingClientRect().width, labelLines:text.getClientRects().length };
     })()`);
-    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 76 && sidebarGeometry.plusHeight >= 30 && sidebarGeometry.togetherWidth >= 24 && sidebarGeometry.labelFits && sidebarGeometry.labelLines === 1, JSON.stringify(sidebarGeometry));
+    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 76 && sidebarGeometry.plusHeight >= 30 && sidebarGeometry.labelFits && sidebarGeometry.labelLines === 1, JSON.stringify(sidebarGeometry));
     await checkProjectTree();
     await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
     for (const width of [780, 640, 1000]) {
@@ -1105,10 +1237,12 @@ app.whenReady().then(async () => {
     assert.equal(manager.list().length, 4);
     const last = await evaluate('WhiteboxWorkspace.getState().activeId');
     const lastPid = manager.get(last).pid;
+    activityOverrides.set(last, usageForPane('claude', lastPid + 100000, 'terminal-tokens-archive', 3000, 456, 2400));
     await manager.write(last, command('TRASH_KEPT'));
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'trash output fixture');
     await forceCapture();
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
+    await waitFor(`document.querySelector('${tokenSelector(last)}').textContent==='3,456 토큰'`, 'archive fixture retains its own native usage independently of analysis tokens');
     const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
     const trashChild = path.join(profile, 'trash-child.cjs'), trashChildPidFile = path.join(profile, 'trash-child.pid');
     fs.writeFileSync(trashChild, `require('fs').writeFileSync(${JSON.stringify(trashChildPidFile)},String(process.pid));setInterval(()=>{},1000);`);
@@ -1137,11 +1271,18 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-action=dismiss-error]").click()');
     for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture stop failure')) errors.splice(index,1);
     const stopsBeforeTrash = stopCalls;
+    terminalGetReads.length = 0; heldPauseReviewId = last;
     await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click();document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'move to trash');
+    await waitFor('!WhiteboxWorkspace.getState().busy','trash UI settles without waiting for a review-pause reply');
+    for(let attempt=0;!releaseHeldPauseReview&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,10));
+    assert(releaseHeldPauseReview,'background review pause has reached the deliberately held IPC');
+    assert.equal(terminalGetReads.filter(item=>item.id===last&&item.full).length,0,'termination identity checks do not transfer old terminal output');
+    heldPauseReviewId='';releaseHeldPauseReview();releaseHeldPauseReview=null;
     assert.equal(stopCalls, stopsBeforeTrash + 1, 'double click terminates only once');
     assert.equal(manager.get(last).pid, null);
     assert.equal(manager.get(last).status, 'stopped');
+    activityOverrides.delete(last);
     assert.equal(manager.sessions.get(last).process, null, 'trash releases the actual PTY');
     assert.equal(manager.list().filter(session=>!['exited','stopped','failed'].includes(session.status)).length, 3, 'trash frees a running-session slot');
     if (process.platform !== 'win32') assert.throws(() => process.kill(lastPid, 0), {code:'ESRCH'}, 'original shell no longer exists');
@@ -1164,11 +1305,30 @@ app.whenReady().then(async () => {
     assert.equal(manager.list().length, 4, 'failed restore never creates a replacement shell');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 1, 'failed restore preserves review and trash metadata');
     rejectRestoreIdentity = false;
+    await evaluate('window.originalRestoreMount = WhiteboxTerminal.mountTerminal; WhiteboxTerminal.mountTerminal = async () => { throw new Error("fixture restore mount failure"); }; void 0');
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
+    await waitFor(`!WhiteboxWorkspace.getState().busy && document.querySelector('#wbTrashNotice').textContent.includes('fixture restore mount failure') && !document.querySelector('[data-restore-instance="${last}"]').disabled`, 'failed mount retains archive and enables retry');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 1);
+    assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${last}"]'))`), false, 'failed restore never leaves a blank pane');
+    await evaluate('WhiteboxTerminal.mountTerminal = window.originalRestoreMount; delete window.originalRestoreMount');
+    heldReplayId = last; terminalGetReads.length = 0;
+    await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click();document.querySelector('[data-restore-instance="${last}"]').click()`);
+    await waitFor(`document.querySelector('[data-restore-instance="${last}"]').disabled && document.querySelector('[data-restore-instance="${last}"]').getAttribute('aria-busy') === 'true' && document.querySelector('[data-restore-instance="${last}"]').textContent.includes('복원 중')`, 'slow replay has immediate visible progress and duplicate suppression');
+    for (let attempt=0; attempt<100 && !releaseHeldReplay; attempt++) await new Promise(resolve=>setTimeout(resolve,10));
+    assert(releaseHeldReplay, 'the one full replay read reaches the host');
+    assert.deepEqual(terminalGetReads.filter(item=>item.id===last).map(item=>item.full), [false, true], 'metadata check does not duplicate the large replay transfer');
+    holdCollaborationReply = true; releaseCollaborationReply = null;
+    releaseHeldReplay(); heldReplayId = ''; releaseHeldReplay = null;
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore project terminal');
+    for (let attempt=0; attempt<100 && !releaseCollaborationReply; attempt++) await new Promise(resolve=>setTimeout(resolve,10));
+    assert(releaseCollaborationReply, 'background collaboration is held while restored UI is already interactive');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().busy'), false, 'restore never waits behind unrelated review/collaboration work');
+    releaseCollaborationReply(); releaseCollaborationReply = null;
+    assert.equal(terminalGetReads.filter(item=>item.id===last && item.full).length, 1, 'one click transfers the replay once');
     assert.equal(manager.get(last).pid, null);
     assert.equal(manager.get(last).status, 'stopped');
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
+    assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'terminal native usage survives stop, trash, reload and read-only restore without mixing analysis usage');
     const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
     assert.ok(restoredReview.includes(reviewBeforeTrash), `original review cards and observation time survive trash and renderer restart: ${JSON.stringify({before:reviewBeforeTrash,after:restoredReview})}`);
     await evaluate('WhiteboxWorkspace.captureReviews()');
@@ -1180,7 +1340,18 @@ app.whenReady().then(async () => {
     assert.equal(manager.get(last).pid, null, 'restoring records never restarts a program');
     await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash restored terminal');
+    await evaluate(`(() => {const item=WhiteboxWorkspace.getState().trash.find(item=>item.id===${JSON.stringify(last)});delete item.sessionStopped;item.pid=${lastPid};item.review={...item.review,pid:${lastPid}};})()`);
     await evaluate('document.querySelector("[data-action=trash]").click()');
+    assert.equal(await evaluate(`document.querySelector('[data-restore-instance="${last}"]').disabled`), false, 'legacy archive flags cannot hide a confirmed stopped record');
+    await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
+    await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore legacy archive as read-only');
+    assert.equal(manager.get(last).pid, null);
+    assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'legacy PID migration preserves prior review usage');
+    assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'legacy stopped identity preserves the original conversation counters');
+    await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
+    await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'archive legacy-restored record');
+    await evaluate('document.querySelector("[data-action=trash]").click()');
+    console.log('PASS responsive trash restore: visible progress, one replay read, duplicate suppression, blocked-background independence, failed-mount retry and legacy stopped archives');
     await evaluate(`document.querySelector('[data-purge-instance="${last}"]').click()`);
     await waitFor('document.querySelector("#wbClose").open', 'permanent delete confirmation');
     await evaluate('window.purgeBeforeCancel = document.querySelector("[data-purge-instance]"); document.querySelector("#wbClose button[value=cancel]").click()');
@@ -1193,6 +1364,7 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("#wbClose button[value=close]").click()');
     await waitFor('WhiteboxWorkspace.getState().trash.length === 0', 'permanent deletion');
     assert.equal(manager.list().some(item => item.id === last), false);
+    assert.equal(await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).terminalUsageHistory.some(r=>r.id==='${last}')`), false, 'permanent deletion also removes retained token counters');
     await evaluate('document.querySelector("[data-action=trash-close]").click()');
     await evaluate('document.querySelector("[data-action=new-independent]").click()');
     await waitFor('WhiteboxWorkspace.getState().standalone.tabs.length === 1 && !WhiteboxWorkspace.getState().busy', 'independent instance creation');
@@ -1373,13 +1545,15 @@ app.whenReady().then(async () => {
     const gapPlacement = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return [...s.spaces,s.standalone].find(o=>o.id===s.selectedSpace).viewLayout;})()');
     assert.equal(gapPlacement.axis,'row','whole-panel gap drop arranges against another panel, never one of its own members');
     assert.equal(gapPlacement.first.id,singlePanelId);
-    await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
+    const thirdTerminalId = await evaluate(`WhiteboxWorkspaceLayout.ids([...WhiteboxWorkspace.getState().spaces,WhiteboxWorkspace.getState().standalone].flatMap(o=>o.tabs).find(p=>p.id==='${thirdPanel}').layout)[0]`);
+    await nativeDrag(thirdTerminalId, `#wbCanvas [data-terminal-id="${singlePanelId}"]`, `[data-drag-panel="${thirdPanel}"]`);
     const togetherState = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return {visible:[...document.querySelectorAll("#wbCanvas .wb-pane")].map(n=>({id:n.dataset.terminalId,panel:n.dataset.panelId})), panels:[...s.spaces,s.standalone].flatMap(o=>o.tabs).map(p=>({id:p.id,ids:WhiteboxWorkspaceLayout.ids(p.layout)})), pins:s.pinnedPanels, selected:s.selectedSpace};})()');
-    assert(new Set(togetherState.visible.map(n=>n.panel)).size>=3, 'sidebar together-view adds a third panel without replacing the current view: '+JSON.stringify({thirdPanel,...togetherState}));
+    assert(new Set(togetherState.visible.map(n=>n.panel)).size>=3, 'whole-panel drag adds a third panel without replacing the current view: '+JSON.stringify({thirdPanel,...togetherState}));
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'),rosterBeforeArrange,'panel dragging and together-view preserve all memberships');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'three-panel display preserves every PTY');
     if (process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_PANEL_DRAG_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
-    await evaluate(`document.querySelector('[data-pin-panel="${thirdPanel}"]').click()`);
+    await evaluate(`document.querySelector('[data-solo-terminal="${singlePanelId}"]').click()`);
+    await nativeDrag(foreignId, `#wbCanvas [data-terminal-id="${singlePanelId}"]`, `[data-drag-panel="${beforeAdd.panelId}"]`);
     console.log('PASS real pointer drag across panels/projects, complete-panel display, three-panel together-view and horizontal panel-add labels at 176px');
     // A foreign visible target may still remember its old single-panel view.
     // Moving beside it must preserve the rest of the current shared canvas.
@@ -1477,7 +1651,8 @@ app.whenReady().then(async () => {
     let control;
     try {
       await host.start(); await client.connect();
-      control = new TerminalCollaboration({ manager: () => client, directory: path.join(profile, 'terminal-collaboration'), monitor: { scan: () => ({ available: true, processes: [] }) } });
+      control = new TerminalCollaboration({ manager: () => client, directory: path.join(profile, 'terminal-collaboration'), monitor: { scan: () => ({ available: true, processes: [] }) },
+        onTerminalClosed: terminal => win.webContents.send('terminals:state', { change: 'removed', session: terminal, sessions: manager.list() }) });
       await forceCapture();
       await control.sync(collaborationPayload);
       const id = await evaluate('WhiteboxWorkspace.getState().activeId');
@@ -1543,7 +1718,7 @@ app.whenReady().then(async () => {
           await client.command(session.id,` export PATH=${quote(adapterDirectory)}:${quote(fixtureBin)}:"$PATH"; export WHITEBOX_PANEL_DIRECTORY=${quote(control.directory)}`);
           return session;
         };
-        control.monitor={scan:()=>({available:true,processes:newIds.map(id=>({pid:manager.get(id).pid+1000,ancestorPids:[manager.get(id).pid],provider:'codex'}))})};
+        control.monitor={scan:()=>({available:true,processes:newIds.map(id=>manager.get(id)).filter(s=>s?.pid).map(s=>({pid:s.pid+1000,ancestorPids:[s.pid],provider:'codex'}))})};
         control.completion={observe:async()=>({available:false})};
         livePanelControl=control;
         const originalIds=manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
@@ -1584,6 +1759,61 @@ app.whenReady().then(async () => {
           assert.equal(result.state,'completed'); assert.match(result.answer,/반가워요/u);
         }
         console.log('PASS CLI new-terminal --count 3 → real PTYs → renderer adoption → provider adapter/MCP discovery → same-panel greeting/three matched replies (fixture providers)');
+        const trashBeforeClose = await evaluate('WhiteboxWorkspace.getState().trash.length');
+        const assertPaneGone = async target => {
+          await waitFor(`!WhiteboxWorkspace.getState().sessions.some(s=>s.id===${JSON.stringify(target)}) && !document.querySelector('[data-terminal-id="${target}"]')`, 'closed terminal removed from renderer and canvas');
+          assert.equal(await client.get(target, false), null, 'host removal acknowledged');
+          assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), trashBeforeClose, 'direct close does not archive the terminal');
+          assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2'))).includes(${JSON.stringify(target)})`), false, 'closed pane is removed from saved layout and review records');
+        };
+        const [xTarget, cliTarget, stoppedTarget] = newIds;
+        await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(xTarget)},true)`);
+        rejectedCloseId = xTarget;
+        await evaluate(`document.querySelector('[data-close-terminal="${xTarget}"]').click()`);
+        await waitFor('!WhiteboxWorkspace.getState().busy && !document.querySelector("#wbError").hidden', 'failed X close retains its pane');
+        assert(manager.get(xTarget));
+        assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${xTarget}"]'))`), true);
+        assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), trashBeforeClose);
+        rejectedCloseId = '';
+        await evaluate(`document.querySelector('[data-close-terminal="${xTarget}"]').click()`);
+        await assertPaneGone(xTarget);
+        await waitFor('!WhiteboxWorkspace.getState().busy', 'X close completed');
+        await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
+        assert.equal((await panelCommand(['close-terminal', cliTarget, '--source', id, '--json'], opts)).closed, true);
+        await assertPaneGone(cliTarget);
+        await client.stop(stoppedTarget);
+        await waitFor(`WhiteboxWorkspace.getState().sessions.find(s=>s.id===${JSON.stringify(stoppedTarget)})?.status === 'stopped'`, 'stopped pane remains available to close');
+        await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
+        const stoppedRoster = await panelCommand(['list-panels', '--source', id, '--json'], opts);
+        assert.equal(stoppedRoster.surfaces.find(s=>s.id===stoppedTarget).status, 'stopped');
+        await panelCommand(['close-terminal', stoppedTarget, '--source', id], opts); await assertPaneGone(stoppedTarget);
+        const beforeGhostIds = new Set(manager.list().map(s=>s.id));
+        await evaluate(`(() => {const s=WhiteboxWorkspace.getState(), owner=[...s.spaces,s.standalone].find(o=>o.tabs.some(p=>p.id===${JSON.stringify(batch.workspace_id)}));return WhiteboxWorkspace.createTerminal('row',owner,${JSON.stringify(batch.workspace_id)});})()`);
+        const ghost = manager.list().find(s=>!beforeGhostIds.has(s.id)); assert(ghost);
+        let ghostRoster;
+        for (let attempt=0; attempt<100; attempt++) {
+          await evaluate('WhiteboxWorkspace.captureReviews(true)');
+          if (collaborationPayload.groups.some(g=>g.id===batch.workspace_id && g.members.some(s=>s.id===ghost.id))) { ghostRoster=collaborationPayload; break; }
+          await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        assert(ghostRoster, 'orphan fixture must first belong to the actual requesting panel');
+        suppressedRemovalId = ghost.id;
+        await client.close(ghost.id);
+        assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${ghost.id}"]'))`), true, 'reproduce a pane whose host record is already gone');
+        suppressedRemovalId = '';
+        await control.sync(ghostRoster);
+        assert.equal((await panelCommand(['list-panels', '--source', id], opts)).surfaces.find(s=>s.id===ghost.id).status, 'removed');
+        await panelCommand(['close-terminal', ghost.id, '--source', id], opts); await assertPaneGone(ghost.id);
+        // An old removal event must not erase a different creation identity.
+        win.webContents.send('terminals:state', { change: 'removed', session: { id, creationId: 'different-epoch' }, sessions: [] });
+        await evaluate('new Promise(resolve=>setTimeout(resolve,50))');
+        assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.some(s=>s.id===${JSON.stringify(id)})`), true);
+        assert.deepEqual(manager.list().filter(s=>originalIds.some(old=>old.id===s.id)).map(({id,pid,creationId})=>({id,pid,creationId})), originalIds, 'close does not restart or terminate any other terminal');
+        await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload after direct close');
+        for (const target of [...newIds, ghost.id]) {
+          assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.some(s=>s.id===${JSON.stringify(target)})`), false, 'closed panes stay closed after reload');
+        }
+        console.log('PASS real X and CLI close: live/stopped/orphan PTYs, removal events, no trash, saved layout/reload, failure retention and unrelated-terminal identity');
       }
 
     } finally { livePanelControl=null; await control?.control.close(); client.dispose({ preserveHost: true }); host.dispose(); }

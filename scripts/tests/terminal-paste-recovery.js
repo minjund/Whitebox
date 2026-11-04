@@ -3,6 +3,57 @@ const assert = require('node:assert/strict');
 
 module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
   const results = [];
+  // Ghostty installs context-menu cleanup on a delayed task. A fast paste can
+  // finish before that task, leaving cleanup armed for the next canvas click.
+  // Latin keydown still works with a 0x0 textarea; native IME needs its anchor.
+  await evaluate(async () => {
+    await reset(term); term.focus(); writes.length = 0;
+    const canvas = term.renderer.getCanvas(), bounds = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left + 30, clientY: bounds.top + 20 }));
+    term.paste('메뉴 붙여넣기');
+    await new Promise(resolve => setTimeout(resolve, 25));
+  });
+  const lateCleanupKey = await evaluate(() => {
+    const canvas = term.renderer.getCanvas();
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const key = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyD', keyCode: 229, isComposing: true, bubbles: true, cancelable: true });
+    term.textarea.dispatchEvent(key);
+    const rect = term.textarea.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, position: term.textarea.style.position,
+      zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea, prevented: key.defaultPrevented };
+  });
+  assert(lateCleanupKey.focused && lateCleanupKey.width > 0 && lateCleanupKey.height > 0
+    && lateCleanupKey.position === 'absolute' && Number(lateCleanupKey.zIndex) >= 0 && !lateCleanupKey.prevented,
+  'Delayed menu cleanup must not leave Korean keydown with a hidden native input anchor: ' + JSON.stringify(lateCleanupKey));
+  await debuggerSession.sendCommand('Input.imeSetComposition', { text: '하', selectionStart: 1, selectionEnd: 1 });
+  await debuggerSession.sendCommand('Input.insertText', { text: '한글' });
+  const lateCleanupText = await evaluate(async () => { await delay(); return writes.join(''); });
+  assert.equal(lateCleanupText, '메뉴 붙여넣기한글');
+  results.push({ lateCleanupKey, lateCleanupText });
+  // Cleanup must also recover before an accessibility/native IME edit that
+  // has no physical keydown, and it must never reclaim an inactive pane.
+  const anchorOwnership = await evaluate(async () => {
+    const menu = () => {
+      const canvas = term.renderer.getCanvas(), rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20 }));
+    };
+    menu(); term.paste('본문'); await new Promise(resolve => setTimeout(resolve, 25));
+    term.renderer.getCanvas().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    const rect = term.textarea.getBoundingClientRect();
+    const automatic = { width: rect.width, height: rect.height, zIndex: term.textarea.style.zIndex };
+    const other = document.createElement('textarea'); document.body.appendChild(other); other.focus();
+    term.textarea.style.width = '0px'; term.textarea.style.height = '0px'; term.textarea.style.zIndex = '-10';
+    await Promise.resolve();
+    const background = { retainedFocus: document.activeElement === other, width: term.textarea.getBoundingClientRect().width };
+    term.focus();
+    const focused = term.textarea.getBoundingClientRect();
+    const refocus = { width: focused.width, height: focused.height, zIndex: term.textarea.style.zIndex };
+    other.remove(); return { automatic, background, refocus };
+  });
+  for (const value of [anchorOwnership.automatic, anchorOwnership.refocus]) assert(value.width > 0 && value.height > 0 && Number(value.zIndex) >= 0, 'Focused native input anchor must recover without waiting for PTY echo: ' + JSON.stringify(anchorOwnership));
+  assert.deepEqual(anchorOwnership.background, { retainedFocus: true, width: 0 }, 'Recovery must not steal another pane or input focus');
+  results.push({ anchorOwnership });
   for (const contextMenu of [false, true]) for (const activeComposition of [false, true]) for (const history of [false, true]) {
     await evaluate(async ({ contextMenu, history }) => {
       await reset(term); term.focus(); writes.length = 0;

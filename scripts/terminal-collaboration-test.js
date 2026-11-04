@@ -9,6 +9,7 @@ const { main: cli } = require('../bin/panel-agent');
 const { main: control, request: rpc } = require('../bin/panel-control');
 const { completedTurn, completionStamp, inputReady } = require('../src/terminalReviewTurns');
 (async () => {
+ await require('./terminal-panel-close-test')();
  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-collaboration-'));
  const controls = [];
  try {

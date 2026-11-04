@@ -104,3 +104,34 @@
 @container (max-width:200px){#terminalWorkspace .wb-panel-actions>.wb-panel-together{flex:0 0 25px}#terminalWorkspace .wb-panel-together>span{display:none}}
 [data-drag-terminal],[data-drag-panel]{user-select:none;-webkit-user-select:none;cursor:grab}
 .is-dragging-terminal,.is-dragging-terminal *{cursor:grabbing!important}
+
+/* One quiet badge beside the existing state dot; row geometry stays fixed. */
+#terminalWorkspace .wb-instance-row.has-background{position:relative}
+#terminalWorkspace .wb-instance-row.has-background .wb-instance-copy strong{padding-right:34px}
+#terminalWorkspace .wb-background-badge{position:absolute;right:41px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;gap:3px;width:29px;min-width:29px;min-height:23px;padding:2px 3px;margin:0;border:0;border-radius:4px;background:var(--clean-surface);color:var(--clean-secondary);font-size:10px;font-variant-numeric:tabular-nums;z-index:1}
+#terminalWorkspace .wb-background-badge .wb-icon{width:11px;height:11px;flex:0 0 11px}
+#terminalWorkspace .wb-background-badge.is-many{width:38px;min-width:38px}
+#terminalWorkspace .wb-instance-row.has-many-background .wb-instance-copy strong{padding-right:43px}
+#terminalWorkspace .wb-background-badge:hover,#terminalWorkspace .wb-background-badge[aria-expanded=true]{background:var(--clean-wash);color:var(--clean-text)}
+#terminalWorkspace .wb-background-popover{position:fixed;z-index:90;width:min(280px,calc(100vw - 24px));max-height:calc(100vh - 24px);display:flex;flex-direction:column;gap:0;padding:13px;background:var(--clean-surface);color:var(--clean-text);border:1px solid var(--clean-line);border-radius:8px;box-shadow:0 6px 24px #0003;font-size:12px}
+#terminalWorkspace .wb-background-popover[hidden]{display:none}
+#terminalWorkspace .wb-background-popover>header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0}
+#terminalWorkspace .wb-background-popover strong{font-size:12px;font-weight:500}
+#terminalWorkspace #wbBackgroundCount{margin-left:4px;color:var(--clean-muted);font-variant-numeric:tabular-nums}
+#terminalWorkspace .wb-background-popover>header button{display:grid;place-items:center;min-width:24px;min-height:24px;padding:3px;border:0;background:transparent;color:var(--clean-secondary)}
+#terminalWorkspace .wb-background-popover .wb-icon{width:13px;height:13px;flex:0 0 13px}
+#terminalWorkspace #wbBackgroundOwner{margin:1px 0 10px;color:var(--clean-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+#terminalWorkspace #wbBackgroundJobs{list-style:none;padding:0;margin:0;min-height:0;max-height:280px;overflow:auto}
+#terminalWorkspace #wbBackgroundJobs li{padding:10px 0;border-top:1px solid var(--clean-line)}
+#terminalWorkspace #wbBackgroundJobs li>div{display:flex;align-items:flex-start;gap:7px;overflow-wrap:anywhere}
+#terminalWorkspace #wbBackgroundJobs li>div .wb-icon{margin-top:2px;color:var(--clean-muted)}
+#terminalWorkspace #wbBackgroundJobs small{display:flex;gap:10px;margin:5px 0 0 20px;font-size:11px;color:var(--clean-muted);font-variant-numeric:tabular-nums}
+#terminalWorkspace #wbBackgroundMore{font-size:11px;color:var(--clean-muted);margin:5px 0 0}
+@container(max-width:200px){#terminalWorkspace .wb-background-badge{right:38px}}
+@media(pointer:coarse){#terminalWorkspace .wb-background-badge{min-height:32px}#terminalWorkspace .wb-background-popover>header button{min-width:36px;min-height:36px}}
+
+/* Keep title and usage readable while retaining every pane action below. */
+@container terminal-pane (max-width:300px){
+  #terminalWorkspace .wb-pane>header{flex-wrap:wrap;height:auto;min-height:38px;gap:4px 6px;padding-top:5px;padding-bottom:5px}
+  #terminalWorkspace .wb-pane-heading{flex-basis:100%;min-height:15px}
+}

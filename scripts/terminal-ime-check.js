@@ -370,6 +370,7 @@ app.whenReady().then(async () => {
     const pasteRecovery = await checkPasteRecovery(evaluate, win.webContents.debugger);
     win.webContents.debugger.detach();
     checks.push('native/context-menu paste restores a usable input anchor before browser-generated Korean composition');
+    checks.push('delayed context-menu cleanup recovers before Korean keydown or keyless native edits, with synchronous refocus and no background focus theft');
 
     const ownership = await checkImeOwnership(evaluate);
     checks.push('IME native input owns commits once, preserves midline edits, modifiers and composing Backspace, and uses terminal cell widths');

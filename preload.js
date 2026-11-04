@@ -79,7 +79,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   bridgeCommand: provider => ipcRenderer.invoke('bridge:command', provider),
   terminalList: () => ipcRenderer.invoke('terminals:list'),
   wslDistros: () => ipcRenderer.invoke('wsl:list-distros'),
-  terminalGet: id => ipcRenderer.invoke('terminals:get', id),
+  terminalGet: (id, includeReplay = true) => ipcRenderer.invoke('terminals:get', id, includeReplay),
   terminalCompletionRead: payload => ipcRenderer.invoke('terminals:completion-read', payload),
   terminalCollaboration: payload => ipcRenderer.invoke('terminals:collaboration', payload),
   terminalReview: payload => ipcRenderer.invoke('terminals:review', payload),

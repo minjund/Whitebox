@@ -1931,7 +1931,8 @@ function persistedSession(session) {
   };
 }
 
-function serializedStorePayload(sessions, comprehensionProvenance, maxStoreBytes) {
+function serializedStorePayload(sessions, comprehensionProvenance, maxStoreBytes, replayEncoding) {
+  replayEncoding.prune(sessions);
   const records = sessions.map(persistedSession);
   const provenanceRecords = (comprehensionProvenance || [])
     .map(normalizedComprehensionProvenanceRecord)
@@ -1950,7 +1951,7 @@ function serializedStorePayload(sessions, comprehensionProvenance, maxStoreBytes
     throw error;
   }
   const availableReplayBytes = maxStoreBytes - replaylessBytes;
-  const fullReplays = replays.map(replay => jsonBudgetedReplayTail(replay, Number.MAX_SAFE_INTEGER));
+  const fullReplays = replays.map((replay, index) => replayEncoding.full(sessions[index], replay, unicodeSafeReplayTail));
   const requiredReplayBytes = fullReplays.reduce((total, replay) => total + replay.bytes, 0);
   if (requiredReplayBytes <= availableReplayBytes) {
     for (let index = 0; index < records.length; index += 1) {
@@ -1972,8 +1973,8 @@ function serializedStorePayload(sessions, comprehensionProvenance, maxStoreBytes
       remainingBytes -= bounded.bytes;
     }
   }
-  const serialized = JSON.stringify(payload);
-  if (Buffer.byteLength(serialized, 'utf8') > maxStoreBytes) {
+  const serialized = require('./terminalReplayEncoding').encodedStore(records, sessions, provenanceRecords, STORE_VERSION, replayEncoding);
+  if (serialized.length > maxStoreBytes) {
     const error = new Error('명령창 기록 파일이 저장 용량을 초과했습니다.');
     error.code = 'TERMINAL_STORE_TOO_LARGE';
     throw error;
@@ -2029,6 +2030,7 @@ class TerminalManager extends EventEmitter {
     this.maxStoreBytes = Number.isSafeInteger(requestedStoreBytes) && requestedStoreBytes > 0
       ? Math.min(requestedStoreBytes, MAX_STORE_BYTES)
       : MAX_STORE_BYTES;
+    this.replayEncoding = new (require('./terminalReplayEncoding').TerminalReplayEncoding)(this.maxStoreBytes);
     this.persistTimer = null;
     this.storeWriteBlocked = false;
     this.quarantinedStoreFile = '';
@@ -2306,6 +2308,7 @@ class TerminalManager extends EventEmitter {
         sessions,
         [...this.comprehensionProvenanceLedger.values()],
         this.maxStoreBytes,
+        this.replayEncoding,
       );
       this.fileSystem.mkdirSync(path.dirname(this.storeFile), { recursive: true, mode: 0o700 });
       this.fileSystem.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });

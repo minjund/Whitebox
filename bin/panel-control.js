@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const { execFileSync } = require('child_process');
-const COMMANDS = new Set(['identify', 'list-panels', 'new-terminal', 'read-screen', 'send', 'send-key', 'ask', 'wait']);
+const COMMANDS = new Set(['identify', 'list-panels', 'new-terminal', 'close-terminal', 'read-screen', 'send', 'send-key', 'ask', 'wait']);
 function directory(env = process.env) {
   if (env.WHITEBOX_PANEL_DIRECTORY) return env.WHITEBOX_PANEL_DIRECTORY;
   const base = process.platform === 'darwin' ? path.join(os.homedir(), 'Library/Application Support') : process.platform === 'win32' ? env.APPDATA : env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
@@ -57,7 +57,7 @@ async function main(argv, options = {}) {
   params.sourceId ||= process.env.WHITEBOX_SURFACE_ID;
   // Existing PTYs created before identity env support use the real caller ancestry.
   if (!params.sourceId) params.ancestorPids = ancestors();
-  const methods = { identify: 'system.identify', 'list-panels': 'surface.list', 'new-terminal': 'surface.create', 'read-screen': 'surface.read_text', send: 'surface.send_text', 'send-key': 'surface.send_key', ask: 'surface.ask', wait: 'job.read' };
+  const methods = { identify: 'system.identify', 'list-panels': 'surface.list', 'new-terminal': 'surface.create', 'close-terminal': 'surface.close', 'read-screen': 'surface.read_text', send: 'surface.send_text', 'send-key': 'surface.send_key', ask: 'surface.ask', wait: 'job.read' };
   if (!methods[op]) throw new Error('Unknown panel command');
   if (op === 'new-terminal') {
     if (args.length !== 1 || !['claude', 'codex'].includes(args[0])) throw new Error('Usage: whitebox new-terminal <claude|codex> [--count 1..8]');
@@ -67,6 +67,10 @@ async function main(argv, options = {}) {
     params.count = count;
   }
   if (op === 'ask') { params.surface_id ||= args.shift(); params.text = args.join(' '); }
+  if (op === 'close-terminal') {
+    params.surface_id ||= args.shift();
+    if (args.length || !/^[a-zA-Z0-9:._-]{1,200}$/u.test(params.surface_id || '')) throw new Error('Usage: whitebox close-terminal <terminal-ID> [--json]');
+  }
   if (op === 'send') params.text = args.join(' ');
   if (op === 'send-key') params.key = args[0];
   if (op === 'wait') params.jobId = args[0];

@@ -463,6 +463,7 @@ function loadPreloadApi(root, invoke) {
 
 function registerTerminalInteractionTests(context) {
   const { test, root } = context;
+  test('터미널 출력 인코딩 재사용은 저장 형식·예산·실패 복구와 매 변경의 저장 확인을 유지한다', () => require('../terminal-store-encoding-test')());
 
   function outputFixture(overrides = {}) {
     let now = 0;
@@ -511,6 +512,30 @@ function registerTerminalInteractionTests(context) {
     const entry = await workbench.ensureSessionTerminal({ id: 'same', replay: 'already fetched', outputSequence: 2 });
     assert.equal(calls, 5, 'mounting a verified snapshot must not fetch the same replay a second time');
     assert.equal(entry.outputSequence, 2);
+  });
+
+  test('interactive restore replay precedes queued background reads without duplicate reads or extra concurrency', async () => {
+    const calls = [], releases = new Map();
+    let active = 0, maximum = 0;
+    const { workbench } = createWorkbench(root, { terminalGet: id => new Promise(resolve => {
+      calls.push(id); maximum = Math.max(maximum, ++active);
+      releases.set(id, () => { active--; resolve({ id, replay: 'output' }); });
+    }) });
+    const reads = ['first', 'second', 'background', 'restoring'].map(id => workbench.readTerminalSession(id));
+    assert.equal(workbench.readTerminalSession('restoring', { priority: true }), reads[3], 'promoting a queued read shares the existing promise');
+    reads.push(workbench.readTerminalSession('next-restore', { priority: true }));
+    assert.equal(workbench.readTerminalSession('restoring', { priority: true }), reads[3], 'a repeated priority read cannot move behind newer restores');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepStrictEqual(calls, ['first', 'second']);
+    releases.get('first')(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls[2], 'restoring');
+    releases.get('second')(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls[3], 'next-restore', 'interactive reads keep arrival order');
+    releases.get('restoring')(); releases.get('next-restore')();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls[4], 'background'); releases.get('background')();
+    await Promise.all(reads);
+    assert.equal(maximum, 2); assert.equal(calls.length, 5);
   });
 
   test('prompt replay cache follows contiguous output, ignores duplicates and invalidates missing sequence evidence', () => {
@@ -657,6 +682,24 @@ function registerTerminalInteractionTests(context) {
     await assert.rejects(() => list({}), /host unavailable/, 'a connection failure is not an empty inventory');
     host = { list: () => [shell] };
     assert.deepStrictEqual(await list({}), [shell], 'in-process manager remains supported');
+  });
+
+  test('terminal metadata IPC omits replay while default reads and sender checks remain intact', async () => {
+    const handlers = new Map(), calls = [];
+    let trusted = true;
+    require(path.join(root, 'src', 'ipc', 'registerTerminalIpc')).registerTerminalIpc({
+      ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+      requireTrustedSender() { if (!trusted) throw Error('untrusted'); },
+      manager: () => ({ get: (id, includeReplay) => { calls.push([id, includeReplay]); return { id, type: 'shell', ...(includeReplay ? { replay: 'large retained output' } : {}) }; } }),
+      listWslDistros: () => [],
+    });
+    const get = handlers.get('terminals:get');
+    assert.equal((await get({}, 'archive', false)).replay, undefined);
+    assert.equal((await get({}, 'archive')).replay, 'large retained output');
+    assert.deepStrictEqual(calls, [['archive', false], ['archive', true]]);
+    trusted = false;
+    await assert.rejects(() => get({}, 'archive', false), /untrusted/);
+    assert.equal(calls.length, 2, 'untrusted metadata requests never reach the host');
   });
 
   test('늦은 터미널 목록 응답이 더 최신 state 이벤트를 덮어쓰지 않는다', async () => {

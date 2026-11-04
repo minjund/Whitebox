@@ -3,6 +3,7 @@
 const fs = require('fs/promises');
 const { createHash } = require('crypto');
 const { bounded } = require('./terminalReviewBudget');
+const { isNonTaskRequest } = require('./terminalReviewTurns');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const important = /삭제|제거|되돌|복구|실패|금지|하지\s*마|유지|대체|검사|검증|확인|사용처|변경|usage|dependency|rollback|revert|remov|delet|fail|recover|constraint|must|never|test|scope/iu;
 
@@ -30,9 +31,11 @@ function publicRecord(row, provider) {
     ? value.filter(item => ['text', 'input_text', 'output_text', 'tool_result'].includes(item?.type))
       .map(item => item.type === 'tool_result' ? content(item.content) : item.text || '').join('\n') : '';
   if (provider === 'claude') {
-    if (row.isSidechain || row.isMeta || !['user', 'assistant'].includes(row.type)) return null;
+    if (row.isSidechain || row.isMeta || row.isCompactSummary === true || !['user', 'assistant'].includes(row.type)) return null;
     const tool = Array.isArray(event.content) && event.content.some(item => item?.type === 'tool_result');
-    return { role: tool ? 'tool' : row.type, text: content(event.content) };
+    const text = content(event.content);
+    if (!tool && row.type === 'user' && isNonTaskRequest(text)) return null;
+    return { role: tool ? 'tool' : row.type, text };
   }
   if (row.type === 'event_msg' && event.type === 'task_complete') return { role: 'assistant', text: content(event.last_agent_message) };
   if (row.type === 'event_msg' && event.type === 'user_message') return { role: 'user', text: content(event.message) };

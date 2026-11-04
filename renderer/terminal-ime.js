@@ -162,12 +162,32 @@ window.WhiteboxTerminalIme = {
           if (disposed || frame) return;
           frame = requestAnimationFrame(() => { frame = 0; render(); });
         };
+        const recoverInputAnchor = () => {
+          if (disposed || doc.activeElement !== textarea) return;
+          const style = textarea.style;
+          // Ghostty arms context-menu cleanup on a later task. It can run
+          // after preparePaste has restored focus, hiding the textarea again
+          // without a blur/focus event or PTY output to trigger a repaint.
+          // Keep its intentional 1px menu target until cleanup actually hides
+          // it; restoring that live menu target would disrupt native menus.
+          if (Number(style.zIndex) < 0 || parseFloat(style.width) <= 0 || parseFloat(style.height) <= 0) {
+            // Observe upstream changes, not our own repair writes. Zero metrics
+            // during a hidden/detaching pane must not create a microtask loop.
+            anchorObserver.disconnect();
+            try { render(); }
+            finally { if (!disposed) anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] }); }
+          }
+        };
+        const anchorObserver = new MutationObserver(recoverInputAnchor);
+        anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] });
         listen('beforeinput', event => {
           // Bypass upstream's container handler, which prevents all edits.
           event.stopImmediatePropagation();
+          recoverInputAnchor();
         });
         listen('compositionstart', event => {
           event.stopPropagation();
+          recoverInputAnchor();
           flush();
           clearReconciliation();
           startOffset = textarea.selectionStart;
@@ -203,6 +223,9 @@ window.WhiteboxTerminalIme = {
           }
         });
         listen('keydown', event => {
+          // Restore synchronously too: the next native key can arrive in the
+          // same task as cleanup, before MutationObserver/RAF has run.
+          recoverInputAnchor();
           // After clipboard/input-source transitions macOS can report a Hangul
           // jamo with its physical keyCode and isComposing=false. Let the
           // browser IME interpret it; Ghostty would otherwise preventDefault
@@ -248,10 +271,11 @@ window.WhiteboxTerminalIme = {
           hide();
           scheduleRender();
         });
-        listen('focus', scheduleRender);
+        listen('focus', render);
         const subscriptions = [terminal.onRender(scheduleRender), terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
         cleanup = () => {
           disposed = true;
+          anchorObserver.disconnect();
           if (pending) clearTimeout(pending.timer);
           pending = null;
           clearReconciliation();

@@ -4,7 +4,7 @@ const { EventEmitter } = require('events');
 const { randomUUID, createHash } = require('crypto');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
-const { completedTurn, currentTurnEvidence, isStartupRequest } = require('./terminalReviewTurns');
+const { completedTurn, currentTurnEvidence, isNonTaskRequest } = require('./terminalReviewTurns');
 const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
 const { screenTools, compactTools } = require('./terminalReviewTools');
@@ -87,6 +87,10 @@ function exactProcess(session, snapshot) {
   return matches[0];
 }
 
+function responseFormatError(message, issue) {
+  return Object.assign(new Error(message), { code: 'REVIEW_INVALID_RESPONSE', reviewIssues: [issue] });
+}
+
 function reviewObject(raw, locale) {
   const invalid = { ko: '분석 응답의 형식을 읽지 못했습니다. 다시 검토를 눌러 주세요.', en: 'The analysis response could not be read. Please review again.', 'zh-CN': '无法读取分析响应的格式，请重新审查。' };
   const text = String(raw || '').trim();
@@ -113,7 +117,8 @@ function reviewObject(raw, locale) {
       start = -1;
     }
   }
-  if (candidates.size !== 1) throw new Error(invalid[locale] || invalid.ko);
+  if (candidates.size !== 1) throw responseFormatError(invalid[locale] || invalid.ko,
+    candidates.size > 1 ? 'one unambiguous review JSON object' : 'valid review JSON with a tasks array');
   return candidates.values().next().value;
 }
 
@@ -127,7 +132,8 @@ function parseReview(raw, source, locale = 'ko', request = '', lifecycle = 'comp
   // The model never defines task boundaries. A submitted command is one task,
   // including a small text edit or a command containing several requirements.
   if (value.tasks.length > 1 || (request && value.tasks.length !== 1)) {
-    throw new Error(({ ko: '요청 하나에 대한 검토를 읽지 못했습니다. 다시 검토를 눌러 주세요.', en: 'Could not read a review for this single request. Please review again.', 'zh-CN': '无法读取此单条请求的审查，请重新审查。' })[locale] || 'Invalid single-request review');
+    throw responseFormatError(({ ko: '요청 하나에 대한 검토를 읽지 못했습니다. 다시 검토를 눌러 주세요.', en: 'Could not read a review for this single request. Please review again.', 'zh-CN': '无法读取此单条请求的审查，请重新审查。' })[locale] || 'Invalid single-request review',
+      'exactly one task for the current REQUEST');
   }
   const quote = value => {
     const result = clip(value, 1000);
@@ -258,6 +264,34 @@ class TerminalReview extends EventEmitter {
 
   task(entry, taskId) { return entry.result?.tasks.find(item => item.taskId === taskId); }
 
+  pruneNonTasks(id, entry) {
+    const removed = new Set();
+    let changed = false;
+    const keep = chunk => {
+      if (!chunk || !isNonTaskRequest(chunk.request)) return true;
+      if (chunk.taskId) removed.add(chunk.taskId);
+      changed = true; return false;
+    };
+    for (const key of ['turn', 'following', 'failed']) if (!keep(entry[key])) entry[key] = null;
+    entry.pending = entry.pending.filter(keep);
+    if (entry.active && !keep(entry.active.chunk)) {
+      // An old malformed saved request may already be in flight. Invalidate
+      // its publication, retaining the global runner slot until it settles.
+      entry.revision++; entry.active = null;
+    }
+    if (entry.result) {
+      const tasks = entry.result.tasks.filter(keep);
+      if (tasks.length !== entry.result.tasks.length) entry.result = tasks.length ? { ...entry.result, tasks } : null;
+    }
+    for (const [taskId, chunk] of Object.entries(entry.latest)) if (!keep(chunk)) delete entry.latest[taskId];
+    for (const taskId of removed) delete entry.seen[taskId];
+    for (const [root, taskId] of Object.entries(entry.roots)) if (removed.has(taskId)) delete entry.roots[root];
+    if (changed) {
+      if (!entry.failed) entry.message = '';
+      this.persist(id, entry);
+    }
+  }
+
   publish(id, entry, chunk, task, usage = null, metadata = {}) {
     const previous = this.task(entry, chunk.taskId);
     const latest = entry.latest[chunk.taskId] || chunk;
@@ -351,6 +385,7 @@ class TerminalReview extends EventEmitter {
       }
       this.entries.set(id, entry);
     }
+    this.pruneNonTasks(id, entry);
     this.scheduling.set(id, { session, analysis, foreground, force: force || reanalyze });
     entry.locale = analysis.locale || 'ko';
     const snapshot = await scanProcesses(this.monitor);
@@ -398,23 +433,17 @@ class TerminalReview extends EventEmitter {
       entry.revision++; entry.binding = binding; entry.state = 'watching'; entry.lastNative = '';
     }
     entry.provider = process.provider; entry.providerPid = process.pid;
-    // Older saved sessions may contain a setup selection mistaken for a turn.
-    for (const key of ['turn', 'following']) {
-      if (entry[key] && isStartupRequest(entry[key].request)) entry[key] = null;
-    }
-    entry.pending = entry.pending.filter(chunk => !isStartupRequest(chunk.request));
-    if (entry.failed && isStartupRequest(entry.failed.request)) { entry.failed = null; entry.message = ''; }
     if (entry.state === 'paused') entry.state = 'watching';
     const frame = stableScreen(clip(text, 24000));
     const completion = await this.completion.observe(process);
     const nativeKey = completion.requestId ? `${completion.conversationId || binding}:${completion.requestId}` : '';
     const rootKey = completion.requestId ? `${completion.conversationId || binding}:${completion.rootRequestId || completion.requestId}` : '';
     const nativeNew = Boolean(nativeKey && nativeKey !== entry.lastNative
-      && completion.requestAt >= entry.observedSince && !isStartupRequest(completion.request));
+      && completion.requestAt >= entry.observedSince && !isNonTaskRequest(completion.request));
     // Establish a baseline on opening a terminal: history alone never starts a billable call.
     if (!entry.lastNative && nativeKey) entry.lastNative = nativeKey;
-    if (submission?.id && isStartupRequest(submission.request)) entry.lastSubmission = submission.id;
-    if (nativeKey && isStartupRequest(completion.request)) entry.lastNative = nativeKey;
+    if (submission?.id && isNonTaskRequest(submission.request)) entry.lastSubmission = submission.id;
+    if (nativeKey && isNonTaskRequest(completion.request)) entry.lastNative = nativeKey;
     const newSubmission = submission?.id && submission.id !== entry.lastSubmission && submission.request?.trim();
     if (interruption?.id && interruption.id !== entry.lastInterruption) {
       entry.lastInterruption = interruption.id;
@@ -461,7 +490,7 @@ class TerminalReview extends EventEmitter {
     }
     let turn = entry.turn || entry.following;
     if (turn) {
-      const matches = completion.available && completion.requestId
+      const matches = completion.available && completion.requestId && !isNonTaskRequest(completion.request)
         && (turn.nativeKey ? nativeKey === turn.nativeKey : completion.requestAt >= (turn.matchAfter || turn.submittedAt));
       if (matches) {
         turn.nativeKey = nativeKey;
@@ -490,7 +519,7 @@ class TerminalReview extends EventEmitter {
         else { entry.turn = turn; entry.following = null; }
       }
     }
-    if ((force || reanalyze) && (entry.roots[rootKey] || reanalyze && rootKey) && !isStartupRequest(completion.request)
+    if ((force || reanalyze) && (entry.roots[rootKey] || reanalyze && rootKey) && !isNonTaskRequest(completion.request)
       && !entry.turn && !entry.pending.length && !entry.active && completion.state === 'completed') {
       const taskId = entry.roots[rootKey] || `${binding}:${nativeKey}`;
       const previous = entry.latest[taskId] || (entry.following?.taskId === taskId ? entry.following.latest : null);
@@ -620,6 +649,7 @@ class TerminalReview extends EventEmitter {
       active.timings.modelStartedAt = this.now(); active.calls++;
       let raw = await this.runner.generateTerminalReview({ provider, model: settings.models[provider], prompt });
       active.knownUsage = typeof raw === 'object' ? raw.usage ?? null : null;
+      if (this.entries.get(id) !== entry || entry.revision !== active.revision) return raw;
       // Optional, bounded request for a specific omitted record. No filesystem or
       // shell capability is exposed to the model, and no fixed two-call loop.
       let query;
@@ -630,6 +660,7 @@ class TerminalReview extends EventEmitter {
         const ids = query.filter(id => typeof id === 'string' && allowed.has(id) && !included.has(id)).slice(0, 4);
         if (ids.length) {
           const recovered = await this.completion.retrieveEvidence(chunk.source, ids, chunk.context); active.retrievals += ids.length;
+          if (this.entries.get(id) !== entry || entry.revision !== active.revision) return raw;
           if (recovered.some(item => item.status === 'available')) {
             const recoveredText = recovered.map(item => `[${item.id} · ${item.role || 'record'} · ${item.requestId || 'unavailable'} · ${item.status}]\n${item.text || ''}`).join('\n');
             currentSource += `\nADDITIONAL CURRENT RECORDS:\n${recovered.filter(item => item.requestId === chunk.source.requestId).map(item => item.text || '').join('\n')}`;
@@ -654,19 +685,29 @@ class TerminalReview extends EventEmitter {
               analysisMetrics: { ...active.timings, publishedAt: this.now(), calls: 0, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals } });
           return;
         }
-        let parsed = parseReview(typeof raw === 'string' ? raw : raw.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
+        let parsed, formatError;
+        try {
+          parsed = parseReview(typeof raw === 'string' ? raw : raw.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
+        } catch (error) {
+          if (error.code !== 'REVIEW_INVALID_RESPONSE') throw error;
+          formatError = error;
+        }
         let usage = typeof raw === 'object' ? raw.usage ?? null : null;
         let qualityPasses = 1;
-        if (parsed.tasks[0]?.decisionIssues?.length && active.calls < 2) {
+        const repairIssues = formatError?.reviewIssues || parsed.tasks[0]?.decisionIssues;
+        // One replacement only, shared by format and decision repair. A scoped
+        // evidence retrieval may already have used the second model call; its
+        // malformed response still needs a single format-recovery opportunity.
+        if (repairIssues?.length && (formatError || active.calls < 2)) {
           active.calls++;
           const repaired = await this.runner.generateTerminalReview({ provider, model: settings.models[provider],
-            prompt: repairPrompt(prompt, parsed.tasks[0].decisionIssues) });
+            prompt: repairPrompt(prompt, repairIssues) });
           const latestSession = await this.manager().get(id, false);
           if (this.entries.get(id) !== entry || entry.revision !== active.revision || !latestSession || terminalKey(latestSession) !== entry.key) return;
-          parsed = parseReview(typeof repaired === 'string' ? repaired : repaired.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
           usage = combinedUsage(usage, typeof repaired === 'object' ? repaired.usage ?? null : null);
           active.knownUsage = usage;
           qualityPasses++;
+          parsed = parseReview(typeof repaired === 'string' ? repaired : repaired.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence);
           // An invalid brief remains hidden; observed-work details are still usable.
           if (!parsed.tasks[0]?.decision) parsed.tasks.forEach(task => {
             task.nextStep = '';

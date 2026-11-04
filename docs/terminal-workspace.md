@@ -9,6 +9,26 @@ and Codex use process-owned native turn records and the current terminal screen;
 an open shell alone never turns green. POSIX shell commands use the terminal's
 foreground process group, so a quiet `sleep` remains working until it ends.
 Activity refreshes independently of automatic review and makes no model calls.
+The sidebar adds a small layers/count badge beside the existing state dot only
+when background work is observed. It never adds a row or replaces the foreground
+state. Clicking opens that terminal's command/helper-agent list without selecting
+it or sending input. Escape, close and outside clicks dismiss the popover; ended
+jobs remove the badge. Counts above 99 use `99+` with the exact count in the label.
+
+AI background work reuses the monitor worker's parsed `executions` and helper
+agent lifecycles, joined only to the native log already verified for the exact
+live Claude/Codex child. The worker snapshot must be less than 15 seconds old;
+ambiguous, unverified, finished or pre-launch work is excluded. No cwd/title or
+newest-log matching is used, and no extra model call or transcript scan is added.
+POSIX shells also show live background process groups, counting a pipeline once
+and excluding foreground, unrelated, stopped and zombie processes. Unsupported
+or unavailable observations show no speculative badge. Popup metadata excludes
+raw commands, output and prompts. Background counters are not persisted.
+
+Validation: `node scripts/terminal-background-test.js` uses real Claude/Codex
+parsers and exact native-log adapters. The workspace E2E launches a real POSIX
+background job and checks lifecycle, unchanged row/dot/input selection, both
+themes at a 176px sidebar, safe titles, and popup keyboard/outside dismissal.
 Missing/stale observations stay yellow; silence never implies completion.
 Unknown shell activity on platforms without a foreground process probe also
 stays yellow. State dots appear on terminals only. Panels with terminals have a
@@ -22,6 +42,50 @@ before host creation or terminal mounting finishes. Duplicate creation is disabl
 while that request is pending. Failed creation removes the placeholder; a failed
 mount retains the real session with a reconnect button. Placeholders are never
 persisted. The actual terminal mounts in its visible layout.
+
+Create/close latency: replay JSON/UTF-8 encodings are reused while output is
+unchanged. UTF-8 cache buffers are capped by the existing store budget (64 MiB
+by default), invalidated by output changes, and released for removed sessions.
+The store remains the same JSON schema with byte-identical encoding; every
+creation/delivery/termination transaction still performs its required atomic
+write and checks failure. No shutdown acknowledgement or timeout is relaxed.
+Metadata-only identity checks after mount, close, trash and purge no longer
+transfer terminal replay. A confirmed trash operation releases the UI before
+its unrelated review-pause reply completes; mount still validates identity and
+reads the replay through the existing bounded queue.
+
+An isolated benchmark against the installed 2.0.15 core used one 83-session,
+56,865,053-byte history copy and fake PTYs to separate persistence from OS shell
+startup/exit. Three warm runs measured create at 887–945ms before versus 67–75ms
+after; close at 432–444ms before versus 32–366ms after (median 37ms). Required
+write counts stayed four and two, and initial store SHA-256 matched exactly.
+These are storage-path timings, not an installed-app end-to-end latency promise.
+`artifacts/terminal-latency-benchmark.json` records the samples. Regression tests
+cover exact JSON bytes, Unicode and size budgets, cache invalidation, memory
+bounds, write failure/retry and old-schema restoration. The workspace E2E checks
+one mount replay, metadata-only termination checks and a held review-pause reply.
+
+Each canvas terminal shows its connected AI conversation's cumulative tokens to
+the right of its title. Claude and Codex counters come from the exact process's
+native conversation log, independently of automatic review and without a model
+call. They exclude review/analysis tokens and account-wide quotas. Resuming an
+existing conversation includes its recorded history; this is not a per-turn
+counter. The tooltip gives exact total, input, output and cache counts. Repeated
+Claude response blocks are deduplicated; Codex cumulative snapshots replace the
+previous snapshot. Cached tokens are included in input once.
+
+Large totals use K/M notation. `—` means the native counter cannot be confirmed
+(including unsupported providers/platforms); only an explicit counter reports
+zero. A bounded or incomplete Claude log shows `≥` as a lower bound. Counts
+survive reload and stopped-record restoration, clear on a new provider process
+or conversation, and are removed when the terminal is closed or purged. Narrow
+panes keep title and tokens on the first row and actions below.
+
+Token validation: `node scripts/terminal-token-usage-test.js`,
+`node scripts/terminal-activity-test.js` and the Electron workspace check cover
+native counter ownership, duplicate/cache accounting, separate pane totals,
+unknown/zero/partial state, reload, and 220px dark/light header geometry. The UI
+check uses scripted activity counters; it never invokes a paid AI provider.
 
 - **⌘/Ctrl T** and the terminal **+** add a terminal to the current panel.
 - The sidebar **새 패널** (and the project/independent section `+`) starts a
@@ -37,25 +101,32 @@ persisted. The actual terminal mounts in its visible layout.
   separate panel. A project's drop target can also receive terminals from
   another project. Moving does not change the shell's working directory.
 - The trash button beside each sidebar terminal moves it directly to the trash.
-  The terminal header's **터미널 이동** button offers the same placement controls
-  without dragging. It also offers moving the terminal to the trash.
+  The terminal header's **패널 분리 · 화면 배치** button offers placement controls
+  without dragging. Its **X** closes the terminal directly without archiving.
 
 ## Viewing several panels together
 
-Use the **이 패널 함께 보기** button beside a sidebar panel to keep it on screen
-alongside the current panel. Panels from different projects and independent
-panels can share the screen. Each frame shows its project name and panel number;
-its existing terminal splits and project membership stay intact. Click any
-terminal to type there and see its understanding and review. Pinned panels stay
-visible when switching projects, and the pinned selection survives a reload.
-Use **함께 보기 해제** to stop keeping a panel visible; the selected panel remains
-on screen. Narrow windows stack the panels vertically and scroll as needed.
+Drag a terminal or a whole panel card onto a visible terminal to show them
+alongside each other. Panels from different projects and independent panels can
+share the screen while keeping their existing terminal identities and logical
+membership. Click a terminal to type there and view its review. The saved canvas
+survives reloads. Use the terminal's **이 터미널만 보기** button to return to one
+terminal; separate show-together buttons are no longer displayed.
 
 Switching projects or panels, hiding a terminal, and rearranging splits keep the
 same host PTY, renderer buffer, and terminal DOM node. An empty source panel is
 removed automatically. Layout and selection are saved for renderer reloads.
-Moving to trash first confirms session termination, including foreground programs, before removing the panel. A failed stop leaves the panel visible. Stopped output and review records remain and can be restored read-only; restoration never restarts the previous program or creates a replacement shell. Stopped sessions no longer consume the 32-session active limit. Permanent deletion removes retained records. The trash has an
-**휴지통 전체 삭제** action: it confirms the current item count before permanently
+Moving to trash first confirms session termination, including foreground programs, before removing the panel. A failed stop leaves the panel visible. Stopped output and review records remain and can be restored read-only; restoration never restarts the previous program or creates a replacement shell. Stopped sessions no longer consume the 32-session active limit. Permanent deletion removes retained records.
+
+Restoring shows immediate progress and disables duplicate actions until the
+operation settles. Identity/status is checked without transferring replay; the
+terminal mount validates identity again and reads the replay once, with priority
+over queued background reads while retaining the two-read concurrency limit.
+Restoration does not wait for collaboration or AI review. Mount failure retains
+the archive and enables retry without leaving a blank pane. Legacy archive
+metadata can restore a confirmed stopped session with the same creation identity;
+its old PID is retained only as review provenance.
+The trash has an **휴지통 전체 삭제** action: it confirms the current item count before permanently
 deleting all trashed sessions. It never targets panel members outside the trash.
 If any deletion fails, that item stays in the trash and the result shows the
 success/failure counts. The action is disabled when the trash is empty.
@@ -80,6 +151,7 @@ Like cmux, control uses a CLI and a local socket. Whitebox's commands are:
 ```sh
 whitebox identify
 whitebox list-panels --json
+whitebox close-terminal <terminal-id> --json
 whitebox send --surface <terminal-id> "hello"
 whitebox send-key --surface <terminal-id> enter
 whitebox read-screen --surface <terminal-id> --lines 100
@@ -104,8 +176,17 @@ The socket discovery record is `terminal-collaboration/control.json` in the app
 profile. It and the Unix socket are private to the local user. Each newline JSON
 request supplies the record's token, `id`, `method`, and `params`; responses have
 `ok`, `result`, or `error`. Supported methods are `system.identify`, `surface.list`,
-`surface.read_text`, `surface.send_text`, `surface.send_key`, `surface.ask`, and
+`surface.create`, `surface.close`, `surface.read_text`, `surface.send_text`, `surface.send_key`, `surface.ask`, and
 `job.read`. This follows cmux's control model; it is not full cmux API compatibility.
+
+`close-terminal` and MCP `whitebox_close_terminal` stop the selected terminal and
+remove its pane and saved layout without putting it in trash. Use an exact ID
+from `list-panels`, which also lists stopped and orphaned panes. Source authority
+still requires a live terminal in the same panel. Self-close and cross-panel
+close are rejected. A failed or unconfirmed host removal leaves the pane visible.
+The terminal header X uses this direct-close behavior too; the explicit sidebar
+trash icon remains available for archiving. Separate “show together” buttons are
+removed; drag terminals or panel cards to arrange multiple panels on screen.
 
 The CLI does not teach an already running model new commands silently. Ask it to
 use `whitebox list-panels` for a panel task, as with any terminal CLI. No instruction
@@ -266,3 +347,16 @@ composition before sending pasted bytes and clears its browser-side selection.
 The next Korean composition starts from an empty shadow input. Hangul jamo keys
 without composition flags stay with the browser IME, while shortcuts continue
 to use terminal key handling. Clipboard text itself is preserved.
+
+Context-menu cleanup may be installed after a fast paste has already restored
+the textarea. Its later click cleanup can hide that still-focused textarea at
+0×0 with a negative z-index: Latin keydown can continue while native Korean IME
+has no usable input anchor. The IME addon observes only textarea style changes
+and repairs a hidden focused anchor without waiting for PTY output or a paint.
+Keydown/beforeinput/composition start also repair synchronously; focus paints
+immediately. The native menu's intentional 1px target is preserved until cleanup,
+and inactive panes never reclaim focus. `terminal-ime-check.js` reproduces the
+delayed cleanup with the real Ghostty menu handler and checks post-paste Korean
+commits, keyless recovery, refocus and background ownership. Chromium CDP tests
+exercise browser composition; they do not claim physical macOS/Windows IME
+keyboard coverage.

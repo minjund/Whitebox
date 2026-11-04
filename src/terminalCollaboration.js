@@ -12,10 +12,11 @@ const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, createTerminal = options => manager().create(options), monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, now = Date.now, enableControl = true }) {
+  constructor({ manager, directory, createTerminal = options => manager().create(options), onTerminalClosed = () => {}, monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, backgroundSnapshot = () => null, now = Date.now, enableControl = true }) {
     Object.assign(this, { manager, directory, monitor, completion, now });
     this.createTerminal = createTerminal;
-    this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now });
+    this.onTerminalClosed = onTerminalClosed;
+    this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now, backgroundSnapshot });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
     this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -48,12 +49,16 @@ class TerminalCollaboration {
     this.groups = new Map();
     for (const group of groups.slice(0, 100)) {
       if (!safeId(group.id) || !path.isAbsolute(group.cwd || '')) continue;
-      const members = [];
+      const members = [], surfaces = [];
       for (const member of (group.members || []).slice(0, 64)) {
+        if (!safeId(member.id) || !/^[a-zA-Z0-9:._-]{1,240}$/u.test(member.creationId || '') || surfaces.some(item => item.id === member.id)) continue;
         const live = liveById ? liveById.get(member.id) : await manager.get(member.id, false);
+        const stopped = live?.creationId === member.creationId && !live.pid && ['stopped', 'exited', 'failed'].includes(live.status);
+        surfaces.push({ id: member.id, creationId: member.creationId, pid: stopped ? null : member.pid ?? null,
+          title: String(member.title || live?.title || '').slice(0, 120), status: live?.status || 'removed' });
         if (live && live.creationId === member.creationId && live.pid === member.pid && live.status === 'running') members.push({ id: live.id, creationId: live.creationId, pid: live.pid, outputSequence: live.outputSequence, title: String(member.title || live.title).slice(0, 120) });
       }
-      this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members });
+      this.groups.set(group.id, { id: group.id, name: String(group.name || '').slice(0, 120), cwd: group.cwd, members, surfaces });
     }
     const currentMembers = new Map([...this.groups.values()].flatMap(group => group.members).map(member => [member.id, member]));
     for (const [id, frame] of this.frames) {
