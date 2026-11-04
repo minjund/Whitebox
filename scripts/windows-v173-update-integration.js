@@ -611,10 +611,93 @@ function fatalLogLines(lines) {
   ));
 }
 
+function assertImmutable1828IdentityReceipt(receipt, expected) {
+  const pin = { name: 'Whitebox-Setup-1.8.28.exe', size: 95397289,
+    sha256: '7fc94cd9a60db6481873d49435dcd2801bdeca7a1ff78568e1fbb855cad46442' };
+  assert.equal(expected.sourceVersion, '1.8.28');
+  assert.deepStrictEqual(receipt.installer, pin);
+  assert.equal(receipt.moduleSha256, '99ed9e50ed30b72e8df3334763de2801680dd43cf229039f2bbf42d2f00dd793');
+  assert.deepStrictEqual(receipt.scriptHashes, {
+    helper: '576db0c440f16f0eb9bbf546d1543a7bda522026e1a1489981c57bfafd2576b4',
+    bootstrap: 'ec57a934bda98f3dcdab6a065511f7d81569427177cb0e7382d090627e7e76d9',
+  });
+  assert.equal(receipt.callbackCount, 1);
+  assert.equal(receipt.bootstrapExitCode, 0);
+  assert.equal(receipt.bootstrapSignalCode, null);
+  assert.deepStrictEqual(receipt.readySignal, { helperPid: expected.helperPid, tokenHash: expected.tokenHash });
+  assert.deepStrictEqual(receipt.pidSidecar, receipt.readySignal);
+  assert.deepStrictEqual(receipt.boundaryStops, []);
+  assert.deepStrictEqual(receipt.boundaryInstalls, []);
+  assert.equal(receipt.parentAliveAtAcknowledgement, true);
+  assert.deepStrictEqual(receipt.helperRoster, [expected.helperPid]);
+  assert.equal(receipt.identities.length, 2);
+  assert.deepStrictEqual(receipt.identities[0], receipt.identities[1], 'Helper identity changed during the authenticated boundary');
+  const identity = receipt.identities[0];
+  assert.equal(identity.pid, expected.helperPid);
+  assert.equal(identity.parentPid, expected.bootstrapPid);
+  assert.equal(identity.executablePath.toLowerCase(), expected.imagePath.toLowerCase());
+  assert(Number.isSafeInteger(identity.createdAtMs) && identity.createdAtMs >= expected.startedAtMs
+    && identity.createdAtMs <= expected.acknowledgedAtMs, 'Helper is not from this fresh launch');
+  assert.equal(expected.helperArgs.length, 26);
+  assert.equal(expected.helperArgs[0].toLowerCase(), expected.imagePath.toLowerCase());
+  assert.deepStrictEqual(expected.helperArgs.slice(1, 8), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass']);
+  const fields = ['-File', '-InstallerPath', '-ParentPid', '-AppPath', '-ExpectedVersion', '-LogPath', '-ReadyPath', '-RendererReadyPath', '-RendererReadyToken'];
+  fields.forEach((name, index) => assert.equal(expected.helperArgs[8 + index * 2], name));
+  assert.equal(expected.helperArgs[9], expected.helperPath);
+  assert.equal(expected.helperArgs[13], String(expected.parentPid));
+  assert.equal(expected.helperArgs[15], expected.executable);
+  assert.equal(expected.helperArgs[17], expected.version);
+  assert.match(expected.helperArgs[25], /^[0-9a-f]{48}$/u);
+  assert.equal(crypto.createHash('sha256').update(expected.helperArgs[25]).digest('hex'), expected.tokenHash);
+  const escape = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const argument = value => {
+    assert.doesNotMatch(value, /["\r\n\0]/u);
+    return /\s/u.test(value) ? '"' + escape(value) + '"' : '(?:"' + escape(value) + '"|' + escape(value) + ')';
+  };
+  assert.match(identity.commandLine, new RegExp('^\\s*' + expected.helperArgs.map(argument).join('\\s+') + '\\s*$', 'iu'), 'The acknowledged PID is not the exact official helper command');
+  return true;
+}
+
+function assertImmutable1828StartReceipt(lines, receipt, expected) {
+  assertImmutable1828IdentityReceipt(receipt, expected);
+  const identity = receipt.identities[0];
+  assert(Number.isSafeInteger(expected.relaunchPid) && expected.relaunchPid > 0 && expected.relaunchPid !== expected.helperPid);
+  // Only this observed truncation is permitted. Missing/other corrupted records,
+  // duplicates, reordered stages, failures and every timeout remain failures.
+  assert.equal(lines.length, 11);
+  const spawned = lines[0].match(/^helperSpawned=true;pid=(\d+);at=(.+)$/u);
+  assert(spawned); assert.equal(Number(spawned[1]), expected.helperPid);
+  const spawnTime = Date.parse(spawned[2]);
+  assert(Number.isFinite(spawnTime) && spawnTime >= identity.createdAtMs && spawnTime <= expected.acknowledgedAtMs);
+  const ready = lines[1].match(/^readyObserved=true;elapsedMs=(\d+);helperPid=(\d+)$/u);
+  assert(ready); assert(Number(ready[1]) <= 60000); assert.equal(Number(ready[2]), expected.helperPid);
+  assert.deepStrictEqual(lines.slice(2, 8), [
+    '=' + expected.version, 'allAppProcessesStopped=true', 'exitCode=0',
+    `candidate=${expected.executable};version=${expected.version}`,
+    `relaunchPath=${expected.executable};installedVersion=${expected.version};expectedVersion=${expected.version}`,
+    `relaunchStarted=true;attempt=1;pid=${expected.relaunchPid}`,
+  ]);
+  assert.match(lines[8], new RegExp('^windowRestored=true;pid=' + expected.relaunchPid + ';handle=[1-9][0-9]*$'));
+  assert.deepStrictEqual(lines.slice(9), [`rendererReady=true;attempt=1;pid=${expected.relaunchPid}`, `relaunchReady=true;attempt=1;pid=${expected.relaunchPid}`]);
+  return true;
+}
+
 function assertCompletedInstall(logPath, options = {}) {
   const lines = logLines(logPath);
   const expectedStart = `helperStarted=true;parentPid=${options.parentPid};expectedVersion=${options.expectedVersion}`;
-  assert.deepStrictEqual(linesStarting(lines, 'helperStarted='), [expectedStart], 'Exactly one expected packaged helper must run.');
+  const starts = linesStarting(lines, 'helperStarted=');
+  if (!starts.length && options.immutableStart) {
+    const { receipt, expected } = options.immutableStart;
+    assert.equal(options.parentPid, expected.parentPid);
+    assert.equal(options.expectedVersion, expected.version);
+    assert.equal(path.resolve(logPath), path.join(testRoot, 'v173-first-hop-downloads', 'install-update.log'));
+    assert.equal(executableVersion(installedExecutable), options.expectedVersion);
+    assert.equal(packagedMetadata(installedAsar).version, options.expectedVersion);
+    assert.deepStrictEqual(immutable1828ScriptProcessIds(expected.helperPath), []);
+    assert.deepStrictEqual(immutable1828ScriptProcessIds(expected.bootstrapPath), []);
+    assertImmutable1828StartReceipt(lines, receipt, { ...expected, relaunchPid: options.relaunchPid });
+    console.log(`PASS immutable 1.8.28 overwritten helper-start record: exact official scripts, authenticated PID/parent/arguments, fresh nonce, one acknowledged bootstrap; installed version, renderer-ready relaunch and cleanup still required; helperPid=${expected.helperPid}`);
+  } else assert.deepStrictEqual(starts, [expectedStart], 'Exactly one expected packaged helper must run.');
   assert.deepStrictEqual(linesStarting(lines, 'exitCode='), ['exitCode=0'], 'Exactly one NSIS invocation must complete successfully.');
   assert.equal(lines.includes('allAppProcessesStopped=true'), true, 'The helper did not prove all old app processes stopped.');
   const relaunchPaths = linesStarting(lines, 'relaunchPath=');
@@ -920,6 +1003,43 @@ async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
   return downloaded.downloadedPath;
 }
 
+function immutable1828ScriptProcessIds(scriptPath) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$escaped = [Regex]::Escape($env:WHITEBOX_INTEGRATION_SCRIPT)',
+    "$pattern = '(?:^|\\s)-File\\s+(?:\"' + $escaped + '\"|' + $escaped + ')(?=\\s|$)'",
+    "$records = @(Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" -ErrorAction Stop)",
+    '$ids = @($records | Where-Object { [Regex]::IsMatch([string]$_.CommandLine, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase) } | ForEach-Object { [int]$_.ProcessId })',
+    '[Console]::Write((ConvertTo-Json -InputObject @($ids) -Compress))',
+  ].join('\n');
+  const ids = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_SCRIPT: scriptPath }, timeout: 30000,
+  }).stdout.replace(/^\uFEFF/u, '').trim());
+  assert(Array.isArray(ids));
+  assert(ids.every(pid => Number.isSafeInteger(pid) && pid > 0));
+  assert.equal(new Set(ids).size, ids.length);
+  return ids.sort((a, b) => a - b);
+}
+
+function captureImmutable1828HelperIdentity(pid) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$id = [int]$env:WHITEBOX_INTEGRATION_PID',
+    "$records = @(Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $id) -ErrorAction Stop)",
+    "if ($records.Count -ne 1) { throw 'Expected one exact helper process' }",
+    '$record = $records[0]',
+    '$process = Get-Process -Id $id -ErrorAction Stop',
+    '$created = [DateTimeOffset]($process.StartTime.ToUniversalTime())',
+    '@{pid=[int]$record.ProcessId;parentPid=[int]$record.ParentProcessId;executablePath=[string]$process.Path;commandLine=[string]$record.CommandLine;createdAtMs=$created.ToUnixTimeMilliseconds()} | ConvertTo-Json -Compress',
+  ].join('\n');
+  const record = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_PID: String(pid) }, timeout: 30000,
+  }).stdout.replace(/^\uFEFF/u, '').trim());
+  assert.equal(record.pid, pid);
+  record.executablePath = canonicalExistingPath(record.executablePath);
+  return record;
+}
+
 async function launchPackagedInstaller(installerModule, options) {
   let helperCallbackCount = 0;
   let helperPid = 0;
@@ -928,19 +1048,36 @@ async function launchPackagedInstaller(installerModule, options) {
   let capturedHelperPidPath = '';
   let capturedReadyPath = '';
   let capturedReadyToken = '';
-  let capturedHelperPath = '';
+  let capturedHelperPath = '', capturedBootstrapPath = '', capturedRendererReadyPath = '';
+  let immutableStart, scriptHashes;
+  const startedAtMs = Date.now();
   const wrappedSpawn = (command, args, spawnOptions) => {
     const valueAfter = name => {
       const index = args.indexOf(name);
       return index >= 0 ? String(args[index + 1] || '') : '';
     };
-    bootstrapChild = spawn(command, args, spawnOptions);
     capturedLogPath = valueAfter('-LogPath');
     capturedHelperPidPath = valueAfter('-HelperPidPath');
     capturedReadyPath = valueAfter('-ReadyPath');
     capturedReadyToken = valueAfter('-RendererReadyToken');
     capturedHelperPath = valueAfter('-HelperPath');
     const bootstrapPath = valueAfter('-File');
+    capturedBootstrapPath = bootstrapPath;
+    capturedRendererReadyPath = valueAfter('-RendererReadyPath');
+    if (options.immutableSource?.version === '1.8.28') {
+      assert.equal(SOURCE_VERSION, '1.8.28');
+      assert.equal(path.resolve(options.downloadsDir), path.join(testRoot, 'v173-first-hop-downloads'));
+      assert.match(capturedReadyToken, /^[0-9a-f]{48}$/u);
+      assert.equal(capturedHelperPath, path.join(options.downloadsDir, `install-update-${capturedReadyToken}.ps1`));
+      assert.equal(bootstrapPath, path.join(options.downloadsDir, `install-update-bootstrap-${capturedReadyToken}.ps1`));
+      assert.equal(capturedReadyPath, path.join(options.downloadsDir, `install-update-ready-${capturedReadyToken}.json`));
+      assert.equal(capturedHelperPidPath, path.join(options.downloadsDir, `install-update-helper-pid-${capturedReadyToken}.json`));
+      assert.equal(capturedRendererReadyPath, path.join(options.downloadsDir, `install-renderer-ready-${capturedReadyToken}.json`));
+      assert.equal(options.installerPath, path.join(options.downloadsDir, targetInstallerName));
+      assert.equal(path.resolve(options.immutableSource.moduleFile), path.join(testRoot, 'source-packaged', 'resources', 'app.asar', 'src', 'updateInstaller.js'));
+      scriptHashes = { helper: sha256(capturedHelperPath), bootstrap: sha256(bootstrapPath) };
+    }
+    bootstrapChild = spawn(command, args, spawnOptions);
     if (Number.isSafeInteger(bootstrapChild.pid) && bootstrapChild.pid > 0 && bootstrapPath) {
       trackedUpdateProcesses.set(bootstrapChild.pid, bootstrapPath);
     }
@@ -977,17 +1114,50 @@ async function launchPackagedInstaller(installerModule, options) {
         const boundaryLines = logLines(capturedLogPath);
         assert.deepStrictEqual(linesStarting(boundaryLines, 'allAppProcessesStopped='), [], 'The helper crossed the parent shutdown boundary too early.');
         assert.deepStrictEqual(linesStarting(boundaryLines, 'exitCode='), [], 'NSIS ran before the parent shutdown boundary.');
+        if (options.immutableSource?.version === '1.8.28') {
+          const tokenHash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+          const identities = [captureImmutable1828HelperIdentity(helperPid), captureImmutable1828HelperIdentity(helperPid)];
+          immutableStart = {
+            receipt: { installer: { name: path.basename(sourceInstaller), size: fs.statSync(sourceInstaller).size, sha256: sha256(sourceInstaller) },
+              moduleSha256: sha256(options.immutableSource.moduleFile), scriptHashes,
+              bootstrapExitCode: bootstrapChild.exitCode, bootstrapSignalCode: bootstrapChild.signalCode,
+              readySignal: { helperPid: Number(signal.helperPid), tokenHash: tokenHash(signal.token) },
+              pidSidecar: { helperPid: Number(helperIdentity.helperPid), tokenHash: tokenHash(helperIdentity.token) },
+              boundaryStops: linesStarting(boundaryLines, 'allAppProcessesStopped='), boundaryInstalls: linesStarting(boundaryLines, 'exitCode='),
+              parentAliveAtAcknowledgement: processAlive(options.parentPid), helperRoster: immutable1828ScriptProcessIds(capturedHelperPath), identities },
+            expected: { sourceVersion: options.immutableSource.version, parentPid: options.parentPid, version: targetVersion,
+              helperPid, bootstrapPid: bootstrapChild.pid, imagePath: canonicalExistingPath(powershell), startedAtMs, acknowledgedAtMs: Date.now(),
+              tokenHash: tokenHash(capturedReadyToken), helperPath: capturedHelperPath, bootstrapPath: capturedBootstrapPath,
+              executable: installedExecutable,
+              helperArgs: [canonicalExistingPath(powershell), '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
+                '-File', capturedHelperPath, '-InstallerPath', options.installerPath, '-ParentPid', String(options.parentPid), '-AppPath', installedExecutable,
+                '-ExpectedVersion', targetVersion, '-LogPath', capturedLogPath, '-ReadyPath', capturedReadyPath,
+                '-RendererReadyPath', capturedRendererReadyPath, '-RendererReadyToken', capturedReadyToken] },
+          };
+        }
       }
     },
   });
   assert.equal(helperCallbackCount, 1, 'The packaged updater did not cross its helper-ready boundary exactly once.');
   assert.equal(Number.isSafeInteger(helperPid) && helperPid > 0, true, 'The packaged updater did not report its helper PID.');
   assert.equal(launched.mode, 'automatic');
+  if (immutableStart) {
+    immutableStart.receipt.callbackCount = helperCallbackCount;
+    assertImmutable1828IdentityReceipt(immutableStart.receipt, immutableStart.expected);
+    const identity = immutableStart.receipt.identities[0];
+    console.log('PASS official 1.8.28 independent helper-start receipt: ' + JSON.stringify({
+      installer: immutableStart.receipt.installer, moduleSha256: immutableStart.receipt.moduleSha256,
+      scriptHashes: immutableStart.receipt.scriptHashes, helperPid: identity.pid, bootstrapPid: identity.parentPid,
+      createdAtMs: identity.createdAtMs, commandSha256: crypto.createHash('sha256').update(identity.commandLine).digest('hex'),
+      tokenHash: immutableStart.expected.tokenHash, callbackCount: helperCallbackCount, bootstrapExitCode: bootstrapChild.exitCode,
+    }));
+  }
   return {
     ...launched,
     integrationHelperPidPath: capturedHelperPidPath,
     integrationReadyPath: capturedReadyPath,
     integrationHelperPid: helperPid,
+    ...(immutableStart ? { integrationImmutableStart: { ...immutableStart, receipt: { ...immutableStart.receipt, callbackCount: helperCallbackCount } } } : {}),
   };
 }
 
@@ -1143,6 +1313,7 @@ async function main() {
         parentPid: v173ParentPid,
         allowUnsignedWindowsUpdates: v173AllowsUnsigned,
         captureBootstrapAck: true,
+        ...(SOURCE_VERSION === '1.8.28' ? { immutableSource: { version: SOURCE_VERSION, moduleFile: path.join(v173ModuleDir, 'updateInstaller.js') } } : {}),
       });
       assert.equal(processAlive(v173ParentPid), true, 'The fixed source helper did not wait for its parent.');
       closeInstalledAppGracefully(v173ParentPid);
@@ -1155,7 +1326,7 @@ async function main() {
     activeAppPid = await waitForRelaunchLog(firstLaunch.logPath, targetVersion, 120_000, firstLaunch.integrationHelperPid);
     await waitForInstalledPackage(targetVersion, 120_000, 8);
     await waitForUpdateArtifactCleanup(firstLaunch);
-    assertCompletedInstall(firstLaunch.logPath, { parentPid: v173ParentPid, expectedVersion: targetVersion });
+    assertCompletedInstall(firstLaunch.logPath, { parentPid: v173ParentPid, expectedVersion: targetVersion, relaunchPid: activeAppPid, immutableStart: firstLaunch.integrationImmutableStart });
     console.log(`✓ Fixed Whitebox ${SOURCE_VERSION} selected canonical Setup and completed the authenticated automatic installer handshake.`);
   }
 
