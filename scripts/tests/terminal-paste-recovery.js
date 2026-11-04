@@ -42,6 +42,11 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
     await Promise.resolve();
     const rect = term.textarea.getBoundingClientRect();
     const automatic = { width: rect.width, height: rect.height, zIndex: term.textarea.style.zIndex };
+    term.textarea.style.left = '99999px'; term.textarea.style.top = '99999px';
+    await Promise.resolve();
+    const moved = term.textarea.getBoundingClientRect(), canvas = term.renderer.getCanvas().getBoundingClientRect();
+    const movedInside = moved.left >= canvas.left - 1 && moved.right <= canvas.right + 1
+      && moved.top >= canvas.top - 1 && moved.bottom <= canvas.bottom + 1;
     const other = document.createElement('textarea'); document.body.appendChild(other); other.focus();
     term.textarea.style.width = '0px'; term.textarea.style.height = '0px'; term.textarea.style.zIndex = '-10';
     await Promise.resolve();
@@ -49,10 +54,11 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
     term.focus();
     const focused = term.textarea.getBoundingClientRect();
     const refocus = { width: focused.width, height: focused.height, zIndex: term.textarea.style.zIndex };
-    other.remove(); return { automatic, background, refocus };
+    other.remove(); return { automatic, background, refocus, movedInside };
   });
   for (const value of [anchorOwnership.automatic, anchorOwnership.refocus]) assert(value.width > 0 && value.height > 0 && Number(value.zIndex) >= 0, 'Focused native input anchor must recover without waiting for PTY echo: ' + JSON.stringify(anchorOwnership));
   assert.deepEqual(anchorOwnership.background, { retainedFocus: true, width: 0 }, 'Recovery must not steal another pane or input focus');
+  assert(anchorOwnership.movedInside, 'Late upstream cursor positioning cannot leave a positive-sized input target outside the canvas');
   results.push({ anchorOwnership });
   for (const contextMenu of [false, true]) for (const activeComposition of [false, true]) for (const history of [false, true]) {
     await evaluate(async ({ contextMenu, history }) => {

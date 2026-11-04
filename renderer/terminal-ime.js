@@ -179,7 +179,15 @@ window.WhiteboxTerminalIme = {
           // without a blur/focus event or PTY output to trigger a repaint.
           // Keep its intentional 1px menu target until cleanup actually hides
           // it; restoring that live menu target would disrupt native menus.
-          if (Number(style.zIndex) < 0 || parseFloat(style.width) <= 0 || parseFloat(style.height) <= 0) {
+          const viewport = screen.getBoundingClientRect();
+          const target = textarea.getBoundingClientRect();
+          // Upstream cursor synchronization can also move a positive-sized
+          // target outside scrollback after our paste render. Preserve the
+          // intentional fixed-position native-menu target while it is active.
+          const outside = style.position === 'absolute' && viewport.width > 0 && viewport.height > 0
+            && (target.left < viewport.left - 1 || target.right > viewport.right + 1
+              || target.top < viewport.top - 1 || target.bottom > viewport.bottom + 1);
+          if (outside || Number(style.zIndex) < 0 || parseFloat(style.width) <= 0 || parseFloat(style.height) <= 0) {
             // Observe upstream changes, not our own repair writes. Zero metrics
             // during a hidden/detaching pane must not create a microtask loop.
             anchorObserver.disconnect();
