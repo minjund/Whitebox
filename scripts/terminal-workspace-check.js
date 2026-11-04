@@ -149,6 +149,26 @@ app.whenReady().then(async () => {
       try { return await win.webContents.executeJavaScript(expression, true); }
       catch (error) { throw new Error(`${expression}: ${error.message}; console=${JSON.stringify(errors)}`); }
     };
+    // Transport fixture data as CDP values instead of interpolating it into code.
+    const evaluateData = async (fn, ...args) => {
+      const debuggerClient = win.webContents.debugger;
+      const attachedHere = !debuggerClient.isAttached();
+      if (attachedHere) debuggerClient.attach('1.3');
+      let objectId;
+      try {
+        const context = await debuggerClient.sendCommand('Runtime.evaluate', { expression: 'globalThis' });
+        objectId = context.result.objectId;
+        const result = await debuggerClient.sendCommand('Runtime.callFunctionOn', {
+          objectId, functionDeclaration: fn.toString(), arguments: args.map(value => ({ value })),
+          returnByValue: true, awaitPromise: true, userGesture: true,
+        });
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+        return result.result.value;
+      } finally {
+        if (objectId) await debuggerClient.sendCommand('Runtime.releaseObject', { objectId });
+        if (attachedHere) debuggerClient.detach();
+      }
+    };
     const forceCapture = async () => {
       // Await the selected terminal refresh reaching this fixture, including a
       // refresh queued behind an in-flight observation, before asserting its UI.
@@ -489,7 +509,11 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-add-panel-terminal]").click()');
     await waitFor('WhiteboxWorkspace.getState().sessions.length === 2 && !WhiteboxWorkspace.getState().busy', 'panel plus adds a terminal');
     const second = manager.list().find(item => item.id !== first.id);
-    assert.equal(terminalGetReads.filter(item=>item.id===second.id&&item.full).length,1,'adding a terminal transfers replay only for its mount, not for post-mount PID reconciliation');
+    assert.equal(terminalGetReads.filter(item=>item.id===second.id&&!item.full).length,1,'post-mount PID reconciliation requests metadata only');
+    // The independent pending-prompt scanner may initialize its own bounded
+    // snapshot before the mount starts; it is not the reconciliation IPC.
+    const initialFullReads = terminalGetReads.filter(item=>item.id===second.id&&item.full).length;
+    assert(initialFullReads >= 1 && initialFullReads <= 2, 'one mount snapshot plus at most one initial prompt-scan snapshot');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
     const tokenSelector = id => `[data-terminal-id="${id}"] .wb-pane-tokens`;
     const usageForPane = (provider, providerPid, conversationId, input, output, cachedInput = 0, partial = false) => ({
@@ -533,7 +557,7 @@ app.whenReady().then(async () => {
       // Keep the fixture independent of personal login-shell prompt themes.
       // Long cwd prompts redraw multiple rows during rapid pane resizing.
       for (const session of [first, second]) {
-        await manager.command(session.id, "PS1='WB> '; RPS1=''");
+        await manager.command(session.id, "PS1='WB> '; RPS1=''; printf '\\033[2J\\033[H'");
         await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(session.id)}).trim().endsWith('WB>')`, 'deterministic fixture shell prompt');
       }
     }
@@ -1003,7 +1027,7 @@ app.whenReady().then(async () => {
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u, 'the actual previous request stays visible during continuation');
     assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'internal summaries are not retained in new renderer history or digests');
-    await evaluate(`(() => {const key='whitebox:workspace:v2',data=JSON.parse(localStorage.getItem(key)),record=data.reviewHistory.find(r=>r.id==='${first.id}');record.result.tasks.push(${JSON.stringify(bogusTask)});record.digest=JSON.stringify(record.result);localStorage.setItem(key,JSON.stringify(data));})()`);
+    await evaluateData((id, task) => { const key='whitebox:workspace:v2', data=JSON.parse(localStorage.getItem(key)), record=data.reviewHistory.find(r=>r.id===id); record.result.tasks.push(task); record.digest=JSON.stringify(record.result); localStorage.setItem(key,JSON.stringify(data)); }, first.id, bogusTask);
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'legacy summary history migration');
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
     assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'reload removes older internal-summary cards and digests');
@@ -1373,7 +1397,7 @@ app.whenReady().then(async () => {
     assert.equal(manager.get(last).pid, null, 'restoring records never restarts a program');
     await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash restored terminal');
-    await evaluate(`(() => {const item=WhiteboxWorkspace.getState().trash.find(item=>item.id===${JSON.stringify(last)});delete item.sessionStopped;item.pid=${lastPid};item.review={...item.review,pid:${lastPid}};})()`);
+    await evaluateData((id, pid) => { const item=WhiteboxWorkspace.getState().trash.find(item=>item.id===id); delete item.sessionStopped; item.pid=pid; item.review={...item.review,pid}; }, last, lastPid);
     await evaluate('document.querySelector("[data-action=trash]").click()');
     assert.equal(await evaluate(`document.querySelector('[data-restore-instance="${last}"]').disabled`), false, 'legacy archive flags cannot hide a confirmed stopped record');
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
@@ -1821,7 +1845,7 @@ app.whenReady().then(async () => {
         assert.equal(stoppedRoster.surfaces.find(s=>s.id===stoppedTarget).status, 'stopped');
         await panelCommand(['close-terminal', stoppedTarget, '--source', id], opts); await assertPaneGone(stoppedTarget);
         const beforeGhostIds = new Set(manager.list().map(s=>s.id));
-        await evaluate(`(() => {const s=WhiteboxWorkspace.getState(), owner=[...s.spaces,s.standalone].find(o=>o.tabs.some(p=>p.id===${JSON.stringify(batch.workspace_id)}));return WhiteboxWorkspace.createTerminal('row',owner,${JSON.stringify(batch.workspace_id)});})()`);
+        await evaluateData(workspaceId => { const s=WhiteboxWorkspace.getState(), owner=[...s.spaces,s.standalone].find(o=>o.tabs.some(p=>p.id===workspaceId)); return WhiteboxWorkspace.createTerminal('row',owner,workspaceId); }, batch.workspace_id);
         const ghost = manager.list().find(s=>!beforeGhostIds.has(s.id)); assert(ghost);
         let ghostRoster;
         for (let attempt=0; attempt<100; attempt++) {

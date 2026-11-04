@@ -13,10 +13,24 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const save = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2), { mode: 0o600 });
 
 function visibleText(content) {
-  return render({ content }, { t: value => value, esc, taskKey: 'blind' })
-    .replace(/<details[\s\S]*?<\/details>/gu, '')
-    .replace(/<\/(?:p|h3|pre|div)>/gu, '\n').replace(/<[^>]*>/gu, '')
-    .replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&amp;/gu, '&').trim();
+  // Parse the generated markup as text; this output is never HTML sanitization.
+  const html = render({ content }, { t: value => value, esc, taskKey: 'blind' });
+  let text = '', hidden = 0;
+  for (let index = 0; index < html.length;) {
+    if (html[index] !== '<') {
+      if (!hidden) text += html[index];
+      index++; continue;
+    }
+    const end = html.indexOf('>', index);
+    if (end < 0) throw new Error('Incomplete generated review markup');
+    const tag = html.slice(index, end + 1);
+    if (tag.startsWith('<details')) hidden++;
+    else if (tag === '</details>') hidden--;
+    else if (!hidden && ['</p>', '</h3>', '</pre>', '</div>'].includes(tag)) text += '\n';
+    index = end + 1;
+  }
+  const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&amp;': '&' };
+  return text.replace(/&(?:lt|gt|quot|#39|amp);/gu, entity => entities[entity]).trim();
 }
 
 async function main() {

@@ -11,6 +11,11 @@ function main() {
     nextAction: null, deliverables: [{ label: '설정 검사', kind: 'command', value: 'docker compose config --quiet', basis: 'reported', quote: 'SOURCE_ONLY_SENTINEL' }] };
   const visible = visibleText(content), prompt = writerPrompt(visible);
   assert.ok(prompt.includes('docker compose config --quiet'));
+  const literal = '<script>do not execute</script> &lt; &amp;';
+  const literalVisible = visibleText({ ...content, answer: { ...content.answer, text: literal } });
+  assert.ok(literalVisible.includes(literal), 'default-visible text preserves escaped literal bytes without treating them as markup');
+  assert.ok(!literalVisible.includes('SOURCE_ONLY_SENTINEL') && !literalVisible.includes('HIDDEN_BACKGROUND'));
+
   assert.ok(!prompt.includes('SOURCE_ONLY_SENTINEL') && !prompt.includes('HIDDEN_BACKGROUND'), 'blind writer never receives collapsed source or background');
   assert.ok(auditorPrompt({ task: { request: '원래 요청' } }, visible, {}, 'ORIGINAL_SOURCE').includes('ORIGINAL_SOURCE'), 'only the separate auditor receives original evidence');
   const writing = { canWrite: true, draft: '설정 검사를 안내합니다.', gaps: [], support: [{ claim: '검사', quote: '설정 검사 명령은 안내됐고 실행 결과는 미확인입니다.' }] };
