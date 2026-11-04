@@ -101,11 +101,21 @@ window.WhiteboxTerminalIme = {
           const screenLeft = screen.offsetLeft;
           const screenTop = screen.offsetTop;
           const screenWidth = screen.clientWidth;
+          const screenHeight = screen.clientHeight;
+          // Canvas CSS bounds can briefly differ from rows × cell metrics during
+          // resize/font changes. Keep the native candidate target inside the
+          // actual viewport even when the real cursor is in scrollback.
+          const nativeAnchor = width => {
+            const anchorWidth = Math.max(1, Math.min(width, screenWidth || width));
+            const anchorHeight = Math.max(1, Math.min(cellHeight, screenHeight || cellHeight));
+            return { left: `${screenLeft + Math.max(0, Math.min(column * cellWidth, screenWidth - anchorWidth))}px`,
+              top: `${screenTop + Math.max(0, Math.min(row * cellHeight, screenHeight - anchorHeight))}px`,
+              width: `${anchorWidth}px`, height: `${anchorHeight}px` };
+          };
           Object.assign(textarea.style, { position: 'absolute', zIndex: '2', pointerEvents: 'none' });
           if (!cursorInViewport || !composing || !text || doc.activeElement !== textarea) {
             hide();
-            Object.assign(textarea.style, { position: 'absolute', left: `${screenLeft + column * cellWidth}px`,
-              top: `${screenTop + row * cellHeight}px`, width: `${cellWidth}px`, height: `${cellHeight}px` });
+            Object.assign(textarea.style, { position: 'absolute', ...nativeAnchor(cellWidth) });
             return;
           }
           if (text !== measuredText) {
@@ -152,8 +162,7 @@ window.WhiteboxTerminalIme = {
           }
           tail.style.display = preeditWidth > available ? 'none' : '';
           // Anchor native candidate windows to the painted cursor.
-          Object.assign(textarea.style, { left: `${screenLeft + anchorLeft}px`,
-            top: `${screenTop + row * cellHeight}px`, width: `${preeditWidth}px`, height: `${cellHeight}px`,
+          Object.assign(textarea.style, { ...nativeAnchor(preeditWidth),
             fontFamily: options.fontFamily, fontSize: `${options.fontSize}px` });
         };
         const scheduleRender = () => {

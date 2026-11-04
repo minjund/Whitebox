@@ -82,6 +82,8 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
       const screen = term.renderer.getCanvas().getBoundingClientRect();
       return { width: rect.width, height: rect.height, position: term.textarea.style.position,
         zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea,
+        inputRect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        screenRect: { left: screen.left, top: screen.top, right: screen.right, bottom: screen.bottom },
         insideViewport: rect.left >= screen.left - 1 && rect.right <= screen.right + 1 && rect.top >= screen.top - 1 && rect.bottom <= screen.bottom + 1 };
     });
     await debuggerSession.sendCommand('Input.imeSetComposition', { text: 'ㅇ', selectionStart: 1, selectionEnd: 1 });
@@ -97,6 +99,21 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
       `Paste must restore a usable native input anchor before typing: ${JSON.stringify({ contextMenu, activeComposition, history, input })}`);
     assert.equal(result.text, (activeComposition ? '한' : '') + '붙여넣은 본문\r이게 한글 입력');
   }
+  const resizedAnchor = await evaluate(async () => {
+    await reset(term); term.focus();
+    await outputTo(term, Array.from({ length: 40 }, (_, i) => `resize-history-${i}\r\n`).join(''));
+    term.scrollToTop();
+    const canvas = term.renderer.getCanvas(), previous = { width: canvas.style.width, height: canvas.style.height };
+    canvas.style.width = '333px'; canvas.style.height = '127px';
+    try {
+      term.preparePaste();
+      const input = term.textarea.getBoundingClientRect(), screen = canvas.getBoundingClientRect();
+      return { inside: input.left >= screen.left - 1 && input.right <= screen.right + 1
+        && input.top >= screen.top - 1 && input.bottom <= screen.bottom + 1, width: input.width, height: input.height };
+    } finally { Object.assign(canvas.style, previous); term.preparePaste(); }
+  });
+  assert(resizedAnchor.inside && resizedAnchor.width > 0 && resizedAnchor.height > 0, 'Native IME target remains inside resized canvas bounds, independent of stale grid metrics: ' + JSON.stringify(resizedAnchor));
+  results.push({ resizedAnchor });
   const nativeReplacement = await evaluate(async () => {
     await reset(term); term.focus(); writes.length = 0; term.paste('본문');
     term.textarea.value = '한글';
