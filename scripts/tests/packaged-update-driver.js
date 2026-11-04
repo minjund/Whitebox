@@ -7,6 +7,64 @@ const { waitForPackagedRenderer } = require('../packaged-update-button');
 const { probeWindowsProcessIds, waitForOwnedProcessIdsExit } = require('../windows-process-exit-check');
 
 function registerPackagedUpdateDriverTests({ test }) {
+  test('immutable 1.8.28 missing start record requires exact official bytes and a fresh independently authenticated helper', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'windows-v173-update-integration.js'), 'utf8');
+    const extract = name => {
+      const match = source.match(new RegExp('^function ' + name + '\\([\\s\\S]*?^}', 'm'));
+      assert(match, name); return match[0];
+    };
+    const validate = vm.runInNewContext(extract('assertImmutable1828IdentityReceipt') + '\n' + extract('assertImmutable1828StartReceipt')
+      + '\n(payload) => { const p=JSON.parse(payload); return assertImmutable1828StartReceipt(p.lines,p.receipt,p.expected); }', { assert, crypto: require('node:crypto') });
+    const fixture = () => {
+      const image = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+      const nonce = 'f'.repeat(48), tokenHash = require('node:crypto').createHash('sha256').update(nonce).digest('hex');
+      const expected = { sourceVersion:'1.8.28', parentPid:7720, version:'2.0.16', helperPid:2176, bootstrapPid:7120,
+        imagePath:image, startedAtMs:2000, acknowledgedAtMs:4000, tokenHash, relaunchPid:8096, helperPath:'C:\\fresh\\helper.ps1',
+        executable:'C:\\fresh\\Whitebox.exe', helperArgs:[image,'-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass',
+          '-File','C:\\fresh\\helper.ps1','-InstallerPath','C:\\fresh\\Whitebox-Setup-2.0.16.exe','-ParentPid','7720',
+          '-AppPath','C:\\fresh\\Whitebox.exe','-ExpectedVersion','2.0.16','-LogPath','C:\\fresh\\install-update.log',
+          '-ReadyPath','C:\\fresh\\ready.json','-RendererReadyPath','C:\\fresh\\renderer.json','-RendererReadyToken',nonce] };
+      const identity = { pid:2176,parentPid:7120,executablePath:image,createdAtMs:2100,
+        commandLine:expected.helperArgs.map(value=>'"'+value+'"').join(' ') };
+      const receipt = { installer:{name:'Whitebox-Setup-1.8.28.exe',size:95397289,sha256:'7fc94cd9a60db6481873d49435dcd2801bdeca7a1ff78568e1fbb855cad46442'},
+        moduleSha256:'99ed9e50ed30b72e8df3334763de2801680dd43cf229039f2bbf42d2f00dd793',
+        scriptHashes:{helper:'576db0c440f16f0eb9bbf546d1543a7bda522026e1a1489981c57bfafd2576b4',bootstrap:'ec57a934bda98f3dcdab6a065511f7d81569427177cb0e7382d090627e7e76d9'},
+        callbackCount:1,bootstrapExitCode:0,bootstrapSignalCode:null,readySignal:{helperPid:2176,tokenHash:expected.tokenHash},
+        pidSidecar:{helperPid:2176,tokenHash:expected.tokenHash},boundaryStops:[],boundaryInstalls:[],parentAliveAtAcknowledgement:true,
+        helperRoster:[2176],identities:[{...identity},{...identity}] };
+      const lines = ['helperSpawned=true;pid=2176;at=1970-01-01T00:00:02.2000000Z','readyObserved=true;elapsedMs=441;helperPid=2176',
+        '=2.0.16','allAppProcessesStopped=true','exitCode=0',`candidate=${expected.executable};version=2.0.16`,
+        `relaunchPath=${expected.executable};installedVersion=2.0.16;expectedVersion=2.0.16`,'relaunchStarted=true;attempt=1;pid=8096',
+        'windowRestored=true;pid=8096;handle=3015012','rendererReady=true;attempt=1;pid=8096','relaunchReady=true;attempt=1;pid=8096'];
+      return {lines,receipt,expected};
+    };
+    assert.equal(validate(JSON.stringify(fixture())),true);
+    const bare = fixture();
+    bare.receipt.identities.forEach(identity => { identity.commandLine = bare.expected.helperArgs.join(' '); });
+    assert.equal(validate(JSON.stringify(bare)), true, 'native unquoted argument spellings preserve the same exact command');
+    const changes = [
+      p=>p.expected.sourceVersion='1.8.27',p=>p.receipt.installer.name='Whitebox-Setup-1.8.29.exe',p=>p.receipt.installer.size++,p=>p.receipt.installer.sha256='0'.repeat(64),
+      p=>p.receipt.moduleSha256='0'.repeat(64),p=>p.receipt.scriptHashes.helper='0'.repeat(64),p=>p.receipt.scriptHashes.bootstrap='0'.repeat(64),
+      p=>p.receipt.callbackCount=0,p=>p.receipt.callbackCount=2,p=>p.receipt.bootstrapExitCode=1,p=>p.receipt.bootstrapExitCode=null,p=>p.receipt.bootstrapSignalCode='SIGTERM',
+      p=>p.receipt.readySignal.helperPid++,p=>p.receipt.readySignal.tokenHash='0'.repeat(64),p=>p.receipt.pidSidecar.tokenHash='0'.repeat(64),
+      p=>p.receipt.boundaryStops=['allAppProcessesStopped=true'],p=>p.receipt.boundaryInstalls=['exitCode=0'],p=>p.receipt.parentAliveAtAcknowledgement=false,
+      p=>p.receipt.helperRoster=[],p=>p.receipt.helperRoster.push(9999),p=>p.receipt.identities.pop(),p=>p.receipt.identities[1].createdAtMs++,
+      p=>p.receipt.identities.forEach(i=>i.parentPid++),p=>p.receipt.identities.forEach(i=>i.createdAtMs=1999),p=>p.receipt.identities.forEach(i=>i.createdAtMs=4001),
+      p=>p.receipt.identities.forEach(i=>i.executablePath='C:\\foreign\\powershell.exe'),p=>p.receipt.identities.forEach(i=>i.commandLine+=' -Extra'),
+      p=>p.receipt.identities.forEach(i=>i.commandLine=i.commandLine.replace('"7720"','"7721"')),p=>p.receipt.identities.forEach(i=>i.commandLine=i.commandLine.replace('"2.0.16"','"2.0.15"')),
+      p=>p.lines[0]='helperSpawned=true;pid=2177;at=1970-01-01T00:00:02.200Z',p=>p.lines[0]='helperSpawned=true;pid=2176;at=1970-01-01T00:00:01.000Z',
+      p=>p.lines[1]='readyObserved=true;elapsedMs=60001;helperPid=2176',p=>p.lines[1]='readyObserved=true;elapsedMs=441;helperPid=2177',
+      p=>p.lines[2]='Version=2.0.16',p=>p.lines[2]='=2.0.15',p=>p.lines[3]='allAppProcessesStopped=false',p=>p.lines[4]='exitCode=1',
+      p=>p.lines[5]='candidate=C:\\foreign\\Whitebox.exe;version=2.0.16',p=>p.lines[6]=p.lines[6].replace('installedVersion=2.0.16','installedVersion=2.0.15'),
+      p=>p.lines[7]='relaunchStarted=true;attempt=2;pid=8096',p=>p.lines[8]='windowRestored=true;pid=8096;handle=0',
+      p=>p.lines[9]='rendererReady=true;attempt=1;pid=8097',p=>p.lines[10]='relaunchReady=false;attempt=1;pid=8096',
+      p=>p.lines.push('bootstrapReadyTimeout=true'),p=>p.lines.splice(2,0,p.lines[0]),p=>p.lines.splice(4,1),p=>[p.lines[3],p.lines[4]]=[p.lines[4],p.lines[3]],
+    ];
+    changes.forEach((change,index)=>{const p=fixture();change(p);assert.throws(()=>validate(JSON.stringify(p)),undefined,'invalid immutable receipt '+index);});
+    assert.match(source,/SOURCE_VERSION === '1\.8\.28' \? \{ immutableSource:/u,'only the pinned first-hop source may request this witness');
+    assert.match(source,/assertImmutable1828IdentityReceipt\(immutableStart\.receipt, immutableStart\.expected\)/u,'the real identity proof is validated even when the historical text log is intact');
+  });
+
   test('owned process cleanup requires two consecutive observed absences after termination', async () => {
     const observations = [[908], [], [908], [], []];
     let probes = 0;

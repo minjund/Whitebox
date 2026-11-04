@@ -265,3 +265,44 @@ errors. Helper exit and log inspection share the original 120-second deadline.
 Process-query failure, missing or duplicate markers, incomplete renderer/window
 evidence, or cleanup failure remain fatal. A previous run with missing records
 remains failed; this observation change does not reconstruct or waive evidence.
+
+
+### Immutable official 1.8.28 helper-start observation
+
+Official `minjund/Whitebox` v1.8.28, `Whitebox-Setup-1.8.28.exe`, 95,397,289 bytes,
+SHA-256 `7fc94cd9a60db6481873d49435dcd2801bdeca7a1ff78568e1fbb855cad46442`,
+contains `src/updateInstaller.js` SHA-256
+`99ed9e50ed30b72e8df3334763de2801680dd43cf229039f2bbf42d2f00dd793`.
+Its helper uses an append stream with `FileShare.ReadWrite`; its bootstrap uses
+`Add-Content`. Their concurrent append offsets can overwrite the helper-start
+record even when installation, renderer-ready relaunch and cleanup succeed.
+The official installer and extracted source were independently verified; no
+installed or extracted source bytes are patched.
+
+Only this pinned source's first automatic hop may use an independent start
+receipt. Capture it before parent shutdown, after exactly one successful real
+bootstrap acknowledgement: official helper/bootstrap script hashes, a single
+owned helper roster, two identical CIM PID/parent/image/command/start-time
+snapshots, the full exact helper arguments, and matching fresh helper-ready/PID
+sidecars with the same nonce. The identity assertions run even when the text
+start record is intact. The BOM-prefixed helper script hash must be
+`576db0c440f16f0eb9bbf546d1543a7bda522026e1a1489981c57bfafd2576b4` and bootstrap
+hash `ec57a934bda98f3dcdab6a065511f7d81569427177cb0e7382d090627e7e76d9`.
+
+If the helper-start text is missing, only the observed exact eleven-record
+sequence with the `=<expected version>` truncation is accepted alongside that
+receipt. Require the original ordered bootstrap start/readiness, all-parent
+shutdown, NSIS exit 0, exact installed EXE/app.asar version, relaunch PID/window,
+renderer-ready/relaunch-ready and owned-process/artifact cleanup invariants.
+Foreign versions, altered official bytes, ambiguous/reused identities, duplicate
+helpers, nonces, stages, failures, all timeouts and every other corruption fail.
+The candidate's own updater always retains the normal complete start-log check.
+Raw logs are never repaired or synthesized. Negative fixtures exercise these
+rejections, and all sixty packaged paths must pass on one fresh exact-source run.
+
+For immutable v2.0.16 recovery, only reviewed verification files are overlaid
+before testing and restored before packaging. The exact native popup edge wait
+and the new driver/negative fixtures are included in that verification allowlist;
+product/version/dependency/build-source changes remain forbidden. Run the full
+pre-merge sensitive gate and then dispatch the Release workflow from main with
+`release_tag: v2.0.16`; repeat the full packaged matrix and public-channel checks.
