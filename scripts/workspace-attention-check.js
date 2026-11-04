@@ -94,6 +94,17 @@ app.whenReady().then(async () => {
     await waitFor(() => [...popups.windows.values()].some(entry => entry.ready && entry.presented), 'background shell approval popup');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id, 'automatic popup must not switch the selected terminal');
     const entry = [...popups.windows.values()][0];
+    // Native macOS window placement and renderer-requested popup resizing can
+    // settle after `presented` is set. Wait for the same exact edge contract;
+    // a deadline still fails, with the observed geometry attached.
+    await waitFor(() => {
+      const bounds = entry.window.getBounds(), area = screen.getPrimaryDisplay().workArea;
+      return Math.abs(bounds.x + bounds.width - (area.x + area.width - EDGE_MARGIN)) <= 1
+        && Math.abs(bounds.y + bounds.height - (area.y + area.height - EDGE_MARGIN)) <= 1;
+    }, 'popup edge placement').catch(error => {
+      error.message += ' ' + JSON.stringify({ bounds: entry.window.getBounds(), area: screen.getPrimaryDisplay().workArea });
+      throw error;
+    });
     const bounds = entry.window.getBounds(), area = screen.getPrimaryDisplay().workArea;
     // A horizontal popup can start left of the screen center on small displays.
     // Its right and bottom edges still have to align with the work-area margins.
