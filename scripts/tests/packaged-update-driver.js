@@ -13,6 +13,20 @@ function registerPackagedUpdateDriverTests({ test }) {
       const match = source.match(new RegExp('^function ' + name + '\\([\\s\\S]*?^}', 'm'));
       assert(match, name); return match[0];
     };
+    let rosterOutput = '[2176]';
+    const roster = vm.runInNewContext(extract('immutable1828ScriptProcessIds') + '\nimmutable1828ScriptProcessIds', {
+      assert, powershell:'powershell.exe', process:{env:{}}, run:(_command,args,options)=>{
+        assert.match(args.at(-1), /\[Regex\]::Escape/u);
+        assert.match(args.at(-1), /-File/u);
+        assert.equal(options.env.WHITEBOX_INTEGRATION_SCRIPT,'C:\\fresh\\helper.ps1');
+        return {stdout:rosterOutput};
+      },
+    });
+    assert.equal(JSON.stringify(roster('C:\\fresh\\helper.ps1')),'[2176]');
+    rosterOutput='[]'; assert.equal(JSON.stringify(roster('C:\\fresh\\helper.ps1')),'[]');
+    for (const invalid of ['', '{}', '[2176,2176]', '["2176"]', '[0]', '[-1]']) {
+      rosterOutput=invalid; assert.throws(()=>roster('C:\\fresh\\helper.ps1'));
+    }
     const validate = vm.runInNewContext(extract('assertImmutable1828IdentityReceipt') + '\n' + extract('assertImmutable1828StartReceipt')
       + '\n(payload) => { const p=JSON.parse(payload); return assertImmutable1828StartReceipt(p.lines,p.receipt,p.expected); }', { assert, crypto: require('node:crypto') });
     const fixture = () => {

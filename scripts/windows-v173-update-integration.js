@@ -693,8 +693,8 @@ function assertCompletedInstall(logPath, options = {}) {
     assert.equal(path.resolve(logPath), path.join(testRoot, 'v173-first-hop-downloads', 'install-update.log'));
     assert.equal(executableVersion(installedExecutable), options.expectedVersion);
     assert.equal(packagedMetadata(installedAsar).version, options.expectedVersion);
-    assert.deepStrictEqual(runningProcessIdsReferencing(expected.helperPath), []);
-    assert.deepStrictEqual(runningProcessIdsReferencing(expected.bootstrapPath), []);
+    assert.deepStrictEqual(immutable1828ScriptProcessIds(expected.helperPath), []);
+    assert.deepStrictEqual(immutable1828ScriptProcessIds(expected.bootstrapPath), []);
     assertImmutable1828StartReceipt(lines, receipt, { ...expected, relaunchPid: options.relaunchPid });
     console.log(`PASS immutable 1.8.28 overwritten helper-start record: exact official scripts, authenticated PID/parent/arguments, fresh nonce, one acknowledged bootstrap; installed version, renderer-ready relaunch and cleanup still required; helperPid=${expected.helperPid}`);
   } else assert.deepStrictEqual(starts, [expectedStart], 'Exactly one expected packaged helper must run.');
@@ -1003,6 +1003,24 @@ async function downloadWithFrozenUpdater(updaterModule, downloadsDir) {
   return downloaded.downloadedPath;
 }
 
+function immutable1828ScriptProcessIds(scriptPath) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$escaped = [Regex]::Escape($env:WHITEBOX_INTEGRATION_SCRIPT)',
+    "$pattern = '(?:^|\\s)-File\\s+(?:\"' + $escaped + '\"|' + $escaped + ')(?=\\s|$)'",
+    "$records = @(Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" -ErrorAction Stop)",
+    '$ids = @($records | Where-Object { [Regex]::IsMatch([string]$_.CommandLine, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase) } | ForEach-Object { [int]$_.ProcessId })',
+    '[Console]::Write((ConvertTo-Json -InputObject @($ids) -Compress))',
+  ].join('\n');
+  const ids = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, WHITEBOX_INTEGRATION_SCRIPT: scriptPath }, timeout: 30000,
+  }).stdout.replace(/^\uFEFF/u, '').trim());
+  assert(Array.isArray(ids));
+  assert(ids.every(pid => Number.isSafeInteger(pid) && pid > 0));
+  assert.equal(new Set(ids).size, ids.length);
+  return ids.sort((a, b) => a - b);
+}
+
 function captureImmutable1828HelperIdentity(pid) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -1106,7 +1124,7 @@ async function launchPackagedInstaller(installerModule, options) {
               readySignal: { helperPid: Number(signal.helperPid), tokenHash: tokenHash(signal.token) },
               pidSidecar: { helperPid: Number(helperIdentity.helperPid), tokenHash: tokenHash(helperIdentity.token) },
               boundaryStops: linesStarting(boundaryLines, 'allAppProcessesStopped='), boundaryInstalls: linesStarting(boundaryLines, 'exitCode='),
-              parentAliveAtAcknowledgement: processAlive(options.parentPid), helperRoster: runningProcessIdsReferencing(capturedHelperPath), identities },
+              parentAliveAtAcknowledgement: processAlive(options.parentPid), helperRoster: immutable1828ScriptProcessIds(capturedHelperPath), identities },
             expected: { sourceVersion: options.immutableSource.version, parentPid: options.parentPid, version: targetVersion,
               helperPid, bootstrapPid: bootstrapChild.pid, imagePath: canonicalExistingPath(powershell), startedAtMs, acknowledgedAtMs: Date.now(),
               tokenHash: tokenHash(capturedReadyToken), helperPath: capturedHelperPath, bootstrapPath: capturedBootstrapPath,
