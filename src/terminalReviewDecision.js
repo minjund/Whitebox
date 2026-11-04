@@ -58,7 +58,7 @@ function assessDecision(value, { source, supported, unverified = [], lifecycle =
 
 function repairPrompt(prompt, issues) {
   // Do not feed an invalid draft back as instructions or as new evidence.
-  return `${prompt}\nQUALITY REPAIR: The previous response failed these mechanical checks: ${issues.join(', ')}. Generate a complete replacement from the original evidence. Include a valid decision object. Preserve uncertainty and exact quotations. Do not remove a material limitation to meet the length budget; shorten lower-priority explanation instead.`;
+  return `${prompt}\nQUALITY REPAIR: The previous response failed these mechanical checks: ${issues.join(', ')}. Generate a complete replacement from the original evidence in the requested content schema. Return one complete JSON object with a tasks array containing exactly one task for the current REQUEST, including all of its requirements. Include a decision object only when requested. Preserve uncertainty and exact quotations. Do not remove a material limitation to meet the length budget; shorten lower-priority explanation instead.`;
 }
 
 function combinedUsage(first, second) {

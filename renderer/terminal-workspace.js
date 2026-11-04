@@ -13,6 +13,7 @@
     folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11H3Z"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     terminal: '<path d="m5 6 6 6-6 6m9 0h5"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5m-18 5 9 5 9-5"/>',
     split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
     down: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>',
     solo: '<rect x="3" y="4" width="18" height="16" rx="2"/>',
@@ -33,12 +34,15 @@
   const icon = name => `<svg class="wb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
   const uuid = () => crypto.randomUUID();
   const base = path => String(path).split(/[\\/]/u).filter(Boolean).at(-1) || path;
-  let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false;
+  let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false, restoringId = '';
   let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
   let reviewView = 'current';
   let reviewTask = null;
   const reanalysisRequests = new Map();
+  let contentHistory = [];
+  const explainedTasks = (id, creationId, tasks = []) => tasks.map(task =>
+    window.WhiteboxReviewDecision.applyHistoryContent(task, contentHistory, id, creationId));
   let pinnedPanels = [];
   let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
@@ -65,6 +69,8 @@
   }
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
   const workStates = new Map();
+  const terminalUsageHistory = new Map();
+  let backgroundPopover = null;
   const acknowledgedCompletions = new Map();
   const root = document.createElement('div');
   root.id = 'terminalWorkspace';
@@ -103,7 +109,7 @@
       <footer><span id="wbReviewModel"></span><button data-action="refresh" title="지금 검토" aria-label="현재 터미널 다시 검토">${icon('refresh')} 다시 분석</button></footer>
     </aside>
     <div id="wbParking" hidden></div>
-    <dialog id="wbArrange"><form method="dialog"><header><h2>패널 분리 · 화면 배치</h2><button aria-label="닫기">${icon('close')}</button></header><p>패널을 분리해도 같은 화면에서 함께 봅니다. 다른 패널은 테두리 색으로 구분합니다.</p><label>함께 볼 패널<select id="wbMoveTarget"></select></label><label>배치<select id="wbMoveDirection"><option value="right">오른쪽에 배치</option><option value="down">아래에 배치</option><option value="left">왼쪽에 배치</option><option value="up">위에 배치</option></select></label><div class="wb-dialog-actions"><button type="button" data-action="detach-panel">패널 분리</button><button type="button" data-action="join-panel">같은 패널로 묶기</button><button value="cancel">취소</button><button type="button" data-action="pin-arranged">함께 보기</button><button type="button" data-action="move-terminal">분할 배치</button></div></form></dialog>
+    <dialog id="wbArrange"><form method="dialog"><header><h2>패널 분리 · 화면 배치</h2><button aria-label="닫기">${icon('close')}</button></header><p>패널을 분리해도 같은 화면에서 함께 봅니다. 다른 패널은 테두리 색으로 구분합니다.</p><label>함께 볼 패널<select id="wbMoveTarget"></select></label><label>배치<select id="wbMoveDirection"><option value="right">오른쪽에 배치</option><option value="down">아래에 배치</option><option value="left">왼쪽에 배치</option><option value="up">위에 배치</option></select></label><div class="wb-dialog-actions"><button type="button" data-action="detach-panel">패널 분리</button><button type="button" data-action="join-panel">같은 패널로 묶기</button><button value="cancel">취소</button><button type="button" data-action="move-terminal">분할 배치</button></div></form></dialog>
     <dialog id="wbSettings" aria-labelledby="wbSettingsTitle"><form method="dialog" class="wb-settings-form">
       <header class="wb-settings-header"><div class="wb-settings-heading"><span class="wb-settings-appmark">w.</span><div><h2 id="wbSettingsTitle">설정</h2><small>Whitebox</small></div></div><span id="wbSettingsClose"><button aria-label="설정 닫기">${icon('close')}</button></span></header>
       <div class="wb-settings-layout"><nav class="wb-settings-nav" aria-label="설정 항목">
@@ -161,6 +167,11 @@
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
   const $ = selector => root.querySelector(selector);
+  const backgroundPopup = document.createElement('section');
+  backgroundPopup.id = 'wbBackgroundPopover'; backgroundPopup.className = 'wb-background-popover'; backgroundPopup.hidden = true;
+  backgroundPopup.setAttribute('role', 'region'); backgroundPopup.setAttribute('aria-labelledby', 'wbBackgroundHeading');
+  backgroundPopup.innerHTML = msg`<header><strong id="wbBackgroundHeading">백그라운드 작업 <span id="wbBackgroundCount"></span></strong><button type="button" data-close-background aria-label="작업 내역 닫기">${icon('close')}</button></header><p id="wbBackgroundOwner"></p><ul id="wbBackgroundJobs"></ul><p id="wbBackgroundMore" hidden></p>`;
+  root.append(backgroundPopup);
   function settingsSection(name = 'general') {
     if (!$(`[data-settings-page="${name}"]`)) return;
     if (name !== 'connections') concealJevKey();
@@ -430,7 +441,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -440,11 +451,12 @@
   function retainReview(session, value) {
     if (!value?.result || !Array.isArray(value.result.tasks)) return savedReview(session);
     const previous = savedReview(session);
-    const digest = JSON.stringify(value.result);
+    const incoming = value.result.tasks.filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+    const digest = JSON.stringify({ ...value.result, tasks: incoming });
     if (previous?.digest === digest && previous.providerPid === value.providerPid) return previous;
     const sameRun = previous && previous.provider === value.provider && previous.providerPid === value.providerPid;
-    const tasks = sameRun ? [...previous.result.tasks] : [];
-    for (const task of value.result.tasks) {
+    const tasks = sameRun ? previous.result.tasks.filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)) : [];
+    for (const task of incoming) {
       const index = task.taskId ? tasks.findIndex(item => item.taskId === task.taskId)
         : task.requestQuote ? tasks.findIndex(item => !item.taskId && item.requestQuote === task.requestQuote && item.analysisId === task.analysisId) : -1;
       if (index < 0) tasks.push(task);
@@ -474,7 +486,8 @@
     const review = reviews.get(id);
     const tasks = review?.result?.tasks || savedReview(session)?.result?.tasks || [];
     const namedTask = [...tasks].reverse().find(task => !task.recordOnly && !task.deferred
-      && !window.WhiteboxTerminalReviewTurns.isStartupRequest(task.request)
+      && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)
+      && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.summary)
       && task.analysisDepth !== 'deferred' && typeof task.summary === 'string' && task.summary.trim());
     return namedTask?.summary.trim() || review?.provider || session?.title || t('터미널');
   }
@@ -502,18 +515,132 @@
   function stateBadge(value, className = 'wb-terminal-state') {
     return `<span class="${className}" data-state="${value.state}" role="img" aria-label="${esc(value.label)}" title="${esc(value.label)}"><i aria-hidden="true"></i></span>`;
   }
+  function terminalBackground(id) {
+    const session = sessions.get(id), activity = workStates.get(id), value = activity?.background;
+    if (session?.status !== 'running' || activity?.creationId !== session.creationId || activity.pid !== session.pid
+      || Date.now() - activity.observedAt >= 5000 || !Number.isSafeInteger(value?.count) || value.count <= 0 || !Array.isArray(value.items)) return null;
+    const items = value.items.filter(item => item && typeof item.id === 'string' && typeof item.label === 'string'
+      && ['running', 'waiting'].includes(item.state)).slice(0, 32);
+    return items.length ? { ...value, items, activity } : null;
+  }
+  function backgroundBadge(id) {
+    const value = terminalBackground(id);
+    if (!value) return '';
+    const label = `${t('백그라운드 작업')} ${value.count.toLocaleString(window.WhiteboxI18n.getLocaleTag())} · ${t('작업 내역 보기')}`;
+    return `<button type="button" class="wb-background-badge ${value.count > 9 ? 'is-many' : ''}" data-background-terminal="${esc(id)}" title="${esc(label)}" aria-label="${esc(title(id))} · ${esc(label)}" aria-expanded="${backgroundPopover?.id === id}" aria-controls="wbBackgroundPopover">${icon('layers')}<span>${value.count > 99 ? '99+' : value.count}</span></button>`;
+  }
+  function closeBackgroundPopover(restoreFocus = false) {
+    const id = backgroundPopover?.id;
+    backgroundPopover = null; backgroundPopup.hidden = true;
+    root.querySelectorAll('[data-background-terminal]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+    if (restoreFocus && id) (root.querySelector(`[data-background-terminal="${CSS.escape(id)}"]`) || root.querySelector(`[data-instance="${CSS.escape(id)}"]`))?.focus();
+  }
+  function positionBackgroundPopover() {
+    if (!backgroundPopover || backgroundPopup.hidden) return;
+    const button = root.querySelector(`[data-background-terminal="${CSS.escape(backgroundPopover.id)}"]`);
+    if (!button) { closeBackgroundPopover(backgroundPopup.contains(document.activeElement)); return; }
+    const anchor = button.getBoundingClientRect(), row = button.closest('.wb-instance-row').getBoundingClientRect(), rect = backgroundPopup.getBoundingClientRect();
+    const left = row.right + 10 + rect.width <= innerWidth - 12 ? row.right + 10 : row.left - rect.width - 10;
+    backgroundPopup.style.left = `${Math.max(12, Math.min(left, innerWidth - rect.width - 12))}px`;
+    backgroundPopup.style.top = `${Math.max(12, Math.min(anchor.top - 8, innerHeight - rect.height - 12))}px`;
+  }
+  function renderBackgroundPopover() {
+    if (!backgroundPopover) return;
+    const value = terminalBackground(backgroundPopover.id), activity = value?.activity;
+    if (!value || activity.creationId !== backgroundPopover.creationId || activity.pid !== backgroundPopover.pid
+      || activity.providerPid !== backgroundPopover.providerPid || activity.conversationId !== backgroundPopover.conversationId) {
+      closeBackgroundPopover(backgroundPopup.contains(document.activeElement)); return;
+    }
+    const elapsed = at => {
+      const start = Date.parse(at);
+      if (!Number.isFinite(start)) return '';
+      const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      return seconds >= 60 ? `${Math.floor(seconds / 60)}${t('분')} ${seconds % 60}${t('초')}` : `${seconds}${t('초')}`;
+    };
+    $('#wbBackgroundCount').textContent = value.count.toLocaleString(window.WhiteboxI18n.getLocaleTag());
+    $('#wbBackgroundOwner').textContent = title(backgroundPopover.id);
+    const markup = value.items.map(item => `<li><div>${icon(item.kind === 'agent' ? 'layers' : 'terminal')}<span>${esc(item.label)}</span></div><small>${t(item.state === 'waiting' ? '입력 대기' : '실행 중')}<span>${esc(elapsed(item.startedAt))}</span></small></li>`).join('');
+    if ($('#wbBackgroundJobs').innerHTML !== markup) $('#wbBackgroundJobs').innerHTML = markup;
+    const more = Math.max(0, value.count - value.items.length);
+    $('#wbBackgroundMore').hidden = !more;
+    $('#wbBackgroundMore').textContent = more ? `${t('추가 작업')} ${more}` : '';
+    backgroundPopup.hidden = false; positionBackgroundPopover();
+  }
+  function openBackgroundPopover(id) {
+    if (backgroundPopover?.id === id) { closeBackgroundPopover(true); return; }
+    const value = terminalBackground(id);
+    if (!value) return;
+    const { creationId, pid, providerPid, conversationId } = value.activity;
+    backgroundPopover = { id, creationId, pid, providerPid, conversationId };
+    root.querySelectorAll('[data-background-terminal]').forEach(button => button.setAttribute('aria-expanded', String(button.dataset.backgroundTerminal === id)));
+    renderBackgroundPopover();
+    backgroundPopup.querySelector('[data-close-background]').focus();
+  }
+  document.addEventListener('pointerdown', event => {
+    if (backgroundPopover && !backgroundPopup.contains(event.target) && !event.target.closest('[data-background-terminal]')) closeBackgroundPopover();
+  }, true);
+  document.addEventListener('focusin', event => {
+    if (backgroundPopover && !backgroundPopup.contains(event.target) && !event.target.closest('[data-background-terminal]')) closeBackgroundPopover();
+  });
+  backgroundPopup.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeBackgroundPopover(true); }
+  });
+  window.addEventListener('resize', positionBackgroundPopover);
+  new ResizeObserver(positionBackgroundPopover).observe($('.wb-sidebar'));
+  $('.wb-sidebar-scroll').addEventListener('scroll', () => closeBackgroundPopover(), { passive: true });
   function renderPaneTabs() {
     const markup = layout.ids(canvasLayout()).map(id => `<button role="tab" aria-selected="${id === activeId()}" tabindex="${id === activeId() ? 0 : -1}" class="wb-tab ${id === activeId() ? 'active' : ''}" data-pane-tab="${esc(id)}" aria-controls="${esc(panes.get(id)?.node.id || '')}"><span class="wb-tab-icon">${icon('terminal')}</span><span class="wb-tab-title" title="${esc(title(id))}">${esc(title(id))}</span></button>`).join('');
     if ($('#wbTabs').innerHTML !== markup) $('#wbTabs').innerHTML = markup;
+  }
+  function validTerminalUsage(usage) {
+    return usage && ['input', 'output', 'cachedInput', 'cacheWrite', 'total'].every(key => Number.isSafeInteger(usage[key]) && usage[key] >= 0);
+  }
+  function rememberTerminalUsage(id, activity) {
+    const session = sessions.get(id);
+    if (!session || activity?.creationId !== session.creationId || activity.pid !== session.pid) return false;
+    // A stopped shell loses its PID without starting a new conversation. Keep
+    // its final counters, and ignore any late/live activity for the archive.
+    if (stoppedArchiveSession(session)) return false;
+    const previous = terminalUsageHistory.get(id);
+    const replaced = previous && (previous.creationId !== session.creationId || previous.pid !== session.pid
+      || activity.providerPid && previous.providerPid !== activity.providerPid
+      || activity.conversationId && previous.conversationId !== activity.conversationId);
+    if (replaced) terminalUsageHistory.delete(id);
+    if (activity.usageStatus !== 'observed' || !validTerminalUsage(activity.usage)) return Boolean(replaced);
+    const record = { id, creationId: session.creationId, pid: session.pid, provider: activity.provider,
+      providerPid: activity.providerPid, conversationId: activity.conversationId, usage: activity.usage };
+    if (JSON.stringify(previous) === JSON.stringify(record)) return Boolean(replaced);
+    terminalUsageHistory.set(id, record); return true;
+  }
+  function terminalTokens(id) {
+    const session = sessions.get(id), record = terminalUsageHistory.get(id), activity = workStates.get(id);
+    const unavailable = activity?.creationId === session?.creationId && activity.pid === session?.pid && activity.usageStatus === 'unavailable';
+    if (!session || unavailable || !record || record.creationId !== session.creationId
+      || record.pid !== session.pid && !stoppedArchiveSession(session) || !validTerminalUsage(record.usage)) {
+      return { text: msg`— 토큰`, detail: t('이 터미널의 AI 토큰 사용량을 아직 확인하지 못했습니다.') };
+    }
+    const usage = record.usage, locale = window.WhiteboxI18n.getLocaleTag();
+    const full = value => value.toLocaleString(locale);
+    const amount = usage.total < 10000 ? full(usage.total) : new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(usage.total);
+    const text = `${usage.partial ? '≥' : ''}${amount} ${t('토큰')}`;
+    const detail = [t('이 터미널에 연결된 AI 대화의 누적 사용량입니다.'),
+      `${t('전체')} ${full(usage.total)} · ${t('입력')} ${full(usage.input)} · ${t('출력')} ${full(usage.output)}`,
+      `${t('캐시 읽기')} ${full(usage.cachedInput)} · ${t('캐시 쓰기')} ${full(usage.cacheWrite)}`,
+      t('캐시 입력은 입력 합계에 포함되며 중복 합산하지 않습니다.'),
+      usage.partial ? t('기록 일부만 확인되어 관측된 사용량의 하한을 표시합니다.') : '',
+      Number.isFinite(Date.parse(usage.observedAt)) ? `${t('마지막 확인')}: ${new Date(usage.observedAt).toLocaleString(locale)}` : '',
+    ].filter(Boolean).join('\n');
+    return { text, detail };
   }
   function refreshPaneChrome() {
     const visiblePanels = new Set(layout.ids(canvasLayout()).map(panelFor).filter(Boolean));
     for (const [id, pane] of panes) {
       const panel = panelFor(id), separated = visiblePanels.size > 1 && visiblePanels.has(panel);
       const label = title(id), value = terminalState(id), color = panelColor(panel);
+      const tokens = terminalTokens(id);
       const expandTitle = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
       const splitView = layout.ids(canvasLayout()).length > 1;
-      const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, expanded && id === activeId(), expandTitle]);
+      const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, tokens, expanded && id === activeId(), expandTitle]);
       if (pane.chromeKey === key) continue;
       pane.chromeKey = key;
       pane.node.classList.toggle('is-separate-panel', separated);
@@ -525,6 +652,9 @@
       panelBadge.removeAttribute('title');
       pane.node.querySelector('.wb-pane-title').textContent = label;
       pane.node.querySelector('.wb-pane-title').title = label;
+      const tokenBadge = pane.node.querySelector('.wb-pane-tokens');
+      tokenBadge.textContent = tokens.text; tokenBadge.title = tokens.detail;
+      tokenBadge.setAttribute('aria-label', `${tokens.text}. ${tokens.detail}`);
       pane.node.setAttribute('aria-label', `${label} ${t('터미널')}`);
       pane.node.querySelector('[data-solo-terminal]').hidden = !splitView;
       const expandButton = pane.node.querySelector('[data-expand-terminal]');
@@ -597,11 +727,11 @@
   function instanceRows(owner) {
     return owner.tabs.map(item => {
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
-      const shown = ids.length > 0 && ids.every(id => layout.ids(canvasLayout()).includes(id));
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
-        return msg`<div class="wb-instance-row"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button><button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
-      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button><button class="wb-panel-together" data-pin-panel="${esc(item.id)}" aria-pressed="${shown}" title="${t(shown ? '함께 보기 해제' : '이 패널 함께 보기')}" aria-label="${t(shown ? '함께 보기 해제' : '이 패널 함께 보기')}" ${busy || item.pending ? 'disabled' : ''}>${icon('split')}<span>${t('함께 보기')}</span></button></div></section>`;
+        const background = backgroundBadge(id);
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
+      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
@@ -612,6 +742,7 @@
     const independentMarkup = instanceRows(standalone) || t('<p class="wb-no-instances">프로젝트 없는 세션이 여기에 표시됩니다.</p>');
     if (projectsMarkup !== lastProjectsMarkup) { $('#wbSpaces').innerHTML = projectsMarkup; lastProjectsMarkup = projectsMarkup; }
     if (independentMarkup !== lastInstancesMarkup) { $('#wbInstances').innerHTML = independentMarkup; lastInstancesMarkup = independentMarkup; }
+    renderBackgroundPopover();
   }
 
   $('#wbProjectSearch').addEventListener('input', event => { projectQuery = event.target.value.trim().toLocaleLowerCase(); renderInstances(); });
@@ -863,7 +994,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><span class="wb-pane-title"></span><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-trash-instance="${esc(session.id)}" title="종료하고 휴지통으로 이동" aria-label="종료하고 휴지통으로 이동">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-close-terminal="${esc(session.id)}" title="터미널 닫기" aria-label="터미널 닫기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -946,27 +1077,6 @@
     pinnedPanels = pinnedPanels.filter(id => all.some(panel => panel.id === id));
     return [...new Set([...pinnedPanels.map(id => all.find(panel => panel.id === id)), tab()].filter(Boolean))];
   }
-  function togglePanelView(id) {
-    const owner = panelOwner(id), target = owner?.tabs.find(panel => panel.id === id);
-    if (!target) return;
-    if (!tab()) { activatePanel(owner, target); renderLayout(false); return; }
-    const current = canvasLayout(), targetIds = layout.ids(target.layout);
-    const shown = targetIds.every(member => layout.ids(current).includes(member));
-    if (shown && target !== tab()) {
-      for (const member of targetIds) space().viewLayout = layout.remove(space().viewLayout, member);
-    } else if (!shown) {
-      space().viewLayout = layout.reconcile(current, [target.layout], new Set([...layout.ids(current), ...targetIds]));
-    } else {
-      // Hiding the focused panel retains one of the other visible panels.
-      const otherId = layout.ids(current).find(member => !targetIds.includes(member));
-      if (!otherId) return;
-      for (const member of targetIds) space().viewLayout = layout.remove(space().viewLayout, member);
-      selectPane(otherId);
-    }
-    pinnedPanels = [...new Set(layout.ids(space().viewLayout).map(member => panelFor(member)?.id).filter(Boolean))];
-    rememberCanvas();
-    expanded = false; root.classList.remove('terminal-expanded'); renderLayout(false);
-  }
   function renderLayout(focus = true) {
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
@@ -1025,7 +1135,7 @@
       renderLayout(false);
       await mounted;
       // Retain the released ConPTY post-mount PID reconciliation.
-      const current = await api.terminalGet(session.id);
+      const current = await api.terminalGet(session.id, false);
       if (current?.creationId === session.creationId) sessions.set(session.id, current);
       refreshPaneChrome(); renderInstances();
       if (tab() === next) activeFocus();
@@ -1059,28 +1169,55 @@
   function removeTerminalLocally(id) {
     const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove();
     panes.delete(id); sessions.delete(id); reviews.delete(id); reviewHistory.delete(id); submissions.delete(id); interruptions.delete(id);
+    terminalUsageHistory.delete(id);
     trash = trash.filter(item => item.id !== id);
     detachFromLayout(id);
   }
 
+  async function closeInstance(id) {
+    if (busy) return;
+    const session = sessions.get(id);
+    if (!session) return;
+    busy = true; renderNav();
+    try {
+      const live = await api.terminalGet(id, false);
+      if (live) {
+        if (live.creationId !== session.creationId || live.pid !== session.pid) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
+        await api.terminalClose(id);
+        if (await api.terminalGet(id, false)) throw new Error(t('터미널 제거를 확인하지 못해 창을 닫지 않았습니다.'));
+      }
+      if (sessions.get(id)?.creationId === session.creationId) removeTerminalLocally(id);
+      renderLayout(false); renderTrash();
+      if ($('#wbError').dataset.scope === 'close') $('#wbError').hidden = true;
+    } catch (error) { report(error, 'close'); }
+    finally { busy = false; renderNav(); }
+  }
+
   function trashed(id) { return trash.some(item => item.id === id && trashSession(item)); }
+  function stoppedArchiveSession(session) {
+    return Boolean(session && !session.pid && !session.terminationPending && !session.terminationUncertain
+      && ['stopped', 'exited', 'failed'].includes(session.status));
+  }
   function archiveIdentityMatches(session, item) {
-    return Boolean(session && session.creationId === item.creationId && (item.sessionStopped
-      ? !session.pid && !session.terminationPending && !session.terminationUncertain && ['stopped', 'exited', 'failed'].includes(session.status)
-      : !item.pid || session.pid === item.pid));
+    return Boolean(session && session.creationId === item.creationId && (stoppedArchiveSession(session)
+      || !item.sessionStopped && session.status === 'running' && (!item.pid || session.pid === item.pid)));
   }
   function trashSession(item) {
     const session = sessions.get(item.id);
     return archiveIdentityMatches(session, item) ? session : null;
   }
   function renderTrash() {
+    const opened = new Set([...$('#wbTrashList').querySelectorAll('details[data-trash-content][open]')].map(node => node.dataset.trashContent));
     $('#wbTrashCount').textContent = String(trash.length);
     $('[data-action="trash-empty"]').disabled = busy || trash.length === 0;
     $('#wbTrashList').innerHTML = [...trash].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)).map(item => {
       const session = trashSession(item);
       const provider = item.provider === 'claude' ? 'Claude' : item.provider === 'codex' ? 'Codex' : t('일반 셸');
-      const restorable = session?.status === 'running' || item.sessionStopped && Boolean(session);
-      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? item.sessionStopped ? t('세션 종료됨 · 출력과 검토 기록 보관') : session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${restorable ? '' : 'disabled'} aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restorable ? item.sessionStopped ? t('종료된 기록 복원') : msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div></article>`;
+      const restorable = Boolean(session && (session.status === 'running' || stoppedArchiveSession(session)));
+      const restoring = restoringId === item.id;
+      const history = explainedTasks(item.id, item.creationId, item.review?.result?.tasks).filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+      const contents = history.length ? `<details class="wb-trash-content" data-trash-content="${esc(item.id)}" ${opened.has(item.id) ? 'open' : ''}><summary>${esc(t('보관된 글과 분석 보기'))} (${history.length})</summary>${history.map(task => `<article class="wb-task"><h2>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</h2>${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: task.taskId || task.analysisId }) || `<p>${esc(t('AI 분석 없이 기록'))}</p><p>${esc(task.actual)}</p>`}</article>`).join('')}</details>` : '';
+      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? stoppedArchiveSession(session) ? t('세션 종료됨 · 출력과 검토 기록 보관') : session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${!busy && restorable ? '' : 'disabled'} aria-busy="${restoring}" aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restoring ? t('복원 중…') : restorable ? stoppedArchiveSession(session) ? t('종료된 기록 복원') : msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" ${busy ? 'disabled' : ''} aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div>${contents}</article>`;
     }).join('') || t('<div class="wb-trash-empty">휴지통이 비어 있습니다.</div>');
   }
 
@@ -1096,13 +1233,13 @@
       standalone: owner.standalone === true, cwd: owner.cwd, deletedAt: new Date().toISOString() };
     busy = true; renderNav();
     try {
-      const live = await api.terminalGet(id);
+      const live = await api.terminalGet(id, false);
       if (live) {
         if (live.creationId !== item.creationId || live.pid !== item.pid) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
         const stopped = await api.terminalStop(id);
         if (stopped?.creationId !== item.creationId || stopped.pid || stopped.status !== 'stopped'
           || stopped.terminationPending || stopped.terminationUncertain) throw new Error(t('세션 종료를 확인하지 못해 휴지통으로 옮기지 않았습니다.'));
-        const current = await api.terminalGet(id);
+        const current = await api.terminalGet(id, false);
         item.sessionStopped = true; item.pid = null;
         if (current && !archiveIdentityMatches(current, item)) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
         if (current) sessions.set(id, current); else sessions.delete(id);
@@ -1120,8 +1257,7 @@
       const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove(); panes.delete(id);
       detachFromLayout(id); renderLayout();
       // No model work is requested for a stopped archive.
-      try { await api.terminalReview?.({ id, creationId: item.creationId, enabled: false }); }
-      catch (error) { report(error); }
+      Promise.resolve().then(() => api.terminalReview?.({ id, creationId: item.creationId, enabled: false })).catch(report);
     } catch (error) { report(error, 'trash'); }
     finally { busy = false; renderNav(); renderTrash(); }
   }
@@ -1130,19 +1266,27 @@
     if (busy) return;
     const item = trash.find(item => item.id === id);
     if (!item) return;
-    busy = true;
+    busy = true; restoringId = id;
+    $('#wbTrashNotice').textContent = ''; renderTrash();
     try {
       // Verify the host's current identity, not a possibly stale renderer list.
       // Restoring stopped records is read-only; never spawn a shell or reconnect a dead PTY.
-      const session = await api.terminalGet(item.id);
-      if (!archiveIdentityMatches(session, item) || !item.sessionStopped && session.status !== 'running') {
+      // Fetch only identity/status here; the mount validates identity again and
+      // reads the potentially multi-MiB replay exactly once.
+      const session = await api.terminalGet(item.id, false);
+      if (!archiveIdentityMatches(session, item)) {
         throw new Error(t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.'));
       }
       sessions.set(session.id, session);
       await ensurePane(session, true);
-      if (item.review?.creationId === session.creationId && item.review?.pid === session.pid && Array.isArray(item.review?.result?.tasks)) reviewHistory.set(session.id, item.review);
+      const record = item.review || reviewHistory.get(session.id);
+      if (record?.id === session.id && record.creationId === session.creationId && Array.isArray(record.result?.tasks)
+        && (record.pid === session.pid || stoppedArchiveSession(session))) {
+        reviewHistory.set(session.id, stoppedArchiveSession(session)
+          ? { ...record, pid: null, sourcePid: record.sourcePid || item.sourcePid || record.pid, archived: true } : record);
+      }
       const history = savedReview(session);
-      if (history) reviews.set(session.id, { state: session.status === 'stopped' ? 'archived' : 'watching', provider: history.provider, providerPid: history.providerPid, result: history.result, restored: true });
+      if (history) reviews.set(session.id, { state: stoppedArchiveSession(session) ? 'archived' : 'watching', provider: history.provider, providerPid: history.providerPid, result: history.result, restored: true });
       let owner = item.standalone ? standalone : spaces.find(owner => owner.id === item.projectId) || spaces.find(owner => owner.cwd === item.cwd);
       if (!owner) {
         owner = { id: uuid(), cwd: item.cwd, name: item.projectName, tabs: [], activeTab: '', nextNumber: 1 };
@@ -1154,14 +1298,15 @@
       trash = trash.filter(record => record !== item);
       $('#wbTrash').close();
       renderLayout();
-      await captureReviews();
+      // Layout publishes membership asynchronously. Read-only restoration does
+      // not wait for unrelated collaboration/review work or request a model call.
     } catch (error) { $('#wbTrashNotice').textContent = msg`복구하지 못했습니다: ${error.message}`; }
-    finally { busy = false; renderTrash(); }
+    finally { busy = false; restoringId = ''; renderNav(); }
   }
 
   async function deleteTrashItem(item) {
     if (!trash.includes(item)) return;
-    const live = await api.terminalGet(item.id);
+    const live = await api.terminalGet(item.id, false);
     if (live) {
       if (!archiveIdentityMatches(live, item)) {
         throw new Error(t('터미널 세션이 바뀌어 삭제하지 않았습니다.'));
@@ -1171,6 +1316,7 @@
     } else {
       trash = trash.filter(record => record !== item);
       reviewHistory.delete(item.id);
+      terminalUsageHistory.delete(item.id);
     }
     save();
   }
@@ -1299,10 +1445,17 @@
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
-    const latestAnalysis = value?.result?.tasks?.at(-1);
+    const tasks = explainedTasks(id, sessions.get(id)?.creationId, value?.result?.tasks).filter(task => (task.content || !task.deferred && task.analysisDepth !== 'deferred')
+      && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+    const latestAnalysis = tasks.at(-1);
     const analyst = !latestAnalysis?.typedAnalysis && latestAnalysis?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
     $('#wbReviewModel').textContent = autoReview || value?.manual ? `${{ claude: 'Claude', codex: 'Codex' }[analyst] || t('자동 분석')}${!latestAnalysis?.typedAnalysis && latestAnalysis?.analysisModel ? ` · ${latestAnalysis.analysisModel}` : ''}` : t('자동 분석 꺼짐');
-    const state = !autoReview && !value?.manual ? 'paused' : value?.state || 'watching';
+    const nonTaskCurrent = window.WhiteboxTerminalReviewTurns.isNonTaskRequest(value?.preview?.request)
+      || value?.currentTaskId && value.result?.tasks?.some(task => task.taskId === value.currentTaskId
+        && window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+    const observedState = nonTaskCurrent && ['awaiting-answer', 'collecting', 'reviewing'].includes(value?.state)
+      ? tasks.length ? 'ready' : 'watching' : value?.state || 'watching';
+    const state = !autoReview && !value?.manual ? 'paused' : observedState;
     const analyzing = state === 'reviewing';
     const rateLimited = value?.retryAt > Date.now();
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(state);
@@ -1323,8 +1476,6 @@
     if (value?.message && ['error', 'unbound'].includes(state)) html += `<p class="wb-review-notice">${esc(value.message)}</p>`;
     // Deferred entries are bookkeeping, not analysis. Keep them in history data
     // but never echo the user's request as an empty result card.
-    const tasks = (value?.result?.tasks || []).filter(task => !task.deferred && task.analysisDepth !== 'deferred'
-      && !window.WhiteboxTerminalReviewTurns.isStartupRequest(task.request));
     if (!tasks.length && (pending || value?.result?.tasks?.length)) {
       // The activity indicator is the entire waiting UI.
     } else if (!tasks.length && value?.result && !['error', 'awaiting-answer'].includes(state)) {
@@ -1340,7 +1491,7 @@
         const time = Number.isFinite(observed.getTime()) ? `<time class="wb-task-time" datetime="${observed.toISOString()}" title="${esc(observed.toLocaleString(window.WhiteboxI18n.getLocaleTag()))}">${esc(observed.toLocaleTimeString(window.WhiteboxI18n.getLocaleTag(), { hour: '2-digit', minute: '2-digit' }))}</time>` : '';
         const lifecycleLabel = task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록') : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';
         const lifecycle = lifecycleLabel ? `<p class="wb-record-label">${lifecycleLabel}</p>` : '';
-        if (task.recordOnly || task.typedAnalysis) {
+        if (!task.content && (task.recordOnly || task.typedAnalysis)) {
           const record = msg`<article class="wb-task wb-record-only"><div class="wb-task-title"><h2>${esc(task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}${lifecycle}<p class="wb-record-label">${t(task.typedAnalysis ? "이전 Jev 기록 · 재검토 필요" : task.analysisGate ? "LLM 분석 없이 작업 기록 표시" : task.deferred ? "근거가 확보되면 분석합니다" : "AI 분석 없이 기록")}</p><p>${esc(task.typedAnalysis ? t('이전 Jev 결과에는 LLM 판단이 없습니다. 다시 검토해 주세요.') : task.actual)}</p></article>`;
           return index === 0 ? record : msg`<details class="wb-history" data-review-request="${esc(taskKey)}"><summary><strong>${esc(task.request)}</strong>${analysisTokens(task, value.result, true)}</summary>${record}</details>`;
         }
@@ -1350,14 +1501,14 @@
 
         const brief = window.WhiteboxReviewDecision.render(task, { t, esc, taskKey });
         const card = msg`<article class="wb-task">
-          <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(task.summary || task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
+          <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
           ${lifecycle}
           ${brief || `<div class="wb-request-comparison"><div class="wb-comparison-row"><h3>${t('요청한 일')}</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}`}
           ${task.decisionIssues?.length ? `<p class="wb-evidence-limit">${t('판단 요약을 확인하지 못해 작업 기록을 표시합니다.')}</p>` : ''}
           ${task.nextStep ? msg`<button class="wb-next-request" data-followup="${esc(taskKey)}">확인할 내용으로 다음 요청 준비</button>` : ''}
           <details class="wb-task-details" data-review-request="${esc(`details:${taskKey}`)}"><summary>요청과 분석 기록</summary>
             <div class="wb-task-section"><h3>내가 보낸 요청</h3><p>${esc(task.request)}</p></div>
-            ${brief ? `<div class="wb-task-section"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}<div class="wb-task-section"><h3>${t('판단의 근거 기록')}</h3>${task.decision.reasons.map(reason => `<blockquote>${esc(reason.evidenceQuote)}</blockquote>`).join('')}</div>` : ''}
+            ${brief ? `<div class="wb-task-section"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}<div class="wb-task-section"><h3>${t('판단의 근거 기록')}</h3>${(task.decision?.reasons || []).map(reason => `<blockquote>${esc(reason.evidenceQuote)}</blockquote>`).join('')}</div>` : ''}
             <div class="wb-verdict ${alignment}"><span class="wb-check-label">요청 충족 여부</span><strong>${label}</strong><p>${esc(task.explanation)}</p></div>
             ${task.understanding ? msg`<div class="wb-task-section"><h3>어떻게 동작하나요?</h3><p>${esc(task.understanding)}</p></div>` : ''}
             ${task.impact ? msg`<div class="wb-task-section"><h3>사용자에게 어떤 영향이 있나요?</h3><p>${esc(task.impact)}</p></div>` : ''}
@@ -1366,7 +1517,7 @@
           </details>
         </article>`;
         if (index === 0) return card;
-        return msg`<details class="wb-history" data-review-request="${esc(`${task.taskId || task.analysisId || task.observedAt || ''}:${task.request}`)}"><summary><span class="wb-history-label">이전 요청 ${tasks.length - index}</span>${analysisTokens(task, value.result, true)}<strong>${esc(task.summary || task.request)}</strong></summary>${card}</details>`;
+        return msg`<details class="wb-history" data-review-request="${esc(`${task.taskId || task.analysisId || task.observedAt || ''}:${task.request}`)}"><summary><span class="wb-history-label">이전 요청 ${tasks.length - index}</span>${analysisTokens(task, value.result, true)}<strong>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</strong></summary>${card}</details>`;
       });
       html += `<section class="wb-current-review" ${reviewView === 'history' ? 'hidden' : ''}>${cards[0]}</section><section class="wb-review-history" ${reviewView === 'history' ? '' : 'hidden'}>${cards.slice(1).join('') || (reviewView === 'history' ? `<p class="wb-review-notice">${t('아직 이전 분석 기록이 없어요.')}</p>` : '')}</section>`;
     }
@@ -1422,10 +1573,15 @@
       && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
     const result = await api.terminalCollaboration({ operation: 'sync', groups, frames });
     workStates.clear();
+    let usageChanged = false;
     for (const id of acknowledgedCompletions.keys()) if (!sessions.has(id) || trashed(id)) acknowledgedCompletions.delete(id);
     for (const panel of result.panels || []) for (const member of panel.members || []) {
-      if (member.activity) workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
+      if (member.activity) {
+        workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
+        usageChanged = rememberTerminalUsage(member.id, member.activity) || usageChanged;
+      }
     }
+    if (usageChanged) save();
     refreshPaneChrome(); renderInstances();
     collaborationJobs = result.jobs || [];
     for (const job of collaborationJobs) {
@@ -1440,7 +1596,7 @@
       if (job.terminal && !handledCollaborations.has(`new:${job.id}`)) {
         const owner = panelOwner(job.groupId);
         const panel = owner?.tabs.find(item => item.id === job.groupId);
-        const live = await api.terminalGet(job.terminal.id);
+        const live = await api.terminalGet(job.terminal.id, false);
         if (panel && live && live.creationId === job.terminal.creationId) {
           if (!owner.tabs.some(item => layout.ids(item.layout).includes(live.id))) {
             detachFromLayout(live.id);
@@ -1548,7 +1704,6 @@
     if (action === 'new') return createTerminal();
     if (action === 'new-independent') return createTerminal('', standalone);
     if (action === 'new-panel') return createTerminal('');
-    if (action === 'pin-arranged') { const id = $('#wbMoveTarget').value; if (!id.startsWith('owner:')) togglePanelView(id); $('#wbArrange').close(); }
     if (action === 'detach-panel') {
       const panel = panelFor(arrangingId);
       if (panel) moveTerminal(arrangingId, { ownerId: panelOwner(panel.id).id });
@@ -1606,6 +1761,8 @@
   root.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (!button) return;
+    if (button.dataset.backgroundTerminal) openBackgroundPopover(button.dataset.backgroundTerminal);
+    if (button.hasAttribute('data-close-background')) closeBackgroundPopover(true);
     if (button.dataset.action) act(button.dataset.action).catch(report);
     if (button.dataset.space) { selectedSpace = button.dataset.space; space().collapsed = false; renderLayout(); acknowledgeCompletion(activeId()); }
     if (button.dataset.paneTab) { acknowledgeCompletion(button.dataset.paneTab); selectPane(button.dataset.paneTab, true); }
@@ -1634,7 +1791,6 @@
         renderLayout(false); mounted.then(() => { if ($('#wbError').dataset.connection === 'true') $('#wbError').hidden = true; }).catch(report);
       }
     }
-    if (button.dataset.pinPanel) togglePanelView(button.dataset.pinPanel);
     if (button.dataset.newPanel) createTerminal('', owners().find(item => item.id === button.dataset.newPanel)).catch(report);
     if (button.dataset.addPanelTerminal) {
       const owner = panelOwner(button.dataset.addPanelTerminal);
@@ -1644,6 +1800,7 @@
     if (button.dataset.newProject) createTerminal('', spaces.find(item => item.id === button.dataset.newProject)).catch(report);
     if (button.dataset.removeProject) removeProject(button.dataset.removeProject).catch(report);
     if (button.dataset.trashInstance) trashInstance(button.dataset.trashInstance).catch(report);
+    if (button.dataset.closeTerminal) closeInstance(button.dataset.closeTerminal).catch(report);
     if (button.dataset.restoreInstance) restoreInstance(button.dataset.restoreInstance).catch(report);
     if (button.dataset.purgeInstance) purgeInstance(button.dataset.purgeInstance).catch(report);
   });
@@ -1739,6 +1896,8 @@
     inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => sessions.set(item.id, item));
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
+    try { contentHistory = (await api.terminalReview?.({ historyContent: true }))?.entries || []; }
+    catch { /* Originals stay readable when optional historical additions are unavailable. */ }
     for (const id of saved.handledCollaborations || []) if (typeof id === 'string') handledCollaborations.add(id);
     analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', jevEnabled: typeof saved.analysisSettings?.jevEnabled === 'boolean' ? saved.analysisSettings.jevEnabled : saved.analysisSettings?.provider === 'jev', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }
@@ -1759,12 +1918,20 @@
       if (!record || typeof record.id !== 'string' || !Array.isArray(record.result?.tasks)
         || !record.result.tasks.every(task => task && typeof task === 'object')
         || !(sessions.has(record.id) || trash.some(item => item.id === record.id && item.creationId === record.creationId))) continue;
-      record.result = { ...record.result, tasks: record.result.tasks.slice(-12).map(task => Object.hasOwn(task, 'analysisUsage') ? task : {
+      const tasks = record.result.tasks.filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+      const removedNonTasks = tasks.length !== record.result.tasks.length;
+      record.result = { ...record.result, tasks: tasks.slice(-12).map(task => Object.hasOwn(task, 'analysisUsage') ? task : {
         ...task, analysisUsage: task.observedAt && task.observedAt === record.result.observedAt ? record.result.usage ?? null : null
       }) };
+      if (removedNonTasks) record.digest = JSON.stringify(record.result);
       reviewHistory.set(record.id, record);
       const session = sessions.get(record.id);
       if (savedReview(session)) reviews.set(record.id, { state: session.status === 'stopped' ? 'archived' : 'watching', provider: record.provider, providerPid: record.providerPid, result: record.result, restored: true });
+    }
+    for (const record of (Array.isArray(saved.terminalUsageHistory) ? saved.terminalUsageHistory : []).slice(-6400)) {
+      const session = sessions.get(record?.id);
+      if (session && record.creationId === session.creationId && validTerminalUsage(record.usage)
+        && (record.pid === session.pid || stoppedArchiveSession(session))) terminalUsageHistory.set(record.id, record);
     }
     const archivedIds = new Set(trash.filter(trashSession).map(item => item.id));
     const available = new Set([...sessions.keys()].filter(id => !archivedIds.has(id))), seen = new Set(archivedIds);
@@ -1811,10 +1978,25 @@
       refreshPaneChrome(); renderPaneTabs(); renderInstances(); renderReview();
     });
     api.onTerminalState(payload => {
+      let usageChanged = false;
+      const removed = payload.change === 'removed' && payload.session;
+      // Archived records remain available when their host session disappears;
+      // explicit trash deletion removes those separately after acknowledgement.
+      if (removed && sessions.get(removed.id)?.creationId === removed.creationId
+        && !trash.some(item => item.id === removed.id && item.creationId === removed.creationId)
+        && !(payload.sessions || []).some(item => item.id === removed.id)) {
+        removeTerminalLocally(removed.id);
+        renderLayout(false); renderTrash();
+      }
       for (const session of payload.sessions || []) {
         if (!sessions.has(session.id)) continue;
+        const usage = terminalUsageHistory.get(session.id);
+        if (usage && (usage.creationId !== session.creationId || session.pid && usage.pid !== session.pid)) {
+          terminalUsageHistory.delete(session.id); usageChanged = true;
+        }
         sessions.set(session.id, session);
       }
+      if (usageChanged) save();
       refreshPaneChrome();
       renderInstances();
     });

@@ -3,6 +3,63 @@ const assert = require('node:assert/strict');
 
 module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
   const results = [];
+  // Ghostty installs context-menu cleanup on a delayed task. A fast paste can
+  // finish before that task, leaving cleanup armed for the next canvas click.
+  // Latin keydown still works with a 0x0 textarea; native IME needs its anchor.
+  await evaluate(async () => {
+    await reset(term); term.focus(); writes.length = 0;
+    const canvas = term.renderer.getCanvas(), bounds = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left + 30, clientY: bounds.top + 20 }));
+    term.paste('메뉴 붙여넣기');
+    await new Promise(resolve => setTimeout(resolve, 25));
+  });
+  const lateCleanupKey = await evaluate(() => {
+    const canvas = term.renderer.getCanvas();
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const key = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyD', keyCode: 229, isComposing: true, bubbles: true, cancelable: true });
+    term.textarea.dispatchEvent(key);
+    const rect = term.textarea.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, position: term.textarea.style.position,
+      zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea, prevented: key.defaultPrevented };
+  });
+  assert(lateCleanupKey.focused && lateCleanupKey.width > 0 && lateCleanupKey.height > 0
+    && lateCleanupKey.position === 'absolute' && Number(lateCleanupKey.zIndex) >= 0 && !lateCleanupKey.prevented,
+  'Delayed menu cleanup must not leave Korean keydown with a hidden native input anchor: ' + JSON.stringify(lateCleanupKey));
+  await debuggerSession.sendCommand('Input.imeSetComposition', { text: '하', selectionStart: 1, selectionEnd: 1 });
+  await debuggerSession.sendCommand('Input.insertText', { text: '한글' });
+  const lateCleanupText = await evaluate(async () => { await delay(); return writes.join(''); });
+  assert.equal(lateCleanupText, '메뉴 붙여넣기한글');
+  results.push({ lateCleanupKey, lateCleanupText });
+  // Cleanup must also recover before an accessibility/native IME edit that
+  // has no physical keydown, and it must never reclaim an inactive pane.
+  const anchorOwnership = await evaluate(async () => {
+    const menu = () => {
+      const canvas = term.renderer.getCanvas(), rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20 }));
+    };
+    menu(); term.paste('본문'); await new Promise(resolve => setTimeout(resolve, 25));
+    term.renderer.getCanvas().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    const rect = term.textarea.getBoundingClientRect();
+    const automatic = { width: rect.width, height: rect.height, zIndex: term.textarea.style.zIndex };
+    term.textarea.style.left = '99999px'; term.textarea.style.top = '99999px';
+    await Promise.resolve();
+    const moved = term.textarea.getBoundingClientRect(), canvas = term.renderer.getCanvas().getBoundingClientRect();
+    const movedInside = moved.left >= canvas.left - 1 && moved.right <= canvas.right + 1
+      && moved.top >= canvas.top - 1 && moved.bottom <= canvas.bottom + 1;
+    const other = document.createElement('textarea'); document.body.appendChild(other); other.focus();
+    term.textarea.style.width = '0px'; term.textarea.style.height = '0px'; term.textarea.style.zIndex = '-10';
+    await Promise.resolve();
+    const background = { retainedFocus: document.activeElement === other, width: term.textarea.getBoundingClientRect().width };
+    term.focus();
+    const focused = term.textarea.getBoundingClientRect();
+    const refocus = { width: focused.width, height: focused.height, zIndex: term.textarea.style.zIndex };
+    other.remove(); return { automatic, background, refocus, movedInside };
+  });
+  for (const value of [anchorOwnership.automatic, anchorOwnership.refocus]) assert(value.width > 0 && value.height > 0 && Number(value.zIndex) >= 0, 'Focused native input anchor must recover without waiting for PTY echo: ' + JSON.stringify(anchorOwnership));
+  assert.deepEqual(anchorOwnership.background, { retainedFocus: true, width: 0 }, 'Recovery must not steal another pane or input focus');
+  assert(anchorOwnership.movedInside, 'Late upstream cursor positioning cannot leave a positive-sized input target outside the canvas');
+  results.push({ anchorOwnership });
   for (const contextMenu of [false, true]) for (const activeComposition of [false, true]) for (const history of [false, true]) {
     await evaluate(async ({ contextMenu, history }) => {
       await reset(term); term.focus(); writes.length = 0;
@@ -31,6 +88,8 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
       const screen = term.renderer.getCanvas().getBoundingClientRect();
       return { width: rect.width, height: rect.height, position: term.textarea.style.position,
         zIndex: term.textarea.style.zIndex, focused: document.activeElement === term.textarea,
+        inputRect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        screenRect: { left: screen.left, top: screen.top, right: screen.right, bottom: screen.bottom },
         insideViewport: rect.left >= screen.left - 1 && rect.right <= screen.right + 1 && rect.top >= screen.top - 1 && rect.bottom <= screen.bottom + 1 };
     });
     await debuggerSession.sendCommand('Input.imeSetComposition', { text: 'ㅇ', selectionStart: 1, selectionEnd: 1 });
@@ -46,6 +105,21 @@ module.exports = async function checkPasteRecovery(evaluate, debuggerSession) {
       `Paste must restore a usable native input anchor before typing: ${JSON.stringify({ contextMenu, activeComposition, history, input })}`);
     assert.equal(result.text, (activeComposition ? '한' : '') + '붙여넣은 본문\r이게 한글 입력');
   }
+  const resizedAnchor = await evaluate(async () => {
+    await reset(term); term.focus();
+    await outputTo(term, Array.from({ length: 40 }, (_, i) => `resize-history-${i}\r\n`).join(''));
+    term.scrollToTop();
+    const canvas = term.renderer.getCanvas(), previous = { width: canvas.style.width, height: canvas.style.height };
+    canvas.style.width = '333px'; canvas.style.height = '127px';
+    try {
+      term.preparePaste();
+      const input = term.textarea.getBoundingClientRect(), screen = canvas.getBoundingClientRect();
+      return { inside: input.left >= screen.left - 1 && input.right <= screen.right + 1
+        && input.top >= screen.top - 1 && input.bottom <= screen.bottom + 1, width: input.width, height: input.height };
+    } finally { Object.assign(canvas.style, previous); term.preparePaste(); }
+  });
+  assert(resizedAnchor.inside && resizedAnchor.width > 0 && resizedAnchor.height > 0, 'Native IME target remains inside resized canvas bounds, independent of stale grid metrics: ' + JSON.stringify(resizedAnchor));
+  results.push({ resizedAnchor });
   const nativeReplacement = await evaluate(async () => {
     await reset(term); term.focus(); writes.length = 0; term.paste('본문');
     term.textarea.value = '한글';

@@ -20,11 +20,21 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
       });
     }
   }
-  function readTerminalSession(id) {
+  function readTerminalSession(id, { priority = false } = {}) {
     if (!replayReads.has(id)) {
       const pending = new Promise((resolve, reject) => replayQueue.push({ id, resolve, reject }));
-      replayReads.set(id, pending); drainReplayReads();
+      replayReads.set(id, pending);
     }
+    if (priority) {
+      const index = replayQueue.findIndex(item => item.id === id);
+      if (index >= 0 && !replayQueue[index].priority) {
+        const [read] = replayQueue.splice(index, 1);
+        read.priority = true;
+        const background = replayQueue.findIndex(item => !item.priority);
+        replayQueue.splice(background < 0 ? replayQueue.length : background, 0, read);
+      }
+    }
+    drainReplayReads();
     return replayReads.get(id);
   }
   const rawInputBarriers = new Map();

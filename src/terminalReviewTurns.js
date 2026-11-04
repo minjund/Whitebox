@@ -20,6 +20,14 @@ function isStartupRequest(request) {
     || /<command-name>\/(?:clear|help|mcp|model|status|config|resume|exit|quit|login|logout|reload-skills|theme|permissions)<\/command-name>/iu.test(text);
 }
 
+function isContinuationSummary(request) {
+  const prefix = String(request || '').trimStart().replace(/^#{1,6}[ \t]+/u, '');
+  // Match the provider's continuation envelope, not mentions, quoted examples,
+  // or ordinary requests to summarize something. Newlines may wrap its header.
+  return /^This\s+session\s+is\s+being\s+continued\s+from\s+a\s+previous\s+conversation\s+that\s+ran\s+out\s+of\s+context\.(?:\s|$)/iu.test(prefix);
+}
+function isNonTaskRequest(request) { return isStartupRequest(request) || isContinuationSummary(request); }
+
 function submittedPrompt(screen) {
   const lines = String(screen || '').split('\n');
   let index = -1;
@@ -27,7 +35,7 @@ function submittedPrompt(screen) {
   if (index < 0 || busyPattern.test(lines.slice(-12).join('\n'))) return '';
   const first = lines[index].match(promptPattern)[1].trim();
   // Slash commands are CLI controls, not requests to the AI.
-  if (!first || first.startsWith('/') || isStartupRequest(first)) return '';
+  if (!first || first.startsWith('/') || isNonTaskRequest(first)) return '';
   const draft = [first];
   for (let i = index + 1; i < lines.length; i++) {
     const line = lines[i];
@@ -35,7 +43,8 @@ function submittedPrompt(screen) {
     if (!/^\s{2,}\S/u.test(line)) break;
     draft.push(line.trim());
   }
-  return draft.join('\n').slice(0, 4000);
+  const request = draft.join('\n').slice(0, 4000);
+  return isNonTaskRequest(request) ? '' : request;
 }
 
 function completionStamp(screen, provider) {
@@ -159,7 +168,7 @@ function readinessText(buffer) {
   }
   return lines.join('\n').slice(-24000);
 }
-const api = { currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest };
+const api = { currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest, isContinuationSummary, isNonTaskRequest };
 if (typeof module !== 'undefined') module.exports = api;
 else window.WhiteboxTerminalReviewTurns = api;
 

@@ -2429,7 +2429,12 @@ function registerIpcHandlers() {
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
     if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, directory: userFile('terminal-collaboration'),
-      createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')) });
+      backgroundSnapshot: () => lastSnapshot,
+      createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),
+      onTerminalClosed: terminal => {
+        terminalReview?.forget(terminal.id);
+        sendTerminal('terminals:state', { change: 'removed', session: terminal, sessions: visibleTerminalSessions(terminalManager.list()) });
+      } });
     if (payload?.operation === 'sync') return terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');

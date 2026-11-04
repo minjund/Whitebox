@@ -13,12 +13,15 @@ const { addCall, addResult, toolEvidence } = require('./terminalReviewTools');
 const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = require('./terminalReviewContext');
 const { acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
+const { observeClaudeUsage, observeCodexUsage, tokenUsage } = require('./terminalTokenUsage');
+const { isNonTaskRequest } = require('./terminalReviewTurns');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.filter(item => ['text', 'input_text', 'output_text'].includes(item?.type)).map(item => String(item.text || '')).join('\n') : '';
 
 function applyClaudeRow(state, row, sessionId) {
-  if (row.sessionId !== sessionId || row.isSidechain || row.isMeta) return;
+  observeClaudeUsage(state, row, sessionId);
+  if (row.sessionId !== sessionId || row.isSidechain || row.isMeta || row.isCompactSummary === true) return;
   const at = Date.parse(row.timestamp);
   if (row.type === 'user' && row.message?.role === 'user') {
     const results = Array.isArray(row.message.content) ? row.message.content.filter(item => item?.type === 'tool_result') : [];
@@ -27,6 +30,7 @@ function applyClaudeRow(state, row, sessionId) {
       return;
     }
     const request = textContent(row.message.content);
+    if (isNonTaskRequest(request)) return;
     if (/^\[Request interrupted by user(?: for tool use)?\]/u.test(request)) { state.aborted = true; state.complete = false; return; }
     // Claude writes background-agent notifications as user rows, sometimes
     // without isMeta. They must not replace the human request or erase an
@@ -63,6 +67,7 @@ function applyClaudeRow(state, row, sessionId) {
 }
 
 function applyCodexRow(state, row) {
+  observeCodexUsage(state, row);
   const event = row.payload || {};
   const at = Date.parse(row.timestamp);
   if (row.type === 'event_msg' && event.type === 'task_started') {
@@ -101,7 +106,7 @@ function project(state, idle = true) {
     request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
     tools: toolEvidence(state), context: reviewContext(state), updates: assistantUpdates(state),
-    partialEvidence: evidence, evidence: completed ? evidence : '' };
+    usage: tokenUsage(state), partialEvidence: evidence, evidence: completed ? evidence : '' };
 }
 
 // Read only logs explicitly owned by the already matched child process. Never
@@ -136,6 +141,7 @@ class TerminalReviewCompletion {
     const carry = Buffer.from(data.subarray(boundary + 1));
     const lines = data.subarray(0, boundary + 1).toString('utf8').split('\n');
     const state = continuation ? { ...record.state } : {};
+    if (!continuation) state.tokenHistoryPartial = start > 0;
     for (const line of lines) {
       const bytes = Buffer.from(line, 'utf8'), rowOffset = offset; offset += bytes.length + 1;
       let row; try { row = JSON.parse(line); } catch { continue; }

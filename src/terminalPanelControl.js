@@ -53,7 +53,35 @@ class TerminalPanelControl {
   async handle(method, params) {
     const c = this.owner, { group, member } = await this.source(params);
     if (method === 'system.identify') return { workspace_id: group.id, surface_id: member.id, panelName: group.name };
-    if (method === 'surface.list') return { workspace_id: group.id, surface_id: member.id, surfaces: group.members };
+    if (method === 'surface.list') return { workspace_id: group.id, surface_id: member.id,
+      surfaces: group.surfaces.map(surface => ({ ...surface, ...group.members.find(item => item.id === surface.id) })) };
+    if (method === 'surface.close') {
+      // Closing a pane is explicit and must also work after its process exited.
+      // Live members still define source authority; renderer-owned surfaces
+      // retain the exact identity of stopped or already-removed panes.
+      const matches = group.surfaces.filter(item => item.id === params.surface_id);
+      if (matches.length !== 1) throw new Error('Choose an exact surface ID from whitebox list-panels in this panel.');
+      const target = matches[0];
+      if (target.id === member.id) throw new Error('Run close-terminal from another terminal; the invoking terminal cannot close itself.');
+      const manager = c.manager(), live = await manager.get(target.id, false);
+      const stopped = live && !live.pid && ['stopped', 'exited', 'failed'].includes(live.status)
+        && !live.terminationPending && !live.terminationUncertain;
+      if (live && (live.creationId !== target.creationId || (live.pid !== target.pid && !stopped))) throw new Error('Target terminal session changed; refresh the panel first.');
+      if (live) await manager.close(target.id);
+      if (await manager.get(target.id, false)) throw new Error('Terminal removal was not confirmed; the pane was not closed.');
+      // The host emits removal for live sessions. Also notify for a stale pane
+      // whose host record was removed before this command was available.
+      await c.onTerminalClosed({ ...target, pid: null, status: 'exited' });
+      group.members = group.members.filter(item => item.id !== target.id);
+      group.surfaces = group.surfaces.filter(item => item.id !== target.id);
+      c.frames.delete(target.id); this.pending.delete(target.id);
+      c.connected.delete(target.id); c.accessSnapshots.delete(target.id);
+      await fs.promises.rm(c.file(target.id, 'access'), { force: true });
+      for (const job of c.jobs.values()) if (job.targetId === target.id && ['queued', 'starting', 'sending', 'running'].includes(job.state)) {
+        Object.assign(job, { state: 'interrupted', error: 'Target terminal was closed.', finishedAt: c.now() }); c.save(job);
+      }
+      return { workspace_id: group.id, surface_id: target.id, closed: true };
+    }
     if (method === 'job.read') return localRequest([member.id, 'wait', params.jobId, '0'], c.directory);
     if (method === 'surface.create') {
       const count = params.count ?? 1;

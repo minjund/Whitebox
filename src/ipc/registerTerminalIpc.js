@@ -62,9 +62,9 @@ function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, man
     requireTrustedSender(event);
     return listWslDistros();
   });
-  ipcMain.handle('terminals:get', async (event, id) => {
+  ipcMain.handle('terminals:get', async (event, id, includeReplay = true) => {
     requireTrustedSender(event);
-    const session = manager() ? await manager().get(id, true) : null;
+    const session = manager() ? await manager().get(id, includeReplay !== false) : null;
     return session && (session.transient || (session.type === 'agent' && !isProviderVisible(session.provider))) ? null : session;
   });
   ipcMain.handle('terminals:create', (event, options) => {

@@ -65,6 +65,7 @@ module.exports = async function decisionChecks() {
   assert.equal(render({}, options), '', 'old cached analyses use their existing display');
   const task = parse(fixture());
   task.decision.conclusion = '<img src=x onerror=alert(1)>';
+  task.actual = '<img src=x onerror=alert(1)>';
   const html = render(task, options);
   assert.doesNotMatch(html, /<img/u);
   assert.match(html, /&lt;img/u);
@@ -72,7 +73,7 @@ module.exports = async function decisionChecks() {
   assert.doesNotMatch(html, /선택지 비교/u, 'simple work has no empty choice section');
   assert.doesNotMatch(html, /버튼 문구를 변경했습니다\./u, 'verbatim quotes stay in the detailed evidence section');
 
-  async function run(replies, { interruptDuringRepair = false, invalidateDuringRepair = false } = {}) {
+  async function run(replies, { interruptDuringRepair = false, invalidateDuringRepair = false, requireContent = false } = {}) {
     const session = { id: 'decision', creationId: 'epoch', pid: 10, status: 'running' };
     let completion = { available: true };
     const calls = [];
@@ -84,7 +85,7 @@ module.exports = async function decisionChecks() {
         calls.push(options);
         if (interruptDuringRepair && calls.length === 2) Object.values(service.entries.get('decision').latest)[0].lifecycle = 'interrupted';
         if (invalidateDuringRepair && calls.length === 2) service.entries.get('decision').revision++;
-        return { text: JSON.stringify(response(replies[calls.length - 1])), usage };
+        return { text: JSON.stringify(response(replies[calls.length - 1])), usage, ...(requireContent ? { reviewFormat: 'answer-first-v1' } : {}) };
       } } });
     await service.capture({ id: session.id, creationId: session.creationId, text: 'frame' });
     completion = { available: true, requestAt: 2000, requestId: 'one', request, state: 'completed', evidence: `ASSISTANT: ${evidence}`,
@@ -96,6 +97,10 @@ module.exports = async function decisionChecks() {
   let result = await run([fixture()]);
   assert.equal(result.calls.length, 1, 'valid concise output incurs no repair call');
   assert.equal(result.task.qualityPasses, 1);
+  const missing = await run([undefined, undefined], { requireContent: true });
+  assert.equal(missing.calls.length, 2, 'a fresh model cannot silently omit the answer-first contract');
+  assert.equal(missing.task, undefined, 'an invalid new explanation cannot replace the original record');
+  assert.match(missing.service.entries.get('decision').message, /실제 답과 근거/u);
   bad = fixture(); bad.conclusion = '긴'.repeat(181);
   result = await run([bad, fixture()]);
   assert.equal(result.calls.length, 2);

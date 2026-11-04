@@ -280,7 +280,7 @@
   window.WhiteboxTerminal = {
     mountGroupTerminal: async (id, mount, options = {}) => {
       await init();
-      const session = await readTerminalSession(id);
+      const session = await readTerminalSession(id, { priority: Boolean(options.requireSessionIdentity) });
       if (!session) throw new Error('터미널 세션을 찾을 수 없습니다.');
       state.promptReplayCache.set(id, { ...session, replay: String(session.replay || '').slice(-24000) });
       const stoppedRecord = options.allowStoppedRecord === true && !session.pid && !session.terminationPending && !session.terminationUncertain

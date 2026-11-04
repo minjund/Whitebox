@@ -101,11 +101,21 @@ window.WhiteboxTerminalIme = {
           const screenLeft = screen.offsetLeft;
           const screenTop = screen.offsetTop;
           const screenWidth = screen.clientWidth;
+          const screenHeight = screen.clientHeight;
+          // Canvas CSS bounds can briefly differ from rows × cell metrics during
+          // resize/font changes. Keep the native candidate target inside the
+          // actual viewport even when the real cursor is in scrollback.
+          const nativeAnchor = width => {
+            const anchorWidth = Math.max(1, Math.min(width, screenWidth || width));
+            const anchorHeight = Math.max(1, Math.min(cellHeight, screenHeight || cellHeight));
+            return { left: `${screenLeft + Math.max(0, Math.min(column * cellWidth, screenWidth - anchorWidth))}px`,
+              top: `${screenTop + Math.max(0, Math.min(row * cellHeight, screenHeight - anchorHeight))}px`,
+              width: `${anchorWidth}px`, height: `${anchorHeight}px` };
+          };
           Object.assign(textarea.style, { position: 'absolute', zIndex: '2', pointerEvents: 'none' });
           if (!cursorInViewport || !composing || !text || doc.activeElement !== textarea) {
             hide();
-            Object.assign(textarea.style, { position: 'absolute', left: `${screenLeft + column * cellWidth}px`,
-              top: `${screenTop + row * cellHeight}px`, width: `${cellWidth}px`, height: `${cellHeight}px` });
+            Object.assign(textarea.style, { position: 'absolute', ...nativeAnchor(cellWidth) });
             return;
           }
           if (text !== measuredText) {
@@ -152,8 +162,7 @@ window.WhiteboxTerminalIme = {
           }
           tail.style.display = preeditWidth > available ? 'none' : '';
           // Anchor native candidate windows to the painted cursor.
-          Object.assign(textarea.style, { left: `${screenLeft + anchorLeft}px`,
-            top: `${screenTop + row * cellHeight}px`, width: `${preeditWidth}px`, height: `${cellHeight}px`,
+          Object.assign(textarea.style, { ...nativeAnchor(preeditWidth),
             fontFamily: options.fontFamily, fontSize: `${options.fontSize}px` });
         };
         const scheduleRender = () => {
@@ -162,12 +171,40 @@ window.WhiteboxTerminalIme = {
           if (disposed || frame) return;
           frame = requestAnimationFrame(() => { frame = 0; render(); });
         };
+        const recoverInputAnchor = () => {
+          if (disposed || doc.activeElement !== textarea) return;
+          const style = textarea.style;
+          // Ghostty arms context-menu cleanup on a later task. It can run
+          // after preparePaste has restored focus, hiding the textarea again
+          // without a blur/focus event or PTY output to trigger a repaint.
+          // Keep its intentional 1px menu target until cleanup actually hides
+          // it; restoring that live menu target would disrupt native menus.
+          const viewport = screen.getBoundingClientRect();
+          const target = textarea.getBoundingClientRect();
+          // Upstream cursor synchronization can also move a positive-sized
+          // target outside scrollback after our paste render. Preserve the
+          // intentional fixed-position native-menu target while it is active.
+          const outside = style.position === 'absolute' && viewport.width > 0 && viewport.height > 0
+            && (target.left < viewport.left - 1 || target.right > viewport.right + 1
+              || target.top < viewport.top - 1 || target.bottom > viewport.bottom + 1);
+          if (outside || Number(style.zIndex) < 0 || parseFloat(style.width) <= 0 || parseFloat(style.height) <= 0) {
+            // Observe upstream changes, not our own repair writes. Zero metrics
+            // during a hidden/detaching pane must not create a microtask loop.
+            anchorObserver.disconnect();
+            try { render(); }
+            finally { if (!disposed) anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] }); }
+          }
+        };
+        const anchorObserver = new MutationObserver(recoverInputAnchor);
+        anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] });
         listen('beforeinput', event => {
           // Bypass upstream's container handler, which prevents all edits.
           event.stopImmediatePropagation();
+          recoverInputAnchor();
         });
         listen('compositionstart', event => {
           event.stopPropagation();
+          recoverInputAnchor();
           flush();
           clearReconciliation();
           startOffset = textarea.selectionStart;
@@ -203,6 +240,9 @@ window.WhiteboxTerminalIme = {
           }
         });
         listen('keydown', event => {
+          // Restore synchronously too: the next native key can arrive in the
+          // same task as cleanup, before MutationObserver/RAF has run.
+          recoverInputAnchor();
           // After clipboard/input-source transitions macOS can report a Hangul
           // jamo with its physical keyCode and isComposing=false. Let the
           // browser IME interpret it; Ghostty would otherwise preventDefault
@@ -248,10 +288,11 @@ window.WhiteboxTerminalIme = {
           hide();
           scheduleRender();
         });
-        listen('focus', scheduleRender);
+        listen('focus', render);
         const subscriptions = [terminal.onRender(scheduleRender), terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
         cleanup = () => {
           disposed = true;
+          anchorObserver.disconnect();
           if (pending) clearTimeout(pending.timer);
           pending = null;
           clearReconciliation();

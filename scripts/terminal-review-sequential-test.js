@@ -99,6 +99,11 @@ async function queueChecks() {
   await capture(sessions[0], { reanalyze: true }); await drain();
   await capture(sessions[1], { reanalyze: true });
   calls.at(-1).resolve('{malformed'); await drain();
+  assert.equal((await capture(sessions[0])).state, 'reviewing', 'format repair keeps ownership until its one replacement completes');
+  assert.match(calls.at(-1).prompt, /QUALITY REPAIR/u);
+  assert.match(calls.at(-1).prompt, /REQUEST: "설명해줘 119"/u, 'repair cannot use the next queued terminal request');
+  assert.equal(maximum, 1);
+  calls.at(-1).resolve('{malformed again'); await drain();
   assert.equal((await capture(sessions[0])).state, 'error');
   assert.equal(calls.at(-1).prompt.includes('REQUEST: "설명해줘 1"'), true, 'An error cannot block the next queued session');
   calls.at(-1).resolve(answer(calls.at(-1))); await drain();

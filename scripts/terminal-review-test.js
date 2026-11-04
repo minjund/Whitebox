@@ -163,6 +163,12 @@ async function commandBoundaryChecks() {
 }
 
 async function main() {
+  await require('./terminal-background-test')();
+  await require('./terminal-review-continuation-test')();
+  await require('./terminal-token-usage-test')();
+  await require('./terminal-review-format-test')();
+  await require('./terminal-review-content-test')();
+  await require('./terminal-review-artifact-test')();
   await require('./terminal-review-decision-test')();
   await require('./terminal-review-reanalysis-test')();
   await require('./terminal-review-sequential-test').main();
@@ -201,6 +207,8 @@ async function main() {
   assert.equal(terminalReviewUsage('claude', { input_tokens: -1, output_tokens: 10 }), null);
   assert.equal(terminalReviewUsage('codex', { input_tokens: 0, output_tokens: 0 }).total, 0);
   await optimizationChecks();
+  require('./terminal-review-history-audit-test')();
+  await require('./terminal-review-handoff-test')();
   assert.equal(providerFromPosixProcess({ name: '/usr/local/lib/n', commandLine: '/usr/local/lib/node_modules/@openai/codex/vendor/bin/codex' }), 'codex');
   assert.equal(providerFromPosixProcess({ name: '/usr/local/lib/n', commandLine: '/usr/local/lib/node_modules/@openai/codex/vendor/bin/codex app-server' }), null);
   assert.equal(providerFromPosixProcess({ name: '/bin/echo', commandLine: '/bin/echo /usr/local/bin/codex' }), null);

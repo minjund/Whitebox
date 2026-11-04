@@ -4,6 +4,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { posixProcessRows, providerFromPosixProcess, utilityProcess } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
+const { conversationBackground, shellBackground } = require('./terminalBackground');
 const { detectPendingPrompt } = require('../renderer/terminal-prompt');
 const executeFile = promisify(execFile);
 
@@ -57,8 +58,8 @@ function processTable(output, now = Date.now()) {
 }
 
 class TerminalActivity {
-  constructor({ completion = new TerminalReviewCompletion(), execute = executeFile, platform = process.platform, now = Date.now } = {}) {
-    Object.assign(this, { completion, execute, platform, now });
+  constructor({ completion = new TerminalReviewCompletion(), execute = executeFile, platform = process.platform, now = Date.now, backgroundSnapshot = () => null } = {}) {
+    Object.assign(this, { completion, execute, platform, now, backgroundSnapshot });
   }
   async observe(members, frames, fallbackSnapshot = {}) {
     let rows = [], available = false;
@@ -72,6 +73,7 @@ class TerminalActivity {
       } catch { /* Failed probes remain unknown rather than claiming idle/work. */ }
     }
     const result = new Map();
+    const backgroundSnapshot = this.backgroundSnapshot();
     await Promise.all(members.map(async member => {
       const frame = frames.get(member.id);
       const shell = rows.find(row => row.pid === member.pid);
@@ -79,9 +81,13 @@ class TerminalActivity {
       const providers = (available ? rows.filter(row => ['claude', 'codex'].includes(row.provider) && !utilityProcess(row)) : fallbackSnapshot.processes || []).filter(inSession);
       const roots = providers.filter(row => !providers.some(other => row.ancestorPids?.includes(other.pid)));
       const child = roots.length === 1 ? roots[0] : null;
-      let state = 'unknown', completed = false, requestId = '', providerPid = 0;
+      let state = 'unknown', completed = false, requestId = '', providerPid = child?.pid || 0;
+      let usage = null, conversationId = '', usageStatus = roots.length === 0 ? 'none' : 'unavailable';
+      const native = child ? await this.completion.observe(child) : {};
+      const background = child ? conversationBackground(native, child, backgroundSnapshot, this.now())
+        : available && !providers.length ? shellBackground(rows, shell) : [];
+      if (native.available && native.usage) { usage = native.usage; conversationId = native.conversationId || ''; usageStatus = 'observed'; }
       if (child && (!frame || frame.creationId === member.creationId && this.now() - frame.at < 5000)) {
-        const native = await this.completion.observe(child);
         if (native.available && native.requestId) { requestId = native.requestId; providerPid = child.pid; }
         // Unopened restored panels have no renderer buffer. Exact native
         // process/turn evidence still describes their activity independently.
@@ -100,7 +106,9 @@ class TerminalActivity {
           state = /^R/u.test(shell.stat) ? 'working' : 'idle';
         }
       }
-      result.set(member.id, { state, completed, ...(requestId ? { requestId, providerPid } : {}), creationId: member.creationId, pid: member.pid });
+      result.set(member.id, { state, completed, ...(requestId ? { requestId } : {}), providerPid,
+        provider: child?.provider || '', usage, conversationId, usageStatus,
+        background: { count: background.length, items: background.slice(0, 32) }, creationId: member.creationId, pid: member.pid });
     }));
     return result;
   }
