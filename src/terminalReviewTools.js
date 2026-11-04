@@ -1,8 +1,9 @@
 'use strict';
 
-// Keep bounded metadata and result excerpts, not raw commands, patches, fetched
-// pages or hidden reasoning. Command hints are static labels, not execution proof.
+// Keep bounded metadata/results and acknowledged structured edit fragments.
+// Never store raw shell commands, custom patches or hidden reasoning.
 const { bounded } = require('./terminalReviewBudget');
+const { proposedChange, acknowledgeChange } = require('./terminalReviewArtifacts');
 const short = (value, size = 220) => String(value || '').replace(/\s+/gu, ' ').trim().slice(0, size);
 function commandHints(name, input) {
   if (!/^(?:Bash|exec_command|shell_command|shell)$/iu.test(name)) return [];
@@ -58,7 +59,7 @@ function addCall(state, id, name, input) {
   if (!id || !state.requestId || state.complete) return;
   state.tools ||= [];
   if (state.tools.some(item => item.id === id)) return;
-  state.tools.push({ id: short(id, 200), name: short(name, 64) || 'tool', target: target(input), commandHints: commandHints(name, input), status: 'called', excerpt: '', operation: literalOperation(name, input) });
+  state.tools.push({ id: short(id, 200), name: short(name, 64) || 'tool', target: target(input), commandHints: commandHints(name, input), status: 'called', excerpt: '', operation: literalOperation(name, input), pendingChange: proposedChange(name, input) });
   if (state.tools.length > 32) { state.tools = select(state.tools, 32); state.toolsOmitted = (state.toolsOmitted || 0) + 1; }
 }
 function addResult(state, id, output, error) {
@@ -68,12 +69,17 @@ function addResult(state, id, output, error) {
   item.status = error === true ? 'error' : 'returned';
   if (typeof error === 'boolean') item.reportedError = error;
   item.excerpt = excerpt(output);
+  const resultText = Array.isArray(output) ? output.filter(value => value?.type === 'text').map(value => value.text).join('\n') : output;
+  item.change = acknowledgeChange(item.pendingChange, resultText, error);
+  delete item.pendingChange;
   const code = typeof output === 'string' ? output.match(/(?:Process exited with code|Exit code:)\s*(-?\d+)/u) : null;
   if (code) item.exitCode = Number(code[1]);
   // A returned result is not automatically a successful action.
 }
 function toolEvidence(state) {
-  return { source: 'session', items: (state.tools || []).map(({ id, ...item }) => ({ ...item })), omitted: state.toolsOmitted || 0 };
+  const changes = (state.tools || []).map(item => item.change).filter(Boolean);
+  return { source: 'session', items: (state.tools || []).map(({ id, pendingChange, change, ...item }) => ({ ...item })), omitted: state.toolsOmitted || 0,
+    ...(changes.length ? { changes } : {}) };
 }
 function screenTools(evidence) {
   const lines = String(evidence || '').split('\n');

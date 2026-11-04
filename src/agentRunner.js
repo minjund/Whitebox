@@ -684,7 +684,7 @@ class AgentRunner extends EventEmitter {
   canGenerateTerminalReview() { return ![...this.active.values()].some(run => run.internalQuestionnaire); }
 
   generateTerminalReview(options) {
-    return this.generateQuestionnaire({ ...options, terminalReview: true });
+    return this.generateQuestionnaire({ ...options, terminalReview: true }).then(result => ({ ...result, reviewFormat: 'answer-first-v2', handoffRequired: true }));
   }
 
   generateQuestionnaire({ provider, prompt, model = '', terminalReview = false }) {

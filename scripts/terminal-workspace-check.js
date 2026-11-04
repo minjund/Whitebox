@@ -40,6 +40,7 @@ app.whenReady().then(async () => {
   let manualReviewDeferred = false, releaseManualReview;
   let requestSummary = '';
   let gateFixture = null, legacyTyped = false;
+  let contentFixture = null;
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
   let toolEvidence = { source: 'session', items: Array.from({ length: 3 }, () => ({ name: 'WebFetch', status: 'returned', target: 'https://arxiv.org/html/2610.28380v1', excerpt: 'Received 395.7KB (200 OK)' })), omitted: 0 };
   let reviewState, suppressReview = false, rejectRestoreIdentity = false, missingSessionId = '', rejectedCloseId = '', rejectedStopId = '', stopCalls = 0, collaborationFailure = '';
@@ -120,6 +121,7 @@ app.whenReady().then(async () => {
       return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session;
     });
     ipcMain.handle('terminals:review', async (_event, payload) => {
+      if (payload.historyContent) return { entries: [] };
       if(payload.force)forcedReviewCalls++;
       if (payload.reanalyze) {
         manualReviewCalls.push({ id: payload.id, creationId: payload.creationId, enabled: payload.enabled });
@@ -136,7 +138,7 @@ app.whenReady().then(async () => {
       captured.set(payload.id, payload.text);
       const observedText = payload.text.replace(/\s+/g, '');
       const marker = observedText.includes('ONE_ONLY') ? 'ONE_ONLY' : observedText.includes('TWO_ONLY') ? 'TWO_ONLY' : observedText.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
-      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, analysisGate: gateFixture, ...(legacyTyped ? { typedAnalysis: { findings: [{ text: 'JEV_OLD_CONCLUSION_SENTINEL' }], probabilities: { fulfilled: .987654321 } } } : {}), recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
+      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, analysisGate: gateFixture, ...(legacyTyped ? { typedAnalysis: { findings: [{ text: 'JEV_OLD_CONCLUSION_SENTINEL' }], probabilities: { fulfilled: .987654321 } } } : {}), recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, content: contentFixture, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     win.setContentSize(1450, 900);
@@ -655,6 +657,34 @@ app.whenReady().then(async () => {
     assert.doesNotMatch(await evaluate('document.querySelector("#wbTabs").textContent'), /터미널 \d+/u);
     assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
+    contentFixture = { version: 1, answer: { text: '문서 생성은 보고됐지만 본문은 확인되지 않았습니다.', basis: 'reported', quote: '생성 보고' },
+      details: [{ text: '백업 후 SQL을 적용하고 결과를 확인하는 순서입니다.', basis: 'reported', quote: '백업 → SQL → 확인' }],
+      limitations: [{ text: '페이지 ID만으로 문서 본문이 맞다고 판단하지 않습니다.', quote: '생성 보고' }],
+      deliverables: [{ label: '상태 확인 명령어', kind: 'command', value: 'docker compose ps', basis: 'reported', quote: 'docker compose ps' }] };
+    await waitFor('document.querySelector("#wbReviewContent .wb-answer-content")', 'answer-first content displayed in the production workspace');
+    const firstScreen = await evaluate('document.querySelector("#wbReviewContent .wb-answer-content").innerText');
+    for (const value of ['본문은 확인되지 않았습니다', '백업 후 SQL', '페이지 ID만으로', 'docker compose ps', '대화 원문 기준']) assert.ok(firstScreen.includes(value), `${value} must be visible without opening a disclosure`);
+    assert.doesNotMatch(firstScreen, /생성 보고|요청을 충족/u, 'hidden evidence and generic verdicts do not replace the answer');
+    assert.equal(await evaluate('document.querySelectorAll("#wbReviewContent .wb-answer-content details[open]").length'), 0);
+    const contentShots = path.join(root, 'artifacts/answer-first-ui'); fs.mkdirSync(contentShots, { recursive: true });
+    fs.writeFileSync(path.join(contentShots, 'workspace-content.png'), (await win.webContents.capturePage()).toPNG());
+    contentFixture = { ...contentFixture, version: 2,
+      subject: { text: '설정 검사 방법 확인', basis: 'reported', quote: '설정 검사 요청' },
+      handoff: { kind: 'verify', temporal: null,
+        priority: { text: '검사 방법을 정하려면 현재 지원 명령을 먼저 확인합니다.', basis: 'inference', quote: '설정 검사 요청' },
+        prompt: { text: '현재 지원하는 설정 검사 명령과 확인할 결과를 알려줘.', basis: 'inference', quote: '설정 검사 요청' } },
+      deliverables: [{ label: '옛 검사 명령', kind: 'command', value: 'old-tool check', basis: 'reported', quote: 'old-tool check', usage: 'historical',
+        usageNote: { text: '이후 폐지된 명령입니다.', basis: 'reported', quote: '폐지 보고' } }] };
+    await waitFor('document.querySelector("#wbReviewContent .wb-task-title h2")?.textContent === "설정 검사 방법 확인"', 'source-backed task purpose replaces the raw summary');
+    const standaloneScreen = await evaluate('document.querySelector("#wbReviewContent .wb-answer-content").innerText');
+    for (const text of ['보낼 수 있는 다음 요청', '현재 지원하는 설정 검사 명령', '과거 명령 · 현재 실행 안내 아님', '이후 폐지된 명령']) assert.ok(standaloneScreen.includes(text));
+    assert.ok(!standaloneScreen.includes('old-tool check'), 'a historical command stays outside default execution instructions');
+    assert.ok(await evaluate('document.querySelector("#wbReviewContent .wb-content-historical details").textContent.includes("old-tool check")'), 'the exact historical command remains inspectable');
+    console.log('PASS standalone review UI: task purpose, reasoned next request, explicit historical boundary and preserved command bytes');
+    contentFixture = null;
+    await waitFor('!document.querySelector("#wbReviewContent .wb-answer-content")', 'legacy display restored for remaining compatibility checks');
+    console.log('PASS production answer-first UI: actual answer, mechanism, evidence limits and literal commands visible with all disclosures closed');
+
     // Move actual live PTYs through the same DOM drag/drop handlers as the UI.
     const identityBeforeMoves = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
     const originalPanel = await evaluate('WhiteboxWorkspace.getState().spaces[0].activeTab');
@@ -1299,6 +1329,9 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-action=trash]").click()');
     await waitFor('document.querySelector("#wbTrashList").textContent.includes("Claude")', 'trash identifies the archived AI');
     assert.ok((await evaluate('document.querySelector("#wbTrashList").textContent')).includes(last.slice(-5)));
+    assert.ok(await evaluate('document.querySelector("#wbTrashList details[data-trash-content]") !== null'), 'archived responses can be read without restoring or restarting a terminal');
+    assert.match(await evaluate('document.querySelector("#wbTrashList").textContent'), /TRASH_KEPT/u);
+
     rejectRestoreIdentity = true;
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelector("#wbTrashNotice").textContent.length > 0', 'reject changed host identity');

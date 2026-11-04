@@ -301,7 +301,9 @@ function registerBackgroundQuestionnaireTests({ test, temp }) {
       child.emit('close', 0, null);
       const reviewed = await review;
       assert.ok(reviewed.timings.processStartedAt <= reviewed.timings.firstResponseAt && reviewed.timings.firstResponseAt <= reviewed.timings.processExitedAt);
-      const { timings, ...reviewContent } = reviewed;
+      const { timings, reviewFormat, handoffRequired, ...reviewContent } = reviewed;
+      assert.equal(reviewFormat, 'answer-first-v2');
+      assert.equal(handoffRequired, true);
       assert.deepEqual(reviewContent, { text: '{"tasks":[]}', usage: { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 }, model: 'fixture-model' });
       const limited = runner.generateTerminalReview({ provider: 'codex', prompt: 'rate-limit fixture' });
       child.stdout.emit('data', Buffer.from('{"type":"item.completed","item":{"type":"agent_message","text":"429 Too Many Requests"}}\n'));

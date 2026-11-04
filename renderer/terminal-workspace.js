@@ -40,6 +40,9 @@
   let reviewView = 'current';
   let reviewTask = null;
   const reanalysisRequests = new Map();
+  let contentHistory = [];
+  const explainedTasks = (id, creationId, tasks = []) => tasks.map(task =>
+    window.WhiteboxReviewDecision.applyHistoryContent(task, contentHistory, id, creationId));
   let pinnedPanels = [];
   let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
@@ -1204,6 +1207,7 @@
     return archiveIdentityMatches(session, item) ? session : null;
   }
   function renderTrash() {
+    const opened = new Set([...$('#wbTrashList').querySelectorAll('details[data-trash-content][open]')].map(node => node.dataset.trashContent));
     $('#wbTrashCount').textContent = String(trash.length);
     $('[data-action="trash-empty"]').disabled = busy || trash.length === 0;
     $('#wbTrashList').innerHTML = [...trash].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)).map(item => {
@@ -1211,7 +1215,9 @@
       const provider = item.provider === 'claude' ? 'Claude' : item.provider === 'codex' ? 'Codex' : t('일반 셸');
       const restorable = Boolean(session && (session.status === 'running' || stoppedArchiveSession(session)));
       const restoring = restoringId === item.id;
-      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? stoppedArchiveSession(session) ? t('세션 종료됨 · 출력과 검토 기록 보관') : session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${!busy && restorable ? '' : 'disabled'} aria-busy="${restoring}" aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restoring ? t('복원 중…') : restorable ? stoppedArchiveSession(session) ? t('종료된 기록 복원') : msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" ${busy ? 'disabled' : ''} aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div></article>`;
+      const history = explainedTasks(item.id, item.creationId, item.review?.result?.tasks).filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
+      const contents = history.length ? `<details class="wb-trash-content" data-trash-content="${esc(item.id)}" ${opened.has(item.id) ? 'open' : ''}><summary>${esc(t('보관된 글과 분석 보기'))} (${history.length})</summary>${history.map(task => `<article class="wb-task"><h2>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</h2>${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: task.taskId || task.analysisId }) || `<p>${esc(t('AI 분석 없이 기록'))}</p><p>${esc(task.actual)}</p>`}</article>`).join('')}</details>` : '';
+      return msg`<article class="wb-trash-row"><div><strong>${esc(provider)} · ${esc(item.name)} · ${esc(item.id.slice(-5))}</strong><small>${esc(item.projectName)} · ${esc(new Date(item.deletedAt).toLocaleString(window.WhiteboxI18n.getLocaleTag()))}</small><small>${session ? stoppedArchiveSession(session) ? t('세션 종료됨 · 출력과 검토 기록 보관') : session.status === 'running' ? t('실행 중 · 자동 검토 중지') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.') : t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.')}</small></div><div class="wb-trash-actions"><button data-restore-instance="${esc(item.id)}" ${!busy && restorable ? '' : 'disabled'} aria-busy="${restoring}" aria-label="${esc(provider)} ${esc(item.name)} ${esc(item.id.slice(-5))} 복구">${restoring ? t('복원 중…') : restorable ? stoppedArchiveSession(session) ? t('종료된 기록 복원') : msg`${esc(provider)} 세션 복구` : t('세션 연결 불가')}</button><button data-purge-instance="${esc(item.id)}" class="wb-danger" ${busy ? 'disabled' : ''} aria-label="${esc(item.name)} 영구 삭제">영구 삭제</button></div>${contents}</article>`;
     }).join('') || t('<div class="wb-trash-empty">휴지통이 비어 있습니다.</div>');
   }
 
@@ -1439,7 +1445,7 @@
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
-    const tasks = (value?.result?.tasks || []).filter(task => !task.deferred && task.analysisDepth !== 'deferred'
+    const tasks = explainedTasks(id, sessions.get(id)?.creationId, value?.result?.tasks).filter(task => (task.content || !task.deferred && task.analysisDepth !== 'deferred')
       && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request));
     const latestAnalysis = tasks.at(-1);
     const analyst = !latestAnalysis?.typedAnalysis && latestAnalysis?.analysisProvider || (analysisSettings.provider === 'auto' ? value?.provider : analysisSettings.provider);
@@ -1485,7 +1491,7 @@
         const time = Number.isFinite(observed.getTime()) ? `<time class="wb-task-time" datetime="${observed.toISOString()}" title="${esc(observed.toLocaleString(window.WhiteboxI18n.getLocaleTag()))}">${esc(observed.toLocaleTimeString(window.WhiteboxI18n.getLocaleTag(), { hour: '2-digit', minute: '2-digit' }))}</time>` : '';
         const lifecycleLabel = task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록') : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';
         const lifecycle = lifecycleLabel ? `<p class="wb-record-label">${lifecycleLabel}</p>` : '';
-        if (task.recordOnly || task.typedAnalysis) {
+        if (!task.content && (task.recordOnly || task.typedAnalysis)) {
           const record = msg`<article class="wb-task wb-record-only"><div class="wb-task-title"><h2>${esc(task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}${lifecycle}<p class="wb-record-label">${t(task.typedAnalysis ? "이전 Jev 기록 · 재검토 필요" : task.analysisGate ? "LLM 분석 없이 작업 기록 표시" : task.deferred ? "근거가 확보되면 분석합니다" : "AI 분석 없이 기록")}</p><p>${esc(task.typedAnalysis ? t('이전 Jev 결과에는 LLM 판단이 없습니다. 다시 검토해 주세요.') : task.actual)}</p></article>`;
           return index === 0 ? record : msg`<details class="wb-history" data-review-request="${esc(taskKey)}"><summary><strong>${esc(task.request)}</strong>${analysisTokens(task, value.result, true)}</summary>${record}</details>`;
         }
@@ -1494,16 +1500,15 @@
           : `${task.verification ? `<div class="wb-task-section"><h3>${t('기록에서 확인한 범위')}</h3><p>${esc(task.verification)}</p></div>` : ''}`;
 
         const brief = window.WhiteboxReviewDecision.render(task, { t, esc, taskKey });
-        const summary = window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.summary) ? task.request : task.summary || task.request;
         const card = msg`<article class="wb-task">
-          <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(summary)}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
+          <div class="wb-task-section wb-request"><h3>${!value.currentTaskId ? index === 0 ? t('이번 요청') : t('이전 요청') : task.taskId === value.currentTaskId ? t('이번 요청') : t('이전 요청')}</h3><div class="wb-task-title"><h2>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</h2>${analysisTokens(task, value.result)}</div>${time}</div>
           ${lifecycle}
           ${brief || `<div class="wb-request-comparison"><div class="wb-comparison-row"><h3>${t('요청한 일')}</h3><p>${esc(task.request)}</p></div><div class="wb-comparison-row"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}`}
           ${task.decisionIssues?.length ? `<p class="wb-evidence-limit">${t('판단 요약을 확인하지 못해 작업 기록을 표시합니다.')}</p>` : ''}
           ${task.nextStep ? msg`<button class="wb-next-request" data-followup="${esc(taskKey)}">확인할 내용으로 다음 요청 준비</button>` : ''}
           <details class="wb-task-details" data-review-request="${esc(`details:${taskKey}`)}"><summary>요청과 분석 기록</summary>
             <div class="wb-task-section"><h3>내가 보낸 요청</h3><p>${esc(task.request)}</p></div>
-            ${brief ? `<div class="wb-task-section"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}<div class="wb-task-section"><h3>${t('판단의 근거 기록')}</h3>${task.decision.reasons.map(reason => `<blockquote>${esc(reason.evidenceQuote)}</blockquote>`).join('')}</div>` : ''}
+            ${brief ? `<div class="wb-task-section"><h3>${t('실제로 한 일')}</h3><p>${esc(task.actual)}</p></div>${task.why ? `<div class="wb-task-section"><h3>${t('왜 이렇게 바꿨나요?')}</h3><p>${esc(task.why)}</p></div>` : ''}${checks}<div class="wb-task-section"><h3>${t('판단의 근거 기록')}</h3>${(task.decision?.reasons || []).map(reason => `<blockquote>${esc(reason.evidenceQuote)}</blockquote>`).join('')}</div>` : ''}
             <div class="wb-verdict ${alignment}"><span class="wb-check-label">요청 충족 여부</span><strong>${label}</strong><p>${esc(task.explanation)}</p></div>
             ${task.understanding ? msg`<div class="wb-task-section"><h3>어떻게 동작하나요?</h3><p>${esc(task.understanding)}</p></div>` : ''}
             ${task.impact ? msg`<div class="wb-task-section"><h3>사용자에게 어떤 영향이 있나요?</h3><p>${esc(task.impact)}</p></div>` : ''}
@@ -1512,7 +1517,7 @@
           </details>
         </article>`;
         if (index === 0) return card;
-        return msg`<details class="wb-history" data-review-request="${esc(`${task.taskId || task.analysisId || task.observedAt || ''}:${task.request}`)}"><summary><span class="wb-history-label">이전 요청 ${tasks.length - index}</span>${analysisTokens(task, value.result, true)}<strong>${esc(summary)}</strong></summary>${card}</details>`;
+        return msg`<details class="wb-history" data-review-request="${esc(`${task.taskId || task.analysisId || task.observedAt || ''}:${task.request}`)}"><summary><span class="wb-history-label">이전 요청 ${tasks.length - index}</span>${analysisTokens(task, value.result, true)}<strong>${esc(window.WhiteboxReviewDecision.displayTitle(task))}</strong></summary>${card}</details>`;
       });
       html += `<section class="wb-current-review" ${reviewView === 'history' ? 'hidden' : ''}>${cards[0]}</section><section class="wb-review-history" ${reviewView === 'history' ? '' : 'hidden'}>${cards.slice(1).join('') || (reviewView === 'history' ? `<p class="wb-review-notice">${t('아직 이전 분석 기록이 없어요.')}</p>` : '')}</section>`;
     }
@@ -1891,6 +1896,8 @@
     inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => sessions.set(item.id, item));
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
+    try { contentHistory = (await api.terminalReview?.({ historyContent: true }))?.entries || []; }
+    catch { /* Originals stay readable when optional historical additions are unavailable. */ }
     for (const id of saved.handledCollaborations || []) if (typeof id === 'string') handledCollaborations.add(id);
     analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', jevEnabled: typeof saved.analysisSettings?.jevEnabled === 'boolean' ? saved.analysisSettings.jevEnabled : saved.analysisSettings?.provider === 'jev', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }

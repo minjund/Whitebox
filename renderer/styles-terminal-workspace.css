@@ -426,6 +426,14 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 .wb-decision-caution { border-left: 2px solid var(--wb-muted); padding-left: 12px; }
 .wb-decision-action p + p { margin-top: 7px; }
 .wb-decision .wb-decision-condition { color: var(--wb-muted); font-size: 14px; }
+.wb-content-claim { white-space: pre-wrap; }
+.wb-content-claim + .wb-content-claim { margin-top: 12px; }
+.wb-content-basis { display: block; color: var(--wb-muted); font-size: 11px; font-weight: 500; margin-bottom: 3px; }
+.wb-content-source { color: var(--wb-muted); font-size: 12px; margin: 0 0 12px; }
+.wb-content-output pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; padding: 12px; border: 1px solid var(--wb-line); border-radius: 8px; }
+.wb-answer-content blockquote { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--wb-line); font-size: 13px; }
+.wb-trash-row { flex-wrap: wrap; }
+.wb-trash-content { width: 100%; flex-basis: 100%; }
 .wb-task blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--wb-line); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 #terminalWorkspace .wb-task h2 { text-wrap: balance; }
 .wb-task-details > summary { min-height: 40px; }
@@ -490,3 +498,8 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 #terminalWorkspace #wbReviewAuto[aria-pressed=false] .wb-auto-switch::after{transform:translateX(0)}
 #terminalWorkspace #wbReview > header .wb-review-close{display:grid;place-items:center;width:32px;min-width:32px;min-height:36px;padding:6px}
 @media(prefers-reduced-motion:reduce){#terminalWorkspace #wbReviewAuto .wb-auto-switch::after{transition:none}}
+
+#terminalWorkspace .wb-content-time{font-size:11px;color:var(--wb-muted);border-left:2px solid var(--wb-line);padding-left:9px;margin:9px 0}
+#terminalWorkspace .wb-content-time p{margin:3px 0}
+#terminalWorkspace .wb-content-handoff{border:1px solid var(--wb-line);border-radius:8px;padding:10px;margin:12px 0}
+#terminalWorkspace .wb-content-handoff blockquote{margin:6px 0 0;padding:8px;border-left:2px solid var(--wb-accent);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
