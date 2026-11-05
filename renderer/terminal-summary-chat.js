@@ -47,6 +47,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const value = record(id);
     if (!value || value.mode !== 'summary') return;
     value.mode = 'terminal';
+    for (const pending of value.messages.filter(item => item.state === 'queued')) { pending.state = 'interrupted'; pending.error = message; }
     context.save();
     context.reveal(id);
     context.report(message);
@@ -128,7 +129,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         if (message.targetCreationId !== member.creationId || message.targetProviderPid !== member.providerPid || message.targetProvider !== member.provider) {
           message.state = 'interrupted'; message.error = t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'); context.save(); continue;
         }
-        if (!member.ready || detectedPrompt(value.id)) continue;
+        // Finish the preceding reply's summary before another request can
+        // replace the terminal's observed turn, including identical requests.
+        mergeAnswers(value);
+        if (!member.ready || detectedPrompt(value.id) || value.messages.some(item => item.state === 'sent' && !item.answerKey)) continue;
         message.state = 'sending'; context.save(); render();
         try {
           const result = await api.terminalCollaboration({ operation: 'summary-send', id: message.id, groupId: context.groupId(value.id),
@@ -189,7 +193,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       markup += `<article class="wb-summary-prompt"><p>${esc(t('터미널에서 응답이 필요합니다.'))}</p><button data-summary-terminal>${esc(t('터미널에서 확인'))}</button></article>`;
     }
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(review?.state);
-    if (pending || member.activity?.state === 'working') markup += `<p class="wb-summary-working" role="status">${esc(t(review?.state === 'reviewing' ? '요약 중…' : 'AI가 작업 중입니다.'))}</p>`;
+    const waitingForSummary = member.ready && value.messages.some(item => item.state === 'sent' && !item.answerKey);
+    if (pending || waitingForSummary || member.activity?.state === 'working') markup += `<p class="wb-summary-working" role="status">${esc(t(review?.state === 'reviewing' || waitingForSummary ? '요약 중…' : 'AI가 작업 중입니다.'))}</p>`;
     if (markup !== lastMarkup) {
       const nearBottom = list.scrollHeight - list.clientHeight - list.scrollTop < 80;
       const opened = [...list.querySelectorAll('details')].map((node, index) => node.open ? index : -1);

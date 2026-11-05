@@ -36,9 +36,15 @@ function createFixture({ manager, profile, root }) {
     async launch(id, waitFor) {
       const quote = value => "'" + value.replace(/'/gu, process.platform === 'win32' ? "''" : "'\"'\"'") + "'";
       const script = path.join(root, 'scripts/fixtures/summary-chat-provider.cjs');
+      // Electron is a GUI subsystem executable on Windows. PowerShell does not
+      // attach its Node-mode stdin to ConPTY; use the console Node from npm.
+      const node = process.platform === 'win32'
+        ? process.env.npm_node_execpath || require('node:child_process').execFileSync('where.exe', ['node'], { encoding: 'utf8' }).trim().split(/\r?\n/u)[0]
+        : process.execPath;
+      assert(fs.statSync(node).isFile(), 'fixture needs an actual Node executable');
       const command = process.platform === 'win32'
-        ? `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(process.execPath)} ${quote(script)}`
-        : ` ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(script)}`;
+        ? `& ${quote(node)} ${quote(script)}`
+        : ` ELECTRON_RUN_AS_NODE=1 ${quote(node)} ${quote(script)}`;
       await manager.command(id, command);
       await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_READY')`, 'fixture provider startup');
       const replay = manager.get(id, true).replay;
@@ -74,6 +80,9 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile }) {
   await waitFor('document.querySelector("#wbSummaryMessages").textContent.includes("요약: QUEUED_SENT")', 'matching answer summary displayed');
   assert(await summary(), 'answer arrival retains summary mode');
   assert(await evaluate('(() => {const nodes=[...document.querySelectorAll("#wbSummaryMessages article")];const i=nodes.findIndex(n=>n.classList.contains("wb-summary-user")&&n.textContent.includes("QUEUED_SENT"));return i>=0&&nodes[i+1].classList.contains("wb-summary-answer")&&nodes[i+1].textContent.includes("QUEUED_SENT");})()'), 'answers remain next to their matching requests');
+  await send('REPEAT'); await send('REPEAT');
+  await waitFor('document.querySelectorAll(".wb-summary-answer").length >= 4', 'two identical requests retain separate matching summaries');
+  assert.equal([...fixture.controller.jobs.values()].filter(job=>job.request==='REPEAT'&&job.state==='completed').length, 2);
   await send('PERMISSION');
   await waitFor('Boolean(document.querySelector("[data-summary-choice=proceed]"))', 'approval card from actual PTY');
   assert(await evaluate('document.querySelector(".wb-summary-prompt pre").textContent.includes("Would you like to make the following edits?")'));
