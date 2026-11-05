@@ -77,7 +77,7 @@ jobs:
           "digest=sha256:$digest" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "Bridge source: ${{ inputs.source_sha }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "Bridge SHA-256: $digest" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: LoadToAgent-legacy-update-bridge-${{ inputs.source_sha }}
           path: release-legacy-update-bridge/LoadToAgent-Setup-1.6.23.exe
