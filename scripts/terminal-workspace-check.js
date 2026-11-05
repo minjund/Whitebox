@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { TerminalManager } = require('../src/terminalManager');
+const WhiteboxWorkspaceLayout = require('../renderer/terminal-workspace-layout');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-workspace-check-'));
 app.setPath('userData', profile);
@@ -922,8 +923,8 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
     await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`, .5, .1);
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'column');
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge inserts above target without changing membership');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'row', 'two terminals stay in one aligned grid row');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge inserts before target without changing membership');
     // Drop onto another project, then return the same session to its original panel.
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
@@ -1602,8 +1603,8 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(`${JSON.stringify(originalRoster)}.every(id=>Boolean(document.querySelector('#wbCanvas [data-terminal-id="'+id+'"]')))`), true, 'dragging a panel card displays every member of that panel');
     await nativeDrag(foreignId, '#wbCanvas .wb-divider', `[data-drag-panel="${beforeAdd.panelId}"]`);
     const gapPlacement = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return [...s.spaces,s.standalone].find(o=>o.id===s.selectedSpace).viewLayout;})()');
-    assert.equal(gapPlacement.axis,'row','whole-panel gap drop arranges against another panel, never one of its own members');
-    assert.equal(gapPlacement.first.id,singlePanelId);
+    assert.equal(WhiteboxWorkspaceLayout.ids(gapPlacement)[0],singlePanelId,'whole-panel gap drop arranges against another panel, never one of its own members');
+    assert.equal(JSON.stringify(gapPlacement),JSON.stringify(WhiteboxWorkspaceLayout.grid(gapPlacement)),'whole-panel drop keeps the aligned grid');
     const thirdTerminalId = await evaluate(`WhiteboxWorkspaceLayout.ids([...WhiteboxWorkspace.getState().spaces,WhiteboxWorkspace.getState().standalone].flatMap(o=>o.tabs).find(p=>p.id==='${thirdPanel}').layout)[0]`);
     await nativeDrag(thirdTerminalId, `#wbCanvas [data-terminal-id="${singlePanelId}"]`, `[data-drag-panel="${thirdPanel}"]`);
     const togetherState = await evaluate('(() => {const s=WhiteboxWorkspace.getState();return {visible:[...document.querySelectorAll("#wbCanvas .wb-pane")].map(n=>({id:n.dataset.terminalId,panel:n.dataset.panelId})), panels:[...s.spaces,s.standalone].flatMap(o=>o.tabs).map(p=>({id:p.id,ids:WhiteboxWorkspaceLayout.ids(p.layout)})), pins:s.pinnedPanels, selected:s.selectedSpace};})()');

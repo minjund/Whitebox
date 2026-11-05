@@ -392,7 +392,7 @@
     const available = new Set(owners().flatMap(item => item.tabs.flatMap(panel => layout.ids(panel.layout))));
     const view = owner.viewLayout || current.viewLayout, present = layout.ids(view);
     owner.viewLayout = present.length && present.length === new Set(present).size && present.every(id => available.has(id))
-      ? view : layout.restore(view, available) || layout.restore(current.layout, available);
+      ? view : layout.aligned(layout.restore(view, available) || layout.restore(current.layout, available));
     current.viewLayout = owner.viewLayout;
     return owner.viewLayout;
   }
@@ -1965,7 +1965,7 @@
     }
     if (!spaces.length && !Array.isArray(saved.spaces)) spaces.push({ id: uuid(), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.', name: t('내 작업 공간'), tabs: [], activeTab: '', nextNumber: 1 });
     pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
-    for (const owner of owners()) { owner.viewLayout = layout.restore(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.restore(panel.viewLayout, available); }
+    for (const owner of owners()) { owner.viewLayout = layout.aligned(layout.restore(owner.viewLayout, available)); for (const panel of owner.tabs) { panel.layout = layout.aligned(panel.layout); panel.viewLayout = layout.aligned(layout.restore(panel.viewLayout, available)); } }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
     // The saved canvas can intentionally show only some members of a panel.
     // Older profiles without a canvas may still recover their pinned panels.
