@@ -10,6 +10,7 @@ const { main: control, request: rpc } = require('../bin/panel-control');
 const { completedTurn, completionStamp, inputReady } = require('../src/terminalReviewTurns');
 (async () => {
  await require('./terminal-panel-close-test')();
+ require('./panel-control-directory-test')();
  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-collaboration-'));
  const controls = [];
  try {
@@ -130,14 +131,13 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   assert.equal(autoWrites.at(-1).data, '\x1b[200~ㅎㅇ\x1b[201~\r');
   await automatic.sync(answered);
   assert.equal((await control([...args('wait'), socketJob.id, '0'], socketOptions)).state, 'completed');
-  // cmux-style two-step paste/Enter, with edited draft protection.
+  // cmux-style two-step paste/Enter. A multi-line paste is shown collapsed by
+  // the CLI, so the screen never equals the sent text; Enter must still go out.
   await automatic.sync(autoPayload());
-  await control([...args('send'), '--surface', autoSessions[1].id, 'hello'], socketOptions);
-  assert.equal(autoWrites.at(-1).data, '\x1b[200~hello\x1b[201~');
-  const edited = autoPayload(); edited.frames[1].text = '› user edited';
-  await automatic.sync(edited);
-  await assert.rejects(control([...args('send-key'), '--surface', autoSessions[1].id, 'enter'], socketOptions), /draft changed/);
-  edited.frames[1].text = '› hello'; await automatic.sync(edited);
+  await control([...args('send'), '--surface', autoSessions[1].id, 'line one\nline two'], socketOptions);
+  assert.equal(autoWrites.at(-1).data, '\x1b[200~line one\nline two\x1b[201~');
+  const collapsed = autoPayload(); collapsed.frames[1].text = '› [Pasted text #1 +1 lines]';
+  await automatic.sync(collapsed);
   await control([...args('send-key'), '--surface', autoSessions[1].id, 'enter'], socketOptions);
   assert.equal(autoWrites.at(-1).data, '\r');
   uncertain = true; await automatic.sync(autoPayload());
@@ -172,6 +172,14 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   assert.equal(autoWrites.at(-1).data, 'echo pending');
   const pendingShell = shellPayload(false); pendingShell.frames[0].text = '$ echo pending';
   await shell.sync(pendingShell);
+  await control([...args('send-key'), 'enter'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, '\r');
+  // Multi-line shell paste renders with continuation prompts; Enter still submits.
+  await shell.sync(shellPayload(true));
+  await control([...args('send'), '--', 'echo first\necho second'], shellOptions);
+  assert.equal(autoWrites.at(-1).data, '\x1b[200~echo first\necho second\x1b[201~');
+  const multiShell = shellPayload(true); multiShell.frames[0].text = '$ echo first\n> echo second';
+  await shell.sync(multiShell);
   await control([...args('send-key'), 'enter'], shellOptions);
   assert.equal(autoWrites.at(-1).data, '\r');
   // Batch creation through the public socket, with exact adoption/launch order.
@@ -210,7 +218,7 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   assert.equal(creator.jobs.get(uncertainCreation.jobs[0].id).state,'interrupted');
   await creator.sync(creationPayload()); assert.equal(launches.length,4,'lost launch acknowledgement never replays');
   console.log('PASS new-terminal batch: same-panel creation, adoption before launch, wait IDs, validation, timeout and uncertain delivery without replay');
-  console.log('Panel control: real socket/CLI, source ancestry, same-panel routing, paste/Enter, edited draft protection, moves, no instruction injection passed');
+  console.log('Panel control: real socket/CLI, source ancestry, same-panel routing, paste/Enter including multi-line submit, moves, no instruction injection passed');
   console.log('Terminal collaboration: scoped delivery, drafts, busy targets, exact replies, deduplication, timeout, restart and creation passed');
  } finally { await Promise.all(controls.map(control => control.close())); fs.rmSync(directory,{recursive:true,force:true}); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -385,6 +385,10 @@ function installBridgeLauncher(home = bridgeHome) {
     : path.join(__dirname, 'bin', 'whitebox.js');
   const launcher = writeBridgeLauncher({ directory, command: 'whitebox', script });
   require('./bin/panel-provider').install({ directory, runtime: process.execPath, script: path.join(path.dirname(script), 'panel-provider.js') });
+  // Codex has no per-session hook flag; the guard is a no-op outside Whitebox PTYs.
+  try {
+    require('./src/terminalGuardHookInstaller').installCodexTerminalGuard({ home, nodeExecutable: process.execPath, scriptPath: path.join(path.dirname(script), 'terminal-guard-hook.js') });
+  } catch (error) { reportRecoverableError('terminal-guard-hook:codex', error); }
   return {
     path: launcher,
     directory,
@@ -2251,7 +2255,7 @@ function bootstrapState() {
     snapshot: visibleSnapshotSessions(lastSnapshot),
     activeRuns: runner ? runner.listVisibleActive() : [],
     versions: { app: app.getVersion(), electron: process.versions.electron, node: process.versions.node },
-    terminalWorkspace: { defaultCwd: os.homedir() },
+    terminalWorkspace: { defaultCwd: require('./src/terminalDefaultCwd').defaultTerminalCwd(), homeCwd: os.homedir() },
     platform: {
       id: process.platform,
       label: process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux'),

@@ -49,7 +49,15 @@ function resolveProvider(provider, env = process.env, directory = path.join(requ
   }
   throw new Error(`${provider} executable was not found outside the Whitebox adapter directory`);
 }
-function providerArgs(provider, args, server) {
+// Session-scoped Claude hooks that keep terminal operations inside Whitebox.
+function guardSettings(command) {
+  const handler = [{ type: 'command', command, timeout: 30 }];
+  return { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: handler }], SessionStart: [{ hooks: handler }], UserPromptSubmit: [{ hooks: handler }] } };
+}
+function guardHookCommand(runtime = process.execPath) {
+  return `ELECTRON_RUN_AS_NODE=1 ${quote(runtime)} ${quote(path.join(__dirname, 'terminal-guard-hook.js'))} --whitebox-terminal-guard`;
+}
+function providerArgs(provider, args, server, guardCommand = '') {
   // Utilities, nested providers and one-shot calls are not interactive panel peers.
   const utility = args.some(arg => ['--help', '-h', '--version', '-v', '-p', '--print'].includes(arg))
     || args.some(arg => ['exec', 'e', 'review', 'mcp', 'plugin', 'plugins', 'login', 'logout', 'app', 'app-server', 'agents', 'update', 'doctor', 'completion'].includes(arg));
@@ -59,8 +67,14 @@ function providerArgs(provider, args, server) {
     const result = [...args], existing = result.indexOf('--mcp-config');
     if (existing >= 0) result.splice(existing + 1, 0, config);
     else { const separator = result.indexOf('--'); result.splice(separator < 0 ? result.length : separator, 0, '--mcp-config', config); }
+    // The user's own --settings flag is kept as-is; global settings are never modified.
+    if (guardCommand && !result.includes('--settings')) {
+      const separator = result.indexOf('--');
+      result.splice(separator < 0 ? result.length : separator, 0, '--settings', JSON.stringify(guardSettings(guardCommand)));
+    }
     return result;
   }
+  // Codex ignores hooks passed with -c; its guard is in hooks.json (src/terminalGuardHookInstaller.js).
   const prefix = 'mcp_servers.whitebox_panel';
   return ['-c', `${prefix}.command=${JSON.stringify(server.command)}`, '-c', `${prefix}.args=${JSON.stringify(server.args)}`, '-c', `${prefix}.env=${'{'}${Object.entries(server.env).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(',')}${'}'}`, ...args];
 }
@@ -74,7 +88,7 @@ async function main(provider, args, options = {}) {
       const identity = await (options.control || control)(['identify']);
       env.WHITEBOX_SURFACE_ID = identity.surface_id;
       env.WHITEBOX_PANEL_BRIDGE_ACTIVE = '1';
-      launchArgs = providerArgs(provider, args, { command: process.execPath, args: [path.join(__dirname, 'panel-mcp.js')], env: { ELECTRON_RUN_AS_NODE: '1', WHITEBOX_SURFACE_ID: identity.surface_id, WHITEBOX_PANEL_DIRECTORY: require('./panel-control').directory(env) } });
+      launchArgs = providerArgs(provider, args, { command: process.execPath, args: [path.join(__dirname, 'panel-mcp.js')], env: { ELECTRON_RUN_AS_NODE: '1', WHITEBOX_SURFACE_ID: identity.surface_id, WHITEBOX_PANEL_DIRECTORY: require('./panel-control').directory(env) } }, guardHookCommand());
     } catch { /* Outside a live Whitebox panel: preserve the original CLI behavior. */ }
   }
   delete env.ELECTRON_RUN_AS_NODE; delete env.WHITEBOX_SOURCE_LAUNCHER;
@@ -85,4 +99,4 @@ async function main(provider, args, options = {}) {
   return child;
 }
 if (require.main === module) main(process.argv[2], process.argv.slice(3)).catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
-module.exports = { install, workspaceOptions, createWorkspaceTerminal, resolveProvider, providerArgs, main };
+module.exports = { install, workspaceOptions, createWorkspaceTerminal, resolveProvider, providerArgs, guardSettings, guardHookCommand, main };

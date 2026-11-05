@@ -82,8 +82,12 @@ module.exports = async function policyChecks() {
     await capture({ force: true }); assert.equal(calls.length, 3, 'manual refresh cannot bill identical successful evidence');
     service = new TerminalReview(options);
     await capture(); assert.equal(calls.length, 3, 'restart retains result/digest without another call');
-    await submit('repeat', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약 결과를 바로 보여줍니다.' });
-    assert.equal(calls.length, 4, 'identical text submitted separately is a distinct request');
+    await submit('repeat', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약 결과를 바로 보여줍니다.' }); await tick();
+    assert.equal(calls.length, 3, 'identical evidence reuses the cached model response');
+    assert.ok(service.entries.get('one').result.tasks.some(t => t.taskId.endsWith(':conversation:repeat') && t.analysisCached),
+      'identical text submitted separately is still a distinct request');
+    await submit('repeat-changed', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약 결과를 다시 보여줍니다.' });
+    assert.equal(calls.length, 4, 'changed evidence calls the model');
     calls[3].reject(new Error('fixture failure')); await tick();
     for (let i = 0; i < 3; i++) await capture();
     assert.equal(calls.length, 4, 'failure cannot automatically bill repeated retries');
@@ -91,7 +95,7 @@ module.exports = async function policyChecks() {
     await capture({ enabled: false });
     await finish(calls[4], '대신 요약만 보여줘', '요약 결과를 바로 보여줍니다.');
     assert.equal(service.entries.get('one').state, 'paused');
-    assert.equal(service.entries.get('one').result.tasks.filter(t => t.analysisId).length, 2, 'disabled analysis cannot publish a late result');
+    assert.equal(service.entries.get('one').result.tasks.filter(t => t.analysisId).length, 3, 'disabled analysis cannot publish a late result (two model results plus one cached repeat)');
     // Process identity invalidates an in-flight model response.
     await capture();
     await submit('new-child-task', '작동 원리 설명해줘', { state: 'completed', evidence: 'ASSISTANT: 입력을 읽고 결과를 표시하는 방식입니다.' });

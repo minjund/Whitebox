@@ -80,6 +80,23 @@ app.whenReady().then(async () => {
     await checkTerminalRightEdge(evaluate, win.webContents);
     console.log('PASS: final CJK cells remain fully painted at multiple fonts, with and without scrollback');
 
+    const alignment = await evaluate(async () => {
+      const mount = document.querySelector('#terminalRuntimeMount');
+      const canvas = term.renderer.getCanvas();
+      const ratio = window.devicePixelRatio || 1;
+      const offset = () => { const rect = canvas.getBoundingClientRect(); return [rect.left * ratio, rect.top * ratio]; };
+      const aligned = () => offset().every(value => Math.abs(value - Math.round(value)) < 0.01);
+      // Small panes get subpixel origins from wrapped headers and split percentages.
+      mount.style.margin = '7.37px 0 0 10.31px';
+      entry.fit.fit();
+      const shifted = aligned();
+      mount.style.margin = '';
+      entry.fit.fit();
+      return { shifted, restored: aligned(), transform: canvas.style.transform };
+    });
+    assert.deepEqual(alignment, { shifted: true, restored: true, transform: '' });
+    console.log('PASS: terminal canvas snaps to device pixels at subpixel pane origins');
+
     const vt = await evaluate(async () => {
       await write('한글😀 ABC\x1b[31m RED\x1b[0m');
       const unicode = contents();

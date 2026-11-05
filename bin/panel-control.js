@@ -6,10 +6,26 @@ const path = require('path');
 const net = require('net');
 const { execFileSync } = require('child_process');
 const COMMANDS = new Set(['identify', 'list-panels', 'new-terminal', 'close-terminal', 'read-screen', 'send', 'send-key', 'ask', 'wait']);
-function directory(env = process.env) {
+// Installations migrated from LoadToAgent keep their original userData root
+// (src/brandMigration.js), so the app may publish control.json there.
+const PROFILE_NAMES = Object.freeze(['Whitebox', 'LoadToAgent', 'loadtoagent']);
+function directoryCandidates(env = process.env, platform = process.platform, home = os.homedir()) {
+  const base = platform === 'darwin' ? path.join(home, 'Library/Application Support') : platform === 'win32' ? env.APPDATA : env.XDG_CONFIG_HOME || path.join(home, '.config');
+  return PROFILE_NAMES.map(name => path.join(base || home, name, 'terminal-collaboration'));
+}
+function directory(env = process.env, options = {}) {
   if (env.WHITEBOX_PANEL_DIRECTORY) return env.WHITEBOX_PANEL_DIRECTORY;
-  const base = process.platform === 'darwin' ? path.join(os.homedir(), 'Library/Application Support') : process.platform === 'win32' ? env.APPDATA : env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, 'Whitebox', 'terminal-collaboration');
+  const fileSystem = options.fileSystem || fs;
+  const candidates = directoryCandidates(env, options.platform, options.home);
+  // The running app rewrites control.json at startup, so the newest one is live.
+  let best = null;
+  for (const candidate of candidates) {
+    try {
+      const stat = fileSystem.statSync(path.join(candidate, 'control.json'));
+      if (stat.isFile() && (!best || stat.mtimeMs > best.mtimeMs)) best = { candidate, mtimeMs: stat.mtimeMs };
+    } catch {}
+  }
+  return best ? best.candidate : candidates[0];
 }
 function ancestors() {
   const text = process.platform === 'win32'
@@ -84,4 +100,4 @@ async function main(argv, options = {}) {
   if (['failed', 'interrupted'].includes(result.state)) throw new Error(`${result.error || result.state} (job ${result.id})`);
   return !json && op === 'read-screen' ? result.text : result;
 }
-module.exports = { COMMANDS, main, request, directory };
+module.exports = { COMMANDS, main, request, directory, directoryCandidates };

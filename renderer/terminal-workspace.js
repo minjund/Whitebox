@@ -1014,7 +1014,8 @@
           return;
         }
         if (!autoReview || !['\r', '\n'].includes(data) || trashed(session.id)
-          || ['shell', 'unbound', 'paused'].includes(reviews.get(session.id)?.state)) return;
+          // A stale 'paused' projection right after re-enabling must not drop the request.
+          || ['shell', 'unbound'].includes(reviews.get(session.id)?.state)) return;
         const screen = terminal.readTerminal(session.id);
         const { submittedPrompt, completionStamp } = window.WhiteboxTerminalReviewTurns;
         const request = submittedPrompt(screen);
@@ -1053,7 +1054,7 @@
     handle.setAttribute('role', 'separator'); handle.setAttribute('aria-label', t('터미널 분할 크기'));
     handle.setAttribute('aria-orientation', tree.axis === 'row' ? 'vertical' : 'horizontal');
     const resize = ratio => {
-      tree.ratio = Math.min(.85, Math.max(.15, ratio));
+      tree.ratio = Math.min(.9, Math.max(.1, ratio));
       first.style.flex = `${tree.ratio} 1 0%`; second.style.flex = `${1 - tree.ratio} 1 0%`;
       handle.setAttribute('aria-valuenow', String(Math.round(tree.ratio * 100)));
     };
@@ -1870,7 +1871,11 @@
     fontFamily = event.target.value;
     panes.forEach(pane => pane.dispose?.setFontFamily?.(fontFamily)); renderFontPreview(); save();
   });
-  $('#wbAutoReview').addEventListener('change', event => { autoReview = event.target.checked; save(); renderReview(); captureReviews(); });
+  $('#wbAutoReview').addEventListener('change', event => {
+    autoReview = event.target.checked; save(); renderReview();
+    // An in-flight poll may still carry the previous setting; observe again after it.
+    (reviewBusy ? reviewTask.catch(() => {}) : Promise.resolve()).then(() => captureReviews());
+  });
 
   async function init() {
     if (!api) throw new Error(t('Whitebox 앱에서 실행해 주세요.'));
@@ -1935,7 +1940,12 @@
     }
     const archivedIds = new Set(trash.filter(trashSession).map(item => item.id));
     const available = new Set([...sessions.keys()].filter(id => !archivedIds.has(id))), seen = new Set(archivedIds);
-    spaces = (Array.isArray(saved.spaces) ? saved.spaces : []).filter(item => typeof item.cwd === 'string' && item.cwd).slice(0, 100).map(item => {
+    // The auto-created first workspace used the home folder, where Claude never
+    // remembers folder trust. Move only that default entry to the trusted default folder.
+    const { defaultCwd, homeCwd } = bootstrap.terminalWorkspace || {};
+    const migrateDefaultSpace = item => defaultCwd && homeCwd && defaultCwd !== homeCwd && item.cwd === homeCwd
+      && ['내 작업 공간', 'My workspace', '我的工作区'].includes(item.name) ? { ...item, cwd: defaultCwd } : item;
+    spaces = (Array.isArray(saved.spaces) ? saved.spaces : []).filter(item => typeof item.cwd === 'string' && item.cwd).slice(0, 100).map(migrateDefaultSpace).map(item => {
       const tabs = (Array.isArray(item.tabs) ? item.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });

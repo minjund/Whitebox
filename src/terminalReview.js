@@ -15,6 +15,10 @@ const { contentInstructions, assessContent, historyContent } = require('./termin
 const { artifactText } = require('./terminalReviewArtifacts');
 
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
+const RESPONSE_CACHE_VERSION = 1;
+const RESPONSE_CACHE_LIMIT = 48;
+const RESPONSE_CACHE_MAX_CHARS = 64 * 1024;
+const RESPONSE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const terminalKey = session => JSON.stringify([session.id, session.creationId, session.pid, session.createdAt]);
 
 function analysisPolicy(chunk, records, locale) {
@@ -212,11 +216,18 @@ class TerminalReview extends EventEmitter {
     this.scheduling = new Map(); this.priorityRuns = 0; this.cooldowns = new Map(); this.retryTimer = null;
     runner?.on?.('changed', () => queueMicrotask(() => this.drain()));
     this.entries = new Map(); this.busy = false; this.locks = new Map(); this.saved = {};
+    // Successful model responses keyed by the exact prompt, provider and model.
+    // The prompt embeds the request and evidence, so changed evidence never hits.
+    this.responses = new Map();
     if (file) {
       try {
         const data = JSON.parse(require('fs').readFileSync(file, 'utf8'));
         if (data.version === 1) {
           this.saved = data.entries || {};
+          for (const [key, value] of Object.entries(data.responses || {})) {
+            if (/^[0-9a-f]{64}$/u.test(key) && value && Number.isFinite(value.at) && now() - value.at < RESPONSE_CACHE_TTL_MS) this.responses.set(key, value);
+          }
+          while (this.responses.size > RESPONSE_CACHE_LIMIT) this.responses.delete(this.responses.keys().next().value);
           for (const [provider, until] of Object.entries(data.cooldowns || {})) {
             if (['codex', 'claude', 'jev'].includes(provider) && Number.isFinite(until) && until > now() && until <= now() + 86400000) this.cooldowns.set(provider, until);
           }
@@ -235,15 +246,48 @@ class TerminalReview extends EventEmitter {
       pending: entry.pending, retryAt: entry.retryAt, message: entry.message };
     const keys = Object.keys(this.saved);
     for (const key of keys.slice(0, Math.max(0, keys.length - 64))) delete this.saved[key];
+    if (!this.writeFile()) entry.cacheError = true;
+  }
+
+  writeFile() {
+    if (!this.file) return true;
     const fs = require('fs'), path = require('path'), temporary = `${this.file}.${global.process.pid}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      const serialized = JSON.stringify({ version: 1, entries: this.saved, cooldowns: Object.fromEntries(this.cooldowns) });
-      if (serialized === this.lastSaved) return;
+      const serialized = JSON.stringify({ version: 1, entries: this.saved, cooldowns: Object.fromEntries(this.cooldowns),
+        responses: Object.fromEntries(this.responses) });
+      if (serialized === this.lastSaved) return true;
       fs.writeFileSync(temporary, serialized, { mode: 0o600 });
       fs.renameSync(temporary, this.file);
       this.lastSaved = serialized;
-    } catch (error) { entry.cacheError = true; try { fs.unlinkSync(temporary); } catch {} }
+      return true;
+    } catch { try { fs.unlinkSync(temporary); } catch {} return false; }
+  }
+
+  responseKey({ provider, model, prompt }) {
+    return createHash('sha256').update(JSON.stringify([RESPONSE_CACHE_VERSION, provider || '', model || '', prompt])).digest('hex');
+  }
+
+  // Model call with a bounded response cache. `fresh` skips the lookup for an
+  // explicit re-analysis but still stores its result. Failures are never cached.
+  async generate(request, { fresh = false, keys = null } = {}) {
+    const key = this.responseKey(request);
+    keys?.push(key);
+    const hit = fresh ? null : this.responses.get(key);
+    if (hit && this.now() - hit.at < RESPONSE_CACHE_TTL_MS) {
+      this.responses.delete(key); this.responses.set(key, hit);
+      const value = hit.value;
+      return { ...(typeof value === 'string' ? { text: value } : value), usage: zeroUsage(), cached: true };
+    }
+    const value = await this.runner.generateTerminalReview(request);
+    const text = typeof value === 'string' ? value : value?.text;
+    if (typeof text === 'string' && text.length <= RESPONSE_CACHE_MAX_CHARS) {
+      this.responses.delete(key);
+      this.responses.set(key, { at: this.now(), value: typeof value === 'string' ? value : { ...value, timings: undefined } });
+      while (this.responses.size > RESPONSE_CACHE_LIMIT) this.responses.delete(this.responses.keys().next().value);
+      this.writeFile();
+    }
+    return value;
   }
 
   capture(options = {}) {
@@ -400,7 +444,16 @@ class TerminalReview extends EventEmitter {
       return this.project(entry);
     }
     if (!enabled && !reanalyze) {
-      if (entry.state !== 'paused') entry.revision++;
+      if (entry.state !== 'paused') {
+        entry.revision++;
+        // Keep the request being observed, the queued evidence and an analysis
+        // whose late result is discarded below, so re-enabling resumes them.
+        const interrupted = entry.active?.chunk && !entry.active.chunk.reanalyze ? [entry.active.chunk] : [];
+        const work = [...interrupted, ...entry.pending].filter((chunk, index, all) => all.findIndex(item => item.taskId === chunk.taskId) === index);
+        entry.resume = entry.turn || entry.following || work.length
+          ? { turn: entry.turn, following: entry.following, pending: work, native: entry.lastNative || '', submission: entry.lastSubmission || '' }
+          : null;
+      }
       entry.state = 'paused'; entry.pending = []; entry.turn = null; entry.following = null; entry.failed = null; entry.message = '';
       entry.lastSubmission = submission?.id || entry.lastSubmission;
       entry.observedSince = this.now();
@@ -425,13 +478,26 @@ class TerminalReview extends EventEmitter {
     const binding = `${process.provider}:${process.pid}`;
     if (entry.binding !== binding) {
       entry.pending = []; entry.turn = null; entry.following = null; entry.roots = {}; entry.latest = {};
-      entry.revision++; entry.binding = binding; entry.state = 'watching'; entry.lastNative = '';
+      entry.revision++; entry.binding = binding; entry.state = 'watching'; entry.lastNative = ''; entry.resume = null;
     }
     entry.provider = process.provider; entry.providerPid = process.pid;
-    if (entry.state === 'paused') entry.state = 'watching';
+    const resuming = entry.state === 'paused';
+    if (resuming) entry.state = 'watching';
     const frame = stableScreen(clip(text, 24000));
     const completion = await this.completion.observe(process);
     const nativeKey = completion.requestId ? `${completion.conversationId || binding}:${completion.requestId}` : '';
+    if (resuming) {
+      const stash = entry.resume; entry.resume = null;
+      // Restore paused work only while no newer request has started; requests
+      // submitted while review was off are intentionally not analyzed.
+      if (stash && (!nativeKey || !stash.native || nativeKey === stash.native)
+        && (!submission?.id || submission.id === stash.submission)) {
+        entry.turn = stash.turn; entry.following = stash.following;
+        for (const chunk of stash.pending) {
+          if (!entry.pending.some(item => item.taskId === chunk.taskId)) entry.pending.push({ ...chunk, queuedAt: this.now() });
+        }
+      }
+    }
     const rootKey = completion.requestId ? `${completion.conversationId || binding}:${completion.rootRequestId || completion.requestId}` : '';
     const nativeNew = Boolean(nativeKey && nativeKey !== entry.lastNative
       && completion.requestAt >= entry.observedSince && !isNonTaskRequest(completion.request));
@@ -595,7 +661,7 @@ class TerminalReview extends EventEmitter {
     let prompt = reviewPrompt(modelSource, entry.locale, chunk.request, chunk.lifecycle, observed, Boolean(chunk.reanalyze));
     const settings = normalizeReviewSettings(analysis);
     const provider = settings.provider === 'auto' ? entry.provider : settings.provider;
-    const active = { chunk, startedAt: this.now(), revision: entry.revision, timings: { eligibleAt: chunk.observedAt, queuedAt: chunk.queuedAt, startedAt: this.now() }, calls: 0, retrievals: 0 };
+    const active = { chunk, startedAt: this.now(), revision: entry.revision, timings: { eligibleAt: chunk.observedAt, queuedAt: chunk.queuedAt, startedAt: this.now() }, calls: 0, retrievals: 0, cacheKeys: [] };
     entry.active = active; entry.state = 'reviewing'; entry.retryAt = null; entry.message = ''; this.busy = true;
     this.persist(id, entry);
     this.emit('changed', { id, value: this.project(entry) });
@@ -645,7 +711,7 @@ class TerminalReview extends EventEmitter {
       // Only original/linked records enter this prompt. Jev scores and routing
       // conclusions are diagnostics, never evidence for an LLM decision.
       active.timings.modelStartedAt = this.now(); active.calls++;
-      let raw = await this.runner.generateTerminalReview({ provider, model: settings.models[provider], prompt });
+      let raw = await this.generate({ provider, model: settings.models[provider], prompt }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
       active.knownUsage = typeof raw === 'object' ? raw.usage ?? null : null;
       if (this.entries.get(id) !== entry || entry.revision !== active.revision) return raw;
       // Optional, bounded request for a specific omitted record. No filesystem or
@@ -666,7 +732,7 @@ class TerminalReview extends EventEmitter {
             observed += '\n' + recovered.filter(item => item.role === 'tool' && item.status === 'available' && item.requestId === chunk.source.requestId).map(item => item.text || '').join('\n');
             prompt = reviewPrompt(`${modelSource}\nADDITIONAL SCOPED RECORDS (requestId identifies current vs earlier):\n${recoveredText}`, entry.locale, chunk.request, chunk.lifecycle, observed, Boolean(chunk.reanalyze));
             active.calls++;
-            const next = await this.runner.generateTerminalReview({ provider, model: settings.models[provider], prompt });
+            const next = await this.generate({ provider, model: settings.models[provider], prompt }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
             raw = { ...(typeof next === 'object' ? next : {}), text: typeof next === 'string' ? next : next.text,
               usage: combinedUsage(typeof raw === 'object' ? raw.usage : null, typeof next === 'object' ? next.usage : null) };
             active.knownUsage = raw.usage;
@@ -705,8 +771,8 @@ class TerminalReview extends EventEmitter {
         // malformed response still needs a single format-recovery opportunity.
         if (repairIssues?.length && (formatError || active.calls < 2)) {
           active.calls++;
-          const repaired = await this.runner.generateTerminalReview({ provider, model: settings.models[provider],
-            prompt: repairPrompt(prompt, repairIssues) });
+          const repaired = await this.generate({ provider, model: settings.models[provider],
+            prompt: repairPrompt(prompt, repairIssues) }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
           const latestSession = await this.manager().get(id, false);
           if (this.entries.get(id) !== entry || entry.revision !== active.revision || !latestSession || terminalKey(latestSession) !== entry.key) return;
           usage = combinedUsage(usage, typeof repaired === 'object' ? repaired.usage ?? null : null);
@@ -734,11 +800,13 @@ class TerminalReview extends EventEmitter {
         // separately and never report the later successful call as the full cost.
         this.publish(id, entry, chunk, task, chunk.deferredAttempts?.length ? null : usage,
           { analysisId: randomUUID(), analysisDepth: chunk.reanalyze ? 'manual' : 'automatic', analysisProvider: provider,
-            analysisModel: raw?.model || settings.models[provider], ...(active.gate ? { analysisGate: active.gate } : {}), analysisInputChars: prompt.length, qualityPasses,
+            analysisModel: raw?.model || settings.models[provider], ...(active.gate ? { analysisGate: active.gate } : {}), analysisInputChars: prompt.length, qualityPasses, analysisCached: raw?.cached === true,
             analysisMetrics: { ...active.timings, validatedAt: this.now(), publishedAt: this.now(), calls: active.calls, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals, retrievedChars: active.evidence?.readChars || 0,
               deferredAttempts: chunk.deferredAttempts || [], knownCurrentUsage: usage },
             evidenceCoverage: active.evidence ? { omitted: active.evidence.omitted, omittedFromInput: active.evidence.omittedFromInput, skippedBytes: active.evidence.skippedBytes, selection: active.evidence.selection, unavailable: active.evidence.recovered.filter(item => item.status !== 'available').map(item => item.status) } : null });
       }).catch(error => {
+        // A response that could not be published must not be replayed from cache.
+        for (const key of active.cacheKeys) this.responses.delete(key);
         if (this.entries.get(id) !== entry || entry.revision !== active.revision) return;
         if (error.code === 'REVIEW_RATE_LIMITED') {
           const delay = Number(error.retryAfterMs);
