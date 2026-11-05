@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.18 - 2026-11-05
+
+- Arrange terminals in an aligned grid: splitting, closing, separating and placing keep equal cells with matching dividers (for example 2x2, or 3 over 2). Saved layouts from earlier versions are aligned once; dragged divider sizes are kept.
+- The sidebar terminal button is now an X that closes the terminal directly instead of moving it to the trash. Existing trash entries can still be restored.
+- The sidebar shows a dot only for terminals that need attention: yellow for unconfirmed answers and pending questions. Green dots are gone.
+- Keep background-work badges for long, quiet AI background commands such as watchers while their process is still running.
+- Verify official 2.0.17 clients alongside every earlier supported updater cohort.
+
 ## 2.0.17 - 2026-11-05
 
 - Keep terminal text sharp in small or fractional-size panes by snapping the canvas to device pixels.
