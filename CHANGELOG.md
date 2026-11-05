@@ -13,6 +13,7 @@ GitHub release notes remain the authoritative version history.
 - Start standalone panels in `~/whitebox-workspace` so Claude remembers folder trust after the first answer.
 - Let the `whitebox` CLI find the control file in profiles migrated from LoadToAgent.
 - Remove the supporting-records disclosure from analysis cards.
+- Show background-work badges for Claude and Codex terminals: monitor cards now carry their native log path, and unchanged scans keep the snapshot fresh while work is quiet.
 - Verify official 2.0.16 clients alongside every earlier supported updater cohort.
 
 ## 2.0.16 - 2026-11-04

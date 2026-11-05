@@ -12,6 +12,7 @@ Base: immutable published v2.0.16 on origin/main f5f263e (tag v2.0.16).
 - Start standalone panels in `~/whitebox-workspace` because Claude keeps home-folder trust per session only.
 - Let the `whitebox` CLI find control.json in LoadToAgent-migrated profiles.
 - Remove the supporting-records disclosure from analysis cards.
+- Fix AI-terminal background badges, which never appeared in 2.0.16: monitor worker cards now include the native log `file` that `src/terminalBackground.js` matches, and unchanged scans post a sequence-matched `snapshot-fresh` timestamp so the 15-second freshness check does not expire during quiet work. `scripts/terminal-background-worker-test.js` exercises the real worker.
 
 Version metadata advances to 2.0.17. Previous fixed Windows and both Mac source pins advance to official 2.0.16; all prior sources remain, and 2.0.15 joins the retained recent list. Pinned 2.0.16 receives the same authenticated idle-workspace preparation and tray-policy assertions as 2.0.15; its official main.js matches all three asserted patterns. Updater/helper algorithms, app identity, profile paths and store schema stay unchanged.
 

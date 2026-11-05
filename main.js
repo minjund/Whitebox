@@ -18,7 +18,7 @@ const { CmuxClient } = require('./src/cmuxClient');
 const { CmuxMembership } = require('./src/cmuxMembership');
 const { QuestionnairePreferenceStore } = require('./src/questionnairePreferenceStore');
 const { bindWindowNavigation } = require('./src/windowNavigation');
-const { snapshotWithoutSessions } = require('./src/agentMonitor');
+const { snapshotWithoutSessions, refreshedSnapshot } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
 const { collectProviderUsage } = require('./src/providerUsage');
 const { TerminalManager, isInternalTerminalProjectionSessionId } = require('./src/terminalManager');
@@ -872,6 +872,12 @@ function startMonitorWorker() {
   });
   monitorWorker = worker;
   worker.on('message', message => {
+    if (message && message.type === 'snapshot-fresh') {
+      // Apply only to the exact published snapshot this worker re-verified;
+      // a newer snapshot still being bound must not inherit the timestamp.
+      if (monitorWorker === worker) lastSnapshot = refreshedSnapshot(lastSnapshot, message);
+      return;
+    }
     if (message && message.type === 'snapshot') {
       monitorWorkerRestartAttempts = 0;
       const revision = ++monitorSnapshotRevision;
