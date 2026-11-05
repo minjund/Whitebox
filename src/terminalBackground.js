@@ -7,7 +7,29 @@ const timestamp = value => Number.isFinite(Date.parse(value)) ? new Date(value).
 // Reuse the worker's parsed execution/agent lifecycle. Bind it to the native
 // log already proven to belong to this exact live AI process, never to cwd,
 // title, newest history, or a screen claim that something is still running.
-function conversationBackground(native, child, snapshot, now) {
+// A long background command (a watcher, a dev server) writes nothing to the
+// conversation log after it starts, so the log alone marks it unverified after
+// a few quiet minutes. A live process under the same AI process whose command
+// line carries the exact command proves it is still running. Each process
+// proves one execution only, so a finished duplicate is never revived.
+function liveExecutionProof(rows, child) {
+  const used = new Set();
+  const live = (rows || []).filter(row => row?.ancestorPids?.includes(child.pid) && !/^[TZ]/u.test(row.stat || '')
+    && typeof row.commandLine === 'string');
+  return command => {
+    const text = String(command || '').trim();
+    if (!text) return false;
+    const quoted = text.replace(/'/gu, "'\\''");
+    const row = live.find(item => !used.has(item.pid) && (item.commandLine.includes(text) || item.commandLine.includes(quoted)));
+    if (!row) return false;
+    // A pipeline or wrapper shell shares the command; claim its whole group.
+    for (const item of live) if (item.pgid === row.pgid) used.add(item.pid);
+    used.add(row.pid);
+    return true;
+  };
+}
+
+function conversationBackground(native, child, snapshot, now, rows = []) {
   const age = now - Date.parse(snapshot?.generatedAt);
   if (!native?.available || !native.source?.file || !(age >= 0 && age < 15000)) return [];
   const matches = (snapshot.sessions || []).filter(session => session.provider === child.provider && session.file === native.source.file);
@@ -16,8 +38,11 @@ function conversationBackground(native, child, snapshot, now) {
   if (!Number.isFinite(start)) return [];
   const owned = item => Number.isFinite(Date.parse(item.startedAt)) && Date.parse(item.startedAt) >= start - 2000;
   const jobs = new Map();
-  for (const item of matches[0].executions || []) {
-    if (item.mode !== 'background' || item.status !== 'running' || !owned(item)) continue;
+  const proven = liveExecutionProof(rows, child);
+  const executions = [...(matches[0].executions || [])].reverse();
+  for (const item of executions) {
+    if (item.mode !== 'background' || !owned(item)) continue;
+    if (item.status !== 'running' && !(item.status === 'unverified' && proven(item.command))) continue;
     const id = `execution:${item.backgroundId || item.id}`;
     // Parsers fall back to the raw command as a label. Do not expose command
     // arguments, output or prompts through a compact sidebar observation.
@@ -27,6 +52,9 @@ function conversationBackground(native, child, snapshot, now) {
     const label = candidate && !fromCommand ? candidate : short(item.runtime || '명령창');
     jobs.set(id, { id, kind: 'command', label: label || '명령창', state: 'running', startedAt: timestamp(item.startedAt) });
   }
+  const ordered = [...jobs.entries()].reverse();
+  jobs.clear();
+  for (const [id, job] of ordered) jobs.set(id, job);
   for (const item of matches[0].collaboration?.spawns || []) {
     if (!['running', 'waiting'].includes(item.status) || !owned(item)) continue;
     const id = `agent:${item.childId || item.agentPath || item.callId}`;
