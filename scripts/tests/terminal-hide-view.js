@@ -38,11 +38,17 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   await reopen(first);
   assert((await visible()).includes(first));
   assert.deepEqual(identities(), original, 'sidebar reopens the same live sessions');
-  // Real output produced while hidden is available on reopening.
+  // Reload hydrates panes lazily; wait for the original terminal's replay first.
+  await waitFor(`!document.querySelector('[data-terminal-id="${first}"] .wb-pane-loading')`, 'original pane mounted after reload');
+  // Split the marker in the command so an echoed command is not execution proof.
   await hide(first);
-  await manager.write(first, 'echo HIDDEN_SESSION_STILL_RUNNING\r');
+  const command = process.platform === 'win32' ? "Write-Output ('WB_X_' + 'LIVE')" : "printf 'WB_X_%s\\n' 'LIVE'";
+  await manager.command(first, command);
+  const deadline = Date.now() + 5000;
+  while (!manager.get(first, true).replay.includes('WB_X_LIVE') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  assert(manager.get(first, true).replay.includes('WB_X_LIVE'), 'the original hidden PTY must execute the command');
   await reopen(first);
-  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first)}).includes('HIDDEN_SESSION_STILL_RUNNING')`, 'live output after reopening');
+  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first)}).replace(/\\s+/g, '').includes('WB_X_LIVE')`, 'live output after reopening');
   // Hiding the focused pane transfers focus to the remaining visible pane.
   await hide(first);
   assert.deepEqual(await visible(), [second]);
@@ -60,6 +66,7 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   assert.deepEqual(await visible(), []);
   assert.deepEqual(await snapshot(), independentState, 'independent panel also survives X');
   await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload hidden independent panel');
+  assert.deepEqual(await visible(), [], 'independent hidden canvas survives reload');
   await reopen(independent);
   assert.deepEqual(await visible(), [independent]);
   assert.deepEqual(identities(), independentIds);

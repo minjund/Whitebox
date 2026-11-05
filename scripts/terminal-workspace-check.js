@@ -1961,6 +1961,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error(error);
     if (summaryFixture) console.error('Summary jobs:', [...summaryFixture.controller.jobs.values()]);
+    console.error('Fixture host outputs:', manager.list().map(session => ({ id: session.id, replay: manager.get(session.id, true)?.replay })));
     console.error('Fixture terminal outputs:', await win.webContents.executeJavaScript('JSON.stringify(window.WhiteboxWorkspace?.getState().sessions.map(session => ({id:session.id, text:WhiteboxTerminal.readTerminal(session.id)})) || [])').catch(error => error.message));
     fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-workspace-failure.png'), (await win.webContents.capturePage()).toPNG());
     clearTimeout(deadline);
