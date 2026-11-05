@@ -849,7 +849,10 @@ app.whenReady().then(async () => {
     const assertCompletionDot = async (id, expected, part = 'sidebar') => {
       const selector = completionDot(id, part);
       await waitFor(`document.querySelector(${JSON.stringify(selector)})?.dataset.state === ${JSON.stringify(expected)}`, `${part} completion state ${expected}`);
-      const result = await evaluate(`(() => {const dot=document.querySelector(${JSON.stringify(selector)});return {label:dot.getAttribute('aria-label'),visibility:getComputedStyle(dot.querySelector('i')).visibility,color:getComputedStyle(dot.querySelector('i')).backgroundColor,animation:getComputedStyle(dot.querySelector('i')).animationName};})()`);
+      const result = await evaluateData(target => {
+        const dot = document.querySelector(target), mark = getComputedStyle(dot.querySelector('i'));
+        return { label: dot.getAttribute('aria-label'), visibility: mark.visibility, color: mark.backgroundColor, animation: mark.animationName };
+      }, selector);
       assert.equal(result.label, expected === 'needs-review' ? '확인 필요' : '확인 완료');
       const light = await evaluate("document.documentElement.dataset.theme === 'light'");
       assert.equal(result.color, expected === 'needs-review'
