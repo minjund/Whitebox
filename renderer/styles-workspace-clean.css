@@ -135,3 +135,7 @@
   #terminalWorkspace .wb-pane>header{flex-wrap:wrap;height:auto;min-height:38px;gap:4px 6px;padding-top:5px;padding-bottom:5px}
   #terminalWorkspace .wb-pane-heading{flex-basis:100%;min-height:15px}
 }
+
+/* Sidebar shows only terminals that still need attention: unconfirmed
+   completions and pending questions (yellow), live work, and failures. */
+#terminalWorkspace .wb-instance .wb-terminal-state:not([data-state=needs-review],[data-state=waiting],[data-state=working],[data-state=failed]) i{visibility:hidden}

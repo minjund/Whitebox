@@ -574,6 +574,7 @@ app.whenReady().then(async () => {
       try {
         await waitFor(`document.querySelector('${backgroundSelector}')?.textContent.trim()==='1'`, 'real background shell group appears in its own sidebar badge');
         assert.equal(await evaluate(`document.querySelector('[data-instance="${first.id}"] .wb-terminal-state').dataset.state`), 'idle', 'quiet background command does not change the main input-waiting dot');
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-instance="${first.id}"] .wb-terminal-state i')).visibility`), 'hidden', 'sidebar hides the dot of a terminal that needs no attention');
         await evaluate(`document.querySelector('${backgroundSelector}').click()`);
         assert.match(await evaluate('document.querySelector("#wbBackgroundJobs").textContent'), /node/u);
         assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), backgroundActiveId, 'background details never switch the terminal receiving input');
@@ -592,7 +593,7 @@ app.whenReady().then(async () => {
     for (const theme of ['dark','light']) for (const width of [230,176]) {
       await evaluate(`document.documentElement.dataset.theme='${theme}';document.querySelector('#terminalWorkspace').style.gridTemplateColumns='${width}px minmax(0,1fr) 332px'`);
       await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
-      const geometry = await evaluate(`(() => {const b=document.querySelector('${backgroundSelector}'),r=b.getBoundingClientRect(),row=b.closest('.wb-instance-row'),title=row.querySelector('strong'),dot=row.querySelector('.wb-terminal-state').getBoundingClientRect(),trash=row.querySelector('[data-trash-instance]').getBoundingClientRect(),p=document.querySelector('#wbBackgroundPopover').getBoundingClientRect();return {badgeFits:r.left>=row.getBoundingClientRect().left&&r.right<=dot.left,notTrash:r.right<trash.left,readable:title.clientWidth-parseFloat(getComputedStyle(title).paddingRight)>8,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('[data-background-terminal]')===b,popupFits:p.left>=0&&p.right<=innerWidth&&p.top>=0&&p.bottom<=innerHeight};})()`);
+      const geometry = await evaluate(`(() => {const b=document.querySelector('${backgroundSelector}'),r=b.getBoundingClientRect(),row=b.closest('.wb-instance-row'),title=row.querySelector('strong'),dot=row.querySelector('.wb-terminal-state').getBoundingClientRect(),trash=row.querySelector('.wb-trash-instance').getBoundingClientRect(),p=document.querySelector('#wbBackgroundPopover').getBoundingClientRect();return {badgeFits:r.left>=row.getBoundingClientRect().left&&r.right<=dot.left,notTrash:r.right<trash.left,readable:title.clientWidth-parseFloat(getComputedStyle(title).paddingRight)>8,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('[data-background-terminal]')===b,popupFits:p.left>=0&&p.right<=innerWidth&&p.top>=0&&p.bottom<=innerHeight};})()`);
       assert(Object.values(geometry).every(Boolean), 'quiet badge and popover fit narrow sidebar in '+theme+': '+JSON.stringify(geometry));
     }
     assert.equal(await evaluate('document.querySelectorAll("#wbBackgroundJobs li").length'), 2);
@@ -847,13 +848,14 @@ app.whenReady().then(async () => {
     const assertCompletionDot = async (id, expected, part = 'sidebar') => {
       const selector = completionDot(id, part);
       await waitFor(`document.querySelector(${JSON.stringify(selector)})?.dataset.state === ${JSON.stringify(expected)}`, `${part} completion state ${expected}`);
-      const result = await evaluate(`(() => {const dot=document.querySelector(${JSON.stringify(selector)});return {label:dot.getAttribute('aria-label'),color:getComputedStyle(dot.querySelector('i')).backgroundColor,animation:getComputedStyle(dot.querySelector('i')).animationName};})()`);
+      const result = await evaluate(`(() => {const dot=document.querySelector(${JSON.stringify(selector)});return {label:dot.getAttribute('aria-label'),visibility:getComputedStyle(dot.querySelector('i')).visibility,color:getComputedStyle(dot.querySelector('i')).backgroundColor,animation:getComputedStyle(dot.querySelector('i')).animationName};})()`);
       assert.equal(result.label, expected === 'needs-review' ? '확인 필요' : '확인 완료');
       const light = await evaluate("document.documentElement.dataset.theme === 'light'");
       assert.equal(result.color, expected === 'needs-review'
         ? light ? 'rgb(167, 125, 18)' : 'rgb(223, 184, 79)'
         : light ? 'rgb(40, 116, 93)' : 'rgb(117, 201, 149)');
       assert.equal(result.animation, 'none', 'review status is a dot, not a working spinner');
+      assert.equal(result.visibility, part === 'sidebar' && expected !== 'needs-review' ? 'hidden' : 'visible', 'the sidebar marks only unconfirmed answers');
     };
     for (const theme of ['dark', 'light']) {
       await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
@@ -1307,7 +1309,7 @@ app.whenReady().then(async () => {
     assert.doesNotThrow(()=>process.kill(trashChildPid,0));
 
     missingSessionId = last;
-    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelector("#wbError").textContent.includes("세션 종료를 확인하지 못해")', 'missing host identity cannot establish termination');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 0);
     assert.equal(manager.get(last).pid, lastPid);
@@ -1315,7 +1317,7 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("[data-action=dismiss-error]").click()');
     for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('세션 종료를 확인하지 못해')) errors.splice(index,1);
     rejectedStopId = last;
-    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click();document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)});WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelector("#wbError").textContent.includes("fixture stop failure")', 'failed stop remains visible');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), 0, 'failed termination never pretends to move to trash');
     assert.equal(manager.get(last).pid, lastPid);
@@ -1326,7 +1328,7 @@ app.whenReady().then(async () => {
     for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture stop failure')) errors.splice(index,1);
     const stopsBeforeTrash = stopCalls;
     terminalGetReads.length = 0; heldPauseReviewId = last;
-    await evaluate(`document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click();document.querySelector('#wbSpaces [data-trash-instance="${last}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)});WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'move to trash');
     await waitFor('!WhiteboxWorkspace.getState().busy','trash UI settles without waiting for a review-pause reply');
     for(let attempt=0;!releaseHeldPauseReview&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,10));
@@ -1395,7 +1397,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(`Boolean(document.querySelector('#wbSpaces [data-instance="${last}"]'))`), true, 'restored terminal belongs to original project');
     assert.equal(await evaluate(`document.querySelector('[data-terminal-id="${last}"] textarea').readOnly`), true, 'restored output is read only');
     assert.equal(manager.get(last).pid, null, 'restoring records never restarts a program');
-    await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash restored terminal');
     await evaluateData((id, pid) => { const item=WhiteboxWorkspace.getState().trash.find(item=>item.id===id); delete item.sessionStopped; item.pid=pid; item.review={...item.review,pid}; }, last, lastPid);
     await evaluate('document.querySelector("[data-action=trash]").click()');
@@ -1405,7 +1407,7 @@ app.whenReady().then(async () => {
     assert.equal(manager.get(last).pid, null);
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'legacy PID migration preserves prior review usage');
     assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'legacy stopped identity preserves the original conversation counters');
-    await evaluate(`document.querySelector('[data-trash-instance="${last}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'archive legacy-restored record');
     await evaluate('document.querySelector("[data-action=trash]").click()');
     console.log('PASS responsive trash restore: visible progress, one replay read, duplicate suppression, blocked-background independence, failed-mount retry and legacy stopped archives');
@@ -1429,7 +1431,7 @@ app.whenReady().then(async () => {
     const independentPid = manager.get(independent).pid;
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 1);
     assert.equal(await evaluate('document.querySelectorAll("#wbSpaces [data-instance]").length'), 3);
-    await evaluate(`document.querySelector('[data-trash-instance="${independent}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(independent)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'independent instance trash');
     await evaluate('document.querySelector("[data-action=trash]").click()');
     await evaluate(`document.querySelector('[data-restore-instance="${independent}"]').click()`);
@@ -1464,7 +1466,7 @@ app.whenReady().then(async () => {
     assert.equal(manager.list().length, 1, 'independent session survives project deletion and reload');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 1);
     assert.equal(await evaluate('document.querySelectorAll("#wbSpaces [data-instance]").length'), 0);
-    await evaluate(`document.querySelector('[data-trash-instance="${independent}"]').click()`);
+    await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(independent)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash before host loss');
     await manager.close(independent);
     await win.loadFile(path.join(root, 'renderer/index.html'));
@@ -1826,13 +1828,13 @@ app.whenReady().then(async () => {
         const [xTarget, cliTarget, stoppedTarget] = newIds;
         await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(xTarget)},true)`);
         rejectedCloseId = xTarget;
-        await evaluate(`document.querySelector('[data-close-terminal="${xTarget}"]').click()`);
+        await evaluate(`document.querySelector('#wbCanvas [data-close-terminal="${xTarget}"]').click()`);
         await waitFor('!WhiteboxWorkspace.getState().busy && !document.querySelector("#wbError").hidden', 'failed X close retains its pane');
         assert(manager.get(xTarget));
         assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${xTarget}"]'))`), true);
         assert.equal(await evaluate('WhiteboxWorkspace.getState().trash.length'), trashBeforeClose);
         rejectedCloseId = '';
-        await evaluate(`document.querySelector('[data-close-terminal="${xTarget}"]').click()`);
+        await evaluate(`document.querySelector('.wb-instance-row [data-close-terminal="${xTarget}"]').click()`);
         await assertPaneGone(xTarget);
         await waitFor('!WhiteboxWorkspace.getState().busy', 'X close completed');
         await evaluate('WhiteboxWorkspace.captureReviews(true)'); await control.sync(collaborationPayload);
@@ -1870,7 +1872,7 @@ app.whenReady().then(async () => {
         for (const target of [...newIds, ghost.id]) {
           assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.some(s=>s.id===${JSON.stringify(target)})`), false, 'closed panes stay closed after reload');
         }
-        console.log('PASS real X and CLI close: live/stopped/orphan PTYs, removal events, no trash, saved layout/reload, failure retention and unrelated-terminal identity');
+        console.log('PASS real pane X, sidebar X and CLI close: live/stopped/orphan PTYs, removal events, no trash, saved layout/reload, failure retention and unrelated-terminal identity');
       }
 
     } finally { livePanelControl=null; await control?.control.close(); client.dispose({ preserveHost: true }); host.dispose(); }
@@ -1878,7 +1880,7 @@ app.whenReady().then(async () => {
     const batchIds = manager.list().slice(-2).map(item => item.id);
     const survivor = manager.list().find(item => !batchIds.includes(item.id));
     for (const id of batchIds) {
-      await evaluate(`document.querySelector('[data-trash-instance="${id}"]').click()`);
+      await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(id)})`);
       await waitFor(`!WhiteboxWorkspace.getState().busy && WhiteboxWorkspace.getState().trash.some(item => item.id === ${JSON.stringify(id)})`, 'prepare bulk trash');
     }
     await evaluate('document.querySelector("[data-action=trash]").click()');
