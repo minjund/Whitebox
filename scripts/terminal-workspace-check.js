@@ -231,6 +231,10 @@ app.whenReady().then(async () => {
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
+    if (process.argv.includes('--hide-only')) {
+      await require('./tests/terminal-hide-view')({ evaluate, waitFor, win, manager, profile });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     if (process.argv.includes('--responsive-only')) {
       await checkResponsiveReview();
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
@@ -1832,7 +1836,7 @@ app.whenReady().then(async () => {
         const [xTarget, cliTarget, stoppedTarget] = newIds;
         await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(xTarget)},true)`);
         rejectedCloseId = xTarget;
-        await evaluate(`document.querySelector('#wbCanvas [data-close-terminal="${xTarget}"]').click()`);
+        await evaluate(`document.querySelector('.wb-instance-row [data-close-terminal="${xTarget}"]').click()`);
         await waitFor('!WhiteboxWorkspace.getState().busy && !document.querySelector("#wbError").hidden', 'failed X close retains its pane');
         assert(manager.get(xTarget));
         assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${xTarget}"]'))`), true);

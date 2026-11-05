@@ -381,12 +381,13 @@
   });
   const space = () => owners().find(item => item.id === selectedSpace);
   const tab = () => space()?.tabs.find(item => item.id === space().activeTab);
-  const activeId = () => space()?.activeSurface || tab()?.activePane || '';
+  const activeId = () => space()?.canvasHidden ? '' : space()?.activeSurface || tab()?.activePane || '';
   const panelFor = id => owners().flatMap(owner => owner.tabs).find(panel => layout.ids(panel.layout).includes(id));
   // Each panel remembers its own screen arrangement. Explicit drag/arrange
   // operations may include other panels without changing logical membership.
   function canvasLayout(owner = space()) {
-    if (!owner) return null;
+    // An intentionally empty canvas must not fall back to the panel roster.
+    if (!owner || owner.canvasHidden) return null;
     const current = owner.tabs.find(panel => panel.id === owner.activeTab);
     if (!current || current.pending) return null;
     const available = new Set(owners().flatMap(item => item.tabs.flatMap(panel => layout.ids(panel.layout))));
@@ -403,7 +404,7 @@
   function activatePanel(owner, panel, id = panel.activePane) {
     rememberCanvas();
     if (owner !== space()) rememberCanvas(owner);
-    selectedSpace = owner.id; owner.activeTab = panel.id; panel.collapsed = false;
+    selectedSpace = owner.id; owner.canvasHidden = false; owner.activeTab = panel.id; panel.collapsed = false;
     owner.viewLayout = panel.viewLayout || panel.layout;
     if (id && !layout.ids(owner.viewLayout).includes(id)) owner.viewLayout = panel.layout;
     owner.activeSurface = layout.ids(owner.viewLayout).includes(id) ? id : layout.ids(panel.layout)[0] || '';
@@ -690,7 +691,7 @@
     if (projectChanged) {
       const sharedView = canvasLayout();
       rememberCanvas(); rememberCanvas(owner);
-      selectedSpace = owner.id; owner.viewLayout = sharedView;
+      selectedSpace = owner.id; owner.canvasHidden = false; owner.viewLayout = sharedView;
     }
     owner.activeTab = panel.id; owner.activeSurface = id;
     panel.activePane = id;
@@ -730,7 +731,7 @@
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
         const background = backgroundBadge(id);
-        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 닫기')}" aria-label="${esc(title(id))} ${t('터미널 닫기')}">${icon('close')}</button></div>`;
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 종료')}" aria-label="${esc(title(id))} ${t('터미널 종료')}">${icon('trash')}</button></div>`;
       }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
@@ -830,7 +831,7 @@
       : layout.reconcile(destinationView, [{ id }], new Set([...layout.ids(destinationView), id]));
     rememberCanvas(owner);
     owner.activeSurface = id;
-    selectedSpace = owner.id; owner.collapsed = false;
+    selectedSpace = owner.id; owner.canvasHidden = false; owner.collapsed = false;
     expanded = false; root.classList.remove('terminal-expanded');
     renderLayout();
   }
@@ -994,7 +995,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-close-terminal="${esc(session.id)}" title="터미널 닫기" aria-label="터미널 닫기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-hide-terminal="${esc(session.id)}" title="화면에서 숨기기" aria-label="화면에서 숨기기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -1094,7 +1095,9 @@
       selectPane(activeId());
       if (focus) requestAnimationFrame(activeFocus);
     } else {
-      $('#wbCanvas').innerHTML = msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
+      $('#wbCanvas').innerHTML = space()?.canvasHidden
+        ? msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>화면에 표시된 터미널이 없습니다.</h2><p>왼쪽 터미널을 선택하면 다시 표시됩니다.</p></div>`
+        : msg`<div class="wb-empty"><span>${icon('terminal')}</span><h2>터미널에서 바로 시작하세요.</h2><p>셸을 열고 평소처럼 명령어를 입력하세요.<br/>claude, codex도 이 터미널에서 실행합니다.</p><button data-action="${space() ? 'new' : 'workspace'}">${icon('plus')} ${space() ? t('터미널 열기') : t('프로젝트 추가')}</button></div>`;
       $('#wbTerminalStatus').textContent = t('선택한 터미널 없음');
       renderReview();
     }
@@ -1109,10 +1112,11 @@
     busy = true; $('#wbError').hidden = true;
     const owner = destination, previousTab = owner.tabs.find(item => item.id === panelId), selected = previousTab?.activePane || '';
     rememberCanvas(); rememberCanvas(owner);
-    const previousActive = owner.activeTab, previousSpace = selectedSpace, previousView = owner.viewLayout, previousSurface = owner.activeSurface, previousPins = pinnedPanels;
+    const previousActive = owner.activeTab, previousSpace = selectedSpace, previousView = owner.viewLayout, previousSurface = owner.activeSurface, previousPins = pinnedPanels, previousHidden = owner.canvasHidden;
     const splitting = axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected);
     const next = splitting ? previousTab : { id: uuid(), name: t('패널'), layout: null, activePane: '', pending: true };
     if (!splitting) { owner.tabs.push(next); pinnedPanels = []; }
+    owner.canvasHidden = false;
     owner.viewLayout = splitting ? previousTab.viewLayout || previousTab.layout : null;
     if (splitting && !layout.ids(owner.viewLayout).includes(selected)) owner.viewLayout = previousTab.layout;
     expanded = false; root.classList.remove('terminal-expanded');
@@ -1144,7 +1148,7 @@
       if (!created && !splitting) {
         owner.tabs = owner.tabs.filter(item => item !== next);
         if (owner.activeTab === next.id) {
-          owner.activeTab = previousActive; owner.viewLayout = previousView; owner.activeSurface = previousSurface; pinnedPanels = previousPins;
+          owner.canvasHidden = previousHidden; owner.activeTab = previousActive; owner.viewLayout = previousView; owner.activeSurface = previousSurface; pinnedPanels = previousPins;
           if (selectedSpace === owner.id) selectedSpace = previousSpace;
         }
         renderLayout(false);
@@ -1173,6 +1177,17 @@
     terminalUsageHistory.delete(id);
     trash = trash.filter(item => item.id !== id);
     detachFromLayout(id);
+  }
+
+  function hideInstance(id) {
+    if (busy || !layout.ids(canvasLayout()).includes(id)) return;
+    const owner = space();
+    owner.viewLayout = layout.remove(owner.viewLayout, id);
+    owner.canvasHidden = !owner.viewLayout;
+    owner.activeSurface = layout.ids(owner.viewLayout).includes(activeId()) ? activeId() : layout.ids(owner.viewLayout)[0] || '';
+    rememberCanvas(owner);
+    expanded = false; root.classList.remove('terminal-expanded');
+    renderLayout(false);
   }
 
   async function closeInstance(id) {
@@ -1295,7 +1310,7 @@
       }
       const restored = { id: uuid(), name: item.name || t('패널'), layout: { id: session.id }, activePane: session.id };
       rememberCanvas(); rememberCanvas(owner);
-      owner.tabs.push(restored); owner.activeTab = restored.id; selectedSpace = owner.id; owner.viewLayout = restored.layout; owner.activeSurface = session.id;
+      owner.tabs.push(restored); owner.activeTab = restored.id; selectedSpace = owner.id; owner.canvasHidden = false; owner.viewLayout = restored.layout; owner.activeSurface = session.id;
       trash = trash.filter(record => record !== item);
       $('#wbTrash').close();
       renderLayout();
@@ -1800,6 +1815,7 @@
     if (button.dataset.arrangeInstance) openArrange(button.dataset.arrangeInstance);
     if (button.dataset.newProject) createTerminal('', spaces.find(item => item.id === button.dataset.newProject)).catch(report);
     if (button.dataset.removeProject) removeProject(button.dataset.removeProject).catch(report);
+    if (button.dataset.hideTerminal) hideInstance(button.dataset.hideTerminal);
     if (button.dataset.closeTerminal) closeInstance(button.dataset.closeTerminal).catch(report);
     if (button.dataset.restoreInstance) restoreInstance(button.dataset.restoreInstance).catch(report);
     if (button.dataset.purgeInstance) purgeInstance(button.dataset.purgeInstance).catch(report);
