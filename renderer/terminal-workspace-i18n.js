@@ -19,7 +19,6 @@
   ['실제 답', 'Answer', '实际答案'],
   ['핵심과 작동 방식', 'Key points and how it works', '核心与工作原理'],
   ['확인한 범위와 남은 점', 'Evidence limits and remaining questions', '确认范围与待确认事项'],
-  ['설명의 근거', 'Supporting records', '说明依据'],
   ['도구 출력', 'Tool output', '工具输出'],
   ['대화 원문 기준', 'Based on the original conversation', '依据对话原文'],
   ['도구 실행 기록 기준', 'Based on recorded tool output', '依据工具执行记录'],

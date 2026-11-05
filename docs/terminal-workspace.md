@@ -142,9 +142,38 @@ exit state. Its review responses are fixtures rather than live model calls.
 ## Panel control
 
 Panel membership is registered automatically when terminals are added or moved.
-There is no collaboration button, setup dialog, or opt-in setting. It never sends setup prompts, adds
-agent hooks, modifies model configuration, or starts a replacement agent. Dragging
+There is no collaboration button, setup dialog, or opt-in setting. It never sends setup prompts,
+modifies model configuration, or starts a replacement agent. Dragging
 a terminal changes its current membership without restarting its PTY.
+
+### Terminal guard hook
+
+AI sessions inside a Whitebox terminal must create, split, read, send to and close
+terminals through Whitebox (the `whitebox_panel` MCP tools or the `whitebox` CLI).
+`bin/terminal-guard-hook.js` enforces this:
+
+- **PreToolUse** denies shell commands that drive other terminals: tmux
+  session/pane commands, screen, zellij, cmux, `open -a Terminal/iTerm/...`,
+  osascript targeting a terminal app, `wezterm cli`, `kitty @`, and terminal
+  emulators. Ordinary commands, `tmux -V` and `screen -ls` pass.
+- **SessionStart** and terminal-related **UserPromptSubmit** prompts add a short
+  note naming the Whitebox commands.
+- The script does nothing unless `WHITEBOX_SURFACE_ID` is set, which only
+  Whitebox PTYs have.
+
+Claude receives the hooks per session through `--settings` from the provider
+adapter; a user-supplied `--settings` flag is left unchanged and Claude's global
+settings are not edited. Codex ignores hooks passed with `-c`, so Whitebox
+registers the guard in `~/.codex/hooks.json` and records its reviewed hash in
+`config.toml` at startup. Existing hook groups keep their positions.
+
+### Default folder
+
+Standalone panels and the first workspace start in `~/whitebox-workspace`, not
+the home folder. Claude Code keeps folder trust for the home directory only for
+one session, so terminals in `~` asked to trust the folder every time. The
+auto-created "내 작업 공간" entry that pointed at the home folder moves to the
+new folder; workspaces the user added are unchanged.
 
 Like cmux, control uses a CLI and a local socket. Whitebox's commands are:
 

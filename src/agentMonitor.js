@@ -556,6 +556,15 @@ function buildSummary(sessions, availability) {
   };
 }
 
+// A monitor scan that found no change re-verifies the published snapshot.
+// Only the same published sequence may take the newer timestamp.
+function refreshedSnapshot(snapshot, message) {
+  const next = Date.parse(message?.generatedAt);
+  if (!snapshot || !Number.isSafeInteger(message?.sequence) || snapshot.sequence !== message.sequence
+    || !Number.isFinite(next) || !(next > (Date.parse(snapshot.generatedAt) || 0))) return snapshot;
+  return { ...snapshot, generatedAt: new Date(next).toISOString() };
+}
+
 function snapshotWithoutSessions(snapshot, sessionIds, availability = {}) {
   const excluded = new Set((sessionIds || []).map(value => String(value || '')).filter(Boolean));
   if (!excluded.size) return snapshot;
@@ -1127,6 +1136,7 @@ module.exports = {
   readJsonLines,
   buildSummary,
   snapshotWithoutSessions,
+  refreshedSnapshot,
   contextInfo,
   attachHierarchy,
   mergeManagedWithHistory,

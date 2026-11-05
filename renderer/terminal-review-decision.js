@@ -59,7 +59,6 @@
       return `<div class="wb-task-section wb-content-output"><h3>${esc(item.label)}</h3>${item.kind === 'command' ? `<p class="wb-content-time">${esc(t('기록 당시 명령 · 현재 적용 여부는 별도 확인'))}</p>${item.usageNote ? `<p>${esc(item.usageNote.text)}</p>` : ''}` : ''}${output}${badge(item)}</div>`;
     }).join('');
     const background = (content.background || []).map(claim).join('');
-    const quotes = [content.subject, content.answer, ...content.details, ...content.limitations, ...content.deliverables, ...content.deliverables.map(item => item.usageNote), ...(content.background || []), ...(content.nextAction ? [content.nextAction] : []), ...(handoff ? [handoff.temporal, handoff.priority, handoff.prompt].filter(Boolean) : [])].filter(item => item?.quote);
     return `<section class="wb-decision wb-answer-content" aria-label="${esc(t('답과 핵심 설명'))}">
       ${source ? `<p class="wb-content-source">${esc(t(source))}</p>` : ''}
       <div class="wb-task-section wb-decision-conclusion"><h3>${esc(t('실제 답'))}</h3>${answer}</div>
@@ -70,7 +69,6 @@
       ${nextAction ? `<div class="wb-task-section wb-decision-action"><h3>${esc(t('필요한 다음 행동'))}</h3>${nextAction}</div>` : ''}
       ${outputs}
       ${background ? `<details class="wb-task-details"><summary>${esc(t('상세 설명'))}</summary>${background}</details>` : ''}
-      ${quotes.length ? `<details class="wb-task-details"><summary>${esc(t('설명의 근거'))}</summary>${quotes.map(item => `<blockquote>${esc(item.quote)}</blockquote>`).join('')}</details>` : ''}
     </section>`;
   }
   function render(task, { t, esc, taskKey }) {

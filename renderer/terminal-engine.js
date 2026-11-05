@@ -361,6 +361,26 @@
       this.renderer.resize(this.cols, this.rows);
       this.refresh();
       this.emitScroll();
+      this.alignToDevicePixels();
+    }
+    // A canvas placed at a fractional device-pixel offset is resampled by the
+    // compositor and every glyph turns blurry. Small panes hit this often: the
+    // wrapped pane header and split percentages give the grid subpixel origins.
+    // Shift the canvas by under one device pixel so its bitmap maps 1:1.
+    alignToDevicePixels() {
+      const canvas = this.renderer?.getCanvas?.();
+      if (this.disposed || !canvas?.isConnected) return;
+      const ratio = window.devicePixelRatio || 1;
+      const previous = this.pixelShift || { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      const snap = value => {
+        const offset = (Math.round(value * ratio) - value * ratio) / ratio;
+        return Math.abs(offset) < 0.001 ? 0 : Math.round(offset * 1000) / 1000;
+      };
+      const shift = { x: snap(rect.left - previous.x), y: snap(rect.top - previous.y) };
+      if (shift.x === previous.x && shift.y === previous.y) return;
+      this.pixelShift = shift;
+      canvas.style.transform = shift.x || shift.y ? `translate(${shift.x}px, ${shift.y}px)` : '';
     }
     refresh() {
       if (!this.renderer || this.disposed) return;
@@ -495,6 +515,8 @@
       // stale last size across replay hydration. Compare the live grid so the
       // last drag/window size always reaches both the canvas and the PTY.
       if (size && (size.cols !== terminal.cols || size.rows !== terminal.rows)) terminal.resize(size.cols, size.rows);
+      // The grid can keep its size while the pane origin moves by a subpixel.
+      else terminal.alignToDevicePixels?.();
     }
     observeResize() {
       if (!this.terminal?.element || this.observer) return;

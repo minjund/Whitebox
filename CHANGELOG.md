@@ -3,6 +3,19 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.17 - 2026-11-05
+
+- Keep terminal text sharp in small or fractional-size panes by snapping the canvas to device pixels.
+- Resume automatic analysis after it is turned off and on again, and cache identical analysis responses across restarts.
+- Keep terminal operations inside Whitebox: a hook in Whitebox terminals blocks tmux, external terminal apps and similar commands and points the AI to the Whitebox tools.
+- Give every pane an equal share when a terminal is split, separated or removed.
+- Always submit multi-line text sent with `whitebox send`, even when the CLI shows it collapsed.
+- Start standalone panels in `~/whitebox-workspace` so Claude remembers folder trust after the first answer.
+- Let the `whitebox` CLI find the control file in profiles migrated from LoadToAgent.
+- Remove the supporting-records disclosure from analysis cards.
+- Show background-work badges for Claude and Codex terminals: monitor cards now carry their native log path, and unchanged scans keep the snapshot fresh while work is quiet.
+- Verify official 2.0.16 clients alongside every earlier supported updater cohort.
+
 ## 2.0.16 - 2026-11-04
 
 - Combine self-contained analysis summaries, visible limits and source-backed next requests with single-attempt format recovery and internal-summary filtering.

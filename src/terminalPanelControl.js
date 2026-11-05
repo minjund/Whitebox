@@ -131,7 +131,7 @@ class TerminalPanelControl {
         return { surface_id: target.id, submitted: submit };
       }
       const pending = this.pending.get(target.id);
-      if (params.key !== 'enter' || !pending || pending.sourceId !== member.id || pending.groupId !== group.id || pending.creationId !== live.creationId || !frame.text.trimEnd().endsWith(pending.text)) throw new Error('No unchanged pending whitebox send');
+      if (params.key !== 'enter' || !pending || pending.sourceId !== member.id || pending.groupId !== group.id || pending.creationId !== live.creationId) throw new Error('No pending whitebox send');
       this.pending.delete(target.id);
       await c.manager().write(target.id, '\r', { deliveryId: `panel-shell-enter:${randomUUID()}`, expectedOutputSequence: frame.outputSequence });
       return { surface_id: target.id, submitted: true };
@@ -153,10 +153,9 @@ class TerminalPanelControl {
       if (params.key !== 'enter') throw new Error('Only enter after a whitebox send is supported.');
       const pending = this.pending.get(target.id), current = await c.target(group.id, target.id);
       if (!pending || pending.sourceId !== member.id || pending.groupId !== group.id || pending.creationId !== current.live.creationId || pending.providerPid !== current.child.pid) throw new Error('No matching pending whitebox send');
-      const { submittedPrompt } = require('./terminalReviewTurns');
-      // Never submit text subsequently edited by a user.
-      const draft = submittedPrompt(current.frame.readinessText ?? current.frame.text);
-      if (current.frame.inputDraft || draft.trim() !== pending.text.trim()) throw new Error('Terminal draft changed; Enter was not sent.');
+      // Do not compare the screen with the pending text: CLIs collapse
+      // multi-line pastes (e.g. "[Pasted text +N lines]"), which made every
+      // multi-line orchestration send look edited and withheld Enter.
       const native = await c.completion.observe(current.child);
       if (native.available && native.state === 'working') throw new Error('Target is working');
       this.pending.delete(target.id);

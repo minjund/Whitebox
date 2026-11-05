@@ -41,6 +41,7 @@ const monitor = new AgentMonitor({
 
 monitor.setAvailability(workerData.availability || {});
 let lastFingerprint = '';
+let publishedSequence = 0;
 let lastPublishedSessions = [];
 let currentBridges = Array.isArray(workerData.bridges) ? workerData.bridges : [];
 let currentCmuxSessions = Array.isArray(workerData.cmuxSessions) ? workerData.cmuxSessions : [];
@@ -272,6 +273,9 @@ function cardSession(session) {
     id: session.id,
     externalId: session.externalId,
     provider: session.provider,
+    // Terminal background badges bind a card to the exact native log file
+    // already proven to belong to a live AI process (src/terminalBackground.js).
+    file: typeof session.file === 'string' ? session.file : '',
     parentId: session.parentId,
     depth: session.depth,
     agentName: session.agentName,
@@ -503,14 +507,21 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
   // permanently hidden after one delivery. Retry exact 1:1 proof bindings;
   // incomplete/ambiguous guard or provisional-bridge identity changes must
   // still publish once even when there is no binding to retry.
-  if (!snapshotNeedsPublication(lastFingerprint, nextFingerprint, bridgeBindings)) return;
+  if (!snapshotNeedsPublication(lastFingerprint, nextFingerprint, bridgeBindings)) {
+    // The scan re-verified the published content. Refresh only its timestamp so
+    // freshness checks (e.g. background badges) do not expire on quiet work.
+    if (publishedSequence) parentPort.postMessage({ type: 'snapshot-fresh', sequence: publishedSequence, generatedAt: snapshot.generatedAt });
+    return;
+  }
   lastFingerprint = nextFingerprint;
+  publishedSequence += 1;
   lastPublishedSessions = sessions;
   parentPort.postMessage({
     type: 'snapshot',
     bridgeBindings,
     forkBindingGuardSessionIds,
     snapshot: {
+      sequence: publishedSequence,
       generatedAt: snapshot.generatedAt,
       sessions: sessions.map(cardSession),
       automations,
