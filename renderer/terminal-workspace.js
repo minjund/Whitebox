@@ -1918,6 +1918,32 @@
     (reviewBusy ? reviewTask.catch(() => {}) : Promise.resolve()).then(() => captureReviews());
   });
 
+  let initialization = null, initialized = false, waitingForStartupHost = false, connectionRevision = 0;
+  // Register before the first inventory request. A late real connection must
+  // resume a cold renderer that already exhausted its bounded initial reads.
+  api?.onTerminalConnection?.(value => {
+    $('#wbConnection').textContent = value.state === 'connected' ? t('셸 연결됨') : t('셸 다시 연결 중…');
+    if (value.state !== 'connected') return;
+    connectionRevision++;
+    if (!initialized) {
+      if (waitingForStartupHost && !initialization) initializeWorkspace();
+      return;
+    }
+    const mountedIds = [...panes.keys()];
+    for (const [id, pane] of panes) { pane.dispose?.(); pane.node.remove(); panes.delete(id); }
+    Promise.all(mountedIds.map(id => sessions.get(id)).filter(session => session && !trashed(session.id)).map(session => ensurePane(session)))
+      .then(() => renderLayout()).catch(report);
+  });
+  function initializeWorkspace() {
+    if (initialization || initialized) return initialization;
+    const observedConnection = connectionRevision;
+    waitingForStartupHost = false;
+    initialization = init().catch(error => report(error, 'startup')).finally(() => {
+      initialization = null;
+      if (!initialized && waitingForStartupHost && connectionRevision > observedConnection) initializeWorkspace();
+    });
+    return initialization;
+  }
   async function init() {
     if (!api) throw new Error(t('Whitebox 앱에서 실행해 주세요.'));
     bootstrap = await window.WhiteboxRendererUtils.bootstrap();
@@ -1935,7 +1961,7 @@
         inventory = await api.terminalList();
         break;
       } catch (error) {
-        if (attempt === 2) throw error;
+        if (attempt === 2) { waitingForStartupHost = true; throw error; }
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
@@ -2052,14 +2078,6 @@
       refreshPaneChrome();
       renderInstances();
     });
-    api.onTerminalConnection?.(value => {
-      $('#wbConnection').textContent = value.state === 'connected' ? t('셸 연결됨') : t('셸 다시 연결 중…');
-      if (value.state === 'connected') {
-        const mountedIds = [...panes.keys()];
-        for (const [id, pane] of panes) { pane.dispose?.(); pane.node.remove(); panes.delete(id); }
-        Promise.all(mountedIds.map(id => sessions.get(id)).filter(session => session && !trashed(session.id)).map(session => ensurePane(session))).then(() => renderLayout()).catch(report);
-      }
-    });
     await api.setLocale?.(window.WhiteboxI18n?.getLocale() || 'ko');
     api.onAttentionRequested?.(payload => {
       if (payload?.activationId) {
@@ -2086,7 +2104,9 @@
     setInterval(() => captureReviews(), 2500);
     setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing' || reviews.get(activeId())?.retryAt > Date.now()) renderReview(); }, 1000);
     window.WhiteboxWorkspace = { createTerminal, selectPane, captureReviews, trashInstance, getState: () => ({ busy, spaces, standalone, trash, selectedSpace, pinnedPanels, activeId: activeId(), sessions: [...sessions.values()] }) };
+    initialized = true;
+    if ($('#wbError').dataset.scope === 'startup') $('#wbError').hidden = true;
     document.title = `Whitebox ${bootstrap.versions.app}`;
   }
-  init().catch(report);
+  initializeWorkspace();
 })();

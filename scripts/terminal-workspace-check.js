@@ -235,6 +235,10 @@ app.whenReady().then(async () => {
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
+    if (process.argv.includes('--startup-reconnect-only')) {
+      await require('./tests/workspace-startup-reconnect')({ evaluate, waitFor, win, manager, unavailable: value => { inventoryUnavailable = value; }, counters: () => ({ ready: rendererReadyCalls, reads: initialInventoryReads }) });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     if (process.argv.includes('--summary-only')) {
       await require('./tests/terminal-summary-mode').run({ evaluate, waitFor, manager, win, fixture: summaryFixture, profile });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
