@@ -35,6 +35,9 @@ driver waits for rendered review states and retries only an explicit stale-frame
 rejection that occurs before any PTY write; unknown or accepted deliveries are
 never replayed. Product, dependencies, package metadata and updater checks keep
 the immutable tag's bytes and all compatibility gates still run in full.
+The separate pane-hide test may also be overlaid and restored by recovery.
+It requires positive live PTY process IDs before capturing identity baselines,
+so asynchronous pane startup is not mistaken for process replacement by X.
 
 Windows compatibility CI and Release build the candidate once and distribute
 the same three verified Windows installers to six independent GitHub-hosted
