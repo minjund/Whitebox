@@ -84,7 +84,7 @@ class TerminalActivity {
       let state = 'unknown', completed = false, requestId = '', providerPid = child?.pid || 0;
       let usage = null, conversationId = '', usageStatus = roots.length === 0 ? 'none' : 'unavailable';
       const native = child ? await this.completion.observe(child) : {};
-      const background = child ? conversationBackground(native, child, backgroundSnapshot, this.now())
+      const background = child ? conversationBackground(native, child, backgroundSnapshot, this.now(), available ? rows : [])
         : available && !providers.length ? shellBackground(rows, shell) : [];
       if (native.available && native.usage) { usage = native.usage; conversationId = native.conversationId || ''; usageStatus = 'observed'; }
       if (child && (!frame || frame.creationId === member.creationId && this.now() - frame.at < 5000)) {

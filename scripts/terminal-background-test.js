@@ -40,6 +40,22 @@ async function main() {
     assert.deepEqual(conversationBackground(native, child, { ...snapshot, sessions: [{ ...snapshot.sessions[0], file: file + '.foreign' }] }, now), [], 'same cwd/title is not ownership');
     assert.deepEqual(conversationBackground(native, child, { ...snapshot, sessions: [snapshot.sessions[0], snapshot.sessions[0]] }, now), [], 'ambiguous history is rejected');
     assert.deepEqual(conversationBackground(native, { ...child, startedAt: stamp(9000) }, snapshot, now), [], 'a resumed process cannot inherit old background launches');
+    // A quiet long-running command goes unverified in the log; only a live
+    // process under the same AI process with the exact command keeps it.
+    const quiet = { ...snapshot.sessions[0], executions: snapshot.sessions[0].executions.map(item => ({ ...item, status: 'unverified' })) };
+    const quietSnapshot = { ...snapshot, sessions: [quiet] };
+    const command = quiet.executions[0].command;
+    const proc = (pid, extra = {}) => ({ pid, parentPid: 101, pgid: pid, stat: 'S', ancestorPids: [101, 1], commandLine: `/bin/zsh -c source snap && eval '${command}' < /dev/null`, ...extra });
+    assert.deepEqual(conversationBackground(native, child, quietSnapshot, now), [], 'unverified without process evidence stays hidden');
+    assert.equal(conversationBackground(native, child, quietSnapshot, now, [proc(500)]).length, 1, 'a live matching process keeps a quiet background command visible');
+    assert.equal(conversationBackground(native, child, quietSnapshot, now, [proc(500), proc(501, { pgid: 500, parentPid: 500, ancestorPids: [500, 101, 1] })]).length, 1, 'a pipeline proves one command once');
+    assert.deepEqual(conversationBackground(native, child, quietSnapshot, now, [proc(500, { ancestorPids: [999, 1], parentPid: 999 })]), [], 'another AI process tree is not evidence');
+    assert.deepEqual(conversationBackground(native, child, quietSnapshot, now, [proc(500, { stat: 'Z' })]), [], 'a zombie is not running work');
+    assert.deepEqual(conversationBackground(native, child, quietSnapshot, now, [proc(500, { commandLine: '/bin/zsh -c npm test' })]), [], 'a different command line is not evidence');
+    const twice = { ...quiet, executions: [quiet.executions[0], { ...quiet.executions[0], id: 'bash-2', backgroundId: 'bg-2' }] };
+    assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [twice] }, now, [proc(500)]).length, 1, 'one live process never revives a finished duplicate');
+    const quoting = { ...quiet, executions: [{ ...quiet.executions[0], command: "printf 'x'" }] };
+    assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [quoting] }, now, [proc(500, { commandLine: "/bin/zsh -c eval 'printf '\\''x'\\''' < /dev/null" })]).length, 1, 'shell-quoted commands still match');
     rows.push({ type: 'user', sessionId, uuid: 'notification', isMeta: true, timestamp: stamp(4000), message: { role: 'user', content: '<task-notification><task-id>bg-1</task-id><tool-use-id>bash-1</tool-use-id><status>completed</status></task-notification>' } });
     await write();
     assert.equal(conversationBackground(await reader.observe(child), child, { ...snapshot, sessions: [await parsed(file, parseClaude)] }, now).length, 0, 'completion removes the actual parsed background command');

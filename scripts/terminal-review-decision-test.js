@@ -71,7 +71,8 @@ module.exports = async function decisionChecks() {
   assert.match(html, /&lt;img/u);
   assert.ok(html.indexOf('현재 결론') < html.indexOf('판단 이유') && html.indexOf('판단 이유') < html.indexOf('권하는 다음 행동'));
   assert.doesNotMatch(html, /선택지 비교/u, 'simple work has no empty choice section');
-  assert.doesNotMatch(html, /버튼 문구를 변경했습니다\./u, 'verbatim quotes stay in the detailed evidence section');
+  assert.doesNotMatch(html, /버튼 문구를 변경했습니다\./u, 'verbatim quotes are not shown');
+  assert.doesNotMatch(html, /설명의 근거|<details/u, 'the explanation-evidence section is removed');
 
   async function run(replies, { interruptDuringRepair = false, invalidateDuringRepair = false, requireContent = false } = {}) {
     const session = { id: 'decision', creationId: 'epoch', pid: 10, status: 'running' };

@@ -392,7 +392,7 @@
     const available = new Set(owners().flatMap(item => item.tabs.flatMap(panel => layout.ids(panel.layout))));
     const view = owner.viewLayout || current.viewLayout, present = layout.ids(view);
     owner.viewLayout = present.length && present.length === new Set(present).size && present.every(id => available.has(id))
-      ? view : layout.restore(view, available) || layout.restore(current.layout, available);
+      ? view : layout.aligned(layout.restore(view, available) || layout.restore(current.layout, available));
     current.viewLayout = owner.viewLayout;
     return owner.viewLayout;
   }
@@ -730,7 +730,7 @@
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
         const background = backgroundBadge(id);
-        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-instance="${esc(id)}" class="wb-trash-instance" title="${t('종료하고 휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('종료하고 휴지통으로 이동')}">${icon('trash')}</button></div>`;
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 닫기')}" aria-label="${esc(title(id))} ${t('터미널 닫기')}">${icon('close')}</button></div>`;
       }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
@@ -1800,7 +1800,6 @@
     if (button.dataset.arrangeInstance) openArrange(button.dataset.arrangeInstance);
     if (button.dataset.newProject) createTerminal('', spaces.find(item => item.id === button.dataset.newProject)).catch(report);
     if (button.dataset.removeProject) removeProject(button.dataset.removeProject).catch(report);
-    if (button.dataset.trashInstance) trashInstance(button.dataset.trashInstance).catch(report);
     if (button.dataset.closeTerminal) closeInstance(button.dataset.closeTerminal).catch(report);
     if (button.dataset.restoreInstance) restoreInstance(button.dataset.restoreInstance).catch(report);
     if (button.dataset.purgeInstance) purgeInstance(button.dataset.purgeInstance).catch(report);
@@ -1966,7 +1965,7 @@
     }
     if (!spaces.length && !Array.isArray(saved.spaces)) spaces.push({ id: uuid(), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.', name: t('내 작업 공간'), tabs: [], activeTab: '', nextNumber: 1 });
     pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
-    for (const owner of owners()) { owner.viewLayout = layout.restore(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.restore(panel.viewLayout, available); }
+    for (const owner of owners()) { owner.viewLayout = layout.aligned(layout.restore(owner.viewLayout, available)); for (const panel of owner.tabs) { panel.layout = layout.aligned(panel.layout); panel.viewLayout = layout.aligned(layout.restore(panel.viewLayout, available)); } }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
     // The saved canvas can intentionally show only some members of a panel.
     // Older profiles without a canvas may still recover their pinned panels.
@@ -2043,7 +2042,7 @@
     }, 1000);
     setInterval(() => captureReviews(), 2500);
     setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing' || reviews.get(activeId())?.retryAt > Date.now()) renderReview(); }, 1000);
-    window.WhiteboxWorkspace = { createTerminal, selectPane, captureReviews, getState: () => ({ busy, spaces, standalone, trash, selectedSpace, pinnedPanels, activeId: activeId(), sessions: [...sessions.values()] }) };
+    window.WhiteboxWorkspace = { createTerminal, selectPane, captureReviews, trashInstance, getState: () => ({ busy, spaces, standalone, trash, selectedSpace, pinnedPanels, activeId: activeId(), sessions: [...sessions.values()] }) };
     document.title = `Whitebox ${bootstrap.versions.app}`;
   }
   init().catch(report);
