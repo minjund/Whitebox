@@ -1,0 +1,41 @@
+#terminalWorkspace .wb-mode-switch { display: flex; align-items: center; padding: 3px; gap: 2px; border: 1px solid var(--wb-line); border-radius: 7px; }
+#terminalWorkspace .wb-mode-switch button { width: auto; flex: 0 0 auto; min-height: 28px; padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+#terminalWorkspace .wb-mode-switch [aria-pressed="true"] { background: var(--wb-soft); color: var(--wb-text); }
+#terminalWorkspace .wb-mode-switch button:disabled { opacity: .4; cursor: not-allowed; }
+#terminalWorkspace.summary-mode { grid-template-columns: var(--wb-sidebar-width) minmax(0, 1fr); }
+#terminalWorkspace.summary-mode #wbReview, #terminalWorkspace.summary-mode #wbReviewToggle, #terminalWorkspace.summary-mode #wbTabs { display: none; }
+#terminalWorkspace.summary-mode.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+#terminalWorkspace .wb-summary { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--wb-bg); }
+.wb-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 30px 15px; border-bottom: 1px solid var(--wb-line); }
+.wb-summary-heading > div { min-width: 0; display: grid; gap: 5px; }
+.wb-summary-heading span { color: var(--wb-muted); font-size: 11px; }
+.wb-summary-heading strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#terminalWorkspace .wb-summary-messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 30px max(24px, calc((100% - 720px) / 2)); scrollbar-width: thin; scrollbar-color: var(--wb-line) transparent; }
+.wb-summary-messages > article { margin-bottom: 28px; font-size: 15px; line-height: 1.8; overflow-wrap: anywhere; }
+#terminalWorkspace .wb-summary-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--wb-muted); font-size: 11px; }
+#terminalWorkspace .wb-summary-user { padding: 16px 20px; background: var(--wb-panel); border: 1px solid var(--wb-line); border-radius: 10px; white-space: pre-wrap; }
+#terminalWorkspace .wb-summary-answer { padding: 0 5px 24px; border-bottom: 1px solid var(--wb-line); }
+#terminalWorkspace .wb-summary-answer .wb-decision-conclusion > p { font-size: 20px; line-height: 1.65; font-weight: 600; letter-spacing: -.4px; }
+#terminalWorkspace .wb-summary-answer .wb-task-section { margin-bottom: 18px; }
+#terminalWorkspace .wb-summary-answer h3 { margin-bottom: 6px; color: var(--wb-muted); font-size: 12px; font-weight: 500; }
+#terminalWorkspace .wb-summary-answer .wb-content-paragraph, #terminalWorkspace .wb-summary-answer .wb-content-answer { margin-bottom: 12px; }
+#terminalWorkspace .wb-summary-answer pre, #terminalWorkspace .wb-summary-prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow-y: auto; font: 12px/1.65 'Cascadia Mono', Menlo, monospace; }
+.wb-summary-empty { min-height: 240px; display: flex; flex-direction: column; justify-content: center; gap: 16px; }
+.wb-summary-empty > span { font-size: 11px; color: var(--wb-accent); }
+#terminalWorkspace .wb-summary-empty h1 { max-width: 520px; font-size: clamp(22px, 3vw, 32px); line-height: 1.5; font-weight: 550; letter-spacing: -.8px; }
+.wb-summary-empty p { color: var(--wb-muted); }
+#terminalWorkspace .wb-summary-composer { width: min(100% - 48px, 720px); flex-shrink: 0; margin: 0 auto 24px; padding: 14px 16px 10px; background: var(--wb-panel); border: 1px solid var(--wb-line); border-radius: 10px; }
+#terminalWorkspace .wb-summary-composer:focus-within { border-color: var(--wb-accent); }
+#terminalWorkspace .wb-summary-composer textarea { display: block; width: 100%; min-height: 56px; max-height: 180px; resize: none; border: none; outline: none; padding: 0; background: transparent; color: var(--wb-text); font: inherit; font-size: 15px; line-height: 1.7; }
+.wb-summary-composer > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wb-summary-composer > div > span { font-size: 11px; color: var(--wb-muted); }
+#terminalWorkspace #wbSummarySend { background: var(--wb-accent); color: var(--wb-bg); min-height: 32px; padding: 5px 16px; font-weight: 600; }
+#terminalWorkspace #wbSummaryNotice { margin-top: 6px; color: var(--wb-muted); font-size: 12px; }
+.wb-summary-queue-actions { display: flex; gap: 8px; padding-top: 8px; }
+#terminalWorkspace .wb-summary-queue-actions button { border: 1px solid var(--wb-line); font-size: 12px; }
+#terminalWorkspace .wb-summary-prompt { border-left: 2px solid var(--wb-accent); padding: 16px 20px; background: var(--wb-panel); }
+#terminalWorkspace .wb-summary-prompt h2 { font-size: 16px; }
+.wb-summary-prompt > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+#terminalWorkspace .wb-summary-prompt button { border: 1px solid var(--wb-line); min-height: 36px; }
+.wb-summary-working, .wb-summary-delivery-error { color: var(--wb-muted); font-size: 12px; }
+@media (max-width: 850px) { #terminalWorkspace.summary-mode { grid-template-columns: minmax(0, 1fr); } .wb-summary-heading { padding: 16px; } #terminalWorkspace .wb-summary-messages { padding: 20px 16px; } #terminalWorkspace .wb-summary-composer { width: calc(100% - 24px); margin-bottom: 12px; } #terminalWorkspace .wb-mode-switch button { padding: 3px 6px; } }

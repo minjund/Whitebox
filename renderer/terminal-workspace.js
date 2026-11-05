@@ -69,6 +69,7 @@
   }
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
   const workStates = new Map();
+  const summaryMembers = new Map();
   const terminalUsageHistory = new Map();
   let backgroundPopover = null;
   const acknowledgedCompletions = new Map();
@@ -92,9 +93,14 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-mode-switch" role="group" aria-label="작업 모드"><button data-workspace-mode="terminal" aria-pressed="true">터미널</button><button data-workspace-mode="summary" aria-pressed="false" disabled>요약</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
+      <section id="wbSummary" class="wb-summary" aria-label="요약 채팅" hidden>
+        <header class="wb-summary-heading"><div><span>요약 모드</span><strong id="wbSummaryTarget"></strong></div><span id="wbSummaryProvider"></span></header>
+        <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"></div>
+        <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 참고해 다음 요청을 입력하세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><button id="wbSummarySend" type="submit">전송</button></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+      </section>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
       <footer class="wb-status"><span id="wbConnection"><i></i>터미널 연결 중</span><span id="wbTerminalStatus"></span><span>⌘/Ctrl T 터미널 추가 <b>·</b> ⌘/Ctrl D 분할</span></footer>
     </main>
@@ -167,6 +173,20 @@
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
   const $ = selector => root.querySelector(selector);
+  const summaryChat = window.WhiteboxSummaryChat({
+    root, api, t, esc, activeId: () => activeId(), session: id => sessions.get(id),
+    member: id => summaryMembers.get(id), groupId: id => panelFor(id)?.id,
+    review: id => reviews.get(id), snapshot: id => terminal.readTerminalSnapshot(id),
+    tasks: id => explainedTasks(id, sessions.get(id)?.creationId, reviews.get(id)?.result?.tasks)
+      .filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)),
+    label: id => { const owner = terminalPosition(id)?.owner; return `${owner?.name || ''} · ${title(id)}`; },
+    refresh: () => syncCollaboration(), save: () => save(),
+    reveal: id => selectInstance(id), report: message => report(new Error(message), 'summary'),
+    submitted: job => {
+      submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
+      setTimeout(() => captureReviews(), 0);
+    },
+  });
   const backgroundPopup = document.createElement('section');
   backgroundPopup.id = 'wbBackgroundPopover'; backgroundPopup.className = 'wb-background-popover'; backgroundPopup.hidden = true;
   backgroundPopup.setAttribute('role', 'region'); backgroundPopup.setAttribute('aria-labelledby', 'wbBackgroundHeading');
@@ -442,7 +462,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -481,7 +501,7 @@
     save();
     return record;
   }
-  function activeFocus() { terminal.focusTerminal(activeId()); }
+  function activeFocus() { if (root.classList.contains('summary-mode')) $('#wbSummaryInput').focus(); else terminal.focusTerminal(activeId()); }
   function title(id) {
     const session = sessions.get(id);
     const review = reviews.get(id);
@@ -718,6 +738,7 @@
   }
 
   function renderNav() {
+    summaryChat.render();
     $('#wbBreadcrumbProject').textContent = space()?.name || t('내 작업 공간');
     renderInstances();
     renderTrash();
@@ -1173,6 +1194,7 @@
 
   function removeTerminalLocally(id) {
     const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove();
+    summaryChat.forget(id); summaryMembers.delete(id);
     panes.delete(id); sessions.delete(id); reviews.delete(id); reviewHistory.delete(id); submissions.delete(id); interruptions.delete(id);
     terminalUsageHistory.delete(id);
     trash = trash.filter(item => item.id !== id);
@@ -1446,6 +1468,7 @@
   }
 
   function renderReview() {
+    summaryChat.render();
     renderCollaborationStatus();
     const id = activeId(), value = reviews.get(id);
     const requesting = reanalysisRequests.get(id)?.creationId === sessions.get(id)?.creationId && reanalysisRequests.has(id);
@@ -1588,10 +1611,11 @@
     const frames = capturedFrames.filter(frame => panes.has(frame.id) && !trashed(frame.id)
       && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
     const result = await api.terminalCollaboration({ operation: 'sync', groups, frames });
-    workStates.clear();
+    workStates.clear(); summaryMembers.clear();
     let usageChanged = false;
     for (const id of acknowledgedCompletions.keys()) if (!sessions.has(id) || trashed(id)) acknowledgedCompletions.delete(id);
     for (const panel of result.panels || []) for (const member of panel.members || []) {
+      summaryMembers.set(member.id, { ...member, observedAt: Date.now() });
       if (member.activity) {
         workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
         usageChanged = rememberTerminalUsage(member.id, member.activity) || usageChanged;
@@ -1600,6 +1624,7 @@
     if (usageChanged) save();
     refreshPaneChrome(); renderInstances();
     collaborationJobs = result.jobs || [];
+    summaryChat.observe(collaborationJobs);
     for (const job of collaborationJobs) {
       if (collaborationLoaded && job.state === 'completed' && collaborationStates.get(job.id) !== 'completed') {
         collaborationNotices.set(job.id, Date.now() + 7000);
@@ -1635,7 +1660,7 @@
     if ($('#wbError').dataset.scope === 'collaboration') $('#wbError').hidden = true;
   }
   function renderCollaborationStatus() {
-    const related = collaborationJobs.filter(job => job.sourceId === activeId() || job.targetId === activeId());
+    const related = collaborationJobs.filter(job => job.operation !== 'summary' && (job.sourceId === activeId() || job.targetId === activeId()));
     const jobs = related.filter(job => job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now()).slice(-3);
     const status = $('#wbCollaborationStatus'); status.hidden = !jobs.length;
     const labels = { queued: t('전달 대기'), starting: t('시작 중…'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
@@ -1680,8 +1705,9 @@
           reviews.set(id, { state: 'unbound', message: t('이전 터미널에는 검토 연결 식별자가 없습니다. 새 터미널을 열면 이해·검토가 연결됩니다.') });
           continue;
         }
+        const summaryEnabled = summaryChat.needsReview(id);
         let result;
-        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget ? terminal.readTerminal(id) : '', enabled: autoReview || Boolean(manualTarget), force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget || summaryEnabled ? terminal.readTerminal(id) : '', enabled: autoReview || Boolean(manualTarget) || summaryEnabled, force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
         } catch (error) {
           if (sessions.get(id)?.creationId === session.creationId) reviews.set(id, { ...reviews.get(id), state: 'error', message: String(error.message || error) });
           continue;
@@ -1964,10 +1990,11 @@
       const tabs = (Array.isArray(item.tabs) ? item.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });
+    summaryChat.restore(saved.summaryChats);
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
     standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.',
-      viewLayout: savedStandalone.viewLayout, activeSurface: savedStandalone.activeSurface,
+      viewLayout: savedStandalone.viewLayout, activeSurface: savedStandalone.activeSurface, canvasHidden: savedStandalone.canvasHidden === true,
       tabs: independentTabs, nextNumber: Math.max(1, Number(savedStandalone.nextNumber) || independentTabs.length + 1),
       activeTab: independentTabs.some(item => item.id === savedStandalone.activeTab) ? savedStandalone.activeTab : independentTabs[0]?.id || '' };
     for (const workspace of bootstrap.workspaces || []) {

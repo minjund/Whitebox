@@ -18,7 +18,7 @@ class TerminalCollaboration {
     this.onTerminalClosed = onTerminalClosed;
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now, backgroundSnapshot });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
-    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
+    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.summaryPromptReceipts = new Set(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.helper = path.join(directory, 'panel-agent.cjs');
     fs.copyFileSync(path.join(__dirname, '../bin/panel-agent.js'), this.helper);
@@ -137,7 +137,7 @@ class TerminalCollaboration {
     const child = exactProcess(live, await scanProcesses(this.monitor));
     if (!child) throw new Error('이 터미널에서 Claude 또는 Codex를 먼저 실행해 주세요.');
     const frame = this.frames.get(id);
-    if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || frame.outputSequence !== live.outputSequence) throw new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.');
+    if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || frame.outputSequence !== live.outputSequence) throw Object.assign(new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.'), { code: 'TERMINAL_FRAME_STALE' });
     return { member, live, child, frame };
   }
   async send(groupId, id, message, deliveryId, expected = null, submit = true) {
@@ -153,6 +153,55 @@ class TerminalCollaboration {
     // One guarded write prevents an intervening draft between paste and Enter.
     await this.manager().write(id, `\x1b[200~${message}\x1b[201~${submit ? '\r' : ''}`, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
     return { baseline: native.requestId || '', stamp: completionStamp(target.frame.text, target.child.provider), provider: target.child.provider, providerPid: target.child.pid, creationId: target.member.creationId, pid: target.member.pid };
+  }
+  summarySend(payload) {
+    return this.serialize(async () => {
+      const { id, groupId, targetId, message, targetCreationId, targetProviderPid, targetProvider } = payload || {};
+      if (!/^[a-f0-9-]{36}$/u.test(id || '') || !safeId(groupId) || !safeId(targetId)
+        || typeof message !== 'string' || !message.trim() || message.length > 8000 || /[\x00-\x08\x0b-\x1f\x7f]/u.test(message)
+        || typeof targetCreationId !== 'string' || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0
+        || !['claude', 'codex'].includes(targetProvider)) throw new Error('올바른 채팅 요청과 실행 세션이 필요합니다.');
+      const existing = this.jobs.get(id);
+      if (existing) {
+        if (existing.operation !== 'summary' || existing.targetId !== targetId || existing.groupId !== groupId
+          || existing.request !== message || existing.expectedCreationId !== targetCreationId
+          || existing.expectedProviderPid !== targetProviderPid || existing.expectedProvider !== targetProvider) throw new Error('채팅 전송 식별자가 다른 요청에 사용되었습니다.');
+        return { ok: ['running', 'completed'].includes(existing.state), job: existing };
+      }
+      let target;
+      try { target = await this.target(groupId, targetId); }
+      catch (error) { if (error.code === 'TERMINAL_FRAME_STALE') return { deferred: true }; throw error; }
+      if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('채팅을 작성한 AI 세션이 바뀌었습니다.');
+      if ([...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))
+        || target.frame.inputDraft || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) return { deferred: true };
+      const native = await this.completion.observe(target.child);
+      if (native.available && native.state === 'working') return { deferred: true };
+      // Persist before the first write. A lost acknowledgement is never replayed.
+      const job = { id, operation: 'summary', sourceId: targetId, targetId, groupId, request: message,
+        expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
+        state: 'sending', createdAt: this.now(), sentAt: this.now() };
+      this.jobs.set(id, job); this.save(job);
+      try { Object.assign(job, await this.send(groupId, targetId, message, `summary:${id}`, payload), { state: 'running' }); }
+      catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
+      this.save(job);
+      return { ok: job.state === 'running', job };
+    });
+  }
+  summaryRespond(payload) {
+    return this.serialize(async () => {
+      const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider, fingerprint, choiceId } = payload || {};
+      const target = await this.target(groupId, targetId);
+      if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('승인을 요청한 AI 세션이 바뀌었습니다.');
+      const prompt = require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text);
+      const choice = prompt?.fingerprint === fingerprint && prompt.choices?.find(item => item.id === choiceId);
+      if (!choice) throw new Error('승인 요청이 바뀌었거나 처리되었습니다.');
+      const receipt = JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint]);
+      if (this.summaryPromptReceipts.has(receipt)) throw new Error('이미 응답한 승인 요청입니다. 터미널을 확인해 주세요.');
+      this.summaryPromptReceipts.add(receipt);
+      const deliveryId = `summary-approval:${require('crypto').createHash('sha256').update(JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint, choiceId])).digest('hex')}`;
+      await this.manager().respond(targetId, choice.key, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
+      return { ok: true, requiresText: choice.requiresText === true };
+    });
   }
   connect(groupId, sourceId) { return this.serialize(() => this.connectNow(groupId, sourceId)); }
   async connectNow(groupId, sourceId) {
