@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko" data-state="arrival" data-unread="true">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Whitebox · B — 오른쪽 패널의 도착 신호</title>
+<style>
+:root{--wb-bg:#13161a;--wb-panel:#20242a;--wb-side:#20242a;--wb-soft:#282f38;--wb-line:#333b46;--wb-text:#e3e9f2;--wb-muted:#a6b2c3;--wb-accent:#98d4b9;--wb-sidebar-width:220px;--wb-review-width:408px;--wb-radius:10px;--wb-gap:16px;color-scheme:dark}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){--wb-bg:#fbfcfd;--wb-panel:#f0f2f5;--wb-side:#f0f2f5;--wb-soft:#e8edf3;--wb-line:#dce2e9;--wb-text:#263141;--wb-muted:#637185;--wb-accent:#28745d;color-scheme:light}}
+:root[data-theme="light"]{--wb-bg:#fbfcfd;--wb-panel:#f0f2f5;--wb-side:#f0f2f5;--wb-soft:#e8edf3;--wb-line:#dce2e9;--wb-text:#263141;--wb-muted:#637185;--wb-accent:#28745d;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;background:var(--wb-bg);color:var(--wb-text);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo",sans-serif}button,textarea,select{font:inherit}button{cursor:pointer;color:inherit;background:none;border:0;border-radius:6px;padding:6px 9px}button:hover{background:color-mix(in srgb,var(--wb-muted) 12%,transparent)}button:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible,select:focus-visible{outline:2px solid var(--wb-accent);outline-offset:3px}p,h1,h2,h3{margin:0}[hidden]{display:none!important}.muted{color:var(--wb-muted)}.icon{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}.demo-bar{height:48px;border-bottom:1px solid var(--wb-line);padding:0 18px;display:flex;align-items:center;justify-content:space-between;gap:20px;background:var(--wb-bg)}.demo-title{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--wb-muted)}.demo-title b{display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--wb-line);border-radius:6px;color:var(--wb-text)}.demo-controls{display:flex;align-items:center;gap:16px}.control{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wb-muted)}.segments{display:flex;gap:2px;border:1px solid var(--wb-line);border-radius:7px;padding:2px}.segments button{font-size:11px;padding:3px 9px;min-height:25px}.segments button[aria-pressed=true]{background:var(--wb-soft);color:var(--wb-text);box-shadow:0 1px 2px #0001}.extra-state{background:var(--wb-bg);border:1px solid var(--wb-line);border-radius:6px;color:var(--wb-muted);padding:5px;font-size:11px}
+.workspace{height:calc(100dvh - 48px);display:grid;grid-template-columns:var(--wb-sidebar-width) minmax(0,1fr) var(--wb-review-width);min-height:500px}.sidebar{background:var(--wb-side);border-right:1px solid var(--wb-line);display:flex;flex-direction:column;min-width:0}.brand{height:70px;display:flex;align-items:center;gap:10px;padding:0 22px}.brand-mark{display:grid;place-items:center;width:25px;height:27px;border:1px solid var(--wb-muted);border-radius:7px;transform:rotate(-8deg);font-weight:800;font-size:14px}.brand strong{font-size:19px;letter-spacing:-1px}.brand small{font-size:9px;margin-left:auto;color:var(--wb-muted);border:1px solid var(--wb-line);border-radius:3px;padding:0 3px}.local{margin:12px 20px 24px;display:flex;align-items:center;gap:10px}.local>span{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--wb-line);border-radius:8px}.local strong{font-size:12px}.local small{display:block;color:var(--wb-muted);font-size:10px;margin-top:3px}.search{border:1px solid var(--wb-line);border-radius:7px;margin:0 16px 30px;display:flex;align-items:center;gap:8px;padding:9px 10px;color:var(--wb-muted);font-size:11px}.search kbd{margin-left:auto;font:10px inherit;opacity:.7}.side-heading{display:flex;justify-content:space-between;margin:0 22px 10px;font-size:10px;color:var(--wb-muted)}.project{margin:0 12px 12px}.project-name{display:flex;align-items:center;gap:8px;padding:10px;background:var(--wb-soft);border-radius:6px;font-weight:600;font-size:12px}.terminal-list{margin:12px 0 0 18px;border-left:1px solid var(--wb-line);padding-left:9px}.terminal-row{width:100%;display:flex;align-items:center;gap:8px;text-align:left;font-size:11px;padding:10px 9px;white-space:nowrap}.terminal-row.selected{background:color-mix(in srgb,var(--wb-text) 5%,transparent);border:1px solid var(--wb-line)}.terminal-row .arrived{margin-left:auto}.arrived{color:var(--wb-accent)}.arrival-indicator{visibility:hidden}.arrival-indicator.active{visibility:visible}.add-terminal{font-size:11px;color:var(--wb-muted);width:100%;text-align:left;margin-top:5px;padding-left:13px}.panel-add{margin:12px 0 22px;width:100%;border:1px dashed var(--wb-line);font-size:11px;text-align:left;color:var(--wb-muted);padding:10px}.other-project{margin:0 22px;color:var(--wb-muted);display:flex;align-items:center;gap:8px;font-size:11px}.sidebar-bottom{margin-top:auto;padding:12px 16px;border-top:1px solid var(--wb-line);display:grid;gap:7px;color:var(--wb-muted);font-size:11px}.sidebar-bottom div{padding:6px;display:flex;gap:9px;align-items:center}.sidebar-bottom small{padding-left:6px;font-size:10px}
+.main{min-width:0;display:flex;flex-direction:column;background:var(--wb-bg)}.main-header{height:64px;flex:none;border-bottom:1px solid var(--wb-line);padding:0 22px;display:flex;align-items:center;gap:12px;font-size:11px}.main-header .icon{color:var(--wb-muted)}.main-header .divider{width:1px;height:18px;background:var(--wb-line)}.main-header .slash{color:var(--wb-muted)}.main-header>button{margin-left:auto;color:var(--wb-muted)}.canvas{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:22px 20px 0;flex:1;min-height:0}.terminal{min-width:0;display:flex;flex-direction:column;border:1px solid var(--wb-line);border-radius:8px;overflow:hidden;background:#0c0c0c;color:#cdd1d6}.terminal.selected{border-color:color-mix(in srgb,var(--wb-accent) 48%,var(--wb-line))}.terminal-header{height:39px;padding:0 11px;display:flex;align-items:center;gap:8px;background:#202224;flex:none;font-size:10px}.terminal-header strong{font-weight:500}.terminal-header .terminal-tools{margin-left:auto;color:#8c9095;font-size:12px}.terminal-notice{display:flex;align-items:center;gap:5px;font-size:10px;white-space:nowrap}.terminal-output{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:15px 12px 0;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.1px}.terminal-output .prompt{color:#858d98}.input-row{display:flex;gap:7px;align-items:flex-start;margin:4px 12px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.input-row label{color:#858d98}.terminal-input{background:transparent;color:#dce2e9;border:0;resize:none;width:100%;min-width:0;outline-offset:0;font:inherit;line-height:inherit;padding:0;height:44px;caret-color:#98d4b9}.terminal:focus-within{border-color:var(--wb-accent)}.main-footer{height:45px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 20px;color:var(--wb-muted);font-size:10px}.main-footer .connected{display:flex;align-items:center;gap:6px}.main-footer .dot{width:4px;height:4px}
+.review{position:relative;border-left:1px solid var(--wb-line);background:var(--wb-panel);display:flex;flex-direction:column;min-width:0;min-height:0}.review::before{content:"";position:absolute;inset:0 auto 0 -1px;width:3px;background:var(--wb-accent);opacity:0;pointer-events:none;z-index:1}html[data-unread=true] .review::before{opacity:1}.review-header{height:64px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;gap:12px;border-bottom:1px solid var(--wb-line)}.review-header h1{font-size:14px;font-weight:650;letter-spacing:-.4px}.pill{display:inline-flex;align-items:center;gap:6px;color:var(--wb-accent);background:color-mix(in srgb,var(--wb-accent) 10%,transparent);border:1px solid color-mix(in srgb,var(--wb-accent) 26%,transparent);border-radius:20px;padding:3px 9px;font-size:11px;white-space:nowrap}.read-label{font-size:11px;color:var(--wb-muted)}.review-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--wb-line) transparent;padding:24px;scroll-padding:24px}.review-body{max-width:680px;margin:auto}.conclusion{padding:20px;border:1px solid var(--wb-line);border-radius:var(--wb-radius);background:color-mix(in srgb,var(--wb-bg) 70%,var(--wb-panel));box-shadow:0 2px 6px #0000000b}.conclusion .eyebrow{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--wb-muted);margin-bottom:12px}.conclusion .eyebrow .icon{width:14px;height:14px}.conclusion h2{font-size:21px;line-height:1.55;letter-spacing:-.7px;font-weight:630;word-break:keep-all;overflow-wrap:anywhere}.pulse{animation:arrival-pulse 1200ms ease-out 1}@keyframes arrival-pulse{0%,100%{box-shadow:0 2px 6px #0000000b}45%{border-color:var(--wb-accent);box-shadow:0 0 0 5px color-mix(in srgb,var(--wb-accent) 10%,transparent)}}.meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:12px 0 26px;font-size:10px;color:var(--wb-muted)}.meta .icon{width:12px;height:12px}.meta .separator{opacity:.5;padding:0 2px}.meta strong{font-weight:500}.section-heading{font-size:12px;font-weight:600;margin-bottom:12px;letter-spacing:-.1px}.reasons{padding:0;list-style:none;display:grid;gap:12px;margin:0 0 18px}.reasons li{display:grid;grid-template-columns:20px 1fr;gap:10px}.reason-no{font-size:10px;color:var(--wb-muted);width:20px;height:20px;display:grid;place-items:center;border:1px solid var(--wb-line);border-radius:50%;margin-top:4px}.body-text{font-size:15px;line-height:1.8;word-break:keep-all;overflow-wrap:anywhere}.caution{border-left:2px solid var(--wb-muted);padding-left:12px;margin-bottom:24px}.caution h3{font-size:11px;color:var(--wb-muted);margin-bottom:4px;font-weight:500}.caution p{font-size:15px;line-height:1.8}.next{border-top:1px solid var(--wb-line);padding-top:20px}.next .section-heading{display:flex;gap:7px;align-items:center;color:var(--wb-accent);margin-bottom:8px}.next h3{font-size:16px;font-weight:600;margin-bottom:5px;letter-spacing:-.3px}.next p{font-size:15px;line-height:1.8;color:var(--wb-muted)}.primary{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:43px;border-radius:7px;background:var(--wb-accent);color:#13251e;font-size:13px;font-weight:650;margin-top:16px;box-shadow:0 1px 2px #0002}.primary:hover{background:color-mix(in srgb,var(--wb-accent) 88%,var(--wb-text))}:root[data-theme=light] .primary{color:#fff}@media(prefers-color-scheme:light){:root:not([data-theme=dark]) .primary{color:#fff}}.action-note{display:block;font-size:10px;color:var(--wb-muted);text-align:center;margin-top:7px}details{border-top:1px solid var(--wb-line);margin-top:24px;padding-top:15px}summary{font-size:11px;color:var(--wb-muted);cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px}summary::before{content:"›";font-size:16px;line-height:1}details[open] summary::before{transform:rotate(90deg)}.detail-content{margin-top:16px;font-size:13px;line-height:1.8;color:var(--wb-muted)}.detail-content blockquote{border-left:2px solid var(--wb-line);padding-left:12px;margin:10px 0}.detail-content code{font:12px/1.7 ui-monospace,monospace;display:block;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--wb-line);border-radius:6px;padding:12px;margin-top:10px}.review-footer{height:45px;border-top:1px solid var(--wb-line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex:none;font-size:10px;color:var(--wb-muted)}.review-footer>span{display:flex;align-items:center;gap:6px}.review-footer button{font-size:11px;display:flex;align-items:center;gap:6px}.review-footer .dot{width:4px;height:4px}
+.thinking{padding:8px 0}.thinking-chip{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--wb-line);background:var(--wb-bg);padding:8px 12px;border-radius:20px;font-size:12px;color:var(--wb-muted);box-shadow:0 1px 2px #0001}.spinner{width:14px;height:14px;border:1.5px solid var(--wb-line);border-top-color:var(--wb-muted);border-radius:50%;animation:spin 1.5s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.thinking h2,.blank-state h2{font-size:19px;line-height:1.6;letter-spacing:-.4px;margin-top:24px;font-weight:600}.thinking p,.blank-state p{margin-top:10px;font-size:15px;line-height:1.8;color:var(--wb-muted)}.quiet-meta{font-size:11px;color:var(--wb-muted);margin-top:26px;border-top:1px solid var(--wb-line);padding-top:14px}.thinking .skeleton{display:grid;gap:10px;margin-top:30px;opacity:.45}.skeleton i{height:7px;background:var(--wb-line);border-radius:8px;width:88%}.skeleton i:nth-child(2){width:72%}.skeleton i:nth-child(3){width:45%}.blank-state button{margin-top:20px;border:1px solid var(--wb-line)}.return-link{display:inline-flex;gap:6px;margin-top:22px;font-size:11px;color:var(--wb-muted);padding-left:0}
+dialog{background:var(--wb-panel);color:var(--wb-text);border:1px solid var(--wb-line);border-radius:12px;width:min(520px,90vw);padding:24px;box-shadow:0 20px 80px #0004}dialog::backdrop{background:#0007}dialog header{display:flex;justify-content:space-between;align-items:center;gap:12px}dialog h2{font-size:18px}dialog p{font-size:13px;color:var(--wb-muted);line-height:1.8;margin:12px 0 18px}dialog label{font-size:12px}dialog textarea{display:block;margin-top:8px;width:100%;background:var(--wb-bg);color:var(--wb-text);border:1px solid var(--wb-line);border-radius:7px;padding:12px;resize:vertical;line-height:1.8;min-height:145px}dialog footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:18px}dialog footer button{border:1px solid var(--wb-line)}#copyStatus{font-size:11px;color:var(--wb-muted)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media(max-width:1199px){:root{--wb-sidebar-width:190px;--wb-review-width:380px}.canvas{padding:18px 14px 0;grid-template-columns:minmax(0,1fr)}.terminal.secondary{display:none}.demo-title span{display:none}.demo-controls{gap:8px}.control>span{display:none}}
+@media(max-width:800px){.workspace{min-width:800px}.demo-bar{min-width:800px}.review-scroll{padding:20px}.demo-title{gap:5px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.sr-only{top:0;left:0}
+.terminal{--wb-accent:#98d4b9}
+</style>
+</head>
+<body>
+<svg style="display:none" aria-hidden="true"><defs>
+<symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 2h10v13H3Z"/></symbol>
+<symbol id="terminal" viewBox="0 0 24 24"><path d="m5 6 5 5-5 5m8 1h6"/></symbol>
+<symbol id="panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+<symbol id="review" viewBox="0 0 24 24"><path d="M4 5h16M4 11h10M4 17h6m5 0 2 2 4-5"/></symbol>
+<symbol id="refresh" viewBox="0 0 24 24"><path d="M20 9a8 8 0 0 0-14-3L3 9m0-5v5h5M4 15a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/></symbol>
+</defs></svg>
+<div class="demo-bar" aria-label="시안 조작">
+ <div class="demo-title"><b>B</b><span>레이아웃은 그대로, 도착은 선명하게</span></div>
+ <div class="demo-controls">
+  <div class="control"><span>상태</span><div class="segments" aria-label="분석 상태"><button data-state-button="thinking" aria-pressed="false">분석 중</button><button data-state-button="arrival" aria-pressed="true">결과 도착</button></div></div>
+  <select class="extra-state" aria-label="기타 상태"><option value="">기타 상태</option><option value="empty">아직 작업 없음</option><option value="error">오류</option></select>
+  <div class="control"><span>테마</span><div class="segments" aria-label="테마"><button data-theme-button="system" aria-pressed="true">자동</button><button data-theme-button="dark" aria-pressed="false">다크</button><button data-theme-button="light" aria-pressed="false">라이트</button></div></div>
+ </div>
+</div>
+<div class="workspace" id="terminalWorkspace">
+ <aside class="sidebar" aria-label="프로젝트와 터미널">
+  <div class="brand"><span class="brand-mark">w</span><strong>whitebox.</strong><small>2.0</small></div>
+  <div class="local"><span>W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
+  <div class="search"><svg class="icon"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg>프로젝트 찾기<kbd>⌘ K</kbd></div>
+  <div class="side-heading"><span>프로젝트</span><span>＋</span></div>
+  <div class="project">
+   <div class="project-name"><span class="muted">⌄</span><svg class="icon"><use href="#folder"/></svg>Whitebox test</div>
+   <div class="terminal-list">
+    <button class="terminal-row selected" id="sidebarResult" aria-label="ONE_ONLY, 새 결과 보기"><svg class="icon muted"><use href="#terminal"/></svg>ONE_ONLY<span class="arrived arrival-indicator active"><i class="dot"></i></span></button>
+    <div class="terminal-row muted"><svg class="icon"><use href="#terminal"/></svg>TWO_ONLY</div>
+    <div class="add-terminal">＋ 터미널</div>
+   </div>
+   <div class="panel-add">＋ 패널 추가</div>
+  </div>
+  <div class="other-project"><span>⌄</span><svg class="icon"><use href="#folder"/></svg>Other project</div>
+  <div class="sidebar-bottom"><div>♧ <span>휴지통</span><span style="margin-left:auto">0</span></div><div>☷ <span>설정 · 단축키</span></div><small>v2.0.0</small></div>
+ </aside>
+ <main class="main">
+  <header class="main-header"><svg class="icon"><use href="#panel"/></svg><span class="divider"></span><svg class="icon"><use href="#folder"/></svg><span class="muted">Whitebox test</span><span class="slash">/</span><strong>작업 공간</strong><button id="goReview" aria-label="이해와 검토로 이동"><svg class="icon"><use href="#review"/></svg></button></header>
+  <div class="canvas">
+   <section class="terminal selected" aria-label="ONE_ONLY 터미널">
+    <header class="terminal-header"><strong>ONE_ONLY</strong><button class="terminal-notice arrived arrival-indicator active" id="headerResult"><i class="dot"></i>결과 도착<svg class="icon" style="width:12px;height:12px"><use href="#arrow"/></svg></button><span class="terminal-tools" aria-hidden="true">− &nbsp; □ &nbsp; ⋮</span></header>
+    <pre class="terminal-output"><span class="prompt">WB&gt;</span> printf '%s\n' 'ONE_ONLY 한 글 입력 확인'
+ONE_ONLY 한 글 입력 확인
+
+<span class="prompt">요청</span> 문서 생성 결과를 확인해 줘.
+
+문서를 생성했습니다.
+페이지 ID: wb-one-only
+
+백업 후 SQL을 적용하고 결과를
+확인하는 순서입니다.
+</pre>
+    <div class="input-row"><label for="terminalInput">WB&gt;</label><textarea class="terminal-input" id="terminalInput" aria-label="ONE_ONLY 터미널 입력 시안" spellcheck="false"></textarea></div>
+   </section>
+   <section class="terminal secondary" aria-label="TWO_ONLY 터미널"><header class="terminal-header"><strong>TWO_ONLY</strong><span class="terminal-tools" aria-hidden="true">− &nbsp; □ &nbsp; ⋮</span></header><pre class="terminal-output"><span class="prompt">WB&gt;</span> printf '%s\n' 'TWO_ONLY 한 글 입력 확인'
+TWO_ONLY 한 글 입력 확인
+<span class="prompt">WB&gt;</span> <span aria-hidden="true">▏</span></pre></section>
+  </div>
+  <footer class="main-footer"><span class="connected"><i class="dot"></i>셸 연결됨 <span style="margin-left:8px">ONE_ONLY</span></span><span>⌘/Ctrl T 터미널 추가 &nbsp; · &nbsp; ⌘/Ctrl D 분할</span></footer>
+ </main>
+ <aside class="review" aria-labelledby="reviewTitle">
+  <header class="review-header"><h1 id="reviewTitle">이해 · 검토</h1><span class="pill" id="newPill"><i class="dot"></i>새 결과</span><span class="read-label" id="readLabel" hidden>읽음</span></header>
+  <div class="review-scroll" id="reviewScroll" tabindex="0" aria-label="분석 결과 읽기">
+   <div class="review-body" id="resultView">
+    <article class="conclusion" id="conclusion" aria-labelledby="conclusionTitle"><div class="eyebrow"><svg class="icon"><use href="#review"/></svg>결론</div><h2 id="conclusionTitle">문서 생성은 보고됐지만 본문은 확인되지 않았습니다.</h2></article>
+    <div class="meta"><svg class="icon"><use href="#terminal"/></svg><strong>ONE_ONLY</strong><span class="separator">·</span>이번 요청<span class="separator">·</span><time>오후 09:00</time></div>
+    <h3 class="section-heading">이렇게 판단한 이유</h3>
+    <ol class="reasons"><li><span class="reason-no">1</span><p class="body-text">생성 보고와 페이지 ID는 있으나, 문서 본문은 대화에 없습니다.</p></li><li><span class="reason-no">2</span><p class="body-text">백업 → SQL 적용 → 결과 확인의 순서만 설명됐습니다.</p></li></ol>
+    <div class="caution"><h3>확인 범위와 남은 점</h3><p>페이지 ID만으로 본문이 맞다고 판단하지 않습니다.</p></div>
+    <section class="next" aria-labelledby="nextTitle"><div class="section-heading"><svg class="icon"><use href="#arrow"/></svg>권장 행동</div><h3 id="nextTitle">문서 본문부터 확인하세요</h3><p>생성 여부와 내용 일치를 구분할 수 있습니다.</p><button class="primary" id="prepare">본문 확인 요청 준비<svg class="icon"><use href="#arrow"/></svg></button><small class="action-note">요청 초안을 열어 확인합니다</small></section>
+    <details><summary>요청과 분석 기록</summary><div class="detail-content"><strong>대화 원문 기준 · AI 보고</strong><blockquote>문서를 생성했습니다.<br>페이지 ID: wb-one-only</blockquote><p>본문을 직접 읽은 기록은 없습니다. 아래 명령은 기록 당시의 상태 확인 예시이며, 현재 적용 여부는 별도 확인이 필요합니다.</p><code>docker compose ps</code><p style="margin-top:12px">분석 사용량 · 1,400 토큰</p></div></details>
+    <button class="return-link" data-return>← 터미널로 돌아가기</button>
+   </div>
+   <section class="thinking" id="thinkingView" hidden aria-labelledby="thinkingTitle"><div class="thinking-chip"><i class="spinner" aria-hidden="true"></i>응답을 살펴보고 있어요</div><h2 id="thinkingTitle">작업은 계속하셔도 됩니다.</h2><p>결론과 확인할 내용을 정리하고 있습니다. 결과가 오면 이곳에 표시합니다.</p><div class="quiet-meta">ONE_ONLY · 이번 요청</div><div class="skeleton" aria-hidden="true"><i></i><i></i><i></i></div><button class="return-link" data-return>← 터미널로 돌아가기</button></section>
+   <section class="blank-state" id="emptyView" hidden><h2>첫 작업을 기다리고 있어요.</h2><p>터미널에서 작업을 시작하면, 응답을 바탕으로 결론과 다음 행동을 정리합니다.</p><button data-return>터미널로 이동 →</button></section>
+   <section class="blank-state" id="errorView" hidden><h2>분석을 가져오지 못했습니다.</h2><p>터미널의 작업 내용은 그대로입니다. 원문을 확인하거나 다시 분석할 수 있습니다.</p><button id="retry">다시 분석</button><br><button class="return-link" data-return>← 터미널로 돌아가기</button></section>
+  </div>
+  <footer class="review-footer"><span><i class="dot"></i>자동 분석 켜짐</span><button id="reanalyze"><svg class="icon" style="width:12px;height:12px"><use href="#refresh"/></svg>다시 분석</button></footer>
+ </aside>
+</div>
+<div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="announcement"></div>
+<dialog id="draftDialog" aria-labelledby="draftTitle"><header><h2 id="draftTitle">본문 확인 요청 준비</h2><button id="closeDialog" aria-label="요청 초안 닫기">✕</button></header><p>내용을 확인한 뒤 복사해 터미널에 붙여 넣으세요.</p><label for="draftText">요청 내용</label><textarea id="draftText">생성했다고 보고한 문서의 본문을 확인해 줘. 페이지 ID만으로 완료를 판단하지 말고, 요청한 내용과 실제 본문이 일치하는지 확인한 근거를 보여 줘.</textarea><footer><span id="copyStatus" role="status">초안을 수정할 수 있습니다.</span><button id="copyDraft">요청 복사</button></footer></dialog>
+<script>
+(() => {
+ const root=document.documentElement, $=s=>document.querySelector(s), panel=$('#reviewScroll');
+ let state='arrival', unread=true;
+ function paintRead(){
+  root.dataset.unread=String(unread);
+  document.querySelectorAll('.arrival-indicator').forEach(e=>e.classList.toggle('active',unread));
+  $('#newPill').hidden=!unread; $('#readLabel').hidden=state!=='arrival'||unread;
+  $('#sidebarResult').setAttribute('aria-label',unread?'ONE_ONLY, 새 결과 보기':'ONE_ONLY, 분석 결과 보기');
+ }
+ function markRead(){if(state==='arrival'&&unread){unread=false;paintRead();$('#conclusion').classList.remove('pulse');$('#announcement').textContent='ONE_ONLY 분석 결과를 읽음으로 표시했습니다.'}}
+ function setState(next){
+  state=next;root.dataset.state=next;unread=next==='arrival';
+  for(const [s,id] of Object.entries({arrival:'resultView',thinking:'thinkingView',empty:'emptyView',error:'errorView'})) $('#'+id).hidden=s!==next;
+  document.querySelectorAll('[data-state-button]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.stateButton===next)));
+  $('.extra-state').value=['empty','error'].includes(next)?next:'';
+  paintRead();panel.scrollTop=0;panel.setAttribute('aria-busy',String(next==='thinking'));
+  $('#conclusion').classList.remove('pulse');
+  if(next==='arrival'){void $('#conclusion').offsetWidth;$('#conclusion').classList.add('pulse')}
+  $('#announcement').textContent={arrival:'ONE_ONLY에 새 분석 결과가 도착했습니다.',thinking:'ONE_ONLY 응답을 분석하고 있습니다.',empty:'아직 작업이 없습니다.',error:'분석을 가져오지 못했습니다.'}[next];
+ }
+ function setTheme(theme){if(theme==='system')delete root.dataset.theme;else root.dataset.theme=theme;document.querySelectorAll('[data-theme-button]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.themeButton===theme)))}
+ document.querySelectorAll('[data-state-button]').forEach(b=>b.addEventListener('click',()=>setState(b.dataset.stateButton)));
+ document.querySelectorAll('[data-theme-button]').forEach(b=>b.addEventListener('click',()=>setTheme(b.dataset.themeButton)));
+ $('.extra-state').addEventListener('change',e=>{if(e.target.value)setState(e.target.value)});
+ panel.addEventListener('click',markRead);panel.addEventListener('scroll',markRead,{passive:true});
+ panel.addEventListener('wheel',markRead,{passive:true});
+ // Keyboard entry is explicit reading; arrival itself never moves focus.
+ panel.addEventListener('focusin',markRead);
+ panel.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();$('#terminalInput').focus()}});
+ const goReview=()=>{panel.focus();markRead()};
+ ['#sidebarResult','#headerResult','#goReview'].forEach(id=>$(id).addEventListener('click',goReview));
+ document.querySelectorAll('[data-return]').forEach(b=>b.addEventListener('click',()=>$('#terminalInput').focus()));
+ $('#prepare').addEventListener('click',()=>{$('#copyStatus').textContent='초안을 수정할 수 있습니다.';$('#draftDialog').showModal()});
+ $('#closeDialog').addEventListener('click',()=>$('#draftDialog').close());
+ $('#copyDraft').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#draftText').value);$('#copyStatus').textContent='복사했습니다. 터미널에 붙여 넣으세요.'}catch{$('#draftText').focus();$('#draftText').select();$('#copyStatus').textContent='선택된 내용을 ⌘/Ctrl+C로 복사하세요.'}});
+ $('#reanalyze').addEventListener('click',()=>setState('thinking'));$('#retry').addEventListener('click',()=>setState('thinking'));
+ const params=new URLSearchParams(location.search);setTheme(params.get('theme')||'system');setState(['thinking','arrival','empty','error'].includes(params.get('state'))?params.get('state'):'arrival');
+})();
+</script>
+</body>
+</html>

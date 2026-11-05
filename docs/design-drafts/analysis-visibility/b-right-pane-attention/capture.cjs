@@ -1,0 +1,77 @@
+const {app,BrowserWindow,nativeTheme}=require('electron');
+const fs=require('node:fs');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const out=__dirname;
+const profile=path.join(out,'.capture-profile');
+app.setPath('userData',profile);
+app.disableHardwareAcceleration();
+app.whenReady().then(async()=>{
+ let win;
+ try{
+  win=new BrowserWindow({width:1440,height:900,useContentSize:true,show:false,webPreferences:{nodeIntegration:false,contextIsolation:true}});
+  const js=s=>win.webContents.executeJavaScript(s);
+  const pause=ms=>new Promise(r=>setTimeout(r,ms));
+  await win.loadFile(path.join(out,'index.html'),{query:{theme:'dark',state:'arrival'}});
+  await pause(1300);
+  assert.equal(await js('innerWidth'),1440);
+  assert.equal(await js('innerHeight'),900);
+  assert.equal(await js('document.querySelector(".review").getBoundingClientRect().width'),408);
+  assert.equal(await js('getComputedStyle(document.querySelector(".body-text")).fontSize'), '15px');
+  assert.equal(await js('getComputedStyle(document.querySelector(".body-text")).lineHeight'), '27px');
+  assert.equal(await js('document.documentElement.scrollWidth <= innerWidth'),true);
+  assert.equal(await js('document.querySelector(".review-scroll").scrollWidth <= document.querySelector(".review-scroll").clientWidth'),true);
+  fs.writeFileSync(path.join(out,'dark.png'),(await win.webContents.capturePage()).toPNG());
+  await js('document.querySelector("[data-theme-button=light]").click()');
+  assert.equal(await js('document.documentElement.dataset.unread'),'true');
+  fs.writeFileSync(path.join(out,'light.png'),(await win.webContents.capturePage()).toPNG());
+  await js('document.querySelector("#conclusion").click()');
+  assert.equal(await js('document.documentElement.dataset.unread'),'false');
+  assert.equal(await js('document.querySelectorAll(".arrival-indicator.active").length'),0);
+  assert.equal(await js('document.querySelector("#readLabel").hidden'),false);
+  await js('document.querySelector("[data-state-button=arrival]").click(); document.querySelector("details").open=true; document.querySelector("#reviewScroll").scrollTop=80');
+  await pause(100);
+  assert.equal(await js('document.documentElement.dataset.unread'),'false');
+  await js('document.querySelector("details").open=false; document.querySelector("[data-state-button=arrival]").click(); document.querySelector("#reviewScroll").dispatchEvent(new WheelEvent("wheel",{deltaY:40}))');
+  assert.equal(await js('document.documentElement.dataset.unread'),'false');
+  await js('document.querySelector("#terminalInput").focus(); document.querySelector("[data-state-button=arrival]").click()');
+  assert.equal(await js('document.activeElement.id'),'terminalInput');
+  assert.equal(await js('document.documentElement.dataset.unread'),'true');
+  await js('document.querySelector("#headerResult").click()');
+  assert.equal(await js('document.activeElement.id'),'reviewScroll');
+  assert.equal(await js('document.documentElement.dataset.unread'),'false');
+  await js('document.querySelector("#prepare").click()');
+  assert.equal(await js('document.querySelector("#draftDialog").open'),true);
+  await js('document.querySelector("#closeDialog").click(); document.querySelector("[data-return]").click()');
+  assert.equal(await js('document.activeElement.id'),'terminalInput');
+  await js('document.querySelector("[data-state-button=thinking]").click(); document.querySelector("[data-theme-button=dark]").click()');
+  assert.equal(await js('document.querySelector("#thinkingView").hidden'),false);
+  assert.equal(await js('document.documentElement.dataset.unread'),'false');
+  fs.writeFileSync(path.join(out,'thinking-dark.png'),(await win.webContents.capturePage()).toPNG());
+  await js('document.querySelector(".extra-state").value="error"; document.querySelector(".extra-state").dispatchEvent(new Event("change"))');
+  assert.equal(await js('document.querySelector("#errorView").hidden'),false);
+  await js('document.querySelector("#retry").click()');
+  assert.equal(await js('document.documentElement.dataset.state'),'thinking');
+  await js('document.querySelector(".extra-state").value="empty"; document.querySelector(".extra-state").dispatchEvent(new Event("change"))');
+  assert.equal(await js('document.querySelector("#emptyView").hidden'),false);
+  await js('document.querySelector("[data-theme-button=system]").click()');
+  nativeTheme.themeSource='light';await pause(100);
+  assert.equal(await js('getComputedStyle(document.documentElement).getPropertyValue("--wb-accent").trim()'),'#28745d');
+  nativeTheme.themeSource='dark';await pause(100);
+  assert.equal(await js('getComputedStyle(document.documentElement).getPropertyValue("--wb-accent").trim()'),'#98d4b9');
+  win.webContents.debugger.attach('1.3');
+  await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+  await js('document.querySelector("[data-state-button=arrival]").click()');
+  assert.equal(await js('getComputedStyle(document.querySelector("#conclusion")).animationName'),'none');
+  await js('document.querySelector("[data-state-button=thinking]").click()');
+  assert.equal(await js('getComputedStyle(document.querySelector(".spinner")).animationName'),'none');
+  win.webContents.debugger.detach();
+  for(const width of [1280,1024]){
+   win.setContentSize(width,900);await pause(50);
+   assert.equal(await js('document.documentElement.scrollWidth <= innerWidth'),true);
+  }
+  console.log('PASS: 1440x900 captures; 408px panel; 15px/27px body; click/scroll/keyboard read; arrival preserves focus; draft only; return; thinking/error/empty; system themes; reduced motion; 1280/1024 overflow.');
+ }catch(e){console.error(e);process.exitCode=1}
+ finally{if(win)win.destroy();app.quit()}
+});
+app.on('will-quit',()=>{try{fs.rmSync(profile,{recursive:true,force:true})}catch{}});

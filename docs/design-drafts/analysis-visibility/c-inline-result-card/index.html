@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whitebox · C — 터미널로 찾아오는 결과</title>
+<style>
+/* Whitebox workspace tokens, copied locally so the mockup stays self-contained. */
+:root{color-scheme:dark;--wb-bg:#13161a;--wb-panel:#20242a;--wb-side:#20242a;--wb-soft:#282f38;--wb-line:#333b46;--wb-text:#e3e9f2;--wb-muted:#a6b2c3;--wb-accent:#98d4b9;--wb-sidebar-width:220px;--wb-gap:16px;--wb-radius:8px;--warn:#edc38c;--shadow:0 8px 32px #0003;--card:#222a2d;--on-solid:#142219}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){color-scheme:light;--wb-bg:#fbfcfd;--wb-panel:#f0f2f5;--wb-side:#f0f2f5;--wb-soft:#e8edf3;--wb-line:#dce2e9;--wb-text:#263141;--wb-muted:#637185;--wb-accent:#28745d;--warn:#916022;--shadow:0 8px 32px #26314112;--card:#f4f8f6;--on-solid:#fff}}
+:root[data-theme="light"]{color-scheme:light;--wb-bg:#fbfcfd;--wb-panel:#f0f2f5;--wb-side:#f0f2f5;--wb-soft:#e8edf3;--wb-line:#dce2e9;--wb-text:#263141;--wb-muted:#637185;--wb-accent:#28745d;--warn:#916022;--shadow:0 8px 32px #26314112;--card:#f4f8f6;--on-solid:#fff}
+*{box-sizing:border-box}body{margin:0;color:var(--wb-text);background:var(--wb-bg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;color:inherit;border:0;background:none}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--wb-accent);outline-offset:3px}button:disabled{cursor:default;opacity:.45}[hidden]{display:none!important}h1,h2,h3,p{margin:0}svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}.muted{color:var(--wb-muted)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--wb-accent);flex:none}.spacer{flex:1}.icon-btn{display:grid;place-items:center;width:30px;height:30px;border-radius:6px;color:var(--wb-muted)}.icon-btn:hover{background:var(--wb-soft);color:var(--wb-text)}
+.prototype{height:48px;padding:0 22px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--wb-line);background:var(--wb-panel);font-size:12px}.variant{display:flex;align-items:center;gap:10px;font-weight:600;white-space:nowrap}.variant b{display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--wb-accent);border-radius:6px;color:var(--wb-accent)}.proto-label{font-size:10px;letter-spacing:1px;color:var(--wb-muted)}.seg{display:flex;gap:3px;background:var(--wb-bg);border:1px solid var(--wb-line);padding:3px;border-radius:7px}.seg button{padding:3px 10px;font-size:11px;border-radius:4px;color:var(--wb-muted)}.seg button[aria-pressed="true"]{background:var(--wb-soft);color:var(--wb-text);box-shadow:0 1px 2px #0001}.demo-background{padding:6px 10px;border:1px solid var(--wb-line);border-radius:6px;font-size:11px}.demo-background:hover{background:var(--wb-soft)}
+.app{height:calc(100vh - 120px);min-height:600px;display:grid;grid-template-columns:var(--wb-sidebar-width) minmax(0,1fr) 44px;position:relative}.sidebar{display:flex;flex-direction:column;border-right:1px solid var(--wb-line);background:var(--wb-side)}.brand{height:72px;display:flex;align-items:center;padding:0 22px;gap:9px;font-size:21px;letter-spacing:-1px;font-weight:750}.brand-mark{border:1px solid var(--wb-muted);border-radius:7px;width:25px;height:25px;display:grid;place-items:center;font-size:11px;letter-spacing:-2px}.brand small{margin-left:auto;font-size:10px;font-weight:400;letter-spacing:0;border:1px solid var(--wb-line);border-radius:3px;padding:0 4px;color:var(--wb-muted)}.space{display:flex;align-items:center;gap:10px;padding:15px 22px}.space-icon{width:30px;height:30px;border:1px solid var(--wb-line);border-radius:9px;display:grid;place-items:center;font:16px Georgia,serif}.space strong{font-size:12px}.space small{display:block;color:var(--wb-muted);font-size:10px;margin-top:3px}.search{margin:12px 15px 30px;border:1px solid var(--wb-line);border-radius:7px;padding:8px 10px;display:flex;align-items:center;gap:8px;color:var(--wb-muted);font-size:11px}.search svg{width:13px;height:13px}.search kbd{margin-left:auto;font:10px inherit}.side-title{display:flex;justify-content:space-between;padding:0 23px 10px;color:var(--wb-muted);font-size:10px}.project{padding:10px 18px;background:var(--wb-soft);font-size:12px;font-weight:600;display:flex;gap:9px;align-items:center;margin:0 12px;border-radius:6px}.project svg{width:15px;height:15px}.terminal-list{margin:10px 12px 16px 30px;padding:7px;border:1px solid var(--wb-line);border-radius:8px}.terminal-item{width:100%;display:flex;align-items:center;text-align:left;gap:8px;padding:10px 8px;border-radius:5px;color:var(--wb-muted);font-size:11px}.terminal-item.selected{background:color-mix(in srgb,var(--wb-accent) 9%,transparent);color:var(--wb-text)}.terminal-item .dot{margin-left:auto;width:5px;height:5px}.side-add{color:var(--wb-muted);font-size:11px;padding:12px 20px;border-top:1px solid var(--wb-line);margin:6px 6px 0}.ghost-project{padding:13px 24px;display:flex;gap:10px;color:var(--wb-muted);font-size:12px}.side-footer{border-top:1px solid var(--wb-line);padding:16px 22px;display:grid;gap:14px;color:var(--wb-muted);font-size:11px}.side-footer small{font-size:10px;opacity:.7}
+.main{min-width:0;min-height:0;display:flex;flex-direction:column}.topbar{height:64px;flex:none;display:flex;align-items:center;padding:0 24px;gap:14px;border-bottom:1px solid var(--wb-line)}.breadcrumbs{display:flex;align-items:center;gap:12px;color:var(--wb-muted);font-size:11px}.breadcrumbs strong{color:var(--wb-text);font-weight:550}.divider{width:1px;height:16px;background:var(--wb-line);margin:0 3px}.layout{display:flex;align-items:center;gap:6px;color:var(--wb-muted);font-size:11px}.layout svg{width:15px;height:15px}.canvas{padding:20px 20px 0;display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;min-height:0}.pane{display:flex;flex-direction:column;min-width:0;min-height:0;border:1px solid var(--wb-line);border-radius:var(--wb-radius);overflow:hidden;background:var(--wb-bg)}.pane.selected{border-color:color-mix(in srgb,var(--wb-accent) 75%,var(--wb-line));box-shadow:0 0 0 1px color-mix(in srgb,var(--wb-accent) 12%,transparent)}.pane-head{height:39px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--wb-panel);border-bottom:1px solid var(--wb-line);font-size:10px;color:var(--wb-muted)}.pane.selected .pane-head{background:color-mix(in srgb,var(--wb-accent) 6%,var(--wb-panel))}.pane-name{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;font-weight:600;color:var(--wb-text)}.pane-name svg{width:13px;height:13px}.pane-head .icon-btn{width:20px;height:24px}.pane-head .icon-btn svg{width:13px;height:13px}.state-label{font-size:10px;display:flex;align-items:center;gap:6px;white-space:nowrap}.state-label.result{color:var(--wb-accent)}.spinner{width:10px;height:10px;border:1.5px solid var(--wb-line);border-top-color:var(--wb-muted);border-radius:50%;animation:spin 1.2s linear infinite}.result-chip{padding:3px 7px;border:1px solid color-mix(in srgb,var(--wb-accent) 35%,var(--wb-line));background:color-mix(in srgb,var(--wb-accent) 8%,transparent);color:var(--wb-accent);border-radius:20px;font-size:10px;display:flex;gap:5px;align-items:center}.result-chip .dot{width:4px;height:4px}.terminal{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;padding:23px 18px 15px;scrollbar-width:thin;scrollbar-color:var(--wb-line) transparent}.terminal pre{font:12px/1.85 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;color:var(--wb-text)}.terminal pre .faint{color:var(--wb-muted)}.terminal pre .accent{color:var(--wb-accent)}.terminal pre .warn{color:var(--warn)}.terminal-divider{border-top:1px solid var(--wb-line);margin:20px 0 14px;opacity:.7}.terminal-note{font-size:11px;color:var(--wb-muted);margin-top:16px}.terminal-fill{flex:1;min-height:20px}.prompt{display:flex;align-items:center;gap:10px;margin-top:18px;padding:10px 0 0;border-top:1px solid color-mix(in srgb,var(--wb-line) 55%,transparent);font:12px ui-monospace,SFMono-Regular,monospace}.prompt label{color:var(--wb-accent)}.prompt input{background:transparent;border:0;color:var(--wb-text);font:inherit;min-width:0;width:100%;padding:3px 0;outline-offset:0;caret-color:var(--wb-accent)}.prompt input::placeholder{color:var(--wb-muted);opacity:.7}.key-hint{font:10px -apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap;color:var(--wb-muted)}
+/* This card participates in flex layout: terminal height shrinks; no overlay. */
+.result-card{width:100%;flex:0 0 auto;max-height:40%;overflow:auto;padding:16px 18px 14px;background:var(--card);border-top:2px solid var(--wb-accent);box-shadow:0 -10px 28px #00000009;animation:arrive 260ms cubic-bezier(.22,1,.36,1);scrollbar-width:thin}.card-status{display:flex;align-items:center;gap:7px;color:var(--wb-accent);font-size:10px;margin-bottom:8px}.card-status .new{font-size:9px;background:color-mix(in srgb,var(--wb-accent) 12%,transparent);padding:1px 5px;border-radius:4px}.card-status .icon-btn{width:23px;height:20px;margin:-4px -4px -4px 0}.card-status .icon-btn svg{width:13px;height:13px}.conclusion{font-size:17px;font-weight:700;line-height:1.5;letter-spacing:-.6px;word-break:keep-all}.reasons{padding:0;margin:9px 0 14px;list-style:none;max-width:680px;font-size:15px;line-height:1.8;color:var(--wb-muted)}.reasons li{display:flex;gap:8px}.reasons li::before{content:'·';color:var(--wb-accent)}.card-actions{display:flex;gap:8px;align-items:center}.button-clean{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:32px;padding:6px 11px;border-radius:6px;font-size:12px;font-weight:550;transition:background 140ms,transform 140ms;white-space:nowrap}.button-clean.primary{color:var(--on-solid);background:var(--wb-accent)}.button-clean.secondary{background:var(--wb-bg);box-shadow:0 0 0 1px color-mix(in srgb,var(--wb-line) 80%,transparent),0 1px 2px #0001}.button-clean:hover{filter:brightness(1.08)}.button-clean:active{transform:scale(.98)}.button-clean svg{width:13px;height:13px}.dismiss-hint{margin-left:auto;font-size:10px;color:var(--wb-muted)}kbd{font-size:10px;border:1px solid var(--wb-line);padding:1px 4px;border-radius:3px;font-family:inherit}.statusbar{height:36px;flex:none;display:flex;gap:18px;align-items:center;padding:0 22px;font-size:10px;color:var(--wb-muted)}.statusbar .dot{width:4px;height:4px;margin-right:6px}.review-rail{border-left:1px solid var(--wb-line);background:var(--wb-panel);display:flex;align-items:center;flex-direction:column;padding-top:18px;gap:12px}.rail-label{writing-mode:vertical-rl;letter-spacing:2px;color:var(--wb-muted);font-size:10px;margin-top:4px}.rail-count{width:18px;height:18px;display:grid;place-items:center;background:var(--wb-soft);border-radius:5px;color:var(--wb-accent);font-size:10px}
+.review{position:absolute;z-index:5;right:0;top:0;bottom:0;width:min(500px,calc(100% - 220px));background:var(--wb-panel);border-left:1px solid var(--wb-line);box-shadow:-16px 0 50px #0003;display:flex;flex-direction:column}.review-header{display:flex;align-items:center;padding:22px 24px 15px;gap:10px;border-bottom:1px solid var(--wb-line)}.review-header h2{font-size:18px;letter-spacing:-.5px}.review-header small{font-size:10px;color:var(--wb-muted)}.review-tabs{display:flex;gap:22px;border-bottom:1px solid var(--wb-line);padding:0 24px;color:var(--wb-muted);font-size:12px}.review-tabs span{padding:13px 0}.review-tabs .active{color:var(--wb-text);border-bottom:2px solid var(--wb-accent)}.review-body{overflow:auto;padding:24px;font-size:15px;line-height:1.8}.review-body h3{font-size:12px;color:var(--wb-muted);margin:24px 0 8px}.review-body .conclusion{font-size:19px}.review-body p{margin:9px 0 15px}.review-body .scope{font-size:11px;color:var(--wb-muted)}.caution{padding:12px 14px;border-left:2px solid var(--warn);background:color-mix(in srgb,var(--warn) 5%,transparent)}.review-body details{border-top:1px solid var(--wb-line);margin-top:24px;padding-top:16px}.review-body summary{cursor:pointer;font-size:12px;color:var(--wb-muted)}.review-body blockquote{margin:12px 0;padding:12px;border-radius:6px;background:var(--wb-bg);font-size:12px;color:var(--wb-muted)}.review-footer{padding:14px 24px;border-top:1px solid var(--wb-line);margin-top:auto;font-size:11px;color:var(--wb-muted)}
+.toast-stack{position:absolute;bottom:52px;right:66px;width:330px;z-index:7;display:flex;flex-direction:column-reverse;gap:8px;pointer-events:none}.toast{background:var(--wb-panel);border:1px solid var(--wb-line);box-shadow:var(--shadow);border-radius:10px;padding:12px 14px;display:flex;align-items:flex-start;gap:10px;animation:arrive 220ms ease;pointer-events:auto}.toast>svg{width:17px;color:var(--wb-accent);margin-top:3px}.toast-main{flex:1;text-align:left;min-width:0;padding:0}.toast-main strong{display:block;font-size:12px;font-weight:600}.toast-main p{font-size:11px;color:var(--wb-muted);margin-top:3px}.toast-main span{display:block;font-size:10px;color:var(--wb-accent);margin-top:8px}.toast .icon-btn{width:20px;height:22px}.toast .icon-btn svg{width:12px}.scene-caption{height:72px;display:flex;align-items:center;gap:24px;padding:0 25px;border-top:1px solid var(--wb-line);background:var(--wb-panel)}.caption-lead{min-width:197px;display:grid;gap:3px}.caption-lead strong{font-size:12px;font-weight:600}.caption-lead small{font-size:10px;color:var(--wb-muted)}.caption-step{display:flex;gap:10px;align-items:center;font-size:11px;color:var(--wb-muted)}.caption-step b{font:10px ui-monospace,monospace;color:var(--wb-accent);border:1px solid var(--wb-line);border-radius:50%;width:22px;height:22px;display:grid;place-items:center}.caption-step strong{font-weight:500;color:var(--wb-text)}.caption-step p{margin-top:2px;font-size:10px}.caption-separator{height:24px;width:1px;background:var(--wb-line)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+dialog{width:480px;max-width:90vw;border:1px solid var(--wb-line);border-radius:12px;background:var(--wb-panel);color:var(--wb-text);padding:25px;box-shadow:var(--shadow)}dialog::backdrop{background:#0007}dialog h2{font-size:17px}dialog p{font-size:12px;color:var(--wb-muted);margin:8px 0 15px}dialog textarea{width:100%;height:140px;resize:vertical;font:15px/1.8 inherit;background:var(--wb-bg);color:var(--wb-text);border:1px solid var(--wb-line);border-radius:7px;padding:12px}dialog footer{margin-top:18px;display:flex;justify-content:flex-end}
+@keyframes arrive{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+@media(max-width:1180px){.prototype{gap:8px;padding:0 12px}.proto-label,.dismiss-hint{display:none}.canvas{padding:14px 12px 0;gap:10px}.result-card{padding:13px}.reasons{font-size:15px}.caption-step{font-size:10px}.conclusion{letter-spacing:-.5px}.app{--wb-sidebar-width:190px}.side-footer{padding:14px}.brand{padding:0 16px}.demo-background{max-width:160px}.caption-lead{min-width:170px}.scene-caption{gap:16px;padding:0 18px}}
+@media(max-width:850px){body{min-width:740px}.app{--wb-sidebar-width:155px}.prototype{gap:6px}.variant{font-size:10px}.seg button{padding:3px 6px}.brand{font-size:17px}.brand small,.key-hint,.layout,.pane-head>.icon-btn{display:none}.pane-head{padding:0 9px;gap:5px}.canvas{padding:10px 8px 0;gap:8px}.terminal{padding:16px 12px}.card-actions{gap:5px}.button-clean{font-size:11px;padding:6px 8px}.scene-caption .caption-step:last-child{display:none}.space{padding:10px 15px}.search{margin:10px 8px 24px}.terminal-list{margin-left:17px}.result-card{max-height:40%}}
+</style>
+<style>.sr-only{position:fixed;top:0;left:0}dialog textarea{font-family:inherit;font-size:15px;line-height:1.8}</style>
+</head>
+<body>
+<svg hidden aria-hidden="true"><defs>
+<symbol id="i-term" viewBox="0 0 24 24"><path d="m5 6 5 6-5 6m8 0h6"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 3h10v12H3Z"/></symbol><symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol><symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></symbol><symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></symbol><symbol id="i-review" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6m5-1 2 2 4-5"/></symbol><symbol id="i-max" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></symbol></defs></svg>
+<header class="prototype" aria-label="목업 조작">
+ <div class="variant"><b>C</b> 결과가 터미널 안으로 찾아온다</div><span class="spacer"></span>
+ <span class="proto-label">장면</span><div class="seg" aria-label="분석 상태"><button data-scene="analyzing" aria-pressed="false">분석 중</button><button data-scene="arrived" aria-pressed="true">결과 도착</button></div>
+ <button id="backgroundDemo" class="demo-background">다른 터미널에 결과 도착</button>
+ <div class="seg" aria-label="테마"><button data-theme-choice="system" aria-pressed="true">시스템</button><button data-theme-choice="dark" aria-pressed="false">다크</button><button data-theme-choice="light" aria-pressed="false">라이트</button></div>
+</header>
+<div class="app">
+ <aside class="sidebar" aria-label="프로젝트">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">WB</span>whitebox.<small>2.0</small></div>
+  <div class="space"><span class="space-icon">W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
+  <div class="search"><svg><use href="#i-search"/></svg>프로젝트 찾기<kbd>⌘ K</kbd></div>
+  <div class="side-title"><span>프로젝트</span><span>＋</span></div>
+  <div class="project"><span>⌄</span><svg><use href="#i-folder"/></svg>Whitebox test</div>
+  <div class="terminal-list"><button class="terminal-item selected" data-select="one"><span class="mono">›_</span> ONE_ONLY <span class="dot" id="sideDotOne"></span></button><button class="terminal-item" data-select="two"><span class="mono">›_</span> TWO_ONLY <span class="dot" id="sideDotTwo" hidden></span></button><div class="side-add">＋ 터미널</div></div>
+  <div class="ghost-project"><span>⌄</span><svg><use href="#i-folder"/></svg>Other project</div>
+  <div class="spacer"></div><div class="side-footer"><span>⊞　독립 패널</span><span>⚙　설정 · 단축키</span><small>v2.0.0 · 로컬 작업 공간</small></div>
+ </aside>
+ <main class="main">
+  <header class="topbar"><svg class="muted"><use href="#i-panel"/></svg><span class="divider"></span><div class="breadcrumbs"><svg><use href="#i-folder"/></svg><span>Whitebox test</span><span>/</span><strong>작업 공간</strong></div><span class="spacer"></span><span class="layout"><svg><use href="#i-panel"/></svg>터미널 2개</span></header>
+  <div class="canvas">
+   <section class="pane selected" id="pane-one" aria-label="ONE_ONLY 터미널">
+    <header class="pane-head"><button class="pane-name" data-select="one"><svg><use href="#i-term"/></svg>ONE_ONLY</button><span class="spacer"></span><span class="state-label result" id="state-one"></span><button class="result-chip" id="chip-one" hidden aria-expanded="false" aria-controls="card-one">결과</button><span class="divider"></span><span class="muted mono">Codex</span><span class="icon-btn" aria-hidden="true"><svg><use href="#i-max"/></svg></span></header>
+    <div class="terminal" data-terminal="one">
+     <pre><span class="faint">~/Whitebox test</span>
+<span class="accent">❯</span> 문서를 생성하고 결과를 알려 주세요.
+
+<span class="faint">• 문서를 생성하고 응답을 정리합니다.</span>
+
+<span class="accent">✓</span> 문서를 생성했습니다.
+  페이지 ID: ONE_ONLY
+  생성 요청을 처리했습니다.</pre>
+     <div class="terminal-divider"></div>
+     <pre><span class="faint">WB&gt;</span> printf '%s\n' 'ONE_ONLY 한글 입력 확인'
+ONE_ONLY 한글 입력 확인
+<span class="faint">WB&gt;</span></pre>
+     <div class="terminal-fill"></div><div class="terminal-note" id="note-one">작업 종료 · 대화 원문을 바탕으로 분석했습니다.</div>
+     <form class="prompt" data-form="one"><label for="input-one">❯</label><input id="input-one" aria-label="ONE_ONLY 터미널 입력" autocomplete="off" placeholder="다음 요청을 입력하세요"><span class="key-hint">입력하면 카드 접힘</span></form>
+    </div>
+    <article class="result-card" id="card-one" aria-labelledby="conclusion-one">
+     <div class="card-status"><svg style="width:13px;height:13px"><use href="#i-review"/></svg><span class="arrival-label">결과 도착</span><span class="new">미읽음</span><span class="spacer"></span><button class="icon-btn" data-dismiss="one" aria-label="ONE_ONLY 결과 접기 · Esc"><svg><use href="#i-close"/></svg></button></div>
+     <h2 class="conclusion" id="conclusion-one">문서 생성은 보고됐지만 본문은 확인되지 않았습니다.</h2>
+     <ul class="reasons"><li>생성 응답에는 페이지 ID만 남아 있습니다.</li><li>페이지 ID만으로 본문의 정확성을 판단할 수 없습니다.</li></ul>
+     <div class="card-actions"><button class="button-clean primary" data-draft="one">본문 확인 요청 준비<svg><use href="#i-arrow"/></svg></button><button class="button-clean secondary" data-details="one">자세히<svg><use href="#i-panel"/></svg></button><span class="dismiss-hint"><kbd>Esc</kbd> 접기</span></div>
+    </article>
+   </section>
+   <section class="pane" id="pane-two" aria-label="TWO_ONLY 터미널">
+    <header class="pane-head"><button class="pane-name" data-select="two"><svg><use href="#i-term"/></svg>TWO_ONLY</button><span class="spacer"></span><span class="state-label" id="state-two"></span><button class="result-chip" id="chip-two" hidden aria-expanded="false" aria-controls="card-two">결과</button><span class="divider"></span><span class="muted mono">Claude</span><span class="icon-btn" aria-hidden="true"><svg><use href="#i-max"/></svg></span></header>
+    <div class="terminal" data-terminal="two">
+     <pre><span class="faint">~/Whitebox test</span>
+<span class="accent">❯</span> 백업 후 SQL 적용 순서를 확인해 주세요.
+
+<span class="faint">• 실행 순서와 상태 확인 방법을 정리합니다.</span>
+
+1. 현재 데이터를 백업합니다.
+2. SQL을 적용합니다.
+3. 적용 결과를 확인합니다.
+
+<span class="faint">상태 확인 명령</span>
+<span class="accent">docker compose ps</span></pre>
+     <div class="terminal-divider"></div><pre><span class="faint">WB&gt;</span> printf '%s\n' 'TWO_ONLY 한글 입력 확인'
+TWO_ONLY 한글 입력 확인
+<span class="faint">WB&gt;</span></pre>
+     <div class="terminal-note" id="note-two">대화가 끝나면 이 터미널에서 결과를 알려드립니다.</div><div class="terminal-fill"></div>
+     <form class="prompt" data-form="two"><label for="input-two">❯</label><input id="input-two" aria-label="TWO_ONLY 터미널 입력" autocomplete="off" placeholder="다음 요청을 입력하세요"></form>
+    </div>
+    <article class="result-card" id="card-two" aria-labelledby="conclusion-two" hidden>
+     <div class="card-status"><svg style="width:13px;height:13px"><use href="#i-review"/></svg><span class="arrival-label">결과 도착</span><span class="new">미읽음</span><span class="spacer"></span><button class="icon-btn" data-dismiss="two" aria-label="TWO_ONLY 결과 접기 · Esc"><svg><use href="#i-close"/></svg></button></div>
+     <h2 class="conclusion" id="conclusion-two">백업 후 SQL을 적용하고 결과를 확인하는 순서입니다.</h2>
+     <ul class="reasons"><li>백업이 SQL 적용보다 먼저입니다.</li><li>실제 적용 여부는 별도 확인이 필요합니다.</li></ul>
+     <div class="card-actions"><button class="button-clean primary" data-draft="two">적용 상태 확인 요청 준비<svg><use href="#i-arrow"/></svg></button><button class="button-clean secondary" data-details="two">자세히<svg><use href="#i-panel"/></svg></button><span class="dismiss-hint"><kbd>Esc</kbd> 접기</span></div>
+    </article>
+   </section>
+  </div>
+  <footer class="statusbar"><span><i class="dot"></i>셸 연결됨</span><span id="selectedStatus">ONE_ONLY 선택됨</span><span class="spacer"></span><span>자동 분석 켜짐</span><span>⌘/Ctrl D 분할</span></footer>
+ </main>
+ <aside class="review-rail" aria-label="접힌 이해와 검토 패널"><button class="icon-btn" id="openReview" aria-label="이해 · 검토 열기" aria-controls="review" aria-expanded="false"><svg><use href="#i-review"/></svg></button><span class="rail-count" id="reviewCount">1</span><span class="rail-label">이해 · 검토</span></aside>
+ <aside class="review" id="review" aria-labelledby="reviewTitle" hidden>
+  <header class="review-header"><h2 id="reviewTitle">이해 · 검토</h2><span class="spacer"></span><small id="reviewTarget">ONE_ONLY</small><button class="icon-btn" id="closeReview" aria-label="이해 · 검토 닫기"><svg><use href="#i-close"/></svg></button></header>
+  <div class="review-tabs"><span class="active">이번 요청</span><span>히스토리</span></div>
+  <div class="review-body" id="reviewBody" tabindex="-1"></div><footer class="review-footer">대화 원문 기준 · 보고된 내용과 확인된 내용을 구분합니다.</footer>
+ </aside>
+ <div class="toast-stack" id="toastStack" role="region" aria-label="다른 터미널 결과 알림"></div>
+</div>
+<footer class="scene-caption"><div class="caption-lead"><strong>커서 아래, 판단 한 장.</strong><small>C · INLINE RESULT CARD</small></div><span class="caption-separator"></span><div class="caption-step"><b>01</b><div><strong>결과가 도착하면, 해당 pane에서</strong><p>출력을 위로 밀고 · 높이는 최대 40%</p></div></div><div class="caption-step"><b>02</b><div><strong>입력 시작 또는 Esc로 터미널에 복귀</strong><p>접힌 결과는 pane 헤더의 ‘결과’ 칩에</p></div></div><div class="caption-step"><b>03</b><div><strong>다른 터미널은 조용한 알림으로</strong><p>상단 ‘다른 터미널에 결과 도착’으로 체험</p></div></div></footer>
+<dialog id="draftDialog" aria-labelledby="draftTitle"><h2 id="draftTitle">확인 요청 초안</h2><p id="draftTarget">ONE_ONLY에 보낼 요청입니다. 내용을 검토해 주세요.</p><textarea id="draftText" aria-label="확인 요청 초안"></textarea><footer><button class="button-clean secondary" id="closeDraft">초안 닫기</button></footer><p style="margin-bottom:0">동작 목업입니다. 실제 터미널에 전송하지 않습니다.</p></dialog>
+<div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const names = {one:'ONE_ONLY',two:'TWO_ONLY'};
+const state = {selected:'one',one:{phase:'arrived',collapsed:false,read:false},two:{phase:'analyzing',collapsed:false,read:false}};
+let reviewReturn = null;
+const announce = text => { $('announcer').textContent = text; };
+function render(){
+ for(const id of ['one','two']){
+  const s=state[id],has=s.phase==='arrived',open=has&&!s.collapsed;
+  $('pane-'+id).classList.toggle('selected',state.selected===id);
+  $('card-'+id).hidden=!open;
+  $('chip-'+id).hidden=!has||open;
+  $('chip-'+id).innerHTML=(s.read?'':'<i class="dot" aria-hidden="true"></i>')+'결과';
+  $('chip-'+id).setAttribute('aria-label',`${names[id]} 결과 다시 열기${s.read?'':' · 미읽음'}`);
+  $('chip-'+id).setAttribute('aria-expanded',String(open));
+  $('state-'+id).hidden=has&&!open;
+  $('state-'+id).classList.toggle('result',has);
+  $('state-'+id).innerHTML=has?'<i class="dot" aria-hidden="true"></i> 작업 종료':'<i class="spinner" aria-hidden="true"></i> 분석 중';
+  $('card-'+id).querySelector('.new').hidden=s.read;
+  $('card-'+id).querySelector('.arrival-label').textContent=s.read?'결과 · 읽음':'결과 도착';
+  $('sideDot'+(id==='one'?'One':'Two')).hidden=!has||s.read;
+  document.querySelector(`[data-select="${id}"].terminal-item`).classList.toggle('selected',state.selected===id);
+ }
+ $('selectedStatus').textContent=names[state.selected]+' 선택됨';
+ $('reviewCount').textContent=['one','two'].filter(id=>state[id].phase==='arrived'&&!state[id].read).length;
+ $('note-one').textContent=state.one.phase==='analyzing'?'작업 종료 · 대화 원문과 생성 응답을 확인하고 있습니다.':'작업 종료 · 대화 원문을 바탕으로 분석했습니다.';
+ $('note-two').textContent=state.two.phase==='analyzing'?'대화가 끝나면 이 터미널에서 결과를 알려드립니다.':'작업 종료 · 결과가 준비되어 있습니다.';
+}
+function markRead(id){if(!state[id].read){state[id].read=true;render();}}
+function select(id,focus=false){state.selected=id;render();if(focus)$('input-'+id).focus({preventScroll:true});}
+function collapse(id,read=false){state[id].collapsed=true;if(read)state[id].read=true;render();}
+function openCard(id){select(id);state[id].collapsed=false;state[id].read=true;render();$('card-'+id).querySelector('[data-details]').focus({preventScroll:true});announce(names[id]+' 결과를 열었습니다.');}
+function arrive(id){const s=state[id];s.phase='arrived';s.read=false;s.collapsed=state.selected!==id||document.activeElement===$('input-'+id);render();announce(names[id]+' 분석 결과가 도착했습니다.');if(state.selected!==id)addToast(id);}
+function addToast(id){
+ if($('toast-'+id))return;
+ const item=document.createElement('article');item.className='toast';item.id='toast-'+id;item.setAttribute('aria-label',names[id]+' 결과 알림');
+ item.innerHTML=`<svg aria-hidden="true"><use href="#i-review"/></svg><button class="toast-main"><strong>${names[id]} · 결과가 도착했습니다</strong><p>현재 작업을 계속해도 괜찮습니다.</p><span>터미널로 이동 →</span></button><button class="icon-btn" aria-label="${names[id]} 알림 닫기"><svg><use href="#i-close"/></svg></button>`;
+ item.querySelector('.toast-main').onclick=()=>{item.remove();openCard(id);};
+ item.querySelector('.icon-btn').onclick=()=>{item.remove();$('backgroundDemo').focus();};
+ $('toastStack').append(item);
+}
+function setScene(scene){
+ document.querySelectorAll('[data-scene]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.scene===scene)));
+ state.selected='one';state.one={phase:scene==='arrived'?'arrived':'analyzing',collapsed:false,read:false};state.two={phase:'analyzing',collapsed:false,read:false};$('toastStack').replaceChildren();closeReview(false);render();announce(scene==='arrived'?'ONE_ONLY 결과 도착. TWO_ONLY는 분석 중입니다.':'두 터미널 모두 분석 중입니다.');
+}
+function showReview(id,trigger){
+ select(id);markRead(id);reviewReturn=trigger||$('openReview');$('reviewTarget').textContent=names[id];
+ const has=state[id].phase==='arrived';
+ $('reviewBody').innerHTML=has?`<p class="scope">이번 요청 · 대화 원문 기준 · AI 보고 포함</p><h3 style="margin-top:14px">결론</h3><h2 class="conclusion">${$('conclusion-'+id).textContent}</h2>${id==='one'?'<p class="caution">페이지 ID만으로 문서 본문이 맞다고 판단하지 않습니다.</p><h3>이유</h3><p>생성 응답에는 페이지 ID가 있습니다. 문서 본문을 직접 읽은 결과는 현재 대화에서 확인되지 않았습니다.</p><h3>권장 행동</h3><p>생성된 문서의 본문을 읽고 요청과 일치하는지 확인하세요.</p>':'<p class="caution">설명된 순서입니다. 실제 SQL 적용 여부는 별도로 확인해야 합니다.</p><h3>이유</h3><p>백업 → SQL 적용 → 결과 확인 순서로 안내했습니다.</p><h3>상태 확인 명령</h3><p class="mono">docker compose ps</p>'}<button class="button-clean primary" data-review-draft>확인 요청 준비 <svg><use href="#i-arrow"/></svg></button><details><summary>요청과 분석 기록 · 전체 근거</summary><h3>사용자 요청</h3><blockquote>${id==='one'?'문서를 생성하고 결과를 알려 주세요.':'백업 후 SQL 적용 순서를 확인해 주세요.'}</blockquote><h3>AI가 보고한 결과</h3><blockquote>${id==='one'?'문서를 생성했습니다. 페이지 ID: ONE_ONLY':'백업 후 SQL을 적용하고 결과를 확인하는 순서입니다.'}</blockquote><h3>확인한 범위와 남은 점</h3><p>${id==='one'?'생성 메타데이터는 보고됐으나 본문 내용은 미확인입니다.':'현재 대화에 제시된 절차만 확인했습니다. 실제 실행 결과는 확인하지 못했습니다.'}</p></details>`:'<p class="scope">'+names[id]+'</p><h2 class="conclusion">대화 원문을 분석하고 있습니다.</h2><p>결과가 준비되면 해당 터미널에서 알려드립니다.</p>';
+ $('reviewBody').querySelector('[data-review-draft]')?.addEventListener('click',()=>draft(id));
+ $('review').hidden=false;$('openReview').setAttribute('aria-expanded','true');$('reviewBody').scrollTop=0;$('reviewBody').focus({preventScroll:true});
+}
+function closeReview(restore=true){$('review').hidden=true;$('openReview').setAttribute('aria-expanded','false');if(restore)reviewReturn?.focus({preventScroll:true});}
+function draft(id){markRead(id);$('draftTarget').textContent=names[id]+'에 보낼 요청 초안입니다. 내용을 검토해 주세요.';$('draftText').value=id==='one'?'생성했다고 보고한 ONE_ONLY 문서의 본문을 읽고, 요청한 내용과 일치하는지 확인해 주세요. 확인한 본문과 남은 불확실성을 알려 주세요.':'백업 완료 여부와 SQL 적용 결과를 확인해 주세요. 실제 확인한 결과와 아직 확인하지 못한 내용을 구분해 주세요.';$('draftDialog').showModal();}
+document.querySelectorAll('[data-select]').forEach(b=>b.onclick=()=>{select(b.dataset.select);if(state[b.dataset.select].phase==='arrived'&&state[b.dataset.select].collapsed)openCard(b.dataset.select);});
+document.querySelectorAll('[data-scene]').forEach(b=>b.onclick=()=>setScene(b.dataset.scene));
+document.querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>{const theme=b.dataset.themeChoice;if(theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=theme;document.querySelectorAll('[data-theme-choice]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));});
+for(const id of ['one','two']){
+ $('chip-'+id).onclick=()=>openCard(id);
+ $('input-'+id).onfocus=()=>select(id);
+ $('input-'+id).addEventListener('beforeinput',()=>collapse(id));
+ $('input-'+id).addEventListener('input',()=>collapse(id));
+ $('card-'+id).addEventListener('focusin',()=>markRead(id));
+ document.querySelector(`[data-form="${id}"]`).onsubmit=e=>{e.preventDefault();announce('목업 입력입니다. 실제 터미널로 전송하지 않습니다.');};
+}
+document.querySelectorAll('[data-dismiss]').forEach(b=>b.onclick=()=>{const id=b.dataset.dismiss;collapse(id,true);$('input-'+id).focus({preventScroll:true});});
+document.querySelectorAll('[data-details]').forEach(b=>b.onclick=()=>showReview(b.dataset.details,b));
+document.querySelectorAll('[data-draft]').forEach(b=>b.onclick=()=>draft(b.dataset.draft));
+$('backgroundDemo').onclick=()=>{const id=state.selected==='one'?'two':'one';arrive(id);};
+$('openReview').onclick=e=>showReview(state.selected,e.currentTarget);$('closeReview').onclick=()=>closeReview();$('closeDraft').onclick=()=>$('draftDialog').close();
+document.addEventListener('keydown',e=>{
+ if(e.key!=='Escape'||$('draftDialog').open)return;
+ if(!$('review').hidden){e.preventDefault();closeReview();return;}
+ const id=state.selected;if(state[id].phase==='arrived'&&!state[id].collapsed){e.preventDefault();collapse(id,true);$('input-'+id).focus({preventScroll:true});announce('결과를 접었습니다. pane 헤더에서 다시 열 수 있습니다.');}
+});
+render();
+})();
+</script>
+</body>
+</html>
