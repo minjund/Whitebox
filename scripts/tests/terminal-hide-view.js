@@ -10,6 +10,17 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   })()`);
   const visible = () => evaluate('[...document.querySelectorAll("#wbCanvas .wb-pane")].map(n=>n.dataset.terminalId)');
   const identities = () => manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
+  const waitForLivePtys = async ids => {
+    // A new pane mounts asynchronously and initially has no process identity.
+    // Compare identities only after real PTYs have started, before any X click.
+    const deadline = Date.now() + 5000;
+    const ready = () => ids.every(id => {
+      const session = manager.get(id);
+      return session && Number.isInteger(session.pid) && session.pid > 0;
+    });
+    while (!ready() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    assert(ready(), 'identity baseline requires every original PTY to be running');
+  };
   const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const hide = async id => {
     await click(`#wbCanvas [data-terminal-id="${id}"] header button:last-child`);
@@ -20,6 +31,7 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   assert(first, 'fixture starts with a project terminal');
   await evaluate('WhiteboxWorkspace.createTerminal("row")');
   const second = await evaluate('WhiteboxWorkspace.getState().activeId');
+  await waitForLivePtys([first, second]);
   const before = await snapshot(), original = identities();
   assert.deepEqual(new Set(await visible()), new Set([first, second]));
   await hide(first); // Hide a pane that does not own keyboard focus.
@@ -61,6 +73,7 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   assert.deepEqual(await visible(), [third]);
   await evaluate('WhiteboxWorkspace.createTerminal("", WhiteboxWorkspace.getState().standalone)');
   const independent = await evaluate('WhiteboxWorkspace.getState().activeId');
+  await waitForLivePtys([first, second, third, independent]);
   const independentState = await snapshot(), independentIds = identities();
   await hide(independent);
   assert.deepEqual(await visible(), []);
