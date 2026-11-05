@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "2.0.18",
+  "version": "2.0.19",
   "description": "A terminal workspace that connects every AI task to its own understanding and review.",
   "main": "main.js",
   "author": "wincube AX",
@@ -89,7 +89,7 @@
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package",
-    "test:workspace": "node scripts/terminal-workspace-layout-test.js && node scripts/terminal-activity-test.js && node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && electron scripts/terminal-workspace-check.js && electron scripts/terminal-workspace-check.js --responsive-only && node scripts/workspace-attention-runner.js",
+    "test:workspace": "node scripts/terminal-workspace-layout-test.js && node scripts/terminal-activity-test.js && node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/panel-provider-test.js && node scripts/terminal-summary-chat-test.js && electron scripts/terminal-workspace-check.js --startup-reconnect-only && electron scripts/terminal-workspace-check.js --summary-only && electron scripts/terminal-workspace-check.js --hide-only && electron scripts/terminal-workspace-check.js && electron scripts/terminal-workspace-check.js --responsive-only && node scripts/workspace-attention-runner.js",
     "test": "node scripts/regression-test.js && node scripts/execution-activity-test.js && node scripts/workspace-source-contract.js && node scripts/update-restart-regression.js && node scripts/electron-asar-cleanup-check.js",
     "test:performance": "node --expose-gc scripts/performance-monitor-check.js && node scripts/performance-fixture-runner.js",
     "test:result-review": "node scripts/terminal-review-test.js",

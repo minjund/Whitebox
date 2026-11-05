@@ -17,6 +17,7 @@ app.whenReady().then(async () => {
   let win;
   const manager = new TerminalManager({ storeFile: path.join(profile, 'terminals.json') });
   const activityReader = new (require('../src/terminalActivity').TerminalActivity)();
+  const summaryFixture = process.argv.includes('--summary-only') ? require('./tests/terminal-summary-mode').createFixture({ manager, profile, root }) : null;
   const errors = [];
   const captured = new Map();
   const adapterDirectory = path.join(profile, 'panel-bin');
@@ -63,6 +64,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
     for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
+    if (summaryFixture) ipcMain.handle('app:notify-attention-prompt', () => ({ ok: true }));
     let initialInventoryReads = 0, rendererReadyCalls = 0, inventoryUnavailable = false;
     ipcMain.handle('app:renderer-ready', () => {
       assert(initialInventoryReads >= 3, 'renderer readiness must follow recovery of the initial host connection');
@@ -71,6 +73,7 @@ app.whenReady().then(async () => {
     });
     ipcMain.handle('terminals:completion-read', (_event, payload) => completionTracker.read(payload));
     ipcMain.handle('terminals:collaboration', async (_event, payload) => {
+      if (summaryFixture) return summaryFixture.collaboration(payload);
       if (collaborationFailure) throw new Error(collaborationFailure);
       collaborationPayload = payload;
       if (livePanelControl) return livePanelControl.sync(payload);
@@ -122,6 +125,7 @@ app.whenReady().then(async () => {
       return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session;
     });
     ipcMain.handle('terminals:review', async (_event, payload) => {
+      if (summaryFixture) return summaryFixture.review(payload);
       if (payload.historyContent) return { entries: [] };
       if(payload.force)forcedReviewCalls++;
       if (payload.reanalyze) {
@@ -231,6 +235,18 @@ app.whenReady().then(async () => {
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
+    if (process.argv.includes('--startup-reconnect-only')) {
+      await require('./tests/workspace-startup-reconnect')({ evaluate, waitFor, win, manager, unavailable: value => { inventoryUnavailable = value; }, counters: () => ({ ready: rendererReadyCalls, reads: initialInventoryReads }) });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
+    if (process.argv.includes('--summary-only')) {
+      await require('./tests/terminal-summary-mode').run({ evaluate, waitFor, manager, win, fixture: summaryFixture, profile });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
+    if (process.argv.includes('--hide-only')) {
+      await require('./tests/terminal-hide-view')({ evaluate, waitFor, win, manager, profile });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     if (process.argv.includes('--responsive-only')) {
       await checkResponsiveReview();
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
@@ -1832,7 +1848,7 @@ app.whenReady().then(async () => {
         const [xTarget, cliTarget, stoppedTarget] = newIds;
         await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(xTarget)},true)`);
         rejectedCloseId = xTarget;
-        await evaluate(`document.querySelector('#wbCanvas [data-close-terminal="${xTarget}"]').click()`);
+        await evaluate(`document.querySelector('.wb-instance-row [data-close-terminal="${xTarget}"]').click()`);
         await waitFor('!WhiteboxWorkspace.getState().busy && !document.querySelector("#wbError").hidden', 'failed X close retains its pane');
         assert(manager.get(xTarget));
         assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-id="${xTarget}"]'))`), true);
@@ -1948,6 +1964,8 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error);
+    if (summaryFixture) console.error('Summary jobs:', [...summaryFixture.controller.jobs.values()]);
+    console.error('Fixture host outputs:', manager.list().map(session => ({ id: session.id, replay: manager.get(session.id, true)?.replay })));
     console.error('Fixture terminal outputs:', await win.webContents.executeJavaScript('JSON.stringify(window.WhiteboxWorkspace?.getState().sessions.map(session => ({id:session.id, text:WhiteboxTerminal.readTerminal(session.id)})) || [])').catch(error => error.message));
     fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-workspace-failure.png'), (await win.webContents.capturePage()).toPNG());
     clearTimeout(deadline);

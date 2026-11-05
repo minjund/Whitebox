@@ -3,6 +3,15 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.19 - 2026-11-06
+
+- Add a Summary mode for running AI terminals: read summarized replies and send follow-up messages to the same session without displaying the terminal. Each terminal remembers its own mode, chat history and draft.
+- Queue messages while the AI is busy, with editing and cancellation before delivery. Session changes and application restarts never replay queued or uncertain deliveries.
+- Answer supported approval prompts inside the chat; use the terminal for other prompts and when summary generation fails. Terminals without a running AI keep Summary mode disabled.
+- Make the canvas X hide only that view. Sidebar terminal and panel entries and their running sessions remain available; the separate sidebar trash icon terminates a terminal.
+- Resume workspace initialization when a real terminal host connects after the initial bounded inventory attempts, so a cold updater relaunch can finish without reloading or replacing sessions.
+- Pin the official 2.0.18 installer as the current update-compatibility baseline.
+
 ## 2.0.18 - 2026-11-05
 
 - Arrange terminals in an aligned grid: splitting, closing, separating and placing keep equal cells with matching dividers (for example 2x2, or 3 over 2). Saved layouts from earlier versions are aligned once; dragged divider sizes are kept.

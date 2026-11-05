@@ -306,3 +306,23 @@ and the new driver/negative fixtures are included in that verification allowlist
 product/version/dependency/build-source changes remain forbidden. Run the full
 pre-merge sensitive gate and then dispatch the Release workflow from main with
 `release_tag: v2.0.16`; repeat the full packaged matrix and public-channel checks.
+
+
+### Official 2.0.18 startup-shell preparation
+
+The pinned official `minjund/Whitebox` v2.0.18 Windows installer,
+`Whitebox-Setup-2.0.18.exe` (95,411,152 bytes; SHA-256
+`7335f783f14510ba95b5fc0c570cf27a5bbeb7001fc42aa11961fa4a2c631b59`),
+contains `main.js` SHA-256
+`bfa0fdbd0b861493938b107fe719648dac599f8c4b88407397499ee7a587e0a0`.
+Independent extraction from its official packaged `app.asar` proves that active
+startup workspace shells keep a normal window close in the tray. The packaged
+Windows driver checks that exact main-file digest and its tray/host policy,
+uses the production authenticated terminal host, and closes only the fresh
+attempt's owned startup workspace shells before the idle-parent scenario.
+Official installer and packaged source bytes remain unchanged. The 30-second
+graceful-exit limit, bootstrap acknowledgement, installed version, renderer-ready
+relaunch, same-version candidate reinstall, and process/artifact cleanup checks
+are unchanged. The separate packaged-button scenario preserves a live PTY.
+The earlier timed-out attempt remains failed; approval requires a complete fresh
+successful compatibility run on the reviewed source SHA.
