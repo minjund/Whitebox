@@ -1240,7 +1240,7 @@ async function main() {
 
   // These pinned official sources need their production terminal host too:
   // capture mode cannot authenticate or close their startup workspace shells.
-  if (['2.0.11', '2.0.15', '2.0.16', '2.0.17', '2.0.18', '2.0.19'].includes(SOURCE_VERSION)) {
+  if (['2.0.11', '2.0.15', '2.0.16', '2.0.17', '2.0.18', '2.0.19', '2.0.20'].includes(SOURCE_VERSION)) {
     const officialMain = asar.extractFile(installedAsar, 'main.js').toString('utf8');
     if (SOURCE_VERSION === '2.0.18') assert.equal(crypto.createHash('sha256').update(officialMain).digest('hex'),
       'bfa0fdbd0b861493938b107fe719648dac599f8c4b88407397499ee7a587e0a0', 'Official 2.0.18 startup policy bytes must remain immutable');
@@ -1249,7 +1249,7 @@ async function main() {
     assert.match(officialMain, /terminalManager = demoCapture\s*\? new TerminalManager\(/);
     console.log(`PASS official ${SOURCE_VERSION} packaged startup-shell tray policy verified;mainSha256=${crypto.createHash('sha256').update(officialMain).digest('hex')}`);
   }
-  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11', '2.0.12', '2.0.13', '2.0.14', '2.0.15', '2.0.16', '2.0.17', '2.0.18', '2.0.19'].includes(SOURCE_VERSION);
+  const workspaceSource = ['2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11', '2.0.12', '2.0.13', '2.0.14', '2.0.15', '2.0.16', '2.0.17', '2.0.18', '2.0.19', '2.0.20'].includes(SOURCE_VERSION);
   if (workspaceSource) delete process.env.WHITEBOX_DEMO_CAPTURE;
   const v173ParentPid = await startInstalledApp(SOURCE_VERSION);
   activeAppPid = v173ParentPid;

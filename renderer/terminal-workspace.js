@@ -79,7 +79,6 @@
     <button class="wb-summary-nav-backdrop" data-action="summary-sidebar-close" aria-label="사이드바 접기" tabindex="-1"></button>
     <aside class="wb-sidebar">
       <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span><button class="wb-summary-nav-close" data-action="summary-sidebar-close" aria-label="사이드바 접기">${icon('close')}</button></div>
-      <div class="wb-local-workspace"><span>W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
       <div class="wb-sidebar-scroll">
       <div class="wb-side-heading"><span>프로젝트</span><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
@@ -473,6 +472,7 @@
   let lastReviewKey = '';
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
   let draggingId = '', draggingPanelId = '', pointerDrag = null, suppressDragClick = false, consumedDragEscape = false;
+  let projectDrag = null;
   let arrangingId = '';
   let pendingCreation = null;
 
@@ -787,9 +787,9 @@
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
   function renderInstances() {
-    if (draggingId || pointerDrag) return; // Keep pressed sources attached before the drag threshold too.
+    if (draggingId || pointerDrag || projectDrag) return; // Keep pressed sources attached before the drag threshold too.
     const matchingProjects = spaces.filter(item => !projectQuery || [item.name, item.cwd, ...item.tabs.flatMap(panel => layout.ids(panel.layout).map(title))].some(value => String(value).toLocaleLowerCase().includes(projectQuery)));
-    const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" title="${esc(item.cwd)}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
+    const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project" data-project-id="${esc(item.id)}"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" draggable="false" title="${esc(item.cwd)} · ${t('길게 눌러 끌어서 순서 변경 · Alt+↑/↓')}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
     const independentMarkup = instanceRows(standalone) || t('<p class="wb-no-instances">프로젝트 없는 세션이 여기에 표시됩니다.</p>');
     if (projectsMarkup !== lastProjectsMarkup) { $('#wbSpaces').innerHTML = projectsMarkup; lastProjectsMarkup = projectsMarkup; }
     if (independentMarkup !== lastInstancesMarkup) { $('#wbInstances').innerHTML = independentMarkup; lastInstancesMarkup = independentMarkup; }
@@ -797,6 +797,94 @@
   }
 
   $('#wbProjectSearch').addEventListener('input', event => { projectQuery = event.target.value.trim().toLocaleLowerCase(); renderInstances(); });
+
+  function reorderProject(id, targetId, after = false) {
+    const source = spaces.find(item => item.id === id);
+    if (!source || id === targetId || !spaces.some(item => item.id === targetId)) return;
+    spaces.splice(spaces.indexOf(source), 1);
+    spaces.splice(spaces.findIndex(item => item.id === targetId) + Number(after), 0, source);
+    save(); renderInstances();
+    [...$('#wbSpaces').querySelectorAll('[data-space]')].find(node => node.dataset.space === id)?.focus({ preventScroll: true });
+  }
+  function clearProjectDrop() {
+    $('#wbSpaces').querySelectorAll('[data-project-drop-edge]').forEach(node => { delete node.dataset.projectDropEdge; });
+  }
+  function projectDropTarget(drag) {
+    const scroll = $('.wb-sidebar-scroll').getBoundingClientRect();
+    if (drag.x < scroll.left || drag.x > scroll.right || drag.y < scroll.top || drag.y > scroll.bottom) return null;
+    const projects = [...$('#wbSpaces').querySelectorAll('[data-project-id]')];
+    const target = projects.find(node => drag.y < node.getBoundingClientRect().bottom) || projects.at(-1);
+    if (!target || target.dataset.projectId === drag.id) return null;
+    const bounds = target.getBoundingClientRect();
+    return { node: target, id: target.dataset.projectId, after: drag.y >= bounds.top + bounds.height / 2 };
+  }
+  function projectDragFrame() {
+    if (!projectDrag?.started) return;
+    const scroll = $('.wb-sidebar-scroll'), bounds = scroll.getBoundingClientRect();
+    const { x, y } = projectDrag;
+    if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
+      const edge = Math.min(36, bounds.height / 4);
+      const speed = y < bounds.top + edge ? -Math.ceil((bounds.top + edge - y) / 3)
+        : y > bounds.bottom - edge ? Math.ceil((y - bounds.bottom + edge) / 3) : 0;
+      if (speed) scroll.scrollTop += speed;
+    }
+    clearProjectDrop();
+    const target = projectDropTarget(projectDrag);
+    if (target) target.node.dataset.projectDropEdge = target.after ? 'after' : 'before';
+    projectDrag.frame = requestAnimationFrame(projectDragFrame);
+  }
+  function startProjectDrag() {
+    if (!projectDrag || projectDrag.started) return;
+    clearTimeout(projectDrag.timer);
+    projectDrag.started = true;
+    root.setPointerCapture(projectDrag.pointerId);
+    root.classList.add('is-dragging-project');
+    projectDrag.source.closest('.wb-project').classList.add('is-project-drag-source');
+    projectDragFrame();
+  }
+  function finishProjectDrag(event, cancelled = false) {
+    if (!projectDrag || event.pointerId !== projectDrag.pointerId) return;
+    const drag = projectDrag, target = !cancelled && drag.started ? projectDropTarget({ ...drag, x: event.clientX, y: event.clientY }) : null;
+    projectDrag = null;
+    clearTimeout(drag.timer); cancelAnimationFrame(drag.frame);
+    root.classList.remove('is-dragging-project');
+    drag.source.closest('.wb-project')?.classList.remove('is-project-drag-source');
+    clearProjectDrop();
+    if (root.hasPointerCapture(drag.pointerId)) root.releasePointerCapture(drag.pointerId);
+    if (!drag.started) { setTimeout(renderInstances, 0); return; }
+    suppressDragClick = true;
+    event.preventDefault(); event.stopPropagation();
+    if (target) reorderProject(drag.id, target.id, target.after);
+    else renderInstances();
+  }
+  root.addEventListener('pointerdown', event => {
+    const source = event.target.closest('#wbSpaces [data-space]');
+    if (!source || event.button !== 0 || !event.isPrimary || busy || projectDrag || pointerDrag) return;
+    suppressDragClick = false;
+    projectDrag = { id: source.dataset.space, source, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      originX: event.clientX, originY: event.clientY, started: false, frame: 0 };
+    projectDrag.timer = setTimeout(startProjectDrag, 250);
+  }, true);
+  window.addEventListener('pointermove', event => {
+    if (!projectDrag || event.pointerId !== projectDrag.pointerId) return;
+    projectDrag.x = event.clientX; projectDrag.y = event.clientY;
+    if (!projectDrag.started && Math.hypot(event.clientX - projectDrag.originX, event.clientY - projectDrag.originY) >= 6) {
+      if (event.pointerType === 'mouse') startProjectDrag();
+      else { finishProjectDrag(event, true); return; }
+    }
+    if (projectDrag.started) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+  window.addEventListener('pointerup', event => finishProjectDrag(event), true);
+  window.addEventListener('pointercancel', event => finishProjectDrag(event, true), true);
+  root.addEventListener('lostpointercapture', event => finishProjectDrag(event, true));
+  root.addEventListener('keydown', event => {
+    const source = event.target.closest('#wbSpaces [data-space]');
+    if (!source || !event.altKey || event.ctrlKey || event.metaKey || !['ArrowUp', 'ArrowDown'].includes(event.key) || busy || projectDrag) return;
+    const visible = [...$('#wbSpaces').querySelectorAll('[data-space]')];
+    const target = visible[visible.indexOf(source) + (event.key === 'ArrowDown' ? 1 : -1)];
+    event.preventDefault(); event.stopPropagation();
+    if (target) reorderProject(source.dataset.space, target.dataset.space, event.key === 'ArrowDown');
+  });
 
   function selectInstance(id) {
     const owner = owners().find(item => item.tabs.some(tab => layout.ids(tab.layout).includes(id)));
@@ -988,6 +1076,7 @@
   root.addEventListener('pointercancel', event => finishPointerDrag(event, true), true);
   root.addEventListener('lostpointercapture', event => finishPointerDrag(event, true));
   window.addEventListener('blur', () => {
+    if (projectDrag) finishProjectDrag({ pointerId: projectDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
     if (pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
   });
   root.addEventListener('click', event => {
@@ -998,9 +1087,10 @@
   }, true);
   root.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    if (!event.repeat && !pointerDrag) consumedDragEscape = false;
-    if (!pointerDrag && !consumedDragEscape) return;
+    if (!event.repeat && !pointerDrag && !projectDrag) consumedDragEscape = false;
+    if (!pointerDrag && !projectDrag && !consumedDragEscape) return;
     consumedDragEscape = true;
+    if (projectDrag) finishProjectDrag({ pointerId: projectDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
     if (pointerDrag) finishPointerDrag({ pointerId: pointerDrag.pointerId, preventDefault() {}, stopPropagation() {} }, true);
     event.preventDefault(); event.stopImmediatePropagation();
   }, true);
@@ -1010,6 +1100,7 @@
     event.preventDefault(); event.stopImmediatePropagation();
   }, true);
   root.addEventListener('dragstart', event => {
+    if (event.target.closest('#wbSpaces [data-space]')) { event.preventDefault(); return; }
     const source = event.target.closest('[data-drag-terminal]');
     if (!source || busy || event.target.closest('header button')) { if (source) event.preventDefault(); return; }
     draggingId = source.dataset.dragTerminal;
@@ -1561,7 +1652,7 @@
         const taskKey = task.taskId || task.analysisId || `${task.observedAt}:${task.request}`;
         const observed = new Date(task.observedAt || value.result.observedAt);
         const time = Number.isFinite(observed.getTime()) ? `<time class="wb-task-time" datetime="${observed.toISOString()}" title="${esc(observed.toLocaleString(window.WhiteboxI18n.getLocaleTag()))}">${esc(observed.toLocaleTimeString(window.WhiteboxI18n.getLocaleTag(), { hour: '2-digit', minute: '2-digit' }))}</time>` : '';
-        const retained = retainedFailure?.retainedAnalysisId === task.analysisId && retainedFailure.taskId === task.taskId;
+        const retained = window.WhiteboxReviewDecision.matchesRetainedAnalysis(task, retainedFailure);
         const lifecycleLabel = retained ? t(retainedFailure.description) : task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록')
           : task.analysisLifecycle === 'in-progress' && task.lifecycle === 'completed' ? t('진행 중 기록의 분석 · 최종 결과 미반영')
           : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';

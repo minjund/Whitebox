@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 const {assessContent}=require('../src/terminalReviewContent');
-const {render,displayTitle}=require('../renderer/terminal-review-decision');
+const {render,displayTitle,matchesRetainedAnalysis,reviewFailure}=require('../renderer/terminal-review-decision');
 const {TerminalReview,reviewPrompt}=require('../src/terminalReview');
 const {validateDecision,decisionPrompt,visibleAnalysis}=require('./terminal-review-next-instruction');
 const esc=v=>String(v).replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -9,6 +9,15 @@ const source='설정 검사를 안내했습니다. 실행 결과는 없습니다
 const content=()=>({version:2,answer:{text:'설정 검사 방법을 안내했지만 실제 실행은 확인되지 않습니다.',basis:'reported',quote:'설정 검사를 안내했습니다. 실행 결과는 없습니다.'},details:[],limitations:[],deliverables:[],background:[],nextAction:null,
  handoff:{kind:'verify',temporal:{text:'이후 새 명령 추가가 보고됐으며 현재 적용은 미확인입니다.',basis:'reported',quote:'새 명령을 추가했다고 보고했습니다.'},priority:{text:'새 명령의 현재 연결부터 확인해야 이전 안내를 그대로 실행하지 않습니다.',basis:'inference',quote:'새 명령을 추가했다고 보고했습니다.'},prompt:{text:'현재 설정 검사 명령의 연결 대상을 확인하고 실제 사용 가능한 명령을 알려줘.',basis:'inference',quote:'설정 검사를 안내했습니다. 실행 결과는 없습니다.'}}});
 async function main(){
+ const retained={taskId:'request',retainedAnalysisId:'analysis'};
+ for(const task of [null,{}, {taskId:'request'}, {analysisId:'analysis'}, {taskId:'request',analysisId:''}]) {
+  assert.equal(matchesRetainedAnalysis(task,null),false,'absent failure never matches missing IDs');
+  assert.equal(matchesRetainedAnalysis(task,retained),false,'both nonempty identities are mandatory');
+ }
+ assert.equal(matchesRetainedAnalysis({taskId:'request',analysisId:'analysis'},retained),true);
+ assert.equal(matchesRetainedAnalysis({taskId:'different',analysisId:'analysis'},retained),false,'another request cannot inherit a failure');
+ assert.equal(matchesRetainedAnalysis({taskId:'request',analysisId:'another'},retained),false,'another analysis cannot inherit a failure');
+ assert.equal(reviewFailure({state:'error',failure:retained,result:{tasks:[null,{taskId:'request',recordOnly:true}]}}),null);
  const evidence={source,observed:'실행 결과는 없습니다.'};assert.ok(assessContent(content(),evidence).content);
  let bad=content();bad.handoff.temporal.basis='observed';assert.ok(assessContent(bad,evidence).issues.includes('handoff temporal observed attribution'),'later reports cannot become current tool observations');
  bad=content();bad.handoff.prompt.basis='reported';assert.ok(assessContent(bad,evidence).issues.includes('handoff prompt is a suggestion, not execution evidence'));

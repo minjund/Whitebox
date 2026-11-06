@@ -333,7 +333,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     let markup = value.messages.map(message => {
       if (message.role === 'answer') {
         const task = message.task;
-        const retained = retainedFailure?.taskId === task.taskId && retainedFailure.retainedAnalysisId === task.analysisId;
+        const retained = window.WhiteboxReviewDecision.matchesRetainedAnalysis(task, retainedFailure);
         return `<article class="wb-summary-answer"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t('Whitebox 요약'))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: message.key }) || `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
       }
       const time = message.sentAt || message.at;

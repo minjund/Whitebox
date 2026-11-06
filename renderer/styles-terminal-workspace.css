@@ -328,6 +328,13 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 #terminalWorkspace .wb-add-project { display: flex; align-items: center; gap: 7px; margin: 0 12px 17px; padding: 7px 9px; color: var(--wb-muted); font-size: 11px; }
 .wb-add-project + .wb-side-heading { border-top: 1px solid var(--wb-line); padding-top: 20px; }
 .wb-project { margin-bottom: 8px; }
+.wb-project[data-project-id] { position: relative; }
+#terminalWorkspace #wbSpaces .wb-space { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: pan-y; }
+#terminalWorkspace.is-dragging-project, #terminalWorkspace.is-dragging-project * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+.wb-project.is-project-drag-source { opacity: .45; }
+.wb-project[data-project-drop-edge]::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--wb-accent); pointer-events: none; z-index: 3; }
+.wb-project[data-project-drop-edge="before"]::after { top: -3px; }
+.wb-project[data-project-drop-edge="after"]::after { bottom: -3px; }
 .wb-project > .wb-space-row:has(.wb-space.active) { background: transparent; }
 #terminalWorkspace .wb-space { padding: 8px 2px; gap: 7px; }
 .wb-space strong { font-size: 12px; font-weight: 500; }

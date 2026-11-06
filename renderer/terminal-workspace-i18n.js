@@ -4,6 +4,7 @@
   // Only static application copy passes through these helpers. Interpolated
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
+  ['길게 눌러 끌어서 순서 변경 · Alt+↑/↓', 'Hold and drag to reorder · Alt+↑/↓', '长按拖动以调整顺序 · Alt+↑/↓'],
   ['답과 핵심 설명', 'Answer and explanation', '答案与核心说明'],
   ['기록 시점', 'Recorded at', '记录时间'],
   ['과거 명령 · 현재 실행 안내 아님', 'Historical command · not current instructions', '历史命令 · 非当前操作指南'],
