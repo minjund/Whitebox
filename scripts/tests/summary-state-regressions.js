@@ -60,6 +60,11 @@ exports.run = async evaluate => {
     await f.send();
     check(f.stats.lookups[0][0]?.id === 'a' && f.stats.captures === 1 && f.stats.sends === 1,
       'lookup and archive an old completion outside 80 jobs before exactly one next send'); cases.push('archived-job');
+    f = make({ messages: [user('a')], review: { state: 'reviewing', analysisTaskId: 'a' }, jobs: [{ id: 'a', operation: 'summary', state: 'completed' }] });
+    await f.send();
+    check(f.stats.captures === 1 && f.stats.sends === 1 && f.stats.payloads[0].sendNow === false,
+      'completed reply releases the queue automatically while model analysis is still reviewing');
+    f.chat.observe(f.data.jobs); await tick(); check(f.stats.sends === 1, 'completed reply releases exactly once'); cases.push('automatic-after-answer');
     const trust = "2. Trust all and continue\\n3. Continue without trusting (hooks won't run)";
     const bogus = task('trust', { request: trust, lifecycle: 'interrupted', recordOnly: true, actual: '요청이 중단됐어요. 수행 결과는 수집되지 않았어요.' });
     f = make({ tasks: [bogus], messages: [{ role: 'user', id: 'request:trust', text: trust, state: 'sent', answerKey: 'trust' },
@@ -98,6 +103,6 @@ exports.run = async evaluate => {
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
     return cases;
   })()`);
-  assert.equal(result.length, 13);
+  assert.equal(result.length, 14);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };

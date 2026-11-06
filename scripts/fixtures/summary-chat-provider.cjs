@@ -7,7 +7,9 @@ const draw = body => process.stdout.write(`\x1b[2J\x1b[H\x1b[999;1H\x1b[?2004hSU
 const finish = () => {
   waiting = false;
   const footer = provider === 'claude' ? `✻ Baked for ${++turn}s` : `Worked for 1s • 3:${String(40 + ++turn).padStart(2, '0')} PM`;
-  draw(`› ${request}\r\n• SUMMARY_REPLY ${request}\r\n${footer}\r\n› ${provider === 'claude' ? '' : 'Ask Codex to do anything'}\r\n  ${provider === 'claude' ? '[Sonnet]' : 'GPT-6'} · fixture`);
+  // Real providers can retain the preceding working line in scrollback.
+  // The explicit later finish and empty input must release the queued request.
+  draw(`› ${request}\r\n• Working (esc to interrupt)\r\n• SUMMARY_REPLY ${request}\r\n${footer}\r\n› ${provider === 'claude' ? '' : 'Ask Codex to do anything'}\r\n  ${provider === 'claude' ? '[Sonnet]' : 'GPT-6'} · fixture`);
 };
 draw('› Ask Codex to do anything\r\n  GPT-6 · fixture');
 process.stdin.on('data', data => {

@@ -94,7 +94,7 @@ function completedTurn(screen, request, provider, baselineStamp, options = {}) {
     if (finishedPattern[provider].test(lines[i])) finished = i;
     if (finished >= 0 && promptPattern.test(lines[i])) { ready = i; break; }
   }
-  if (ready < 0 || busyPattern.test(lines.slice(ready - 2).join('\n'))) return '';
+  if (ready < 0 || busyPattern.test(lines.slice(finished + 1).join('\n'))) return '';
   const evidence = lines.slice(start, ready).join('\n').trim();
   // A completion banner without answer content is not enough.
   const answer = lines.slice(start + request.split('\n').length, ready)
@@ -123,10 +123,14 @@ function currentTurnEvidence(screen, request) {
 function inputReady(screen, provider) {
   if (!finishedPattern[provider]) return false;
   const lines = String(screen || '').split('\n');
-  if (busyPattern.test(lines.slice(-15).join('\n'))) return false;
   let index = -1;
   for (let i = 0; i < lines.length; i++) if (promptPattern.test(lines[i])) index = i;
   if (index < 0 || lines.length - index > 15) return false;
+  let finished = -1;
+  for (let i = 0; i < index; i++) if (finishedPattern[provider].test(lines[i])) finished = i;
+  // Completed-turn scrollback can retain the former spinner. Only a busy
+  // indicator after that explicit finish belongs to the current input state.
+  if (busyPattern.test(lines.slice(finished >= 0 ? finished + 1 : -15).join('\n'))) return false;
   const draft = lines[index].match(promptPattern)[1].trim();
   if (draft && !/^(?:Ask Codex to do anything|Try ".*"|Summarize recent commits|Find and fix a bug in @filename)$/u.test(draft)) return false;
   // Claude puts its custom multi-line status bar below the input's closing

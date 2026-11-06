@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { TerminalCollaboration } = require('../../src/terminalCollaboration');
+const { providerActivity } = require('../../src/terminalActivity');
 
 function createFixture({ manager, profile, root }) {
   const processes = new Map();
@@ -15,7 +16,7 @@ function createFixture({ manager, profile, root }) {
     activity: { observe: async (members, frames) => new Map(members.map(member => {
       const text = frames.get(member.id)?.text || '';
       return [member.id, { provider: processes.has(member.id) ? providers.get(member.id) || 'codex' : '', providerPid: processes.get(member.id) || 0,
-        state: text.includes('Would you like') ? 'waiting' : text.includes('esc to interrupt') ? 'working' : 'idle' }];
+        state: providerActivity({ text }) }];
     })) },
   });
   return {

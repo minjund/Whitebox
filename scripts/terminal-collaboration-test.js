@@ -65,6 +65,14 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   await c.sync(adopted); assert.equal(writes.at(-1).command,'codex');
   assert.equal(c.jobs.get(created.id).state,'completed');
   assert.equal(inputReady('› ㅎㅇ','codex'),false);
+  for (const [provider, finish, prompt] of [['codex', 'Worked for 2s • 3:42 PM', '› Ask Codex to do anything'], ['claude', '✻ Baked for 2s', '❯ ']]) {
+    const completed = `› first\n• Working (esc to interrupt)\n• answer\n${finish}\n${prompt}`;
+    assert.equal(inputReady(completed, provider), true, 'historical busy text before an explicit finish cannot block automatic queued delivery');
+    assert.equal(inputReady(completed + '\n• Working (esc to interrupt)', provider), false, 'new work after the completed turn still blocks automatic delivery');
+    assert.equal(inputReady(completed.replace(prompt, '› real draft'), provider), false, 'an actual draft still blocks automatic delivery');
+    assert.equal(inputReady(`› first\n• Working (esc to interrupt)\n${prompt}`, provider), false, 'an empty prompt without an explicit finish cannot clear a busy indicator');
+    assert(completedTurn(completed, 'first', provider, completionStamp('› first', provider), { exactRequest: true }), 'old busy text does not hide the verified completed reply');
+  }
   const before=completionStamp('› ㅎㅇ','codex');
   assert.equal(completedTurn('› 다른말\n• 답\nWorked for 2s • 3:42 PM\n› ', 'ㅎㅇ','codex',before,{exactRequest:true}),'');
   // App-owned membership uses actual providers and never injects model instructions.
