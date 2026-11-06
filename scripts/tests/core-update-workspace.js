@@ -706,6 +706,13 @@ function registerCliAndUpdateTests(context) {
       '1.8.1', '1.8.2', '1.8.3', '1.8.4', '1.8.5', '1.8.6',
       '1.8.7', '1.8.8', '1.8.9', '1.8.10', '1.8.11', '1.8.12', '1.8.13', '1.8.14', '1.8.15', '1.8.16', '1.8.17', '1.8.18', '1.8.19', '1.8.20', '1.8.21', '1.8.22', '1.8.23', '1.8.24', '1.8.25', '1.8.27', '1.8.28', '1.8.30', '1.8.31', '1.8.32', '2.0.1', '2.0.3', '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.0.10', '2.0.11', '2.0.12', '2.0.13', '2.0.14', '2.0.15', '2.0.16', '2.0.17', '2.0.18', '2.0.19', manifest.previousFixed.version,
     ])].sort(compareVersions), 'Every published supported Windows installer must be exercised exactly once');
+    const driver = fs.readFileSync(path.join(__dirname, '..', 'windows-v173-update-integration.js'), 'utf8');
+    const idleSource = driver.match(/^  const workspaceSource = (.+);$/mu);
+    assert(idleSource, 'Packaged driver must declare its audited workspace source preparation');
+    for (const cohort of cohorts.filter(item => item.version.startsWith('2.0.'))) {
+      assert.equal(require('node:vm').runInNewContext(idleSource[1], { SOURCE_VERSION: cohort.version }, { timeout: 50 }), true,
+        `Official ${cohort.version} must use the authenticated idle-parent fixture instead of capture mode`);
+    }
     const previousFixed = manifest.previousFixed;
     assert.equal(compareVersions(previousFixed.version, manifest.frozen.at(-1).version), 1,
       'previousFixed must be newer than every immutable frozen cohort.');
