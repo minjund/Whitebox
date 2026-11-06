@@ -1,0 +1,51 @@
+'use strict';
+const { app, BrowserWindow } = require('electron');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-summary-design-'));
+app.setPath('userData', profile);
+app.disableHardwareAcceleration();
+app.on('window-all-closed', () => {});
+app.whenReady().then(async () => {
+  const deadline = setTimeout(() => app.exit(1), 45000);
+  const win = new BrowserWindow({ width: 1440, height: 1000, useContentSize: true, show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, backgroundThrottling: false, offscreen: true } });
+  const errors = [];
+  win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
+  const evaluate = code => win.webContents.executeJavaScript(code, true);
+  const settle = () => evaluate('document.fonts.ready.then(() => new Promise(resolve => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 350)))');
+  const open = async query => { await win.loadFile(path.join(__dirname, 'index.html'), { query }); await settle(); };
+  const shot = async file => { await settle(); fs.writeFileSync(path.join(__dirname, file), (await win.webContents.capturePage()).toPNG()); };
+  try {
+    await open({ theme: 'dark', state: 'ready' });
+    assert(await evaluate('Boolean(document.querySelector("#mode .ui-segc"))'), 'actual affectUI control mounted');
+    await shot('ready-dark.png');
+    await evaluate('document.querySelector("#mode [role=radio]").click()');
+    assert.equal(await evaluate('document.querySelector("#terminal").hidden'), false, 'affectUI toggle opens terminal');
+    await evaluate('document.querySelectorAll("#mode [role=radio]")[1].click()');
+    assert.equal(await evaluate('document.querySelector("#summary-body").hidden'), false);
+    await open({ theme: 'dark', state: 'waiting', game: 'open' });
+    assert(await evaluate('Boolean(document.querySelector("#thinking .ui-tlc"))'), 'actual affectUI loader mounted');
+    await shot('waiting-dark.png');
+    const before = await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()');
+    await evaluate('document.querySelector("[data-game-direction=left]").click()');
+    assert.notEqual(await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()'), before);
+    await evaluate('document.querySelector("#scenario [role=radio]").click()');
+    assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), false, 'game remains open when summary completes');
+    assert(await evaluate('document.querySelector("[data-game-status]").textContent.includes("요약 완료")'));
+    await open({ theme: 'light', state: 'ready' }); await shot('ready-light.png');
+    win.setContentSize(640, 1000); await open({ theme: 'light', state: 'queue' });
+    assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'narrow view has no horizontal overflow');
+    await evaluate('document.querySelector("#edit").click()');
+    assert(await evaluate('document.querySelector("#draft").value.includes("수정한 내용")'));
+    await evaluate('document.querySelector("#composer").requestSubmit()');
+    assert.equal(await evaluate('document.querySelector("#queue").hidden'), false);
+    await shot('mobile-light.png');
+    assert.deepEqual(errors, []);
+    console.log('PASS affectUI draft: real segmented controls/buttons/loader, summary/terminal toggle, playable 2048, completion preserves game, queue edit/send and 640px layout');
+    console.log(__dirname);
+  } finally { clearTimeout(deadline); win.destroy(); fs.rmSync(profile, { recursive: true, force: true }); }
+  app.exit(0);
+}).catch(error => { console.error(error); app.exit(1); });

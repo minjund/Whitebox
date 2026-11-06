@@ -3,13 +3,52 @@
 // A chat is a view of one existing AI process, never a replacement shell.
 window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const { root, api, t, esc } = context;
+  const ui = window.WhiteboxWorkspaceUI;
+  const $ = selector => root.querySelector(selector);
   const records = new Map();
-  let flushing = false, selected = '', lastMarkup = '', approvalBusy = false;
+  let flushing = false, selected = '', lastMarkup = '', approvalBusy = false, retryBusy = false, modeKey = '', sendKey = '', thinkingLabel = '';
+  const actionHosts = new Set();
   const form = root.querySelector('#wbSummaryForm');
   const input = root.querySelector('#wbSummaryInput');
   const list = root.querySelector('#wbSummaryMessages');
+  const transcript = root.querySelector('#wbSummaryTranscript');
   const notice = root.querySelector('#wbSummaryNotice');
+  const jobsById = new Map();
+  const game = window.Whitebox2048.createView({ root: root.querySelector('#wbSummaryGame'), t, esc,
+    read: () => record(context.activeId()), save: () => context.save() });
   const identity = member => ({ targetCreationId: member.creationId, targetProviderPid: member.providerPid, targetProvider: member.provider });
+  function control(label, attributes, disabled = false, variant = 'ghost', translate = true) {
+    return `<span data-summary-control data-variant="${variant}"><button type="button" ${attributes} ${disabled ? 'disabled' : ''}>${esc(translate ? t(label) : label)}</button></span>`;
+  }
+  function mountControls() {
+    if (!ui?.actionButton) return;
+    for (const host of transcript.querySelectorAll('[data-summary-control]')) {
+      const original = host.querySelector('button');
+      const attributes = [...original.attributes].filter(attribute => attribute.name.startsWith('data-summary-'));
+      const disabled = original.disabled;
+      ui.actionButton(host, { label: original.textContent, variant: host.dataset.variant });
+      const button = host.querySelector('button');
+      for (const attribute of attributes) button.setAttribute(attribute.name, attribute.value);
+      button.disabled = disabled;
+      actionHosts.add(host);
+    }
+  }
+  function renderMode(summary, available) {
+    const host = $('.wb-mode-switch'), key = JSON.stringify([summary, available, t('터미널'), t('요약')]);
+    if (host && ui?.choices && key !== modeKey) {
+      ui.choices(host, { value: summary ? 'summary' : 'terminal', label: t('작업 모드'),
+        options: [{ value: 'terminal', label: t('터미널') }, { value: 'summary', label: t('요약'), disabled: !available }],
+        onChange: setMode });
+      host.removeAttribute('role'); host.removeAttribute('aria-label');
+      host.querySelectorAll('[role="radio"]').forEach((button, index) => { button.dataset.workspaceMode = index ? 'summary' : 'terminal'; });
+      modeKey = key;
+    }
+    for (const button of root.querySelectorAll('[data-workspace-mode]')) {
+      button.disabled = button.dataset.workspaceMode === 'summary' && !available;
+      button.setAttribute('aria-pressed', String(button.dataset.workspaceMode === (summary ? 'summary' : 'terminal')));
+      button.title = button.disabled ? t('이 터미널에서 AI를 먼저 실행해 주세요.') : button.textContent;
+    }
+  }
   const eligible = id => {
     const session = context.session(id), member = context.member(id);
     return Boolean(session?.status === 'running' && member && Date.now() - member.observedAt < 5000
@@ -27,16 +66,28 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     return value;
   }
   const taskKey = task => String(task.taskId || task.analysisId || `${task.observedAt}:${task.request}`);
-  function tasksFor(id) { return context.tasks(id).filter(task => !task.deferred && task.analysisDepth !== 'deferred'); }
+  function tasksFor(id) { return context.tasks(id).filter(task => task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred'); }
   function mergeAnswers(value) {
     for (const task of tasksFor(value.id)) {
       const key = taskKey(task);
       const previous = value.messages.find(message => message.role === 'answer' && message.key === key);
-      if (previous) { previous.task = task; continue; }
+      // A review event can arrive before the send acknowledgement. Reconcile
+      // existing answers too, once the outgoing request becomes `sent`.
       const pending = value.messages.find(message => message.role === 'user' && message.state === 'sent'
-        && !message.answerKey && message.text.trim() === String(task.request || '').trim() && !message.baseline?.includes(key));
+        && !message.answerKey && (task.submissionId ? task.submissionId === message.id
+          : message.text.trim() === String(task.request || '').trim() && !message.baseline?.includes(key)));
       if (pending) pending.answerKey = key;
-      else if (task.request) value.messages.push({ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key });
+      if (previous) {
+        const duplicateRequest = pending && (previous.task?.submissionId === pending.id
+          || String(previous.task?.request || '').trim() === pending.text.trim());
+        previous.task = task;
+        if (pending) {
+          value.messages = value.messages.filter(message => message !== previous && !(duplicateRequest && message.id === `request:${key}`));
+          value.messages.splice(value.messages.indexOf(pending) + 1, 0, previous);
+        }
+        continue;
+      }
+      if (!pending && task.request) value.messages.push({ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key });
       const answer = { role: 'answer', id: `answer:${key}`, key, task };
       if (pending) value.messages.splice(value.messages.indexOf(pending) + 1, 0, answer);
       else value.messages.push(answer);
@@ -55,9 +106,17 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   function setMode(mode) {
     const id = context.activeId(), value = record(id);
     if (!value || mode === 'summary' && !eligible(id)) return;
+    const opening = value.mode !== 'summary' && mode === 'summary';
     value.mode = mode;
     context.save(); render();
-    if (mode === 'summary') input.focus({ preventScroll: true });
+    if (mode === 'summary') {
+      input.focus({ preventScroll: true });
+      // Choosing summary is explicit intent to summarize the existing reply.
+      // Passive observation still leaves completed historical turns untouched.
+      if (opening && !tasksFor(id).length && context.member(id)?.ready) {
+        context.startSummary?.().catch(error => { notice.textContent = String(error.message || error); });
+      }
+    }
   }
   root.querySelectorAll('[data-workspace-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.workspaceMode)));
   input.addEventListener('input', () => {
@@ -81,9 +140,22 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     context.save(); render();
     context.refresh().then(flush).catch(error => { notice.textContent = String(error.message || error); });
   });
-  list.addEventListener('click', event => {
-    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-choice], [data-summary-terminal]');
+  root.querySelector('#wbSummary').addEventListener('click', event => {
+    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry]');
     if (!button) return;
+    if (button.hasAttribute('data-summary-retry')) {
+      if (retryBusy || !context.startSummary) return;
+      retryBusy = true; render();
+      context.startSummary().catch(error => { notice.textContent = String(error.message || error); })
+        .finally(() => { retryBusy = false; render(); });
+      return;
+    }
+    if (button.hasAttribute('data-summary-copy')) {
+      const text = button.closest('.wb-summary-answer')?.querySelector('.wb-summary-answer-body')?.innerText;
+      if (text) api.writeClipboard(text).then(() => { notice.textContent = t('요약을 복사했어요.'); })
+        .catch(error => { notice.textContent = String(error.message || error); });
+      return;
+    }
     if (button.hasAttribute('data-summary-terminal')) { setMode('terminal'); context.reveal(context.activeId()); return; }
     if (button.dataset.summaryChoice) { respond(button.dataset.summaryChoice).catch(error => { notice.textContent = String(error.message || error); }); return; }
     const value = record(context.activeId());
@@ -129,10 +201,25 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         if (message.targetCreationId !== member.creationId || message.targetProviderPid !== member.providerPid || message.targetProvider !== member.provider) {
           message.state = 'interrupted'; message.error = t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'); context.save(); continue;
         }
-        // Finish the preceding reply's summary before another request can
-        // replace the terminal's observed turn, including identical requests.
         mergeAnswers(value);
-        if (!member.ready || detectedPrompt(value.id) || value.messages.some(item => item.state === 'sent' && !item.answerKey)) continue;
+        if (!member.ready || detectedPrompt(value.id)) continue;
+        // Archive each completed reply in the reviewer before replacing the
+        // observed turn. Model analysis may finish later or be deferred; it
+        // must not hold the user's next request indefinitely.
+        let waiting = false;
+        for (const sent of value.messages.filter(item => item.state === 'sent' && item.targetCreationId && !item.replyCaptured)) {
+          const job = jobsById.get(sent.id);
+          if (job?.state !== 'completed') { waiting = true; break; }
+          try {
+            if (!await context.captureReply(job)) { waiting = true; break; }
+            sent.replyCaptured = true;
+            context.save();
+          } catch (error) { notice.textContent = String(error.message || error); waiting = true; break; }
+        }
+        if (waiting) continue;
+        // Capturing evidence is asynchronous: recheck the process and frame
+        // before asking the guarded backend to send.
+        if (!eligible(value.id) || !context.member(value.id)?.ready || message.state !== 'queued') continue;
         message.state = 'sending'; context.save(); render();
         try {
           const result = await api.terminalCollaboration({ operation: 'summary-send', id: message.id, groupId: context.groupId(value.id),
@@ -149,6 +236,67 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       }
     } finally { flushing = false; }
   }
+  function renderProgress(value, member, review, prompt) {
+    const failure = window.WhiteboxReviewDecision.reviewFailure(review);
+    const sent = [...value.messages].reverse().find(message => message.role === 'user' && ['sent', 'sending'].includes(message.state));
+    const task = value.messages.find(message => message.role === 'answer' && message.key === sent?.answerKey)?.task;
+    const job = jobsById.get(sent?.id);
+    const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(review?.state);
+    const waitingForSummary = Boolean(member.ready && value.messages.some(item => item.state === 'sent' && !item.answerKey));
+    const needsResponse = Boolean(prompt || member.activity?.state === 'waiting');
+    const working = member.activity?.state === 'working';
+    const replyDone = !working && (job?.state === 'completed' || task?.lifecycle === 'completed'
+      || review?.preview?.lifecycle === 'completed' && (!sent?.targetCreationId || review.preview.submissionId === sent.id));
+    const deferred = Boolean(task?.deferred || task?.analysisDepth === 'deferred');
+    const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !pending && !waitingForSummary && !working
+      && (!failure || failure.kind === 'reanalysis' && failure.retainedLifecycle === 'completed')
+      && !needsResponse && (!task.lifecycle || task.lifecycle === 'completed'));
+    const loading = !needsResponse && (pending || waitingForSummary || working);
+    const label = replyDone || review?.state === 'reviewing' || waitingForSummary ? '요약 중…' : 'AI가 작업 중입니다.';
+    $('#wbSummaryWorking').hidden = !loading;
+    if (loading) {
+      if (t(label) !== thinkingLabel) {
+        if (ui?.thinking) ui.thinking($('#wbSummaryThinking'), t(label));
+        else $('#wbSummaryThinking').textContent = t(label);
+        thinkingLabel = t(label);
+      }
+      $('#wbSummaryWorkingDescription').textContent = t(replyDone
+        ? 'AI 답변은 도착했어요. 요청과 결과를 비교해 요약으로 정리하고 있어요.'
+        : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
+    } else if (thinkingLabel) { ui?.clear?.($('#wbSummaryThinking')); thinkingLabel = ''; }
+    let title = '다음 요청을 입력하세요.', description = '같은 AI 세션에서 대화를 이어갑니다.';
+    if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; }
+    else if (failure) { title = failure.title; description = failure.description; }
+    else if (working) { title = 'AI가 작업 중입니다.'; description = '작업 중 보낸 요청은 전송 대기로 보관합니다.'; }
+    else if (summaryDone) { title = '답변과 요약이 도착했어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
+    else if (replyDone && deferred) { title = '답변 완료 · 분석 대기'; description = '결과를 판단할 구체적인 내용이 아직 부족해요.'; }
+    else if (replyDone) { title = '답변은 완료, 요약은 정리 중'; description = '완료된 답변을 읽기 쉬운 요약으로 정리합니다.'; }
+    else if (review?.state === 'reviewing') { title = '작업 내용을 분석 중입니다.'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
+    else if (pending || sent?.state === 'sent') { title = 'AI 답변을 기다리고 있어요'; description = '같은 AI 세션에서 대화를 이어갑니다.'; }
+    $('#wbSummaryStateTitle').textContent = t(title);
+    $('#wbSummaryStateDescription').textContent = t(description);
+    $('#wbSummaryStateTitle').dataset.state = failure ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
+    const replyState = needsResponse ? '응답 필요' : replyDone ? '완료' : working ? '작업 중' : sent ? '대기 중' : '—';
+    const reviewState = failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
+      : summaryDone ? '완료' : deferred ? '분석 대기' : review?.state === 'reviewing' || loading && replyDone ? '정리 중' : '대기 중';
+    $('#wbSummaryReplyState').textContent = t(replyState);
+    $('#wbSummaryReplyState').dataset.state = replyDone ? 'done' : needsResponse ? 'waiting' : 'working';
+    $('#wbSummaryReviewState').textContent = t(reviewState);
+    $('#wbSummaryReviewState').dataset.state = summaryDone ? 'done' : 'working';
+    const queueCount = value.messages.filter(message => message.state === 'queued').length;
+    $('#wbSummaryQueueRow').hidden = queueCount === 0;
+    $('#wbSummaryQueueCount').textContent = String(queueCount);
+    const done = [sent?.state === 'sent', replyDone, summaryDone];
+    root.querySelectorAll('[data-summary-step]').forEach((step, index) => {
+      step.dataset.state = done[index] ? 'done' : index === done.findIndex(value => !value) ? 'current' : 'pending';
+      step.querySelector('b').textContent = done[index] ? '✓' : String(index + 1);
+      if (step.dataset.state === 'current') step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
+    });
+    $('#wbSummaryNext').hidden = !summaryDone;
+    $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
+      || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
+    game.render({ waiting: loading, completed: summaryDone });
+  }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
     const stillRunning = member && member.providerPid > 0 && ['claude', 'codex'].includes(member.provider)
@@ -157,22 +305,27 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     root.classList.toggle('summary-mode', summary);
     root.querySelector('#wbSummary').hidden = !summary;
     root.querySelector('#wbCanvas').hidden = summary;
-    for (const button of root.querySelectorAll('[data-workspace-mode]')) {
-      button.disabled = button.dataset.workspaceMode === 'summary' && !available;
-      button.setAttribute('aria-pressed', String(button.dataset.workspaceMode === (summary ? 'summary' : 'terminal')));
-      button.title = button.disabled ? t('이 터미널에서 AI를 먼저 실행해 주세요.') : button.textContent;
-    }
+    renderMode(summary, available);
     if (value?.mode === 'summary' && member && !stillRunning) {
       fallBack(id, t('AI 세션이 종료되었습니다. 터미널에서 확인해 주세요.')); return;
     }
-    if (!summary) return;
+    if (!summary) {
+      root.classList.remove('summary-sidebar-open');
+      if (thinkingLabel) { ui?.clear?.($('#wbSummaryThinking')); thinkingLabel = ''; }
+      return;
+    }
     const review = context.review(id);
-    if (review?.state === 'error') {
+    const retainedFailure = window.WhiteboxReviewDecision.reviewFailure(review);
+    if (review?.state === 'error' && !retainedFailure) {
       fallBack(id, t('요약하지 못했습니다. 터미널에서 원문을 확인해 주세요.')); return;
     }
     mergeAnswers(value);
-    root.querySelector('#wbSummaryTarget').textContent = context.label(id);
+    root.querySelector('#wbSummaryTarget').textContent = context.title?.(id) || context.label(id);
+    root.querySelector('#wbSummaryTarget').title = context.label(id);
     root.querySelector('#wbSummaryProvider').textContent = member.provider === 'claude' ? 'Claude' : 'Codex';
+    $('#wbSummaryRailProvider').textContent = member.provider.toUpperCase();
+    $('#wbSummaryConnection').dataset.connected = String(available);
+    $('#wbSummaryConnectionState').textContent = t(available ? '같은 대화에 연결됨' : '연결 확인 중');
     if (selected !== `${id}:${value.creationId}`) {
       selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = '';
     }
@@ -180,33 +333,43 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     let markup = value.messages.map(message => {
       if (message.role === 'answer') {
         const task = message.task;
-        return `<article class="wb-summary-answer"><div class="wb-summary-label">${esc(t('요약'))}</div>${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: message.key }) || `<p>${esc(task.actual || task.explanation || task.summary || '')}</p>`}</article>`;
+        const retained = retainedFailure?.taskId === task.taskId && retainedFailure.retainedAnalysisId === task.analysisId;
+        return `<article class="wb-summary-answer"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t('Whitebox 요약'))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: message.key }) || `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
       }
-      return `<article class="wb-summary-user"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p><button data-summary-terminal>${esc(t('터미널에서 확인'))}</button>` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions"><button data-summary-edit="${esc(message.id)}" ${value.draft ? 'disabled' : ''}>${esc(t('수정'))}</button><button data-summary-cancel="${esc(message.id)}">${esc(t('취소'))}</button></div>` : ''}</article>`;
+      const time = message.sentAt || message.at;
+      const timestamp = Number.isFinite(time) ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+      return `<article class="wb-summary-user" data-state="${esc(message.state)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
     }).join('');
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;
     const prompt = detectedPrompt(id);
     if (prompt) {
       const raw = context.snapshot(id).text || '';
-      markup += `<article class="wb-summary-prompt" role="group" aria-label="${esc(t('응답이 필요합니다'))}"><h2>${esc(prompt.question)}</h2><pre>${esc(raw.slice(-8000))}</pre><div>${prompt.choices.map(choice => `<button data-summary-choice="${esc(choice.id)}" ${approvalBusy ? 'disabled' : ''}>${esc(choice.label)}</button>`).join('')}</div></article>`;
+      markup += `<article class="wb-summary-prompt" role="group" aria-label="${esc(t('응답이 필요합니다'))}"><h2>${esc(prompt.question)}</h2><pre>${esc(raw.slice(-8000))}</pre><div>${prompt.choices.map(choice => control(choice.label, `data-summary-choice="${esc(choice.id)}"`, approvalBusy, 'secondary', false)).join('')}</div></article>`;
     } else if (member.activity?.state === 'waiting') {
-      markup += `<article class="wb-summary-prompt"><p>${esc(t('터미널에서 응답이 필요합니다.'))}</p><button data-summary-terminal>${esc(t('터미널에서 확인'))}</button></article>`;
+      markup += `<article class="wb-summary-prompt"><p>${esc(t('터미널에서 응답이 필요합니다.'))}</p>${control('터미널에서 확인', 'data-summary-terminal')}</article>`;
     }
-    const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(review?.state);
-    const waitingForSummary = member.ready && value.messages.some(item => item.state === 'sent' && !item.answerKey);
-    if (pending || waitingForSummary || member.activity?.state === 'working') markup += `<p class="wb-summary-working" role="status">${esc(t(review?.state === 'reviewing' || waitingForSummary ? '요약 중…' : 'AI가 작업 중입니다.'))}</p>`;
     if (markup !== lastMarkup) {
       const nearBottom = list.scrollHeight - list.clientHeight - list.scrollTop < 80;
       const opened = [...list.querySelectorAll('details')].map((node, index) => node.open ? index : -1);
-      list.innerHTML = markup; lastMarkup = markup;
+      for (const host of actionHosts) ui?.clear?.(host);
+      actionHosts.clear();
+      transcript.innerHTML = markup; lastMarkup = markup; mountControls();
       list.querySelectorAll('details').forEach((node, index) => { node.open = opened.includes(index); });
       if (nearBottom) list.scrollTop = list.scrollHeight;
     }
+    renderProgress(value, member, review, prompt);
     input.disabled = !available;
+    const nextSendKey = JSON.stringify([t('전송'), available]);
+    if (ui?.actionButton && $('#wbSummarySendHost') && nextSendKey !== sendKey) {
+      ui.actionButton($('#wbSummarySendHost'), { label: `${t('전송')} ↑`, type: 'submit', variant: 'primary' });
+      $('#wbSummarySendHost button').id = 'wbSummarySend'; sendKey = nextSendKey;
+    }
     root.querySelector('#wbSummarySend').disabled = !available;
     root.querySelector('#wbSummaryComposerHint').textContent = t(member.ready ? 'Enter 전송 · Shift+Enter 줄바꿈' : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
   }
   function observe(jobs = []) {
+    jobsById.clear();
+    for (const job of jobs) if (job.operation === 'summary') jobsById.set(job.id, job);
     for (const value of records.values()) for (const message of value.messages) {
       const job = jobs.find(item => item.operation === 'summary' && item.id === message.id);
       if (job && ['failed', 'interrupted'].includes(job.state)) { message.state = 'interrupted'; message.error = job.error; }
@@ -233,7 +396,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           message.state = 'interrupted'; message.error = t('앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.');
         }
         records.set(item.id, { id: item.id, creationId: item.creationId, mode: item.mode === 'summary' ? 'summary' : 'terminal',
-          draft: String(item.draft || '').slice(0, 8000), messages });
+          draft: String(item.draft || '').slice(0, 8000), messages, game2048: window.Whitebox2048.restore(item.game2048) });
       }
     },
     forget(id) { records.delete(id); },

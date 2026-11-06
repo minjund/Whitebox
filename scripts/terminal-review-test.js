@@ -247,6 +247,7 @@ async function main() {
   assert.deepEqual(mergeTasks([firstAnalysis], [nextAnalysis]), [firstAnalysis, nextAnalysis], 'repeated request in a new analysis keeps both usage records');
   assert.deepEqual(mergeTasks([firstAnalysis, nextAnalysis], [nextAnalysis]), [firstAnalysis, nextAnalysis], 'polling the same analysis does not duplicate history or usage');
   await require('./terminal-review-policy-test')();
+  await require('./terminal-review-status-test')();
   const tree = layout.split(layout.split({ id: 'a' }, 'a', 'b'), 'b', 'c', 'column');
   assert.deepEqual(layout.ids(tree), ['a', 'b', 'c']);
   assert.deepEqual(layout.ids(layout.remove(tree, 'b')), ['a', 'c']);

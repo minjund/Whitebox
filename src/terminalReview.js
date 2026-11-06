@@ -335,8 +335,8 @@ class TerminalReview extends EventEmitter {
     const observedAt = new Date(this.now()).toISOString();
     const recordedAt = (chunk.reanalyze ? previous?.recordedAt || previous?.observedAt : '')
       || new Date(chunk.observedAt ?? this.now()).toISOString();
-    const value = { ...task, ...metadata, taskId: chunk.taskId, request: chunk.request,
-      submittedAt: chunk.submittedAt, lifecycle: latest.lifecycle, relatedTaskId: chunk.relatedTaskId || '',
+    const value = { ...task, ...metadata, taskId: chunk.taskId, request: chunk.request, submissionId: chunk.submissionId || previous?.submissionId || '',
+      submittedAt: chunk.submittedAt, lifecycle: latest.lifecycle, analysisLifecycle: chunk.lifecycle, relatedTaskId: chunk.relatedTaskId || '',
       relation: chunk.relation || '', observedAt, recordedAt, reviewSchema: 3, evidenceVersion: 4,
       analysisUsage: usage, reviewContext: chunk.context, assistantUpdates: chunk.updates,
       toolEvidence: chunk.tools || { source: 'unavailable', items: [], omitted: 0 },
@@ -350,7 +350,16 @@ class TerminalReview extends EventEmitter {
       tasks = tasks.map(item => item.taskId === value.taskId ? { ...item, analysisRuns: previous.analysisRuns } : item);
     }
     entry.result = { tasks, observedAt };
-    entry.seen[chunk.taskId] = { digest: chunk.digest, mode: value.analysisDepth, lifecycle: latest.lifecycle };
+    entry.seen[chunk.taskId] = { digest: chunk.digest, mode: value.analysisDepth, lifecycle: chunk.lifecycle };
+    const failed = entry.failed;
+    // An older attempt can fail after a newer snapshot is already queued. Its
+    // error must not survive a validated result for that snapshot or next turn.
+    if (metadata.analysisId && failed
+      && (failed.taskId === chunk.taskId && !(failed.lifecycle === 'completed' && chunk.lifecycle !== 'completed') && (failed.digest === chunk.digest
+        || latest.digest === chunk.digest && chunk.observedAt >= failed.observedAt)
+        || chunk.submittedAt > failed.submittedAt)) {
+      entry.failed = null; entry.message = '';
+    }
     const retained = new Set(tasks.map(item => item.taskId));
     for (const key of Object.keys(entry.seen)) if (!retained.has(key)) delete entry.seen[key];
     this.persist(id, entry);
@@ -393,7 +402,7 @@ class TerminalReview extends EventEmitter {
   interrupt(id, entry) {
     const turn = entry.turn;
     if (!turn) return;
-    const chunk = { ...(turn.latest || {}), taskId: turn.taskId, request: turn.request,
+    const chunk = { ...(turn.latest || {}), taskId: turn.taskId, request: turn.request, submissionId: turn.submissionId,
       terminalId: id, submittedAt: turn.submittedAt, observedAt: this.now(), endedAt: this.now(),
       lifecycle: 'interrupted', text: turn.latest?.text || '', awaitingResponse: false };
     this.enqueue(id, entry, chunk);
@@ -478,7 +487,7 @@ class TerminalReview extends EventEmitter {
     const binding = `${process.provider}:${process.pid}`;
     if (entry.binding !== binding) {
       entry.pending = []; entry.turn = null; entry.following = null; entry.roots = {}; entry.latest = {};
-      entry.revision++; entry.binding = binding; entry.state = 'watching'; entry.lastNative = ''; entry.resume = null;
+      entry.revision++; entry.binding = binding; entry.state = 'watching'; entry.lastNative = ''; entry.watchingNative = ''; entry.nativeObserved = false; entry.resume = null;
     }
     entry.provider = process.provider; entry.providerPid = process.pid;
     const resuming = entry.state === 'paused';
@@ -499,8 +508,15 @@ class TerminalReview extends EventEmitter {
       }
     }
     const rootKey = completion.requestId ? `${completion.conversationId || binding}:${completion.rootRequestId || completion.requestId}` : '';
-    const nativeNew = Boolean(nativeKey && nativeKey !== entry.lastNative
-      && completion.requestAt >= entry.observedSince && !isNonTaskRequest(completion.request));
+    // A terminal can reconnect while its request is already running. Arm only
+    // that observed in-flight turn; its later completion is new evidence even
+    // though the request predates this observer. Completed history stays inert.
+    if (!entry.nativeObserved && nativeKey && completion.state === 'working' && !submission?.id) entry.watchingNative = nativeKey;
+    if (nativeKey) entry.nativeObserved = true;
+    if (entry.watchingNative && entry.watchingNative !== nativeKey) entry.watchingNative = '';
+    const observedFinish = entry.watchingNative === nativeKey && ['completed', 'interrupted'].includes(completion.state);
+    const nativeNew = Boolean(nativeKey && (nativeKey !== entry.lastNative && completion.requestAt >= entry.observedSince || observedFinish)
+      && !isNonTaskRequest(completion.request));
     // Establish a baseline on opening a terminal: history alone never starts a billable call.
     if (!entry.lastNative && nativeKey) entry.lastNative = nativeKey;
     if (submission?.id && isNonTaskRequest(submission.request)) entry.lastSubmission = submission.id;
@@ -513,6 +529,7 @@ class TerminalReview extends EventEmitter {
     const adoptingNative = nativeNew && entry.turn && !entry.turn.nativeKey
       && completion.requestAt >= (entry.turn.matchAfter || entry.turn.submittedAt);
     if (newSubmission || nativeNew && !adoptingNative) {
+      entry.watchingNative = '';
       const requested = newSubmission ? submission.request.trim().slice(0, 4000) : completion.request;
       const submittedAt = newSubmission ? Math.min(this.now(), Number(submission.at) || this.now()) : completion.requestAt;
       const currentNative = nativeKey && completion.requestAt >= submittedAt;
@@ -520,6 +537,7 @@ class TerminalReview extends EventEmitter {
       // when its delayed renderer submission arrives.
       const adopted = newSubmission && entry.turn?.nativeKey === nativeKey && currentNative;
       if (newSubmission) entry.lastSubmission = submission.id;
+      if (adopted) entry.turn.submissionId = submission.id;
       if (!adopted) {
         const previous = entry.turn || entry.following;
         const confirmedContinuation = rootKey && entry.roots[rootKey]
@@ -535,6 +553,7 @@ class TerminalReview extends EventEmitter {
           : `${binding}:${currentNative ? nativeKey : submission?.id || nativeKey}`;
         const prior = this.task(entry, taskId);
         entry.turn = { taskId, id: newSubmission ? submission.id : nativeKey,
+          submissionId: newSubmission ? submission.id : (confirmedContinuation || pendingResponse) ? previous?.submissionId || prior?.submissionId || '' : '',
           request: (confirmedContinuation || pendingResponse) ? previous?.request || prior?.request || requested : requested,
           response: (confirmedContinuation || pendingResponse) ? requested : '',
           submittedAt: (confirmedContinuation || pendingResponse) ? previous?.submittedAt || prior?.submittedAt || submittedAt : submittedAt,
@@ -568,7 +587,7 @@ class TerminalReview extends EventEmitter {
         else evidence = completed ? '' : currentTurnEvidence(frame, turn.response || turn.request);
       }
       if (matches || evidence) {
-        const chunk = { taskId: turn.taskId, terminalId: id, request: turn.request,
+        const chunk = { taskId: turn.taskId, terminalId: id, request: turn.request, submissionId: turn.submissionId,
           submittedAt: turn.submittedAt, observedAt: this.now(), lifecycle, text: evidence,
           relatedTaskId: turn.relatedTaskId, relation: turn.relation,
           context: matches ? completion.context : null, updates: matches ? completion.updates : null,
@@ -835,15 +854,21 @@ class TerminalReview extends EventEmitter {
   project(entry) {
     const currentTaskId = entry.turn?.taskId || entry.following?.taskId || '';
     const chunk = entry.latest[currentTaskId] || entry.turn?.latest || entry.active?.chunk || entry.pending[0] || entry.failed;
+    const failed = entry.failed, previous = failed && this.task(entry, failed.taskId);
+    const retained = previous?.analysisId && !previous.recordOnly && !previous.deferred && previous.analysisDepth !== 'deferred' ? previous : null;
+    const retainedLifecycle = retained ? retained.analysisLifecycle || entry.seen[retained.taskId]?.lifecycle || 'unknown' : null;
+    const failure = failed ? { taskId: failed.taskId, evidenceDigest: failed.digest,
+      kind: !retained ? 'initial' : retained.evidenceDigest === failed.digest && retainedLifecycle === failed.lifecycle ? 'reanalysis' : 'updated-evidence',
+      retainedAnalysisId: retained?.analysisId || null, retainedLifecycle } : null;
     entry.projectionRevision = (entry.projectionRevision || 0) + 1;
     return { revision: entry.projectionRevision, terminalPid: JSON.parse(entry.key)[2], creationId: JSON.parse(entry.key)[1], state: entry.state, message: entry.message || '', provider: entry.provider || '', providerPid: entry.providerPid || null,
-      currentTaskId,
+      currentTaskId, failure,
       manual: Boolean(entry.active?.chunk.reanalyze || entry.pending.some(item => item.reanalyze) || entry.failed?.reanalyze),
       phase: entry.active ? entry.active.timings.modelStartedAt ? 'model' : 'evidence' : entry.pending.length ? entry.retryAt > this.now() ? 'backoff' : 'queue' : 'idle',
       retryAt: entry.retryAt || null,
       stale: Boolean(entry.turn || entry.pending.length), startedAt: entry.active?.startedAt || null,
       elapsedSeconds: entry.active ? Math.max(0, Math.floor((this.now() - entry.active.startedAt) / 1000)) : 0,
-      preview: chunk ? { taskId: chunk.taskId, request: chunk.request, lifecycle: chunk.lifecycle, facts: observedFacts(chunk, entry.locale) } : null,
+      preview: chunk ? { taskId: chunk.taskId, submissionId: chunk.submissionId || '', request: chunk.request, lifecycle: chunk.lifecycle, facts: observedFacts(chunk, entry.locale) } : null,
       result: entry.result };
   }
 

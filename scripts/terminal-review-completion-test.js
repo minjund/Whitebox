@@ -137,6 +137,28 @@ module.exports = async function completionChecks() {
     assert.equal((await codexReader.observe(codex)).state, 'working');
     const ambiguous = new TerminalReviewCompletion({ codexHome, platform: 'darwin', execute: async () => ({ stdout: `n${codexLog}\nn${codexLog.replace('test', 'other')}\n` }) });
     assert.equal((await ambiguous.observe(codex)).available, false, 'ambiguous open logs cannot bind another conversation');
+    // Reconnecting while an owned request is running must observe its future
+    // completion, without billing for already completed conversation history.
+    for (const provider of ['claude', 'codex']) {
+      let observed = { available: true, state: 'working', conversationId: 'reconnected', requestId: 'running-before-open', requestAt: start + 100,
+        request: '설명해줘', partialEvidence: 'USER: 설명해줘\\nASSISTANT: 내용을 확인하는 중입니다.' };
+      let reviews = 0;
+      const reconnectOptions = { now: () => start + 5000, file: path.join(root, `reconnect-${provider}.json`),
+        manager: () => ({ get: () => ({ id: 'reconnected', creationId: 'epoch', pid: 100, status: 'running' }) }),
+        monitor: { scan: () => ({ available: true, processes: [{ provider, pid: 101, ancestorPids: [100] }] }) },
+        completion: { observe: async () => observed }, runner: { generateTerminalReview: async () => {
+          reviews++; return JSON.stringify({ tasks: [{ requestQuote: '설명해줘', evidenceQuote: '결과를 설명합니다', actual: '설명을 제공했습니다.' }] });
+        } } };
+      let reconnected = new TerminalReview(reconnectOptions);
+      const poll = () => reconnected.capture({ id: 'reconnected', creationId: 'epoch', text: '' });
+      await poll(); assert.equal(reviews, 0, 'reconnect does not analyze unfinished history');
+      reconnected = new TerminalReview(reconnectOptions);
+      await poll(); assert.equal(reviews, 0, 'restoring an observed in-flight turn does not analyze it early');
+      observed = { ...observed, state: 'completed', evidence: 'USER: 설명해줘\\nASSISTANT: 결과를 설명합니다. 새 결과의 구체적인 동작과 의미를 설명합니다.' };
+      await poll(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(reviews, 1, provider + ' completion after reconnect starts analysis');
+      await poll(); assert.equal(reviews, 1, 'reconnected completion is analyzed exactly once');
+    }
     console.log('PASS native Claude/Codex completion: exact process/turn, no footer, IME echo, partial UTF-8, busy/tool/old-answer rejection, single analysis');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 };

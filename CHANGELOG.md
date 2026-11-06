@@ -3,6 +3,15 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.20 - 2026-11-06
+
+- Apply the approved affectUI Summary layout with keyboard-accessible mode controls, readable answer cards, real request/review status, copy/original actions, and a compact sidebar on small windows.
+- Add an optional 2048 game while replies and summaries are prepared. Preserve each terminal's board and score across view changes and restarts without sending game keys to the AI.
+- Deliver queued requests once the preceding reply has been recorded, without waiting indefinitely for model summaries. Match early summaries to late send acknowledgements and retain editable drafts and guarded delivery.
+- Observe completion after reconnecting to an in-flight AI request, and explicitly summarize an existing reply when Summary mode is opened.
+- Clear superseded review failures after a newer successful analysis. Preserve earlier articles and distinguish failed final/additional analysis from a completed prior review, with an explicit retry action.
+- Verify official 2.0.19 installers in addition to all earlier supported Windows and macOS update cohorts.
+
 ## 2.0.19 - 2026-11-06
 
 - Add a Summary mode for running AI terminals: read summarized replies and send follow-up messages to the same session without displaying the terminal. Each terminal remembers its own mode, chat history and draft.

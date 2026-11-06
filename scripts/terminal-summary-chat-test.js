@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { TerminalCollaboration } = require('../src/terminalCollaboration');
+require('./summary-2048-test');
 (async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-summary-delivery-'));
   let now = Date.now(), providerPid = 1100, hasProvider = true, uncertain = false, draft = '', text = '› Ask Codex to do anything\n  GPT-6 · test';

@@ -30,6 +30,18 @@
     return match && validContent(match.content) ? { ...task, content: match.content, contentIssues: [],
       contentGeneratedAt: match.generatedAt, contentUsage: match.usage } : task;
   }
+  function reviewFailure(review) {
+    const failure = review?.state === 'error' && review.failure;
+    const previous = failure && review.result?.tasks?.find(task => task.taskId === failure.taskId
+      && task.analysisId && task.analysisId === failure.retainedAnalysisId && !task.recordOnly && !task.deferred);
+    if (!previous) return null;
+    const partial = failure.retainedLifecycle === 'in-progress';
+    return { ...failure,
+      title: failure.kind === 'reanalysis' ? '다시 분석하지 못했습니다' : partial ? '최종 분석을 완료하지 못했습니다' : '추가 분석을 완료하지 못했습니다',
+      description: failure.kind === 'reanalysis' ? '기존 분석은 보존했습니다. 다시 분석하는 과정에서 오류가 발생했습니다.'
+        : partial ? '작업 중 작성된 분석은 보존했습니다. 최종 답변은 다시 검토해 주세요.'
+          : '이전 분석은 보존했습니다. 이후 갱신된 기록은 다시 검토해 주세요.' };
+  }
   function renderContent(content, { t, esc }, recordedAt) {
     const bases = new Set([content.answer, ...content.details, ...content.deliverables, ...(content.background || []), ...(content.nextAction ? [content.nextAction] : [])].map(item => item.basis));
     const mixed = bases.has('observed') && bases.has('reported');
@@ -92,5 +104,5 @@
       ${alternatives}
     </section>`;
   }
-  return { render, renderContent, applyHistoryContent, displayTitle };
+  return { render, renderContent, applyHistoryContent, displayTitle, reviewFailure };
 });

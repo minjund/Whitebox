@@ -45,7 +45,7 @@ app.whenReady().then(async () => {
   let contentFixture = null;
   let recordOnly = false, deferred = false, reviewSchema = 3, lifecycle = 'completed', unverified = [], startedAt = null;
   let toolEvidence = { source: 'session', items: Array.from({ length: 3 }, () => ({ name: 'WebFetch', status: 'returned', target: 'https://arxiv.org/html/2610.28380v1', excerpt: 'Received 395.7KB (200 OK)' })), omitted: 0 };
-  let reviewState, suppressReview = false, rejectRestoreIdentity = false, missingSessionId = '', rejectedCloseId = '', rejectedStopId = '', stopCalls = 0, collaborationFailure = '';
+  let reviewState, retainedReviewFailure = false, suppressReview = false, rejectRestoreIdentity = false, missingSessionId = '', rejectedCloseId = '', rejectedStopId = '', stopCalls = 0, collaborationFailure = '';
   const otherProject = path.join(profile, 'other-project');
   fs.mkdirSync(otherProject);
   let workspaces = [{ name: 'Whitebox test', path: profile }, { name: 'Other project', path: otherProject }];
@@ -143,7 +143,7 @@ app.whenReady().then(async () => {
       captured.set(payload.id, payload.text);
       const observedText = payload.text.replace(/\s+/g, '');
       const marker = observedText.includes('ONE_ONLY') ? 'ONE_ONLY' : observedText.includes('TWO_ONLY') ? 'TWO_ONLY' : observedText.includes('TRASH_KEPT') ? 'TRASH_KEPT' : '';
-      return { startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, analysisGate: gateFixture, ...(legacyTyped ? { typedAnalysis: { findings: [{ text: 'JEV_OLD_CONCLUSION_SENTINEL' }], probabilities: { fulfilled: .987654321 } } } : {}), recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, content: contentFixture, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
+      return { failure: retainedReviewFailure ? { taskId: `${marker}:${analysisStamp}`, retainedAnalysisId: `${marker}:${analysisStamp}:${analysisRevision}`, retainedLifecycle: 'in-progress', kind: 'updated-evidence' } : null, startedAt, retryAt:reviewRetryAt, preview: startedAt ? { request: marker, lifecycle: 'in-progress', facts: ['AI의 현재 보고: 결과 표시를 수정했습니다.'] } : null, currentTaskId: reviewState ? 'new-pending-task' : `${marker}:${analysisStamp}`, elapsedSeconds: 17, state: reviewState || (marker ? 'ready' : 'shell'), provider: 'claude', providerPid: manager.get(payload.id)?.pid + 1, result: marker && !suppressReview ? { observedAt: '2026-10-21T12:00:00Z', usage: reportedUsage, analysisProvider: payload.analysis?.provider === 'claude' ? 'claude' : 'codex', analysisModel: payload.analysis?.models?.codex || '', tasks: [{ taskId: `${marker}:${analysisStamp}`, analysisId: `${marker}:${analysisStamp}:${analysisRevision}`, analysisUsage: reportedUsage, analysisGate: gateFixture, ...(legacyTyped ? { typedAnalysis: { findings: [{ text: 'JEV_OLD_CONCLUSION_SENTINEL' }], probabilities: { fulfilled: .987654321 } } } : {}), recordOnly, deferred, summary: requestSummary && marker === 'ONE_ONLY' ? `${requestSummary} ${marker}` : marker, reviewSchema, lifecycle, unverified, content: contentFixture, why: '요청한 결과를 이해할 수 있도록 변경했습니다.', toolEvidence, analysisProvider: recordOnly ? 'local' : 'codex', reviewEvidence: marker, request: deferred ? 'DEFERRED_USER_MESSAGE' : marker, requestQuote: marker, actual: `${marker} 출력`, evidenceQuote: marker, alignment: 'unknown', explanation: '테스트용 검토 데이터', understanding: '실제 PTY 출력 격리 확인', verification: '터미널 출력 관찰', remaining: '화면에서 확인 필요', impact: '다른 화면의 영향 미확인', nextStep: '방금 수정한 문구가 화면에 보이는지 확인해줘.' }] } : null };
     });
     win = new BrowserWindow({ width: 1450, height: 900, show: false, webPreferences: { preload: path.join(root, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     win.setContentSize(1450, 900);
@@ -240,7 +240,7 @@ app.whenReady().then(async () => {
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--summary-only')) {
-      await require('./tests/terminal-summary-mode').run({ evaluate, waitFor, manager, win, fixture: summaryFixture, profile });
+      await require('./tests/terminal-summary-mode').run({ evaluate, waitFor, manager, win, fixture: summaryFixture, profile, clipboard: () => clipboardText });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--hide-only')) {
@@ -1228,7 +1228,16 @@ app.whenReady().then(async () => {
     await evaluate('WhiteboxWorkspace.captureReviews()');
     assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석중/u);
     assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
+    retainedReviewFailure = true;
+    await forceCapture();
+    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /최종 분석을 완료하지 못했습니다/u);
+    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^검토를 완료하지 못했습니다$/u);
+    assert.match(await evaluate('document.querySelector("[data-retained-analysis]").textContent'), /작업 중 작성된 분석은 보존/u);
+    assert(await evaluate('Boolean(document.querySelector("#wbReviewContent .wb-task"))'), 'the retained analysis article stays readable');
+    retainedReviewFailure = false;
     reviewState = undefined;
+    await forceCapture();
+    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true, 'success clears the previous failure indicator');
     await evaluate("document.querySelector('[data-add-panel-terminal]').click()");
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length === 3 && document.querySelectorAll("#wbCanvas canvas").length === 3', 'default new terminal joins current panel and finishes connecting');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
