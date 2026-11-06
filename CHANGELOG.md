@@ -5,6 +5,7 @@ GitHub release notes remain the authoritative version history.
 
 ## 2.0.22 - 2026-11-06
 
+- Preserve live startup terminal identity when an early PID event is followed by a stale metadata response, while keeping real stop events authoritative.
 - Add “Send anyway” to queued Summary requests, delivering once to the same AI terminal without waiting for reply capture or model analysis.
 - Release queued requests automatically after a completed reply even when old working indicators remain in terminal scrollback or model analysis is still running.
 - Fix summary progress, historical reply ordering, archived delivery lookup, interrupted states and startup trust menus appearing as user requests.

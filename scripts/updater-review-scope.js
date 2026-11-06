@@ -9,7 +9,7 @@ const SENSITIVE_PATH_PATTERNS = Object.freeze([
   /^src\/(?:update[^/]*|macUpdateHelper|attentionHookServer|diagnostics)\.js$/,
   /^src\/(?:brandMigration|profileIdentity|interimProfileGuard|interimProfileGuardProcess)\.js$/,
   /^src\/ipc(?:\/|$)/,
-  /^renderer\/(?:app[^/]*\.js|index\.html|i18n-messages\.js)$/,
+  /^renderer\/(?:app[^/]*\.js|terminal-workspace\.js|index\.html|i18n-messages\.js)$/,
   /^scripts\/(?:after-pack|windows-artifact-check|windows-[^/]*update[^/]*|mac-update-integration-test|package-content-check|check-legacy-update-channel|check-update-compatibility-cohorts|legacy-update-bridge\.config|legacy-update-compatibility|release-asset-contract|updater-review-scope)\.js$/,
   /^scripts\/update-compatibility-cohorts\.json$/,
   /^scripts\/(?:mac-packaged-update-button|mac-packaged-brand-identity|mac-update-cohort-check|packaged-update-button|update-restart-regression|electron-asar-cleanup-check)\.js$/,

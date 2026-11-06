@@ -26,6 +26,7 @@ app.whenReady().then(async () => {
   let livePanelControl, suppressedRemovalId = '';
   let heldReplayId = '', releaseHeldReplay;
   const terminalGetReads = [];
+  const startupPidRace = { enabled:process.argv.includes('--startup-reconnect-only'), id:'', live:null, stale:null, delivered:false, hold:true };
   let heldPauseReviewId = '', releaseHeldPauseReview;
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
@@ -110,7 +111,18 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:create', async (_event, options) => {
       if (delayCreation) await new Promise(resolve => { releaseCreation = resolve; });
       if (rejectCreation) throw new Error('fixture creation failure');
-      return providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
+      const created = await providerAdapter.createWorkspaceTerminal(manager, options, adapterDirectory);
+      if (!startupPidRace.enabled || startupPidRace.id) return created;
+      startupPidRace.id = created.id;
+      const until = Date.now() + 10000;
+      while (!(manager.get(created.id, false)?.pid > 0)) {
+        if (Date.now() >= until) throw new Error('Startup PID fixture requires a real live PTY');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      startupPidRace.live = manager.get(created.id, false);
+      startupPidRace.stale = { ...startupPidRace.live, pid:null, outputSequence:0,
+        updatedAt:new Date(Date.parse(startupPidRace.live.updatedAt) - 1).toISOString() };
+      return startupPidRace.stale;
     });
     ipcMain.handle('terminals:stop', (_event, id) => { stopCalls++; if (id === rejectedStopId) throw new Error('fixture stop failure'); return manager.stop(id); });
     ipcMain.removeHandler('terminals:close');
@@ -120,6 +132,16 @@ app.whenReady().then(async () => {
       const full = includeReplay !== false;
       terminalGetReads.push({ id, full });
       const session = manager.get(id, full);
+      if (startupPidRace.enabled && id === startupPidRace.id && !full && !startupPidRace.delivered) {
+        startupPidRace.delivered = true;
+        win.webContents.send('terminals:state', { change:'pid-fixture-ready', session:startupPidRace.live, sessions:[startupPidRace.live] });
+        await win.webContents.executeJavaScript(`new Promise((resolve,reject) => {
+          const until=performance.now()+3000;
+          const poll=() => window.__startupPidFixtureReady ? resolve(true) : performance.now()>until ? reject(Error('PID state fixture event was not delivered')) : setTimeout(poll,0);
+          poll();
+        })`, true);
+        return startupPidRace.stale;
+      }
       if (id === heldReplayId && full) await new Promise(resolve => { releaseHeldReplay = resolve; });
       if (id === missingSessionId) return null;
       return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session;
@@ -149,7 +171,13 @@ app.whenReady().then(async () => {
     win.setContentSize(1450, 900);
     win.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
     manager.on('data', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:data', payload); });
-    manager.on('state', payload => { if (!win.isDestroyed() && !(payload.change === 'removed' && payload.session?.id === suppressedRemovalId)) win.webContents.send('terminals:state', payload); });
+    manager.on('state', payload => { if (startupPidRace.enabled && startupPidRace.hold && payload.session?.id === startupPidRace.id) return; if (!win.isDestroyed() && !(payload.change === 'removed' && payload.session?.id === suppressedRemovalId)) win.webContents.send('terminals:state', payload); });
+    if (startupPidRace.enabled) win.webContents.on('dom-ready', () => {
+      win.webContents.executeJavaScript(`window.whitebox.onTerminalState(value => {
+        if(value.change==='pid-fixture-ready') window.__startupPidFixtureReady=true;
+        if(value.change==='pid-fixture-stale') window.__startupPidFixtureStale=true;
+      }); true`).catch(error => errors.push(String(error)));
+    });
     const evaluate = async expression => {
       try { return await win.webContents.executeJavaScript(expression, true); }
       catch (error) { throw new Error(`${expression}: ${error.message}; console=${JSON.stringify(errors)}`); }
@@ -244,7 +272,7 @@ app.whenReady().then(async () => {
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--startup-reconnect-only')) {
-      await require('./tests/workspace-startup-reconnect')({ evaluate, waitFor, win, manager, unavailable: value => { inventoryUnavailable = value; }, counters: () => ({ ready: rendererReadyCalls, reads: initialInventoryReads }) });
+      await require('./tests/workspace-startup-reconnect')({ evaluate, waitFor, win, manager, pidRace:startupPidRace, unavailable: value => { inventoryUnavailable = value; }, counters: () => ({ ready: rendererReadyCalls, reads: initialInventoryReads }) });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--summary-only')) {

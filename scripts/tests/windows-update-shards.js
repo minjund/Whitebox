@@ -41,7 +41,7 @@ function registerWindowsUpdateShardTests({ test, temp }) {
       p => { p.shards.pop(); }, p => { p.cohorts[0].sha256 = 'd'.repeat(64); },
       p => { p.manifest.previousFixed.sha256 = 'e'.repeat(64); },
     ]) { const changed = clone(plan); mutate(changed); assert.throws(() => validatePlan(changed, context)); }
-    for (const file of ['scripts/windows-update-shards.js', 'scripts/tests/windows-update-shards.js', '.github/workflows/windows-update-shards.yml', 'docs/UPDATE-SHARDING.md']) {
+    for (const file of ['scripts/windows-update-shards.js', 'scripts/tests/windows-update-shards.js', '.github/workflows/windows-update-shards.yml', 'docs/UPDATE-SHARDING.md', 'renderer/terminal-workspace.js']) {
       assert.equal(classifyNameStatus('M\t' + file).sensitive, true, file);
     }
   });
