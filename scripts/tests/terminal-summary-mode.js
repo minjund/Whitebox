@@ -77,6 +77,8 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   assert(await evaluate('document.querySelector("[data-workspace-mode=summary]").disabled'), 'plain shell has no summary mode');
   await fixture.launch(id, waitFor); await capture();
   await require('./summary-chat-races').run(evaluate);
+  await require('./summary-state-regressions').run(evaluate);
+  await require('./summary-game').run(evaluate);
   await waitFor('!document.querySelector("[data-workspace-mode=summary]").disabled', 'AI enables summary mode');
   const before = manager.get(id);
   await evaluate('document.querySelector("#wbAutoReview").checked=false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
@@ -86,6 +88,8 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
   await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', 'keyboard mode toggle');
   assert(await summary());
+  assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'always', 'game setting defaults to always');
+  assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden && !document.querySelector(".wb-2048-panel").hidden'), 'game starts open before any summary request');
   assert(await evaluate('document.querySelector("#wbSummarySend").classList.contains("ui-buttonc")'), 'actual affectUI send button mounted');
   assert(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).display === "none" && getComputedStyle(document.querySelector("#wbReview")).display === "none"'));
   await send('한글 SUMMARY_HOLD');
@@ -139,8 +143,8 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(target)}).includes('esc to interrupt')`, `${provider} working`);
     await waitFor('!document.querySelector("#wbSummaryGame").hidden', 'game invitation while summarizing');
     if (provider === 'claude') {
-      await click('[data-game-open]');
-      assert.equal(await evaluate('document.activeElement.classList.contains("wb-2048-board")'), true);
+      assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), false, '2048 is open by default');
+      await evaluate('document.querySelector(".wb-2048-board").focus()');
       const cells = await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent)');
       assert.equal(cells.filter(Boolean).length, 2);
       await evaluate('document.querySelector(".wb-2048-board").dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true,cancelable:true}))');
@@ -157,6 +161,24 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
       await waitFor('document.querySelector("#wbSummaryGame").dataset.waiting === "false"', 'completed summary updates open game');
     }
   }
+  const priorReply = [...fixture.controller.jobs.values()].filter(job => job.targetId === id && job.state === 'completed').at(-1);
+  const historyIds = Array.from({ length: 80 }, () => require('node:crypto').randomUUID());
+  for (const jobId of historyIds) fixture.controller.jobs.set(jobId, { id: jobId, operation: 'fixture-history', sourceId: other, targetId: other, state: 'completed' });
+  assert(![...fixture.controller.jobs.values()].slice(-80).some(job => job.id === priorReply.id));
+  await send('ARCHIVED_WINDOW_RECOVERY');
+  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_REPLY ARCHIVED_WINDOW_RECOVERY')`, 'next real PTY request after 80 other-panel jobs');
+  assert(fixture.capturedReplies.has(priorReply.id), 'exact archived completion is captured before the next write');
+  for (const jobId of historyIds) fixture.controller.jobs.delete(jobId);
+  await capture();
+  const gameBeforeSettings = await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()');
+  await click('[data-action=settings]'); await click('[data-settings-section=analysis]');
+  await evaluate('document.querySelector("#wbSummaryGameVisibility").value="summarizing"; document.querySelector("#wbSummaryGameVisibility").dispatchEvent(new Event("change"))');
+  assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'summarizing-only setting hides completed game');
+  fixture.setDelayed(true); await capture();
+  assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden'), 'summarizing-only setting reveals active analysis');
+  fixture.setDelayed(false); await capture();
+  assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'summarizing-only setting hides again after analysis');
+  await evaluate('document.querySelector("#wbSettings").close()');
   await evaluate('document.querySelector("#wbSummaryInput").value="draft one"; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
   await click(`.wb-instance[data-instance="${other}"]`);
   await evaluate('document.querySelector("#wbSummaryInput").value="draft two"; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
@@ -170,6 +192,11 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   await evaluate('WhiteboxI18n.setLocale("ko")');
   await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload summary chat'); await capture();
   await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', 'mode restored');
+  assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'summarizing', 'visibility setting survives reload');
+  assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'reload respects summarizing-only setting');
+  assert.equal(await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()'), gameBeforeSettings, 'setting and reload preserve the board');
+  await evaluate('document.querySelector("#wbSummaryGameVisibility").value="always"; document.querySelector("#wbSummaryGameVisibility").dispatchEvent(new Event("change"))');
+  assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden'), 'always setting immediately reopens the game area');
   assert.equal(await evaluate('document.querySelector("#wbSummaryInput").value'), 'draft one');
   assert.equal(manager.get(id).pid, before.pid); assert.equal(manager.get(id).creationId, before.creationId);
   await click(`.wb-instance[data-instance="${other}"]`);

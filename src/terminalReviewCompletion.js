@@ -76,9 +76,9 @@ function applyCodexRow(state, row) {
     Object.assign(state, { continuationParent, aborted: false, awaitingResponse: false, turnId: event.turn_id, request: '', requestId: '', requestAt: at, answer: '', complete: false, tools: [], toolsOmitted: 0, updates: [], updatesOmitted: 0 });
   } else if (row.type === 'response_item' && event.type === 'message' && event.role === 'user' && state.turnId) {
     const request = textContent(event.content);
-    if (request) Object.assign(state, { request, requestId: state.turnId, rootRequestId: state.continuationParent && acknowledgement(request) ? state.continuationParent : state.turnId, requestAt: at, answer: '', complete: false });
+    if (request && !isNonTaskRequest(request)) Object.assign(state, { request, requestId: state.turnId, rootRequestId: state.continuationParent && acknowledgement(request) ? state.continuationParent : state.turnId, requestAt: at, answer: '', complete: false });
   } else if (row.type === 'event_msg' && event.type === 'user_message' && state.turnId) {
-    if (event.message) Object.assign(state, { request: String(event.message), requestId: state.turnId, rootRequestId: state.continuationParent && acknowledgement(event.message) ? state.continuationParent : state.turnId, requestAt: at, complete: false });
+    if (event.message && !isNonTaskRequest(event.message)) Object.assign(state, { request: String(event.message), requestId: state.turnId, rootRequestId: state.continuationParent && acknowledgement(event.message) ? state.continuationParent : state.turnId, requestAt: at, complete: false });
   } else if (row.type === 'event_msg' && event.type === 'task_complete' && event.turn_id === state.turnId && state.requestId) {
     recordAnswer(state, String(event.last_agent_message || ''));
     state.awaitingResponse = state.tools?.some(tool => /^(?:AskUserQuestion|request_user_input)$/u.test(tool.name) && tool.status === 'called') || /(?:승인|허용|진행|선택|어느|어떤).{0,80}[?？]\s*$/u.test(state.answer) || /(?:shall I|may I|which option).{0,80}\?\s*$/iu.test(state.answer);

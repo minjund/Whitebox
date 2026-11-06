@@ -13,7 +13,9 @@ const finishedPattern = {
 
 function isStartupRequest(request) {
   const text = String(request || '').trim();
+  const trustChoice = '(?:[❯›>]\\s*)?(?:[1-3][.)]\\s*)?(?:Trust(?: (?:once|all|this (?:folder|project|directory)))? and continue|Continue without trusting(?:\\s*\\(hooks won[\u0027\u2019]t run\\))?)';
   return /^(?:Ask Codex to do anything|Try ".*")[.…]*$/u.test(text)
+    || new RegExp(`^(?:${trustChoice})(?:\\s+${trustChoice})*$`, 'iu').test(text)
     || /^(?:Yes, I trust this folder|No, exit)$/iu.test(text)
     || /^(?:\S*[/\\])?(?:claude|codex)(?:\.exe)?(?:\s+(?:--?\S+|resume\b|continue\b)[\s\S]*)?$/iu.test(text)
     || /^\/(?:clear|help|mcp|model|status|config|resume|exit|quit|login|logout|reload-skills|theme|permissions)(?:\s|$)/iu.test(text)

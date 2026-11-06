@@ -862,13 +862,13 @@ class TerminalReview extends EventEmitter {
       retainedAnalysisId: retained?.analysisId || null, retainedLifecycle } : null;
     entry.projectionRevision = (entry.projectionRevision || 0) + 1;
     return { revision: entry.projectionRevision, terminalPid: JSON.parse(entry.key)[2], creationId: JSON.parse(entry.key)[1], state: entry.state, message: entry.message || '', provider: entry.provider || '', providerPid: entry.providerPid || null,
-      currentTaskId, failure,
+      currentTaskId, analysisTaskId: entry.active?.chunk.taskId || entry.pending[0]?.taskId || '', failure,
       manual: Boolean(entry.active?.chunk.reanalyze || entry.pending.some(item => item.reanalyze) || entry.failed?.reanalyze),
       phase: entry.active ? entry.active.timings.modelStartedAt ? 'model' : 'evidence' : entry.pending.length ? entry.retryAt > this.now() ? 'backoff' : 'queue' : 'idle',
       retryAt: entry.retryAt || null,
       stale: Boolean(entry.turn || entry.pending.length), startedAt: entry.active?.startedAt || null,
       elapsedSeconds: entry.active ? Math.max(0, Math.floor((this.now() - entry.active.startedAt) / 1000)) : 0,
-      preview: chunk ? { taskId: chunk.taskId, submissionId: chunk.submissionId || '', request: chunk.request, lifecycle: chunk.lifecycle, facts: observedFacts(chunk, entry.locale) } : null,
+      preview: chunk ? { taskId: chunk.taskId, submissionId: chunk.submissionId || '', submittedAt: chunk.submittedAt, request: chunk.request, lifecycle: chunk.lifecycle, facts: observedFacts(chunk, entry.locale) } : null,
       result: entry.result };
   }
 

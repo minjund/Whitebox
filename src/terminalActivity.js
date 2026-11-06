@@ -6,6 +6,7 @@ const { posixProcessRows, providerFromPosixProcess, utilityProcess } = require('
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { conversationBackground, shellBackground } = require('./terminalBackground');
 const { detectPendingPrompt } = require('../renderer/terminal-prompt');
+const { isStartupRequest } = require('./terminalReviewTurns');
 const executeFile = promisify(execFile);
 
 // Presentation only: these observations never authorize input or declare a task
@@ -14,6 +15,8 @@ function providerActivity({ text = '', native = {} } = {}) {
   const lines = String(text).trimEnd().split('\n');
   const tail = lines.slice(-20);
   const screen = tail.join('\n');
+  const trustChoice = tail.findLastIndex(line => /^\s*[❯›>]?\s*[1-3][.)]\s*\S/u.test(line) && isStartupRequest(line));
+  if (trustChoice >= 0 && !tail.slice(trustChoice + 1).some(line => /^\s*[❯›]/u.test(line))) return 'waiting';
   if (detectPendingPrompt(screen)
     || /(?:would you like to|do you want to|allow this|waiting for (?:approval|permission)|press (?:enter|return) to (?:continue|confirm))/iu.test(screen)
       && tail.some(line => /^\s*[❯›]?\s*\d+[.)]\s*(?:Yes|No|Allow|Deny|Proceed)\b/iu.test(line))) return 'waiting';

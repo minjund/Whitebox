@@ -54,6 +54,34 @@ require('./summary-2048-test');
     await assert.rejects(c.summaryRespond({ ...approval, fingerprint: 'old' }), /승인 요청/); assert.equal(responses.length, 0);
     assert.equal((await c.summaryRespond(approval)).ok, true); assert.equal(responses[0].key, 'y');
     await assert.rejects(c.summaryRespond({ ...approval, choiceId: 'always' }), /이미 응답/); assert.equal(responses.length, 1);
+    const old = request('old completed reply');
+    c.jobs.set(old.id, { id: old.id, operation: 'summary', sourceId: session.id, targetId: session.id, groupId: 'panel',
+      expectedCreationId: session.creationId, expectedProviderPid: providerPid, expectedProvider: 'codex', state: 'completed', answer: 'old result' });
+    for (let i = 0; i < 80; i++) { const id = randomUUID(); c.jobs.set(id, { id, operation: 'summary', sourceId: session.id, targetId: session.id, state: 'completed' }); }
+    text = '› Ask Codex to do anything'; session.outputSequence++;
+    const roster = { groups: [{ id: 'panel', cwd: directory, members: [session] }], frames: [{ id: session.id, creationId: session.creationId, outputSequence: session.outputSequence, text }] };
+    assert(!(await c.sync(roster)).jobs.some(job => job.id === old.id), 'old reply is outside the recent display window');
+    assert.equal((await c.sync({ ...roster, summaryJobs: [old] })).jobs.find(job => job.id === old.id).answer, 'old result', 'exact owned job lookup survives 80 newer jobs');
+    const missing = request('unknown delivery');
+    assert.equal((await c.sync({ ...roster, summaryJobs: [missing] })).jobs.find(job => job.id === missing.id).state, 'interrupted', 'missing delivery is explicit, never fabricated completion');
+    assert.equal((await c.sync({ ...roster, summaryJobs: [{ ...old, targetId: 'foreign' }] })).jobs.some(job => job.id === old.id), false, 'foreign terminal cannot read an archived reply');
+    assert.equal((await c.sync({ ...roster, summaryJobs: [{ ...old, targetProviderPid: providerPid + 1 }] })).jobs.find(job => job.id === old.id).answer, undefined, 'wrong provider identity cannot expose the old reply');
+    const monitor = c.monitor; c.monitor = { scan: () => ({ available: false, processes: [] }) };
+    assert(!(await c.sync({ ...roster, summaryJobs: [old] })).jobs.some(job => job.id === old.id && job.state === 'interrupted'), 'unavailable process observation cannot declare a replaced provider');
+    c.monitor = monitor;
+    assert.equal(writes.length, writeCount, 'status lookups never send or replay input');
+    text = '› \n• Working (esc to interrupt)'; session.outputSequence++; await sync();
+    const immediate = { ...request('send while busy'), sendNow: true };
+    c.completion = { observe: async () => ({ available: true, state: 'working', requestId: 'busy' }) };
+    assert.equal((await c.summarySend(immediate)).ok, true, 'explicit send bypasses busy readiness and running job queue');
+    assert.equal(writes.at(-1).data, '\x1b[200~send while busy\x1b[201~\r');
+    const immediateCount = writes.length;
+    await c.summarySend(immediate); assert.equal(writes.length, immediateCount, 'immediate send remains idempotent');
+    draft = 'terminal draft'; await sync();
+    assert.deepEqual(await c.summarySend({ ...request(), sendNow: true }), { deferred: true }, 'send anyway preserves an existing terminal draft');
+    draft = ''; text = "Would you like to make the following edits?\n1. Yes, proceed (y)\n2. Yes, and don't ask again (a)\n3. No, and tell Codex what to do differently (esc)"; session.outputSequence++; await sync();
+    assert.deepEqual(await c.summarySend({ ...request(), sendNow: true }), { deferred: true }, 'send anyway cannot type a task into an approval menu');
+    assert.equal(writes.length, immediateCount);
     console.log('PASS summary chat guarded delivery: busy/draft queue, Unicode, exact AI/session, foreign/shell rejection, no duplicate/restart/unknown replay, current approval and duplicate-choice guard');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

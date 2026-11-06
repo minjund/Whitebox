@@ -6,6 +6,9 @@ const { TerminalActivity, providerActivity } = require('../src/terminalActivity'
 (async () => {
   const completed = { available: true, state: 'completed', requestId: 'one' };
   const working = { available: true, state: 'working', requestId: 'two' };
+  const trust = "› 1. Trust and continue\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)";
+  assert.equal(providerActivity({ text: trust }), 'waiting', 'startup trust menu needs a terminal response, not AI work');
+  assert.equal(providerActivity({ text: trust + '\n› ', native: completed }), 'idle', 'an old trust menu cannot survive the next input prompt');
   for (const provider of ['claude', 'codex']) {
     const prompt = provider === 'claude' ? '❯ ' : '› ';
     assert.equal(providerActivity({ text: prompt }), 'idle');

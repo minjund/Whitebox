@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
-const { start, move, over, restore } = require('../renderer/summary-2048');
+const { start, move, step, over, restore } = require('../renderer/summary-2048');
 const state = values => ({ cells: [...values, ...Array(16 - values.length).fill(0)], score: 0, best: 0, open: true });
 const initial = start(100, () => 0);
 assert.equal(initial.cells.filter(Boolean).length, 2);
@@ -22,4 +22,8 @@ assert.equal(move(state([1024,1024]), 'left', () => 0).cells[0], 2048);
 assert.deepEqual(restore(JSON.parse(JSON.stringify(merged))), merged);
 assert.equal(restore({ ...merged, cells: Array(16).fill(3) }), null);
 assert.equal(restore({ ...merged, score: -1 }), null);
+const trace = step(state([2, 2, 2, 2]), 'left', () => 0);
+assert.deepEqual(trace.merged, [0, 1]); assert.equal(trace.spawned, 2); assert.equal(trace.gain, 8);
+assert.deepEqual(trace.motions.map(({ from, to }) => [from, to]), [[0, 0], [1, 0], [2, 1], [3, 1]], 'each original tile animates to its actual destination');
+assert.deepEqual(step(state([2]), 'left', () => 0).motions, [], 'no-op moves have no fake slide or spawn');
 console.log('PASS 2048: four directions, single merge, scoring/best, no-op/no spawn, game over, 2048 and validated persistence');

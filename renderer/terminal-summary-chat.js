@@ -15,7 +15,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const notice = root.querySelector('#wbSummaryNotice');
   const jobsById = new Map();
   const game = window.Whitebox2048.createView({ root: root.querySelector('#wbSummaryGame'), t, esc,
-    read: () => record(context.activeId()), save: () => context.save() });
+    read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always' });
   const identity = member => ({ targetCreationId: member.creationId, targetProviderPid: member.providerPid, targetProvider: member.provider });
   function control(label, attributes, disabled = false, variant = 'ghost', translate = true) {
     return `<span data-summary-control data-variant="${variant}"><button type="button" ${attributes} ${disabled ? 'disabled' : ''}>${esc(translate ? t(label) : label)}</button></span>`;
@@ -66,8 +66,11 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     return value;
   }
   const taskKey = task => String(task.taskId || task.analysisId || `${task.observedAt}:${task.request}`);
-  function tasksFor(id) { return context.tasks(id).filter(task => task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred'); }
+  const nonTask = request => window.WhiteboxTerminalReviewTurns?.isNonTaskRequest(request);
+  function tasksFor(id) { return context.tasks(id).filter(task => !nonTask(task.request)
+    && (task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred')); }
   function mergeAnswers(value) {
+    value.messages = value.messages.filter(message => !nonTask(message.role === 'answer' ? message.task?.request : message.text));
     for (const task of tasksFor(value.id)) {
       const key = taskKey(task);
       const previous = value.messages.find(message => message.role === 'answer' && message.key === key);
@@ -87,10 +90,15 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         }
         continue;
       }
-      if (!pending && task.request) value.messages.push({ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key });
       const answer = { role: 'answer', id: `answer:${key}`, key, task };
       if (pending) value.messages.splice(value.messages.indexOf(pending) + 1, 0, answer);
-      else value.messages.push(answer);
+      else {
+        const at = Number(task.submittedAt) || 0;
+        const before = at ? value.messages.findIndex(message => message.role === 'user' && (message.sentAt || message.at || 0) > at) : -1;
+        const request = task.request ? [{ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key,
+          at: at || Date.parse(task.observedAt) || 0 }] : [];
+        value.messages.splice(before < 0 ? value.messages.length : before, 0, ...request, answer);
+      }
     }
     value.messages = value.messages.slice(-100);
   }
@@ -141,7 +149,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     context.refresh().then(flush).catch(error => { notice.textContent = String(error.message || error); });
   });
   root.querySelector('#wbSummary').addEventListener('click', event => {
-    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry]');
+    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-send-now], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry]');
     if (!button) return;
     if (button.hasAttribute('data-summary-retry')) {
       if (retryBusy || !context.startSummary) return;
@@ -159,8 +167,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (button.hasAttribute('data-summary-terminal')) { setMode('terminal'); context.reveal(context.activeId()); return; }
     if (button.dataset.summaryChoice) { respond(button.dataset.summaryChoice).catch(error => { notice.textContent = String(error.message || error); }); return; }
     const value = record(context.activeId());
-    const message = value?.messages.find(item => item.id === (button.dataset.summaryEdit || button.dataset.summaryCancel));
+    const message = value?.messages.find(item => item.id === (button.dataset.summaryEdit || button.dataset.summaryCancel || button.dataset.summarySendNow));
     if (!message || message.state !== 'queued') return;
+    if (button.dataset.summarySendNow) {
+      sendNow(value, message).catch(error => { notice.textContent = String(error.message || error); });
+      return;
+    }
     if (button.dataset.summaryEdit) {
       if (value.draft) return;
       value.draft = message.text; input.value = value.draft; input.focus();
@@ -185,6 +197,33 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       if (!result?.ok || result.requiresText) { setMode('terminal'); context.reveal(id); }
       await context.refresh();
     } finally { approvalBusy = false; render(); }
+  }
+  async function deliver(value, message, sendNow = false) {
+    const result = await api.terminalCollaboration({ operation: 'summary-send', id: message.id, groupId: context.groupId(value.id),
+      targetId: value.id, message: message.text, targetCreationId: message.targetCreationId,
+      targetProviderPid: message.targetProviderPid, targetProvider: message.targetProvider, sendNow });
+    if (result?.deferred) {
+      message.state = 'queued';
+      if (sendNow) notice.textContent = t('터미널의 입력 상태를 확인한 뒤 다시 전송해 주세요.');
+    } else if (result?.ok && ['running', 'completed'].includes(result.job?.state)) {
+      message.state = 'sent'; message.sentAt = result.job.sentAt; context.submitted(result.job);
+    } else { message.state = 'interrupted'; message.error = result?.job?.error || t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'); }
+  }
+  async function sendNow(value, message) {
+    // Reserve before refreshing so polling, double clicks and automatic flush
+    // cannot dispatch the same queue item concurrently.
+    message.state = 'sending'; context.save(); render();
+    try {
+      await context.refresh();
+      const member = context.member(value.id);
+      if (!eligible(value.id) || member.creationId !== message.targetCreationId
+        || member.providerPid !== message.targetProviderPid || member.provider !== message.targetProvider) {
+        throw new Error(t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'));
+      }
+      await deliver(value, message, true);
+    } catch (error) {
+      message.state = 'interrupted'; message.error = String(error.message || error);
+    } finally { context.save(); render(); }
   }
   async function flush() {
     if (flushing) return;
@@ -222,13 +261,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         if (!eligible(value.id) || !context.member(value.id)?.ready || message.state !== 'queued') continue;
         message.state = 'sending'; context.save(); render();
         try {
-          const result = await api.terminalCollaboration({ operation: 'summary-send', id: message.id, groupId: context.groupId(value.id),
-            targetId: value.id, message: message.text, targetCreationId: message.targetCreationId,
-            targetProviderPid: message.targetProviderPid, targetProvider: message.targetProvider });
-          if (result?.deferred) { message.state = 'queued'; continue; }
-          if (result?.ok && ['running', 'completed'].includes(result.job?.state)) {
-            message.state = 'sent'; message.sentAt = result.job.sentAt; context.submitted(result.job);
-          } else { message.state = 'interrupted'; message.error = result?.job?.error || t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'); }
+          await deliver(value, message);
         } catch (error) {
           // A bridge error can hide an accepted write. Never automatically retry.
           message.state = 'interrupted'; message.error = String(error.message || error);
@@ -238,21 +271,36 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   }
   function renderProgress(value, member, review, prompt) {
     const failure = window.WhiteboxReviewDecision.reviewFailure(review);
-    const sent = [...value.messages].reverse().find(message => message.role === 'user' && ['sent', 'sending'].includes(message.state));
+    const users = value.messages.filter(message => message.role === 'user' && ['sent', 'sending', 'interrupted'].includes(message.state));
+    // Imported historical requests may arrive later than a user's new send.
+    // Follow submission identity/time, not the last rendered bubble.
+    const outgoing = [...users].reverse().find(message => message.targetCreationId);
+    const preview = review?.preview;
+    const current = preview && (users.find(message => preview.submissionId === message.id || preview.taskId && preview.taskId === message.answerKey)
+      || { id: preview.submissionId || `request:${preview.taskId}`, answerKey: preview.taskId, state: 'sent', at: preview.submittedAt });
+    const sent = outgoing && !(preview?.submittedAt > (outgoing.sentAt || outgoing.at || 0)) ? outgoing
+      : current || outgoing || [...users].sort((a, b) => (a.at || 0) - (b.at || 0)).at(-1);
     const task = value.messages.find(message => message.role === 'answer' && message.key === sent?.answerKey)?.task;
     const job = jobsById.get(sent?.id);
-    const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(review?.state);
-    const waitingForSummary = Boolean(member.ready && value.messages.some(item => item.state === 'sent' && !item.answerKey));
+    const matchesPreview = !preview || !sent || preview.submissionId === sent.id || Boolean(task?.taskId && preview.taskId === task.taskId);
+    const matchesAnalysis = review?.analysisTaskId ? review.analysisTaskId === task?.taskId
+      || matchesPreview && review.analysisTaskId === preview?.taskId : matchesPreview;
     const needsResponse = Boolean(prompt || member.activity?.state === 'waiting');
     const working = member.activity?.state === 'working';
+    const interrupted = sent?.state === 'interrupted' || task?.lifecycle === 'interrupted';
+    const analyzing = !interrupted && matchesAnalysis && review?.state === 'reviewing';
+    const collecting = !interrupted && matchesAnalysis && review?.state === 'collecting';
+    const backoff = collecting && review?.retryAt > Date.now();
+    const awaiting = !interrupted && (matchesPreview && review?.state === 'awaiting-answer'
+      || sent?.state === 'sending' || sent?.state === 'sent' && !task && job?.state !== 'completed');
     const replyDone = !working && (job?.state === 'completed' || task?.lifecycle === 'completed'
-      || review?.preview?.lifecycle === 'completed' && (!sent?.targetCreationId || review.preview.submissionId === sent.id));
+      || matchesPreview && preview?.lifecycle === 'completed');
     const deferred = Boolean(task?.deferred || task?.analysisDepth === 'deferred');
-    const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !pending && !waitingForSummary && !working
+    const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !analyzing && !collecting && !awaiting && !working && !interrupted
       && (!failure || failure.kind === 'reanalysis' && failure.retainedLifecycle === 'completed')
       && !needsResponse && (!task.lifecycle || task.lifecycle === 'completed'));
-    const loading = !needsResponse && (pending || waitingForSummary || working);
-    const label = replyDone || review?.state === 'reviewing' || waitingForSummary ? '요약 중…' : 'AI가 작업 중입니다.';
+    const loading = !needsResponse && !interrupted && (analyzing || working || awaiting);
+    const label = analyzing ? '요약 중…' : working ? 'AI가 작업 중입니다.' : 'AI 답변을 기다리고 있어요';
     $('#wbSummaryWorking').hidden = !loading;
     if (loading) {
       if (t(label) !== thinkingLabel) {
@@ -260,27 +308,29 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         else $('#wbSummaryThinking').textContent = t(label);
         thinkingLabel = t(label);
       }
-      $('#wbSummaryWorkingDescription').textContent = t(replyDone
+      $('#wbSummaryWorkingDescription').textContent = t(analyzing && replyDone
         ? 'AI 답변은 도착했어요. 요청과 결과를 비교해 요약으로 정리하고 있어요.'
         : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
     } else if (thinkingLabel) { ui?.clear?.($('#wbSummaryThinking')); thinkingLabel = ''; }
     let title = '다음 요청을 입력하세요.', description = '같은 AI 세션에서 대화를 이어갑니다.';
     if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; }
     else if (failure) { title = failure.title; description = failure.description; }
+    else if (interrupted) { title = '요청이 중단됐어요'; description = '터미널에서 수행 기록을 확인한 뒤 다음 요청을 이어가세요.'; }
     else if (working) { title = 'AI가 작업 중입니다.'; description = '작업 중 보낸 요청은 전송 대기로 보관합니다.'; }
     else if (summaryDone) { title = '답변과 요약이 도착했어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
+    else if (backoff) { title = '분석 재시도 대기'; description = '사용 한도가 풀리면 분석을 다시 시도합니다.'; }
+    else if (analyzing) { title = replyDone ? '답변은 완료, 요약은 정리 중' : '작업 내용을 분석 중입니다.'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
     else if (replyDone && deferred) { title = '답변 완료 · 분석 대기'; description = '결과를 판단할 구체적인 내용이 아직 부족해요.'; }
-    else if (replyDone) { title = '답변은 완료, 요약은 정리 중'; description = '완료된 답변을 읽기 쉬운 요약으로 정리합니다.'; }
-    else if (review?.state === 'reviewing') { title = '작업 내용을 분석 중입니다.'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
-    else if (pending || sent?.state === 'sent') { title = 'AI 답변을 기다리고 있어요'; description = '같은 AI 세션에서 대화를 이어갑니다.'; }
+    else if (replyDone || collecting) { title = replyDone ? '답변 완료 · 분석 대기' : '분석 대기'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
+    else if (awaiting) { title = 'AI 답변을 기다리고 있어요'; description = '같은 AI 세션에서 대화를 이어갑니다.'; }
     $('#wbSummaryStateTitle').textContent = t(title);
     $('#wbSummaryStateDescription').textContent = t(description);
-    $('#wbSummaryStateTitle').dataset.state = failure ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
-    const replyState = needsResponse ? '응답 필요' : replyDone ? '완료' : working ? '작업 중' : sent ? '대기 중' : '—';
+    $('#wbSummaryStateTitle').dataset.state = failure || interrupted ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
+    const replyState = needsResponse ? '응답 필요' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
     const reviewState = failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
-      : summaryDone ? '완료' : deferred ? '분석 대기' : review?.state === 'reviewing' || loading && replyDone ? '정리 중' : '대기 중';
+      : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing ? '정리 중' : deferred || collecting || replyDone ? '분석 대기' : '대기 중';
     $('#wbSummaryReplyState').textContent = t(replyState);
-    $('#wbSummaryReplyState').dataset.state = replyDone ? 'done' : needsResponse ? 'waiting' : 'working';
+    $('#wbSummaryReplyState').dataset.state = interrupted ? 'warning' : needsResponse ? 'waiting' : replyDone ? 'done' : 'working';
     $('#wbSummaryReviewState').textContent = t(reviewState);
     $('#wbSummaryReviewState').dataset.state = summaryDone ? 'done' : 'working';
     const queueCount = value.messages.filter(message => message.state === 'queued').length;
@@ -295,7 +345,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryNext').hidden = !summaryDone;
     $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
       || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
-    game.render({ waiting: loading, completed: summaryDone });
+    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone });
   }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
@@ -338,7 +388,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       }
       const time = message.sentAt || message.at;
       const timestamp = Number.isFinite(time) ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';
-      return `<article class="wb-summary-user" data-state="${esc(message.state)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
+      return `<article class="wb-summary-user" data-state="${esc(message.state)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
     }).join('');
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;
     const prompt = detectedPrompt(id);
@@ -378,6 +428,11 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   }
   return {
     render, observe, setMode, eligible,
+    pendingJobs: () => [...records.values()].flatMap(value => {
+      const message = value.messages.find(item => item.state === 'sent' && item.targetCreationId && !item.replyCaptured);
+      return message ? [{ id: message.id, targetId: value.id, targetCreationId: message.targetCreationId,
+        targetProviderPid: message.targetProviderPid, targetProvider: message.targetProvider }] : [];
+    }).slice(0, 100),
     needsReview: id => {
       const value = records.get(id);
       if (!value) return false;
@@ -391,7 +446,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         if (!session || item.creationId !== session.creationId) continue;
         const messages = (Array.isArray(item.messages) ? item.messages : []).filter(message => message && typeof message.id === 'string'
           && (message.role === 'user' && typeof message.text === 'string' && message.text.length <= 8000
-          || message.role === 'answer' && message.task && typeof message.task === 'object')).slice(-100);
+          || message.role === 'answer' && message.task && typeof message.task === 'object')
+          && !nonTask(message.role === 'answer' ? message.task.request : message.text)).slice(-100);
         for (const message of messages) if (['queued', 'sending'].includes(message.state)) {
           message.state = 'interrupted'; message.error = t('앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.');
         }
