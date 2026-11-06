@@ -156,10 +156,9 @@ class TerminalCollaboration {
     if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || frame.outputSequence !== live.outputSequence) throw Object.assign(new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.'), { code: 'TERMINAL_FRAME_STALE' });
     return { member, live, child, frame };
   }
-  async send(groupId, id, message, deliveryId, expected = null, submit = true) {
+  async send(groupId, id, message, deliveryId, expected = null, submit = true, immediate = false) {
     const target = await this.target(groupId, id);
     if (expected?.targetCreationId && (expected.targetCreationId !== target.live.creationId || expected.targetProviderPid !== target.child.pid || expected.targetProvider !== target.child.provider)) throw new Error('목록 조회 이후 상대 AI 세션이 바뀌었습니다. list를 다시 조회해 주세요.');
-    const immediate = expected?.sendNow === true;
     if (target.frame.inputDraft || immediate && require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
       || !immediate && !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) throw new Error('상대가 작업 중이거나 입력 중인 글이 있습니다. 입력창이 비어 있고 답변이 끝났을 때 다시 요청해 주세요.');
     const native = await this.completion.observe(target.child);
@@ -201,7 +200,7 @@ class TerminalCollaboration {
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
         state: 'sending', createdAt: this.now(), sentAt: this.now() };
       this.jobs.set(id, job); this.save(job);
-      try { Object.assign(job, await this.send(groupId, targetId, message, `summary:${id}`, payload), { state: 'running' }); }
+      try { Object.assign(job, await this.send(groupId, targetId, message, `summary:${id}`, payload, true, immediate), { state: 'running' }); }
       catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
       this.save(job);
       return { ok: job.state === 'running', job };
