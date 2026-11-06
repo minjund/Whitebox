@@ -17,7 +17,10 @@ exports.run = async evaluate => {
       board.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
       check(root.querySelectorAll('.wb-2048-moving').length === 2, 'both original tiles slide into the merged cell');
       check([...root.querySelectorAll('.wb-2048-moving')].some(tile => tile.getAnimations()[0].effect.getKeyframes().at(-1).transform !== 'translate(0, 0)'), 'motion uses real source/destination positions');
-      await new Promise(resolve => setTimeout(resolve, 150));
+      // The animation timeline follows rendered frames, not a wall-clock
+      // timeout. Wait for the real slides before inspecting merge effects.
+      await Promise.all([...root.querySelectorAll('.wb-2048-moving')].flatMap(tile => tile.getAnimations().map(animation => animation.finished)));
+      await Promise.resolve();
       check(root.querySelectorAll('.wb-2048-moving').length === 0, 'slide layers are removed after movement');
       check(root.querySelectorAll('.wb-2048-cell')[0].getAnimations().length > 0, 'merge receives a pop animation');
       check(record.game2048.cells[0] === 4 && record.game2048.score === 4, 'animation preserves game rules and score');
