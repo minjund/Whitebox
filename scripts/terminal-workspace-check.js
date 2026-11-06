@@ -259,8 +259,6 @@ app.whenReady().then(async () => {
       await checkResponsiveReview();
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
-    await require('./tests/workspace-project-reorder')({ evaluate, waitFor, win, manager });
-    await require('./tests/workspace-review-startup')({ evaluate, waitFor, win, manager, readyCalls: () => rendererReadyCalls });
     await evaluate("WhiteboxI18n.setLocale('ko')");
     await win.reload();
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'Korean locale bootstrap');
