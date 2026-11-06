@@ -13,7 +13,7 @@ const summary = 'This session is being continued from a previous conversation th
 module.exports = async function continuationChecks() {
   const user = (uuid, content, extra = {}) => ({ type: 'user', sessionId: 'owned', uuid, timestamp: '2026-11-04T02:00:00Z', message: { role: 'user', content }, ...extra });
   const trust = "2. Trust all and continue\n3. Continue without trusting (hooks won't run)";
-  for (const menu of [trust, trust.replace('\n', ' '), '❯ 1. Trust this folder and continue\n  2. Trust all and continue\n  3. Continue without trusting (hooks won’t run)', '1. Trust and continue\n' + trust, '1. Trust once and continue\n' + trust, 'Continue without trusting (hooks won\'t run)']) {
+  for (const menu of [trust, trust.replaceAll('\n', ' '), '❯ 1. Trust this folder and continue\n  2. Trust all and continue\n  3. Continue without trusting (hooks won’t run)', '1. Trust and continue\n' + trust, '1. Trust once and continue\n' + trust, 'Continue without trusting (hooks won\'t run)']) {
     assert(turns.isNonTaskRequest(menu), 'trust controls are not human tasks');
     assert.equal(turns.submittedPrompt('❯ ' + menu + '\n────────'), '');
     const state = {};

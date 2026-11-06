@@ -8,11 +8,6 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { fixtureReleaseAssets, selectionDecoys, assertCompleteReleaseAssetSet } = require('./release-asset-contract');
 
-function rendererScript(code) {
-  return `(async () => { try { return { ok:true, value:await (${code}) }; }
-    catch (error) { return { ok:false, error:String(error?.stack || error) }; } })()`;
-}
-
 async function openInspectedApp(executable, args, env) {
   env = { ...env };
   delete env.WHITEBOX_DEMO_CAPTURE;
@@ -133,11 +128,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     };
     return true;
   })()`);
-  const renderer = async code => {
-    const result = await evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(rendererScript(code))},true)`);
-    if (result?.ok !== true) throw new Error(`Packaged renderer evaluation failed: ${result?.error || 'missing result'}\nExpression: ${code}`);
-    return result.value;
-  };
+  const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
   const workspace = await renderer(`document.documentElement.dataset.workspace === 'terminal'`);
   const controls = workspace ? {
     version: '#wbVersion', settings: '[data-action="settings"]',
@@ -241,6 +232,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     const retained = await renderer(`(() => {
+      try {
       const state = WhiteboxWorkspace.getState();
       const session = state.sessions.find(item => item.id === state.activeId);
       if (!session || !session.creationId || !(session.pid > 0)) throw new Error('Retained-review fixture requires the original live PTY');
@@ -265,11 +257,13 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       const stored = JSON.parse(localStorage.getItem(key)).reviewHistory.find(item => item.id === session.id);
       if (!stored || stored.result.tasks[0].analysisId !== undefined) throw new Error('Retained-review fixture was not persisted');
       return {id:session.id, creationId:session.creationId, pid:session.pid};
+      } catch (error) { return {fixtureError:String(error?.stack || error)}; }
     })()`);
+    assert(!retained?.fixtureError, 'Retained-review profile input failed: ' + retained?.fixtureError);
     console.log('PASS packaged source profile retains a recorded task without analysisId: ' + JSON.stringify(retained));
   }
   await renderer(`(${select('install')}.click(), true)`);
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 
-module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer, rendererScript };
+module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer };
