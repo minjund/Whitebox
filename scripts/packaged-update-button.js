@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 const { fixtureReleaseAssets, selectionDecoys, assertCompleteReleaseAssetSet } = require('./release-asset-contract');
 
 function rendererScript(code) {
-  return `(async () => { try { return { ok:true, value:await (0,eval)(${JSON.stringify(code)}) }; }
+  return `(async () => { try { return { ok:true, value:await (${code}) }; }
     catch (error) { return { ok:false, error:String(error?.stack || error) }; } })()`;
 }
 
@@ -152,14 +152,14 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`${select('settings')}.click(); true`);
+  await renderer(`(${select('settings')}.click(), true)`);
   // Native .click() is ignored while the startup check disables this button.
   // Wait for the same enabled state a person needs, then click exactly once.
   while (!await renderer(`!${select('check')}.disabled`)) {
     if (Date.now() >= deadline) throw new Error('Startup update check did not settle: ' + await renderer(`${select('error')}.textContent`));
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`${select('check')}.click(); true`);
+  await renderer(`(${select('check')}.click(), true)`);
   while (!await renderer(installAvailable)) {
     if (Date.now() >= deadline) throw new Error('Packaged update button did not become available: ' + await renderer(`JSON.stringify({error:${select('error')}.textContent,checkDisabled:${select('check')}.disabled})`));
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -190,7 +190,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       };
       return true;
     })()`);
-    await renderer(`${select('install')}.click(); true`);
+    await renderer(`(${select('install')}.click(), true)`);
     const retryDeadline = Date.now() + 90000;
     while (!await renderer(`${select('error')}.textContent.includes('update-button-fixture') && !${select('install')}.disabled`)) {
       if (Date.now() >= retryDeadline) throw new Error('Failed install did not expose a persistent error and retry button: ' + driver.diagnostics());
@@ -268,7 +268,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     })()`);
     console.log('PASS packaged source profile retains a recorded task without analysisId: ' + JSON.stringify(retained));
   }
-  await renderer(`${select('install')}.click(); true`);
+  await renderer(`(${select('install')}.click(), true)`);
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 

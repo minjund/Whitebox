@@ -8,10 +8,11 @@ const { probeWindowsProcessIds, waitForOwnedProcessIdsExit } = require('../windo
 
 function registerPackagedUpdateDriverTests({ test }) {
   test('packaged renderer probes retain sync and async error details without accepting failure as readiness', async () => {
-    const success = await vm.runInNewContext(rendererScript('Promise.resolve({pid:123,ready:true})'));
+    const options = { contextCodeGeneration: { strings:false, wasm:false } };
+    const success = await vm.runInNewContext(rendererScript('Promise.resolve({pid:123,ready:true})'), {}, options);
     assert.equal(success.ok, true); assert.equal(success.value.pid, 123);
-    for (const code of ["throw Error('fixture renderer identity mismatch')", "Promise.reject(Error('fixture renderer identity mismatch'))"]) {
-      const result = await vm.runInNewContext(rendererScript(code));
+    for (const code of ["(() => { throw Error('fixture renderer identity mismatch'); })()", "Promise.reject(Error('fixture renderer identity mismatch'))"]) {
+      const result = await vm.runInNewContext(rendererScript(code), {}, options);
       assert.equal(result.ok, false); assert.match(result.error, /fixture renderer identity mismatch/);
       assert.equal(result.value, undefined);
     }
