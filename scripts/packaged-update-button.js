@@ -217,6 +217,35 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     const hostPid = JSON.parse(req('fs').readFileSync(discoveryFile, 'utf8')).pid;
     return { discoveryFile, hostPid };
   })()`) : null;
+  if (workspace && (sameVersionReinstall || ['2.0.19', '2.0.20'].includes(sourceVersion))) {
+    const retained = await renderer(`(() => {
+      const state = WhiteboxWorkspace.getState();
+      const session = state.sessions.find(item => item.id === state.activeId);
+      if (!session || !session.creationId || !(session.pid > 0)) throw new Error('Retained-review fixture requires the original live PTY');
+      const task = { taskId:'packaged-recorded-request', request:'PACKAGED_RETAINED_RECORD_REQUEST',
+        actual:'PACKAGED_RETAINED_RECORD_OUTPUT', recordOnly:true, analysisDepth:'record', lifecycle:'completed',
+        observedAt:new Date().toISOString() };
+      const key = 'whitebox:workspace:v2', original = Storage.prototype.setItem;
+      // Keep this profile input intact through the source's final UI saves.
+      // The installed app.asar and its updater remain the official bytes.
+      Storage.prototype.setItem = function(name, value) {
+        if (name === key) {
+          const saved = JSON.parse(value);
+          saved.autoReview = false;
+          saved.reviewHistory = (saved.reviewHistory || []).filter(item => item.id !== session.id);
+          saved.reviewHistory.push({ id:session.id, creationId:session.creationId, pid:session.pid,
+            provider:'codex', result:{ tasks:[task], observedAt:task.observedAt } });
+          value = JSON.stringify(saved);
+        }
+        return original.call(this, name, value);
+      };
+      localStorage.setItem(key, localStorage.getItem(key));
+      const stored = JSON.parse(localStorage.getItem(key)).reviewHistory.find(item => item.id === session.id);
+      if (!stored || stored.result.tasks[0].analysisId !== undefined) throw new Error('Retained-review fixture was not persisted');
+      return {id:session.id, creationId:session.creationId, pid:session.pid};
+    })()`);
+    console.log('PASS packaged source profile retains a recorded task without analysisId: ' + JSON.stringify(retained));
+  }
   await renderer(`${select('install')}.click(); true`);
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }

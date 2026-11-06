@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.21 - 2026-11-06
+
+- Keep recorded tasks without an analysis ID readable during startup. Match retained review failures only when both the task and analysis IDs are present and equal, so normal saved records cannot stop renderer readiness or trigger update rollback.
+- Use the same retained-analysis identity check in terminal review and Summary mode.
+- Reorder sidebar projects by holding and dragging their names, with insertion guides, edge scrolling, cancellation, keyboard movement and saved ordering.
+- Remove the redundant local workspace identity block above project search.
+- Exercise recorded-task profile restoration during official 2.0.19/2.0.20 upgrades and candidate automatic reinstalls, alongside every supported Windows and macOS cohort.
+
 ## 2.0.20 - 2026-11-06
 
 - Apply the approved affectUI Summary layout with keyboard-accessible mode controls, readable answer cards, real request/review status, copy/original actions, and a compact sidebar on small windows.

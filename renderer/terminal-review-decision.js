@@ -30,10 +30,14 @@
     return match && validContent(match.content) ? { ...task, content: match.content, contentIssues: [],
       contentGeneratedAt: match.generatedAt, contentUsage: match.usage } : task;
   }
+  function matchesRetainedAnalysis(task, failure) {
+    return Boolean(failure && task?.taskId && task.analysisId
+      && task.taskId === failure.taskId && task.analysisId === failure.retainedAnalysisId);
+  }
   function reviewFailure(review) {
     const failure = review?.state === 'error' && review.failure;
-    const previous = failure && review.result?.tasks?.find(task => task.taskId === failure.taskId
-      && task.analysisId && task.analysisId === failure.retainedAnalysisId && !task.recordOnly && !task.deferred);
+    const previous = failure && review.result?.tasks?.find(task => matchesRetainedAnalysis(task, failure)
+      && !task.recordOnly && !task.deferred);
     if (!previous) return null;
     const partial = failure.retainedLifecycle === 'in-progress';
     return { ...failure,
@@ -104,5 +108,5 @@
       ${alternatives}
     </section>`;
   }
-  return { render, renderContent, applyHistoryContent, displayTitle, reviewFailure };
+  return { render, renderContent, applyHistoryContent, displayTitle, reviewFailure, matchesRetainedAnalysis };
 });

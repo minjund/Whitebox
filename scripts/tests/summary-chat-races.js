@@ -32,7 +32,10 @@ exports.run = async evaluate => {
     resolveSend({ ok: true, job: { id: second.id, state: 'running' } }); await tick();
     tasks = [{ taskId: 'deferred', submissionId: second.id, request: 'repeat', lifecycle: 'completed', deferred: true, analysisDepth: 'deferred', actual: 'insufficient evidence' }];
     chat.render(); saved = chat.serialize()[0];
-    return { early, calls, captures, starts, users: saved.messages.filter(message => message.role === 'user').length,
+    tasks = [{ request:'recorded without IDs', actual:'recorded answer stays readable', recordOnly:true, lifecycle:'completed' }];
+    chat.render();
+    const recordedVisible = root.querySelector('#wbSummary').textContent.includes('recorded answer stays readable');
+    return { early, calls, captures, starts, recordedVisible, users: saved.messages.filter(message => message.role === 'user').length,
       deferredKey: saved.messages.find(message => message.id === second.id).answerKey };
   })()`);
   assert.equal(result.early.users, 1, 'early answer must not duplicate the submitted request');
@@ -42,5 +45,6 @@ exports.run = async evaluate => {
   assert.equal(result.deferredKey, 'deferred', 'completed deferred reviews settle the matching request');
   assert.equal(result.starts, 1, 'opening an empty summary explicitly requests existing-answer analysis exactly once');
   assert.equal(result.users, 2, 'each submitted request has exactly one user bubble');
+  assert.equal(result.recordedVisible, true, 'a recorded answer without IDs renders without matching a nonexistent failure');
   console.log('PASS summary renderer races: early answer/late acknowledgement, no duplicate request, archived completion before next send, deferred result binding');
 };
