@@ -126,11 +126,14 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   await evaluate('WhiteboxWorkspace.createTerminal("")');
   const other = await evaluate('WhiteboxWorkspace.getState().activeId');
   assert.equal(await summary(), false, 'new shell remains in terminal mode');
-  await fixture.launch(other, waitFor, 'claude'); await capture(); await click('[data-workspace-mode=summary]');
+  await fixture.launch(other, waitFor, 'claude'); await capture();
+  await waitFor('!document.querySelector("[data-workspace-mode=summary]").disabled', 'Claude provider observation enables summary mode');
+  await click('[data-workspace-mode=summary]');
   // Both providers must deliver the next request while model summaries are
   // deliberately withheld. The prior reply is captured before that write.
   for (const [target, provider] of [[other, 'claude'], [id, 'codex']]) {
     await click(`.wb-instance[data-instance="${target}"]`);
+    await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', `${provider} summary is open before sending`);
     fixture.setDelayed(true);
     await send(`SUMMARY_HOLD_GAME_${provider}`);
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(target)}).includes('esc to interrupt')`, `${provider} working`);
