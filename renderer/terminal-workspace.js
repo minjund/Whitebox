@@ -69,6 +69,18 @@
     reviewRevisions.set(id, { key, revision: value.revision }); return true;
   }
   const sessions = new Map(), panes = new Map(), reviews = new Map(), submissions = new Map(), interruptions = new Map(), reviewHistory = new Map();
+  function rememberSession(session) {
+    const previous = sessions.get(session.id);
+    // Pending running snapshots cannot erase a newer live process. Actual
+    // stopped/exited events remain authoritative and can always clear its PID.
+    if (previous?.creationId === session.creationId && session.status === 'running') {
+      const before = Date.parse(previous.updatedAt), after = Date.parse(session.updatedAt);
+      if (before > after || previous.pid > 0 && !session.pid
+        && !(after > before)) return previous;
+    }
+    sessions.set(session.id, session);
+    return session;
+  }
   const workStates = new Map();
   const summaryMembers = new Map();
   const terminalUsageHistory = new Map();
@@ -1270,7 +1282,7 @@
     let created = false;
     try {
       const session = await api.terminalCreate({ type: bootstrap.platform.localShell, cwd: owner.cwd, cols: 100, rows: 30, creationId: `workspace:${uuid()}` });
-      sessions.set(session.id, session);
+      rememberSession(session);
       created = true;
       next.layout = splitting ? layout.split(next.layout, selected, session.id, axis) : { id: session.id };
       next.activePane = session.id; delete next.pending;
@@ -1283,9 +1295,9 @@
       const mounted = ensurePane(session);
       renderLayout(false);
       await mounted;
-      // Retain the released ConPTY post-mount PID reconciliation.
+      // Reconcile ConPTY metadata without overwriting a newer state event.
       const current = await api.terminalGet(session.id, false);
-      if (current?.creationId === session.creationId) sessions.set(session.id, current);
+      if (current?.creationId === session.creationId && sessions.get(session.id)?.creationId === session.creationId) rememberSession(current);
       refreshPaneChrome(); renderInstances();
       if (tab() === next) activeFocus();
     } catch (error) {
@@ -1403,7 +1415,7 @@
         const current = await api.terminalGet(id, false);
         item.sessionStopped = true; item.pid = null;
         if (current && !archiveIdentityMatches(current, item)) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
-        if (current) sessions.set(id, current); else sessions.delete(id);
+        if (current) rememberSession(current); else sessions.delete(id);
         if (item.review) {
           item.review = { ...item.review, pid: null, sourcePid: item.sourcePid, archived: true };
           reviewHistory.set(id, item.review);
@@ -1438,7 +1450,7 @@
       if (!archiveIdentityMatches(session, item)) {
         throw new Error(t('원래 실행 세션에 연결할 수 없습니다. 새 셸로 대체하지 않습니다.'));
       }
-      sessions.set(session.id, session);
+      rememberSession(session);
       await ensurePane(session, true);
       const record = item.review || reviewHistory.get(session.id);
       if (record?.id === session.id && record.creationId === session.creationId && Array.isArray(record.result?.tasks)
@@ -1770,7 +1782,7 @@
         if (panel && live && live.creationId === job.terminal.creationId) {
           if (!owner.tabs.some(item => layout.ids(item.layout).includes(live.id))) {
             detachFromLayout(live.id);
-            sessions.set(live.id, live); await ensurePane(live);
+            rememberSession(live); await ensurePane(live);
             const target = panel.activePane || layout.ids(panel.layout)[0], view = panel.viewLayout || panel.layout;
             panel.layout = layout.split(panel.layout, target, live.id);
             panel.viewLayout = layout.split(view, layout.ids(view).includes(target) ? target : layout.ids(view)[0], live.id);
@@ -2068,6 +2080,30 @@
   });
 
   let initialization = null, initialized = false, waitingForStartupHost = false, connectionRevision = 0;
+  function handleTerminalState(payload) {
+    let usageChanged = false;
+    const removed = payload.change === 'removed' && payload.session;
+    // Archived records remain available when their host session disappears;
+    // explicit trash deletion removes those separately after acknowledgement.
+    if (removed && sessions.get(removed.id)?.creationId === removed.creationId
+      && !trash.some(item => item.id === removed.id && item.creationId === removed.creationId)
+      && !(payload.sessions || []).some(item => item.id === removed.id)) {
+      removeTerminalLocally(removed.id);
+      renderLayout(false); renderTrash();
+    }
+    for (const session of payload.sessions || []) {
+      if (!sessions.has(session.id)) continue;
+      if (rememberSession(session) !== session) continue;
+      const usage = terminalUsageHistory.get(session.id);
+      if (usage && (usage.creationId !== session.creationId || session.pid && usage.pid !== session.pid)) {
+        terminalUsageHistory.delete(session.id); usageChanged = true;
+      }
+    }
+    if (usageChanged) save();
+    refreshPaneChrome();
+    renderInstances();
+  }
+  api?.onTerminalState?.(handleTerminalState);
   // Register before the first inventory request. A late real connection must
   // resume a cold renderer that already exhausted its bounded initial reads.
   api?.onTerminalConnection?.(value => {
@@ -2114,7 +2150,16 @@
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
-    inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => sessions.set(item.id, item));
+    inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => rememberSession(item));
+    // A state event can precede the initial inventory response. Reconcile only
+    // unresolved shells after adopting that inventory; subsequent PID events
+    // are already subscribed and cannot be lost during pane mounting.
+    await Promise.all([...sessions.values()].filter(session => session.status === 'running' && !session.pid).map(async session => {
+      let current;
+      try { current = await api.terminalGet(session.id, false); }
+      catch (error) { waitingForStartupHost = true; throw error; }
+      if (current?.creationId === session.creationId && sessions.get(session.id)?.creationId === session.creationId) rememberSession(current);
+    }));
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
     try { contentHistory = (await api.terminalReview?.({ historyContent: true }))?.entries || []; }
@@ -2205,29 +2250,6 @@
       if (task?.analysisMetrics) { task.analysisMetrics.displayedAt = Date.now(); save(); }
       reviews.set(id, history ? { ...value, result: history.result } : value);
       refreshPaneChrome(); renderPaneTabs(); renderInstances(); renderReview();
-    });
-    api.onTerminalState(payload => {
-      let usageChanged = false;
-      const removed = payload.change === 'removed' && payload.session;
-      // Archived records remain available when their host session disappears;
-      // explicit trash deletion removes those separately after acknowledgement.
-      if (removed && sessions.get(removed.id)?.creationId === removed.creationId
-        && !trash.some(item => item.id === removed.id && item.creationId === removed.creationId)
-        && !(payload.sessions || []).some(item => item.id === removed.id)) {
-        removeTerminalLocally(removed.id);
-        renderLayout(false); renderTrash();
-      }
-      for (const session of payload.sessions || []) {
-        if (!sessions.has(session.id)) continue;
-        const usage = terminalUsageHistory.get(session.id);
-        if (usage && (usage.creationId !== session.creationId || session.pid && usage.pid !== session.pid)) {
-          terminalUsageHistory.delete(session.id); usageChanged = true;
-        }
-        sessions.set(session.id, session);
-      }
-      if (usageChanged) save();
-      refreshPaneChrome();
-      renderInstances();
     });
     await api.setLocale?.(window.WhiteboxI18n?.getLocale() || 'ko');
     api.onAttentionRequested?.(payload => {
