@@ -76,8 +76,9 @@
   const root = document.createElement('div');
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
+    <button class="wb-summary-nav-backdrop" data-action="summary-sidebar-close" aria-label="사이드바 접기" tabindex="-1"></button>
     <aside class="wb-sidebar">
-      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
+      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span><button class="wb-summary-nav-close" data-action="summary-sidebar-close" aria-label="사이드바 접기">${icon('close')}</button></div>
       <div class="wb-local-workspace"><span>W</span><div><strong>내 작업 공간</strong><small>Local workspace</small></div></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
       <div class="wb-sidebar-scroll">
@@ -97,9 +98,22 @@
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbSummary" class="wb-summary" aria-label="요약 채팅" hidden>
-        <header class="wb-summary-heading"><div><span>요약 모드</span><strong id="wbSummaryTarget"></strong></div><span id="wbSummaryProvider"></span></header>
-        <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"></div>
-        <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 참고해 다음 요청을 입력하세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><button id="wbSummarySend" type="submit">전송</button></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+        <header class="wb-summary-heading"><div><h1 id="wbSummaryTarget"></h1><p id="wbSummaryConnection"><i aria-hidden="true"></i><span id="wbSummaryProvider"></span><span>·</span><span id="wbSummaryConnectionState">같은 대화에 연결됨</span></p></div><small>화면을 바꿔도 대화는 이어져요</small></header>
+        <div class="wb-summary-body">
+          <div class="wb-summary-conversation">
+            <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span></li></ol>
+            <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
+            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+            <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
+          </div>
+          <aside class="wb-summary-rail" aria-label="이번 요청 상태">
+            <div class="wb-summary-rail-heading"><span>이번 요청</span><span id="wbSummaryRailProvider"></span></div>
+            <div class="wb-summary-state-card" role="status" aria-live="polite"><h2 id="wbSummaryStateTitle"></h2><p id="wbSummaryStateDescription"></p></div>
+            <dl class="wb-summary-state-list"><div><dt>AI 답변</dt><dd id="wbSummaryReplyState"></dd></div><div><dt>이해 · 검토</dt><dd id="wbSummaryReviewState"></dd></div><div id="wbSummaryQueueRow" hidden><dt>전송 대기</dt><dd id="wbSummaryQueueCount"></dd></div></dl>
+            <div class="wb-summary-next" id="wbSummaryNext"><h3>다음으로 할 일</h3><p id="wbSummaryNextText"></p></div>
+            <section id="wbSummaryGame" class="wb-summary-game" aria-label="2048" hidden></section>
+          </aside>
+        </div>
       </section>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
       <footer class="wb-status"><span id="wbConnection"><i></i>터미널 연결 중</span><span id="wbTerminalStatus"></span><span>⌘/Ctrl T 터미널 추가 <b>·</b> ⌘/Ctrl D 분할</span></footer>
@@ -180,7 +194,22 @@
     tasks: id => explainedTasks(id, sessions.get(id)?.creationId, reviews.get(id)?.result?.tasks)
       .filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)),
     label: id => { const owner = terminalPosition(id)?.owner; return `${owner?.name || ''} · ${title(id)}`; },
+    title: id => title(id),
     refresh: () => syncCollaboration(), save: () => save(),
+    startSummary: () => requestReanalysis(),
+    captureReply: async job => {
+      const session = sessions.get(job.targetId);
+      if (!session || session.creationId !== job.creationId || session.pid !== job.pid) throw new Error(t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'));
+      const result = await api.terminalReview({ id: session.id, creationId: session.creationId, text: terminal.readTerminal(session.id),
+        enabled: true, foreground: session.id === activeId(),
+        submission: { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } },
+        analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+      if (sessions.get(session.id)?.creationId !== session.creationId || !acceptReview(session.id, result)) throw new Error(t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'));
+      const history = retainReview(session, result);
+      reviews.set(session.id, history ? { ...result, result: history.result } : result);
+      return result.preview?.submissionId === job.id && result.preview.lifecycle === 'completed'
+        || result.result?.tasks?.some(task => task.submissionId === job.id && task.lifecycle === 'completed');
+    },
     reveal: id => selectInstance(id), report: message => report(new Error(message), 'summary'),
     submitted: job => {
       submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
@@ -773,6 +802,7 @@
     const owner = owners().find(item => item.tabs.some(tab => layout.ids(tab.layout).includes(id)));
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     if (!target) return;
+    root.classList.remove('summary-sidebar-open');
     activatePanel(owner, target, id);
     renderLayout();
   }
@@ -1495,13 +1525,15 @@
     const observedState = nonTaskCurrent && ['awaiting-answer', 'collecting', 'reviewing'].includes(value?.state)
       ? tasks.length ? 'ready' : 'watching' : value?.state || 'watching';
     const state = !autoReview && !value?.manual ? 'paused' : observedState;
+    const retainedFailure = window.WhiteboxReviewDecision.reviewFailure(value);
     const analyzing = state === 'reviewing';
     const rateLimited = value?.retryAt > Date.now();
     const pending = ['awaiting-answer', 'collecting', 'reviewing'].includes(state);
     const states = { archived: t('종료된 기록'), 'awaiting-answer': t('작업 관찰 중'), paused: t('자동 검토 꺼짐'), watching: t('새 요청을 기다리는 중'), collecting: t('분석 대기'), shell: t('셸 사용 중'), unbound: t('연결 확인 필요'), reviewing: t('분석중…'), ready: t('이번 요청 검토 완료'), error: t('검토를 완료하지 못했습니다') };
     const activity = $('#wbReviewActivity');
     activity.hidden = !['awaiting-answer', 'collecting', 'reviewing', 'error', 'unbound'].includes(state);
-    const activityLabel = state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state];
+    const activityLabel = state === 'error' && retainedFailure ? t(retainedFailure.title)
+      : state === 'collecting' && rateLimited ? t('분석 사용 한도 대기') : state === 'reviewing' && value?.phase === 'evidence' ? t('근거 준비 중…') : states[state];
     const hasThinkingLoader = analyzing && typeof ui?.thinking === 'function';
     const previousLoader = activity.querySelector('.wb-review-state-label');
     if (previousLoader) ui?.clear(previousLoader);
@@ -1512,6 +1544,7 @@
     $('[data-action="refresh"]').setAttribute('aria-busy', String(analyzing || requesting || Boolean(value?.manual && state === 'collecting')));
     $('[data-action="refresh"]').title = state === 'awaiting-answer' ? t('답변 완료 다시 확인') : t('지금 검토');
     let html = '';
+    if (retainedFailure && state === 'error') html += `<p class="wb-review-notice" data-retained-analysis>${esc(t(retainedFailure.description))}</p>`;
     if (value?.message && ['error', 'unbound'].includes(state)) html += `<p class="wb-review-notice">${esc(value.message)}</p>`;
     // Deferred entries are bookkeeping, not analysis. Keep them in history data
     // but never echo the user's request as an empty result card.
@@ -1528,7 +1561,10 @@
         const taskKey = task.taskId || task.analysisId || `${task.observedAt}:${task.request}`;
         const observed = new Date(task.observedAt || value.result.observedAt);
         const time = Number.isFinite(observed.getTime()) ? `<time class="wb-task-time" datetime="${observed.toISOString()}" title="${esc(observed.toLocaleString(window.WhiteboxI18n.getLocaleTag()))}">${esc(observed.toLocaleTimeString(window.WhiteboxI18n.getLocaleTag(), { hour: '2-digit', minute: '2-digit' }))}</time>` : '';
-        const lifecycleLabel = task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록') : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';
+        const retained = retainedFailure?.retainedAnalysisId === task.analysisId && retainedFailure.taskId === task.taskId;
+        const lifecycleLabel = retained ? t(retainedFailure.description) : task.lifecycle === 'interrupted' ? t('중단됨 · 수행 기록')
+          : task.analysisLifecycle === 'in-progress' && task.lifecycle === 'completed' ? t('진행 중 기록의 분석 · 최종 결과 미반영')
+          : task.lifecycle === 'in-progress' ? t('작업 진행 중 · 현재까지 분석') : task.deferred ? t('근거 수집 대기') : '';
         const lifecycle = lifecycleLabel ? `<p class="wb-record-label">${lifecycleLabel}</p>` : '';
         if (!task.content && (task.recordOnly || task.typedAnalysis)) {
           const record = msg`<article class="wb-task wb-record-only"><div class="wb-task-title"><h2>${esc(task.request)}</h2>${analysisTokens(task, value.result)}</div>${time}${lifecycle}<p class="wb-record-label">${t(task.typedAnalysis ? "이전 Jev 기록 · 재검토 필요" : task.analysisGate ? "LLM 분석 없이 작업 기록 표시" : task.deferred ? "근거가 확보되면 분석합니다" : "AI 분석 없이 기록")}</p><p>${esc(task.typedAnalysis ? t('이전 Jev 결과에는 LLM 판단이 없습니다. 다시 검토해 주세요.') : task.actual)}</p></article>`;
@@ -1737,7 +1773,17 @@
       return revealJevKey();
     }
     if (action === 'dismiss-error') $('#wbError').hidden = true;
-    if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');
+    if (action === 'summary-sidebar-close') {
+      root.classList.remove('summary-sidebar-open');
+      $('.wb-topbar [data-action="toggle-sidebar"]').focus({ preventScroll: true });
+      return;
+    }
+    if (action === 'toggle-sidebar') {
+      if (root.classList.contains('summary-mode') && window.matchMedia('(max-width: 850px)').matches) {
+        const open = root.classList.toggle('summary-sidebar-open');
+        (open ? $('#wbProjectSearch') : $('.wb-topbar [data-action="toggle-sidebar"]')).focus({ preventScroll: true });
+      } else root.classList.toggle('sidebar-hidden');
+    }
     if (action === 'toggle-review') setReviewVisible(root.classList.contains('review-hidden'));
 
     if (action === 'jev-save' || action === 'jev-remove') {
@@ -1881,9 +1927,15 @@
     $('#wbTabs [aria-selected="true"]')?.focus();
   });
   document.addEventListener('keydown', event => {
+    if (!event.isComposing && event.key === 'Escape' && root.classList.contains('summary-sidebar-open')) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      root.classList.remove('summary-sidebar-open');
+      $('.wb-topbar [data-action="toggle-sidebar"]').focus({ preventScroll: true });
+      return;
+    }
     if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey || root.querySelector('dialog[open]')) return;
     const key = event.key.toLowerCase();
-    if (key === 'k') { event.preventDefault(); event.stopImmediatePropagation(); root.classList.remove('sidebar-hidden'); $('#wbProjectSearch').focus(); return; }
+    if (key === 'k') { event.preventDefault(); event.stopImmediatePropagation(); root.classList.remove('sidebar-hidden'); if (root.classList.contains('summary-mode') && window.matchMedia('(max-width: 850px)').matches) root.classList.add('summary-sidebar-open'); $('#wbProjectSearch').focus(); return; }
     let action = '';
     if (key === 't') action = 'new';
     if (key === 'd') action = event.shiftKey ? 'split-down' : 'split';

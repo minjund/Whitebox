@@ -2,10 +2,12 @@
 // Real PTY fixture; no network or AI account. Each request has a distinct turn marker.
 process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
 let draft = '', request = '', turn = 0, waiting = false;
+const provider = process.argv[2] || 'codex';
 const draw = body => process.stdout.write(`\x1b[2J\x1b[H\x1b[999;1H\x1b[?2004hSUMMARY_READY ${process.pid}\r\n${body}\r\n`);
 const finish = () => {
   waiting = false;
-  draw(`› ${request}\r\n• SUMMARY_REPLY ${request}\r\nWorked for 1s • 3:${String(40 + ++turn).padStart(2, '0')} PM\r\n› Ask Codex to do anything\r\n  GPT-6 · fixture`);
+  const footer = provider === 'claude' ? `✻ Baked for ${++turn}s` : `Worked for 1s • 3:${String(40 + ++turn).padStart(2, '0')} PM`;
+  draw(`› ${request}\r\n• SUMMARY_REPLY ${request}\r\n${footer}\r\n› ${provider === 'claude' ? '' : 'Ask Codex to do anything'}\r\n  ${provider === 'claude' ? '[Sonnet]' : 'GPT-6'} · fixture`);
 };
 draw('› Ask Codex to do anything\r\n  GPT-6 · fixture');
 process.stdin.on('data', data => {
