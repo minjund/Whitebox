@@ -8,6 +8,11 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { fixtureReleaseAssets, selectionDecoys, assertCompleteReleaseAssetSet } = require('./release-asset-contract');
 
+function rendererScript(code) {
+  return `(async () => { try { return { ok:true, value:await (0,eval)(${JSON.stringify(code)}) }; }
+    catch (error) { return { ok:false, error:String(error?.stack || error) }; } })()`;
+}
+
 async function openInspectedApp(executable, args, env) {
   env = { ...env };
   delete env.WHITEBOX_DEMO_CAPTURE;
@@ -128,7 +133,11 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     };
     return true;
   })()`);
-  const renderer = code => evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(code)},true)`);
+  const renderer = async code => {
+    const result = await evaluate(`process.mainModule.require('electron').BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/renderer/index.html')).webContents.executeJavaScript(${JSON.stringify(rendererScript(code))},true)`);
+    if (result?.ok !== true) throw new Error(`Packaged renderer evaluation failed: ${result?.error || 'missing result'}\nExpression: ${code}`);
+    return result.value;
+  };
   const workspace = await renderer(`document.documentElement.dataset.workspace === 'terminal'`);
   const controls = workspace ? {
     version: '#wbVersion', settings: '[data-action="settings"]',
@@ -192,6 +201,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
   }
   let terminalIdForPreservation = '';
+  let terminalCreationIdForPreservation = '';
   if (options.preserveTerminal === true) {
     assert.equal(options.retryAfterFailure, true, 'Preservation must first exercise a failed preparation');
     const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
@@ -209,6 +219,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     }
     terminalPid = Number(terminal.pid);
     terminalIdForPreservation = terminal.id;
+    terminalCreationIdForPreservation = terminal.creationId;
     assert(Number.isSafeInteger(terminalPid) && terminalPid > 0, 'Packaged update requires a live preserved PTY');
   }
   const hostIdentity = options.preserveTerminal ? await evaluate(`(() => {
@@ -218,6 +229,17 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     return { discoveryFile, hostPid };
   })()`) : null;
   if (workspace && (sameVersionReinstall || ['2.0.19', '2.0.20'].includes(sourceVersion))) {
+    // The host can return the spawned PID before its renderer projection has
+    // observed it. Require that same original live session before seeding the
+    // saved-profile input; a missing/replaced session never counts as ready.
+    const projectionDeadline = Math.min(deadline, Date.now() + 10000);
+    while (true) {
+      const session = await renderer(`(() => { const state=WhiteboxWorkspace.getState(); return state.sessions.find(item => item.id===state.activeId) || null; })()`);
+      if (terminalIdForPreservation && session && (session.id !== terminalIdForPreservation || session.creationId !== terminalCreationIdForPreservation)) throw new Error('Preserved PTY identity changed before retained-review input');
+      if (session?.creationId && session.pid > 0 && (!terminalPid || session.pid === terminalPid)) break;
+      if (Date.now() >= projectionDeadline) throw new Error('Retained-review renderer did not observe the original live PTY: ' + JSON.stringify(session));
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     const retained = await renderer(`(() => {
       const state = WhiteboxWorkspace.getState();
       const session = state.sessions.find(item => item.id === state.activeId);
@@ -250,4 +272,4 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 
-module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer };
+module.exports = { openInspectedApp, clickPackagedUpdate, waitForPackagedRenderer, rendererScript };

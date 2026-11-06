@@ -3,10 +3,19 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
-const { waitForPackagedRenderer } = require('../packaged-update-button');
+const { waitForPackagedRenderer, rendererScript } = require('../packaged-update-button');
 const { probeWindowsProcessIds, waitForOwnedProcessIdsExit } = require('../windows-process-exit-check');
 
 function registerPackagedUpdateDriverTests({ test }) {
+  test('packaged renderer probes retain sync and async error details without accepting failure as readiness', async () => {
+    const success = await vm.runInNewContext(rendererScript('Promise.resolve({pid:123,ready:true})'));
+    assert.equal(success.ok, true); assert.equal(success.value.pid, 123);
+    for (const code of ["throw Error('fixture renderer identity mismatch')", "Promise.reject(Error('fixture renderer identity mismatch'))"]) {
+      const result = await vm.runInNewContext(rendererScript(code));
+      assert.equal(result.ok, false); assert.match(result.error, /fixture renderer identity mismatch/);
+      assert.equal(result.value, undefined);
+    }
+  });
   test('immutable 1.8.28 missing start record requires exact official bytes and a fresh independently authenticated helper', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'windows-v173-update-integration.js'), 'utf8');
     const extract = name => {
