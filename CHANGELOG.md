@@ -3,6 +3,15 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.22 - 2026-11-06
+
+- Add “Send anyway” to queued Summary requests, delivering once to the same AI terminal without waiting for reply capture or model analysis.
+- Release queued requests automatically after a completed reply even when old working indicators remain in terminal scrollback or model analysis is still running.
+- Fix summary progress, historical reply ordering, archived delivery lookup, interrupted states and startup trust menus appearing as user requests.
+- Open 2048 by default, add an always-visible or summarizing-only setting, and animate tile movement, merges, spawns and scores with reduced-motion support.
+- Record shared GitHub rankings as deferred; keep login and ranking controls out of the app.
+- Verify official 2.0.21 installers alongside every supported Windows and macOS update cohort.
+
 ## 2.0.21 - 2026-11-06
 
 - Keep recorded tasks without an analysis ID readable during startup. Match retained review failures only when both the task and analysis IDs are present and equal, so normal saved records cannot stop renderer readiness or trigger update rollback.

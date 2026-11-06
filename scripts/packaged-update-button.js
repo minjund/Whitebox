@@ -143,14 +143,14 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     if (Date.now() >= deadline) throw new Error('Packaged renderer bootstrap did not finish');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`${select('settings')}.click(); true`);
+  await renderer(`(${select('settings')}.click(), true)`);
   // Native .click() is ignored while the startup check disables this button.
   // Wait for the same enabled state a person needs, then click exactly once.
   while (!await renderer(`!${select('check')}.disabled`)) {
     if (Date.now() >= deadline) throw new Error('Startup update check did not settle: ' + await renderer(`${select('error')}.textContent`));
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  await renderer(`${select('check')}.click(); true`);
+  await renderer(`(${select('check')}.click(), true)`);
   while (!await renderer(installAvailable)) {
     if (Date.now() >= deadline) throw new Error('Packaged update button did not become available: ' + await renderer(`JSON.stringify({error:${select('error')}.textContent,checkDisabled:${select('check')}.disabled})`));
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -181,7 +181,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       };
       return true;
     })()`);
-    await renderer(`${select('install')}.click(); true`);
+    await renderer(`(${select('install')}.click(), true)`);
     const retryDeadline = Date.now() + 90000;
     while (!await renderer(`${select('error')}.textContent.includes('update-button-fixture') && !${select('install')}.disabled`)) {
       if (Date.now() >= retryDeadline) throw new Error('Failed install did not expose a persistent error and retry button: ' + driver.diagnostics());
@@ -192,6 +192,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     console.log('PASS packaged button failure remains visible after toast expiry; retry enabled');
   }
   let terminalIdForPreservation = '';
+  let terminalCreationIdForPreservation = '';
   if (options.preserveTerminal === true) {
     assert.equal(options.retryAfterFailure, true, 'Preservation must first exercise a failed preparation');
     const type = await evaluate(`process.platform === 'win32' ? 'cmd' : 'shell'`);
@@ -209,6 +210,7 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     }
     terminalPid = Number(terminal.pid);
     terminalIdForPreservation = terminal.id;
+    terminalCreationIdForPreservation = terminal.creationId;
     assert(Number.isSafeInteger(terminalPid) && terminalPid > 0, 'Packaged update requires a live preserved PTY');
   }
   const hostIdentity = options.preserveTerminal ? await evaluate(`(() => {
@@ -218,7 +220,19 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
     return { discoveryFile, hostPid };
   })()`) : null;
   if (workspace && (sameVersionReinstall || ['2.0.19', '2.0.20'].includes(sourceVersion))) {
+    // The host can return the spawned PID before its renderer projection has
+    // observed it. Require that same original live session before seeding the
+    // saved-profile input; a missing/replaced session never counts as ready.
+    const projectionDeadline = Math.min(deadline, Date.now() + 10000);
+    while (true) {
+      const session = await renderer(`(() => { const state=WhiteboxWorkspace.getState(); return state.sessions.find(item => item.id===state.activeId) || null; })()`);
+      if (terminalIdForPreservation && session && (session.id !== terminalIdForPreservation || session.creationId !== terminalCreationIdForPreservation)) throw new Error('Preserved PTY identity changed before retained-review input');
+      if (session?.creationId && session.pid > 0 && (!terminalPid || session.pid === terminalPid)) break;
+      if (Date.now() >= projectionDeadline) throw new Error('Retained-review renderer did not observe the original live PTY: ' + JSON.stringify(session));
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     const retained = await renderer(`(() => {
+      try {
       const state = WhiteboxWorkspace.getState();
       const session = state.sessions.find(item => item.id === state.activeId);
       if (!session || !session.creationId || !(session.pid > 0)) throw new Error('Retained-review fixture requires the original live PTY');
@@ -243,10 +257,12 @@ async function clickPackagedUpdate(driver, installer, version, options = {}) {
       const stored = JSON.parse(localStorage.getItem(key)).reviewHistory.find(item => item.id === session.id);
       if (!stored || stored.result.tasks[0].analysisId !== undefined) throw new Error('Retained-review fixture was not persisted');
       return {id:session.id, creationId:session.creationId, pid:session.pid};
+      } catch (error) { return {fixtureError:String(error?.stack || error)}; }
     })()`);
+    assert(!retained?.fixtureError, 'Retained-review profile input failed: ' + retained?.fixtureError);
     console.log('PASS packaged source profile retains a recorded task without analysisId: ' + JSON.stringify(retained));
   }
-  await renderer(`${select('install')}.click(); true`);
+  await renderer(`(${select('install')}.click(), true)`);
   return { renderer, asset, terminalPid, terminalId: terminalIdForPreservation, hostIdentity };
 }
 

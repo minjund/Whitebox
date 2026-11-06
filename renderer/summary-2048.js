@@ -12,7 +12,9 @@
   }
   function spawn(cells, random) {
     const empty = cells.map((tile, index) => tile ? -1 : index).filter(index => index >= 0);
-    if (empty.length) cells[empty[Math.floor(random() * empty.length)]] = random() < .9 ? 2 : 4;
+    if (!empty.length) return null;
+    const index = empty[Math.floor(random() * empty.length)];
+    cells[index] = random() < .9 ? 2 : 4; return index;
   }
   function start(best = 0, random = Math.random) {
     const game = { cells: Array(16).fill(0), score: 0, best, open: true };
@@ -22,40 +24,90 @@
     return Array.from({ length: 4 }, (_, i) => direction === 'left' ? line * 4 + i
       : direction === 'right' ? line * 4 + 3 - i : direction === 'up' ? i * 4 + line : (3 - i) * 4 + line);
   }
-  function slide(game, direction) {
+  function slide(game, direction, trace = null) {
     const next = { ...game, cells: [...game.cells] };
     for (let line = 0; line < 4; line++) {
-      const slots = indexes(direction, line), tiles = slots.map(index => game.cells[index]).filter(Boolean), merged = [];
+      const slots = indexes(direction, line), tiles = slots.filter(index => game.cells[index]).map(index => ({ index, value: game.cells[index] })), merged = [];
       for (let i = 0; i < tiles.length; i++) {
-        if (tiles[i] === tiles[i + 1] && tiles[i] < 2 ** 30) {
-          const tile = tiles[i] * 2; merged.push(tile); next.score += tile; i++;
-        } else merged.push(tiles[i]);
+        const tile = tiles[i], to = slots[merged.length];
+        trace?.motions.push({ from: tile.index, to, value: tile.value });
+        if (tile.value === tiles[i + 1]?.value && tile.value < 2 ** 30) {
+          trace?.motions.push({ from: tiles[i + 1].index, to, value: tile.value }); trace?.merged.push(to);
+          const value = tile.value * 2; merged.push(value); next.score += value; i++;
+        } else merged.push(tile.value);
       }
       slots.forEach((slot, i) => { next.cells[slot] = merged[i] || 0; });
     }
     next.best = Math.max(next.best, next.score); return next;
   }
   function move(game, direction, random = Math.random) {
-    if (!directions.includes(direction)) return game;
-    const next = slide(game, direction);
-    if (next.cells.every((tile, i) => tile === game.cells[i])) return game;
-    spawn(next.cells, random); return next;
+    return step(game, direction, random).game;
+  }
+  function step(game, direction, random = Math.random) {
+    const trace = { game, motions: [], merged: [], spawned: null, gain: 0 };
+    if (!directions.includes(direction)) return trace;
+    const next = slide(game, direction, trace);
+    if (next.cells.every((tile, i) => tile === game.cells[i])) return { ...trace, motions: [], merged: [] };
+    return { ...trace, game: next, spawned: spawn(next.cells, random), gain: next.score - game.score };
   }
   function over(game) { return directions.every(direction => slide(game, direction).cells.every((tile, i) => tile === game.cells[i])); }
-  function createView({ root, t, read, save }) {
+  function createView({ root, t, read, save, visibility = () => 'always' }) {
     let waiting = false, completed = false, swipe = null;
+    let animationOwner = null, animationGame = null, animationEpoch = 0;
+    const animations = new Set(), ghosts = new Set();
     root.innerHTML = `<button type="button" data-game-open></button><div class="wb-2048-panel" hidden>
       <header><strong>2048</strong><span data-game-score></span><button type="button" data-game-close></button></header>
       <p class="wb-2048-status" data-game-status role="status" aria-live="polite"></p>
       <div class="wb-2048-board" tabindex="0" role="group">${Array.from({ length: 16 }, () => '<span class="wb-2048-cell" aria-hidden="true"></span>').join('')}</div>
       <div class="wb-2048-controls">${directions.map((direction, i) => `<button type="button" data-game-direction="${direction}">${['←', '↑', '→', '↓'][i]}</button>`).join('')}<button type="button" data-game-new></button></div>
-      <p class="wb-2048-hint" data-game-hint></p></div>`;
+      <p class="wb-2048-hint" data-game-hint></p>
+      </div>`;
     const $ = selector => root.querySelector(selector), board = $('.wb-2048-board'), cells = [...root.querySelectorAll('.wb-2048-cell')];
+    function clearAnimation() {
+      animationEpoch++;
+      for (const animation of animations) animation.cancel(); animations.clear();
+      for (const ghost of ghosts) ghost.remove(); ghosts.clear();
+      cells.forEach(cell => { cell.style.color = ''; cell.style.background = ''; });
+      animationOwner = null; animationGame = null;
+    }
+    function animate(element, frames, options) {
+      const animation = element.animate(frames, options); animations.add(animation);
+      animation.finished.then(() => { animations.delete(animation); animation.cancel(); }, () => { animations.delete(animation); });
+      return animation;
+    }
+    function animateMove(value, result) {
+      if (!board.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !board.getBoundingClientRect().width) return;
+      animationOwner = value; animationGame = result.game;
+      const epoch = animationEpoch, bounds = board.getBoundingClientRect();
+      const boxes = cells.map(cell => cell.getBoundingClientRect());
+      cells.forEach(cell => { cell.style.color = 'transparent'; cell.style.background = 'var(--wb-line)'; });
+      const slides = result.motions.map(motion => {
+        const ghost = document.createElement('span'), from = boxes[motion.from], to = boxes[motion.to];
+        ghost.className = 'wb-2048-cell wb-2048-moving'; ghost.textContent = motion.value;
+        ghost.dataset.level = String(Math.min(11, Math.log2(motion.value))); ghost.setAttribute('aria-hidden', 'true');
+        Object.assign(ghost.style, { left: from.left - bounds.left + 'px', top: from.top - bounds.top + 'px', width: from.width + 'px', height: from.height + 'px' });
+        board.append(ghost); ghosts.add(ghost);
+        return animate(ghost, [{ transform: 'translate(0, 0)' }, { transform: 'translate(' + (to.left - from.left) + 'px, ' + (to.top - from.top) + 'px)' }],
+          { duration: 130, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' }).finished;
+      });
+      Promise.allSettled(slides).then(() => {
+        if (epoch !== animationEpoch) return;
+        clearAnimation();
+        if (read() !== value || value.game2048 !== result.game || root.hidden) return;
+        animationOwner = value; animationGame = result.game;
+        for (const index of result.merged) animate(cells[index], [{ transform: 'scale(1)' }, { transform: 'scale(1.18)', offset: .45 }, { transform: 'scale(1)' }], { duration: 170 });
+        if (result.spawned !== null) animate(cells[result.spawned], [{ transform: 'scale(.2)', opacity: 0 }, { transform: 'scale(1)', opacity: 1 }], { duration: 150 });
+        if (result.gain) animate($('[data-game-score]'), [{ transform: 'translateY(-4px)', color: 'var(--wb-accent)' }, { transform: 'translateY(0)' }], { duration: 220 });
+      });
+    }
     function render(options) {
       if (options) { waiting = options.waiting; completed = options.completed ?? !waiting; }
       root.dataset.waiting = String(Boolean(waiting));
-      const game = read()?.game2048;
-      root.hidden = !waiting && !game?.open;
+      const value = read();
+      if (value && !value.game2048) { value.game2048 = start(); save(); }
+      const game = value?.game2048;
+      root.hidden = !value || visibility() === 'summarizing' && !waiting;
+      if (animationOwner && (animationOwner !== value || animationGame !== game || root.hidden || !game?.open)) clearAnimation();
       $('[data-game-open]').hidden = Boolean(game?.open);
       $('[data-game-open]').textContent = t('잠깐 놀기 · 2048');
       $('.wb-2048-panel').hidden = !game?.open;
@@ -76,8 +128,9 @@
     function play(direction) {
       const value = read();
       if (!value?.game2048?.open) return;
-      const next = move(value.game2048, direction);
-      if (next !== value.game2048) { value.game2048 = next; save(); render(); }
+      clearAnimation();
+      const result = step(value.game2048, direction);
+      if (result.game !== value.game2048) { value.game2048 = result.game; save(); render(); animateMove(value, result); }
     }
     root.addEventListener('click', event => {
       const value = read(); if (!value) return;
@@ -108,7 +161,7 @@
     board.addEventListener('pointercancel', () => { swipe = null; });
     return { render };
   }
-  const api = { start, move, over, restore, createView };
+  const api = { start, move, step, over, restore, createView };
   if (typeof module !== 'undefined') module.exports = api;
   else window.Whitebox2048 = api;
 })();

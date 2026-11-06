@@ -103,7 +103,8 @@
 .wb-2048-panel > header span { margin-left: auto; font-size: 11px; color: var(--wb-muted); }
 #terminalWorkspace .wb-2048-panel button { min-height: 32px; padding: 4px 8px; font-size: 12px; }
 .wb-2048-status { min-height: 2.8em; margin: 12px 0; font-size: 12px; line-height: 1.4; color: var(--wb-muted); }
-.wb-2048-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 6px; border-radius: 8px; background: var(--wb-soft); touch-action: none; outline-offset: 4px; user-select: none; }
+.wb-2048-board { position:relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 6px; border-radius: 8px; background: var(--wb-soft); touch-action: none; outline-offset: 4px; user-select: none; }
+.wb-2048-moving { position:absolute; z-index:1; pointer-events:none; will-change:transform; }
 .wb-2048-board:focus-visible { outline: 2px solid var(--wb-accent); }
 .wb-2048-cell { display: grid; place-items: center; aspect-ratio: 1; min-width: 0; border-radius: 5px; background: var(--wb-line); color: #493d32; font-size: clamp(15px, 2.2vw, 25px); font-weight: 650; font-variant-numeric: tabular-nums; }
 .wb-2048-cell[data-level="1"] { background: #eee4d8; }

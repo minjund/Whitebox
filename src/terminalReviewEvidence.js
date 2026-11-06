@@ -38,10 +38,13 @@ function publicRecord(row, provider) {
     return { role: tool ? 'tool' : row.type, text };
   }
   if (row.type === 'event_msg' && event.type === 'task_complete') return { role: 'assistant', text: content(event.last_agent_message) };
-  if (row.type === 'event_msg' && event.type === 'user_message') return { role: 'user', text: content(event.message) };
+  if (row.type === 'event_msg' && event.type === 'user_message') return isNonTaskRequest(content(event.message)) ? null : { role: 'user', text: content(event.message) };
   if (row.type !== 'response_item') return null;
   if (['function_call_output', 'custom_tool_call_output'].includes(event.type)) return { role: 'tool', text: content(event.output) };
-  if (event.type === 'message' && (event.role === 'user' || event.role === 'assistant' && ['commentary', 'final'].includes(event.channel))) return { role: event.role, text: content(event.content) };
+  if (event.type === 'message' && (event.role === 'user' || event.role === 'assistant' && ['commentary', 'final'].includes(event.channel))) {
+    const text = content(event.content);
+    return event.role === 'user' && isNonTaskRequest(text) ? null : { role: event.role, text };
+  }
   return null;
 }
 

@@ -40,7 +40,7 @@ class TerminalCollaboration {
   save(job) { this.write(this.file(job.id, 'job'), job); }
   serialize(action) { const next = this.queue.then(action); this.queue = next.catch(() => {}); return next; }
   sync(payload) { return this.serialize(() => this.update(payload)); }
-  async update({ groups = [], frames = [] } = {}) {
+  async update({ groups = [], frames = [], summaryJobs = [] } = {}) {
     // Polling membership uses the host's event-fed metadata cache. Repeated
     // remote get calls queue behind shell launches on the host connection.
     const manager = this.manager();
@@ -101,7 +101,23 @@ class TerminalCollaboration {
     await this.control?.start();
     await this.poll();
     const visible = new Set([...this.groups.values()].flatMap(group => group.members.map(member => member.id)));
-    return { jobs: [...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80), connected: [...this.connected.keys()], panels: [...this.groups.values()].map(group => ({ id: group.id, name: group.name, members: group.members.map(member => ({ ...member, connected: this.connected.has(member.id), connectionError: '' })) })) };
+    const jobs = new Map([...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80).map(job => [job.id, job]));
+    // The display window must not hide a delivery needed to archive a reply.
+    // Look up only exact, app-owned submissions; missing records never authorize replay.
+    for (const request of (Array.isArray(summaryJobs) ? summaryJobs : []).slice(0, 100)) {
+      const member = currentMembers.get(request?.targetId);
+      if (!/^[a-f0-9-]{36}$/u.test(request?.id || '') || !member || member.creationId !== request.targetCreationId) continue;
+      if (!snapshot.available) continue;
+      const job = this.jobs.get(request.id);
+      const matches = job?.operation === 'summary' && job.targetId === member.id
+        && job.expectedCreationId === request.targetCreationId && job.expectedProviderPid === request.targetProviderPid
+        && job.expectedProvider === request.targetProvider;
+      const sameProcess = member.providerPid === request.targetProviderPid && member.provider === request.targetProvider;
+      jobs.set(request.id, matches && sameProcess ? job : { id: request.id, operation: 'summary', state: 'interrupted',
+        error: sameProcess ? '전송 기록을 확인하지 못했습니다. 터미널에서 확인해 주세요. 자동으로 재전송하지 않았습니다.'
+          : 'AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.' });
+    }
+    return { jobs: [...jobs.values()], connected: [...this.connected.keys()], panels: [...this.groups.values()].map(group => ({ id: group.id, name: group.name, members: group.members.map(member => ({ ...member, connected: this.connected.has(member.id), connectionError: '' })) })) };
   }
   async writeAccessFile(file, value) {
     const tmp = file + '.tmp';
@@ -143,9 +159,11 @@ class TerminalCollaboration {
   async send(groupId, id, message, deliveryId, expected = null, submit = true) {
     const target = await this.target(groupId, id);
     if (expected?.targetCreationId && (expected.targetCreationId !== target.live.creationId || expected.targetProviderPid !== target.child.pid || expected.targetProvider !== target.child.provider)) throw new Error('목록 조회 이후 상대 AI 세션이 바뀌었습니다. list를 다시 조회해 주세요.');
-    if (target.frame.inputDraft || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) throw new Error('상대가 작업 중이거나 입력 중인 글이 있습니다. 입력창이 비어 있고 답변이 끝났을 때 다시 요청해 주세요.');
+    const immediate = expected?.sendNow === true;
+    if (target.frame.inputDraft || immediate && require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
+      || !immediate && !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) throw new Error('상대가 작업 중이거나 입력 중인 글이 있습니다. 입력창이 비어 있고 답변이 끝났을 때 다시 요청해 주세요.');
     const native = await this.completion.observe(target.child);
-    if (native.available && native.state === 'working') throw new Error('상대 AI가 아직 작업 중입니다.');
+    if (!immediate && native.available && native.state === 'working') throw new Error('상대 AI가 아직 작업 중입니다.');
     const live = await this.manager().get(id, false);
     if (!live || live.creationId !== target.member.creationId || live.pid !== target.member.pid
       || exactProcess(live, await scanProcesses(this.monitor))?.pid !== target.child.pid) throw new Error('터미널 실행 세션이 바뀌었습니다.');
@@ -172,10 +190,12 @@ class TerminalCollaboration {
       try { target = await this.target(groupId, targetId); }
       catch (error) { if (error.code === 'TERMINAL_FRAME_STALE') return { deferred: true }; throw error; }
       if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('채팅을 작성한 AI 세션이 바뀌었습니다.');
-      if ([...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))
-        || target.frame.inputDraft || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) return { deferred: true };
+      const immediate = payload.sendNow === true;
+      if (target.frame.inputDraft || require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
+        || !immediate && ([...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))
+          || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider))) return { deferred: true };
       const native = await this.completion.observe(target.child);
-      if (native.available && native.state === 'working') return { deferred: true };
+      if (!immediate && native.available && native.state === 'working') return { deferred: true };
       // Persist before the first write. A lost acknowledgement is never replayed.
       const job = { id, operation: 'summary', sourceId: targetId, targetId, groupId, request: message,
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,

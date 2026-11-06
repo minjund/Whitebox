@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { applyClaudeRow } = require('../src/terminalReviewCompletion');
+const { applyClaudeRow, applyCodexRow } = require('../src/terminalReviewCompletion');
 const { publicRecord } = require('../src/terminalReviewEvidence');
 const { TerminalReview } = require('../src/terminalReview');
 const turns = require('../src/terminalReviewTurns');
@@ -12,6 +12,22 @@ const turns = require('../src/terminalReviewTurns');
 const summary = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n<system-reminder> <tools-used-before-summary>Bash, Skill, ToolSearch, mcp__claude_ai_Notion__notion-create-pages';
 module.exports = async function continuationChecks() {
   const user = (uuid, content, extra = {}) => ({ type: 'user', sessionId: 'owned', uuid, timestamp: '2026-11-04T02:00:00Z', message: { role: 'user', content }, ...extra });
+  const trust = "2. Trust all and continue\n3. Continue without trusting (hooks won't run)";
+  for (const menu of [trust, trust.replaceAll('\n', ' '), '❯ 1. Trust this folder and continue\n  2. Trust all and continue\n  3. Continue without trusting (hooks won’t run)', '1. Trust and continue\n' + trust, '1. Trust once and continue\n' + trust, 'Continue without trusting (hooks won\'t run)']) {
+    assert(turns.isNonTaskRequest(menu), 'trust controls are not human tasks');
+    assert.equal(turns.submittedPrompt('❯ ' + menu + '\n────────'), '');
+    const state = {};
+    applyClaudeRow(state, user('human', '실제 요청을 설명해줘'), 'owned');
+    applyClaudeRow(state, user('trust', menu), 'owned');
+    assert.equal(state.requestId, 'human');
+    assert.equal(publicRecord(user('trust', menu), 'claude'), null);
+    for (const payload of [{ type: 'user_message', message: menu }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: menu }] }]) {
+      const row = { type: payload.type === 'user_message' ? 'event_msg' : 'response_item', timestamp: '2026-11-04T02:00:00Z', payload };
+      const codex = { turnId: 'turn' }; applyCodexRow(codex, row);
+      assert.equal(codex.requestId, undefined); assert.equal(publicRecord(row, 'codex'), null);
+    }
+  }
+  for (const request of ['이 메뉴의 Trust all and continue는 무슨 뜻이야?', 'Explain this text:\n' + trust, '```\n' + trust + '\n```']) assert.equal(turns.isNonTaskRequest(request), false, 'quoted trust controls remain genuine requests');
   for (const row of [user('summary', summary), user('markdown', '## ' + summary), user('flagged', 'COMPACT_PRIVATE_SENTINEL', { isCompactSummary: true })]) {
     const state = {};
     applyClaudeRow(state, user('human', '오류 문구를 고쳐줘'), 'owned');
@@ -43,7 +59,7 @@ module.exports = async function continuationChecks() {
   const bad = { taskId: 'bad', request: summary, text: 'summary only', lifecycle: 'in-progress' };
   entry.turn = { ...bad, latest: bad }; entry.following = { ...bad }; entry.failed = { ...bad };
   entry.pending = [{ ...bad }]; entry.latest.bad = bad; entry.roots.bad = 'bad';
-  entry.result = { tasks: [good, { ...bad, recordOnly: true }] };
+  entry.result = { tasks: [good, { ...bad, recordOnly: true }, { taskId: 'trust', request: trust, lifecycle: 'interrupted', recordOnly: true }] };
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'whitebox-review-continuation-'));
   try {
     const file = path.join(directory, 'reviews.json');
@@ -71,11 +87,13 @@ module.exports = async function continuationChecks() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(lateService.busy, false); assert.equal(oldCalls, 1); assert.equal(extraReads, 0, 'discarded internal analysis cannot fetch more evidence or spend another call');
   assert.deepEqual(lateEntry.result.tasks, [good], 'late internal results cannot overwrite real history');
-  now += 100; native = { available: true, state: 'working', requestId: 'summary', request: summary, requestAt: now };
-  for (let index = 0; index < 3; index++) {
-    const view = await capture({ force: true, reanalyze: index === 2, submission: { id: 'summary-echo', request: summary, at: now } });
-    assert.equal(view.state, 'ready'); assert.equal(view.preview, null); assert.equal(view.currentTaskId, '');
-    assert.deepEqual(view.result.tasks, [good], 'already saved bogus cards are removed while real history survives');
+  for (const request of [summary, trust]) {
+    now += 100; native = { available: true, state: 'working', requestId: 'internal', request, requestAt: now };
+    for (let index = 0; index < 3; index++) {
+      const view = await capture({ force: true, reanalyze: index === 2, submission: { id: 'internal-echo', request, at: now } });
+      assert.equal(view.state, 'ready'); assert.equal(view.preview, null); assert.equal(view.currentTaskId, '');
+      assert.deepEqual(view.result.tasks, [good], 'already saved bogus cards are removed while real history survives');
+    }
   }
   assert.equal(calls.length, 0, 'summary polling, force and reanalysis must not spend model tokens');
   now += 100; native = { available: true, state: 'completed', requestId: 'next', request: '새 오류를 수정해줘', requestAt: now,
