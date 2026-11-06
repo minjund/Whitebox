@@ -40,6 +40,11 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   job=await ask(); await c.sync(p); assert.equal(c.jobs.get(job.id).state,'failed'); assert.equal(writes.length,1,'IME textarea draft blocks delivery');
   p=payload(); p.frames[1].text='› existing draft'; await c.sync(p); job=await ask(); await c.sync(p); assert.equal(c.jobs.get(job.id).state,'failed');
   p=payload(); await c.sync(p); native={available:true,state:'working'}; job=await ask(); await c.sync(p); assert.equal(c.jobs.get(job.id).state,'failed');
+  const forceFromAgent = { id:randomUUID(), operation:'ask', sourceId:'terminal:source', groupId:'group',
+    token:c.connected.get('terminal:source').token, targetId:'terminal:target', message:'agent cannot force delivery', sendNow:true };
+  fs.writeFileSync(path.join(directory,`${forceFromAgent.id}.request.json`),JSON.stringify(forceFromAgent)); await c.sync(p);
+  assert.equal(c.jobs.get(forceFromAgent.id).state,'failed','agent request fields cannot opt into the user-only send-anyway action');
+  assert.equal(writes.length,1,'forged immediate delivery never reaches the PTY');
   native={available:false}; await c.sync(p);
   const forged={id:randomUUID(),operation:'ask',sourceId:'terminal:source',groupId:'group',token:c.connected.get('terminal:source').token,targetId:'terminal:outside',message:'no'};
   fs.writeFileSync(path.join(directory,`${forged.id}.request.json`),JSON.stringify(forged)); await c.sync(p); assert.equal(c.jobs.get(forged.id).state,'failed');
