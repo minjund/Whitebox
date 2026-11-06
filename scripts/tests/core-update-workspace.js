@@ -1656,14 +1656,17 @@ function registerCliAndUpdateTests(context) {
       processExists: () => { throw Object.assign(new Error('already gone'), { code: 'ESRCH' }); },
     });
     let liveClock = 0;
-    await assert.rejects(terminateWindowsUpdateProcesses([3_592], {
+    // Cleanup intentionally excludes its own PID. A fixed fake PID can equal
+    // this test process on Windows and silently skip the negative probe.
+    const unconfirmedProbePid = process.pid + 1;
+    await assert.rejects(terminateWindowsUpdateProcesses([unconfirmedProbePid], {
       killProcessTree: async () => {},
       processExists: () => { throw Object.assign(new Error('access denied'), { code: 'EPERM' }); },
       now: () => liveClock,
       delay: async milliseconds => { liveClock += milliseconds; },
       terminationTimeoutMs: 5,
       terminationPollMs: 1,
-    }), error => error.code === 'UPDATE_HELPER_CANCELLATION_UNCONFIRMED' && error.pids[0] === 3_592);
+    }), error => error.code === 'UPDATE_HELPER_CANCELLATION_UNCONFIRMED' && error.pids[0] === unconfirmedProbePid);
     await assert.rejects(terminateWindowsUpdateProcesses([3_593], {
       killProcessTree: async () => {},
       processExists: () => { throw Object.assign(new Error('lookup failed'), { code: 'EIO' }); },
