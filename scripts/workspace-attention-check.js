@@ -40,7 +40,13 @@ app.whenReady().then(async () => {
   const preference = new AttentionPopupPreferenceStore(path.join(profile, 'attention.json'));
   const errors = [], resolutions = [];
   let lastPrompts = [];
-  const deadline = setTimeout(() => { console.error('Workspace attention E2E timed out'); app.exit(1); }, 60000);
+  let phase = 'fixture setup';
+  const stage = value => { phase = value; console.log('Workspace attention: ' + phase); };
+  const deadline = setTimeout(() => {
+    console.error('Workspace attention E2E timed out', { phase, errors,
+      terminals: manager.list().map(({ id, pid, status }) => ({ id, pid, status })) });
+    app.exit(1);
+  }, 60000);
   try {
     const sandbox = {
       require: createRequire(path.join(root, 'main.js')), crypto: require('node:crypto'),
@@ -82,8 +88,10 @@ app.whenReady().then(async () => {
     manager.on('data', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:data', payload); });
     manager.on('state', payload => { if (!win.isDestroyed()) win.webContents.send('terminals:state', payload); });
     const evaluate = code => win.webContents.executeJavaScript(code, true);
+    stage('load renderer');
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor(() => evaluate('Boolean(window.WhiteboxWorkspace)'), 'workspace ready');
+    stage('create second terminal');
     const first = manager.list()[0];
     await evaluate('WhiteboxWorkspace.createTerminal("row")');
     const second = manager.list().find(item => item.id !== first.id);
@@ -91,6 +99,7 @@ app.whenReady().then(async () => {
     fs.writeFileSync(fixture, `process.stdin.setRawMode(true); process.stdin.resume(); process.stdout.write(${JSON.stringify(prompt)}); process.stdin.once('data', data => { process.stdout.write('\\x1b[2J\\x1b[HAPPROVAL_RECEIVED:' + data.toString('hex') + '\\r\\n'); process.stdin.setRawMode(false); process.exit(0); });`);
     const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
     await manager.write(first.id, `node ${quote(fixture)}\r`);
+    stage('background approval popup');
     await waitFor(() => [...popups.windows.values()].some(entry => entry.ready && entry.presented), 'background shell approval popup');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id, 'automatic popup must not switch the selected terminal');
     const entry = [...popups.windows.values()][0];
@@ -114,6 +123,7 @@ app.whenReady().then(async () => {
     assert.ok(bounds.width <= Math.floor(area.width * .9) && bounds.height <= Math.min(360, Math.floor(area.height * .9)), 'popup respects horizontal size limits');
     assert.equal(lastPrompts[0].sessionId, first.id, 'ordinary shell without monitor snapshot is scanned');
     const request = [...sandbox.terminalAttentionPrompts.values()][0];
+    stage('reject stale identity and restore popup');
     assert.equal(sandbox.normalizeTerminalAttentionPrompts([{ ...lastPrompts[0], pid: first.pid + 1 }]).size, 0, 'stale process identity rejected');
     assert.equal(sandbox.normalizeTerminalAttentionPrompts([{ ...lastPrompts[0], creationId: 'workspace:old' }]).size, 0, 'stale creation identity rejected');
     await assert.rejects(sandbox.respondToTerminalAttention(request, { action: 'choice', choiceId: 'proceed' }, { context: { ...request.context, pid: first.pid + 1 } }), /연결/);
@@ -121,11 +131,13 @@ app.whenReady().then(async () => {
     await waitFor(() => [...popups.windows.values()].some(row => row.ready && row.presented), 'restored popup');
     // Click the actual popup button, then inspect the byte read by the PTY fixture.
     const current = [...popups.windows.values()][0];
+    stage('click approval and verify PTY byte');
     await current.window.webContents.executeJavaScript(`document.querySelector('.terminal-actions .popup-button').click()`, true);
     await waitFor(() => manager.get(first.id, true).replay.includes('APPROVAL_RECEIVED:79'), 'approval byte delivered');
     await waitFor(() => resolutions.length === 1 && popups.windows.size === 0, 'resolved popup removed');
     assert.equal(manager.get(second.id, true).replay.includes('APPROVAL_RECEIVED'), false, 'other shell untouched');
     await evaluate('WhiteboxTerminal.refreshPendingPrompts()');
+    stage('clear prompts and reject stale output');
     await waitFor(() => lastPrompts.length === 0, 'cleared screen no longer detected');
     sandbox.syncTerminalAttentionPrompts([{ ...lastPrompts[0], ...{
       sessionId: first.id, creationId: first.creationId, pid: first.pid, fingerprint: request.context.fingerprint,
@@ -133,21 +145,25 @@ app.whenReady().then(async () => {
     } }]);
     const stale = [...sandbox.terminalAttentionPrompts.values()][0];
     await assert.rejects(sandbox.respondToTerminalAttention(stale, { action: 'choice', choiceId: 'proceed' }, { context: stale.context }), /바뀌었거나/);
+    stage('settings screenshot and preference');
     await evaluate(`document.querySelector('[data-action="settings"]').click()`);
     const artifacts = path.join(root, 'artifacts');
     fs.mkdirSync(artifacts, { recursive: true });
     fs.writeFileSync(path.join(artifacts, 'workspace-attention-settings.png'), (await win.webContents.capturePage()).toPNG());
     await evaluate(`document.querySelector('#wbAttentionEnabled').click()`);
     await waitFor(() => preference.snapshot().enabled === false, 'popup setting saved');
+    stage('reload renderer');
     await win.reload();
     await waitFor(() => evaluate('Boolean(window.WhiteboxWorkspace)'), 'reloaded workspace');
     assert.equal(await evaluate('document.querySelector("#wbAttentionEnabled").checked'), false);
+    stage('navigate to exact terminal');
     win.webContents.send('agents:attention-requested', { terminalId: first.id, sessionId: first.id, event: 'terminal' });
     await waitFor(() => evaluate(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(first.id)}`), 'popup navigation selects exact terminal');
     assert.deepEqual(errors, []);
     console.log('PASS: workspace shell → bottom-right popup → exact PTY response; stale identity/output rejected; cleared prompts removed; settings persist; exact terminal navigation');
   } catch (error) { console.error(error.stack, errors); process.exitCode = 1; }
   finally {
+    stage('dispose popup and PTYs');
     popups?.dispose();
     await manager.dispose();
     win?.destroy();
