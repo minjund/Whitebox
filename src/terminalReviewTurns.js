@@ -98,7 +98,7 @@ function completedTurn(screen, request, provider, baselineStamp, options = {}) {
   const evidence = lines.slice(start, ready).join('\n').trim();
   // A completion banner without answer content is not enough.
   const answer = lines.slice(start + request.split('\n').length, ready)
-    .filter(line => line.trim() && !finishedPattern[provider].test(line) && !/^\s*[─━-]+\s*$/u.test(line));
+    .filter(line => line.trim() && !finishedPattern[provider].test(line) && !busyPattern.test(line) && !/^\s*[─━-]+\s*$/u.test(line));
   return answer.length ? evidence : '';
 }
 

@@ -72,6 +72,7 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
     assert.equal(inputReady(completed.replace(prompt, '› real draft'), provider), false, 'an actual draft still blocks automatic delivery');
     assert.equal(inputReady(`› first\n• Working (esc to interrupt)\n${prompt}`, provider), false, 'an empty prompt without an explicit finish cannot clear a busy indicator');
     assert(completedTurn(completed, 'first', provider, completionStamp('› first', provider), { exactRequest: true }), 'old busy text does not hide the verified completed reply');
+    assert.equal(completedTurn(completed.replace('• answer\n', ''), 'first', provider, completionStamp('› first', provider), { exactRequest: true }), '', 'a former spinner alone is not answer evidence');
   }
   const before=completionStamp('› ㅎㅇ','codex');
   assert.equal(completedTurn('› 다른말\n• 답\nWorked for 2s • 3:42 PM\n› ', 'ㅎㅇ','codex',before,{exactRequest:true}),'');
