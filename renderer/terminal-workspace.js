@@ -38,6 +38,7 @@
   let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
   let summaryGameVisibility = 'always';
+  let summaryGameBehavior = 'auto-collapse';
   let reviewView = 'current';
   let reviewTask = null;
   const reanalysisRequests = new Map();
@@ -173,6 +174,7 @@
       </section>
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
+        <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>답변 도착 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">답변 오면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
         <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 표시</strong><span>요약 화면의 게임 표시 방식</span></label><select id="wbSummaryGameVisibility"><option value="always">항상 표시</option><option value="summarizing">AI 요약 중에만 표시</option></select></div>
         <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
@@ -208,7 +210,7 @@
       .filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)),
     label: id => { const owner = terminalPosition(id)?.owner; return `${owner?.name || ''} · ${title(id)}`; },
     title: id => title(id),
-    refresh: () => syncCollaboration(), save: () => save(), gameVisibility: () => summaryGameVisibility,
+    refresh: () => syncCollaboration(), save: () => save(), gameVisibility: () => summaryGameVisibility, gameBehavior: () => summaryGameBehavior,
     startSummary: () => requestReanalysis(),
     captureReply: async job => {
       const session = sessions.get(job.targetId);
@@ -505,7 +507,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameVisibility, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -2074,6 +2076,10 @@
     // An in-flight poll may still carry the previous setting; observe again after it.
     (reviewBusy ? reviewTask.catch(() => {}) : Promise.resolve()).then(() => captureReviews());
   });
+  $('#wbSummaryGameBehavior').addEventListener('change', event => {
+    summaryGameBehavior = event.target.value === 'always-open' ? 'always-open' : 'auto-collapse';
+    save(); summaryChat.render();
+  });
   $('#wbSummaryGameVisibility').addEventListener('change', event => {
     summaryGameVisibility = event.target.value === 'summarizing' ? 'summarizing' : 'always';
     save(); summaryChat.render();
@@ -2177,6 +2183,8 @@
     autoReview = saved.autoReview !== false;
     summaryGameVisibility = saved.summaryGameVisibility === 'summarizing' ? 'summarizing' : 'always';
     $('#wbSummaryGameVisibility').value = summaryGameVisibility;
+    summaryGameBehavior = saved.summaryGameBehavior === 'always-open' ? 'always-open' : 'auto-collapse';
+    $('#wbSummaryGameBehavior').value = summaryGameBehavior;
     const trashIds = new Set();
     trash = (Array.isArray(saved.trash) ? saved.trash : []).filter(item => {
       if (!item || typeof item.id !== 'string' || typeof item.cwd !== 'string' || !item.cwd || trashIds.has(item.id)) return false;

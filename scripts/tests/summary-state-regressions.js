@@ -16,7 +16,7 @@ exports.run = async evaluate => {
         activeId: () => 'states', session: () => ({ status: 'running', creationId: 'epoch', pid: 100 }),
         member: () => member, tasks: () => data.tasks, review: () => data.review,
         snapshot: () => ({ text: '' }), label: () => 'states', groupId: () => 'group',
-        gameVisibility: () => data.visibility, save: () => {}, reveal: () => {}, report: () => {}, submitted: () => {},
+        gameVisibility: () => data.visibility, gameBehavior: () => data.behavior || 'auto-collapse', save: () => {}, reveal: () => {}, report: () => {}, submitted: () => {},
         refresh: async () => {
           stats.lookups.push(chat.pendingJobs());
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
@@ -84,6 +84,23 @@ exports.run = async evaluate => {
     f.data.visibility = 'always'; f.chat.render();
     check(!f.root.querySelector('#wbSummaryGame').hidden && JSON.stringify(f.chat.serialize()[0].game2048.cells) === before, 'visibility changes preserve the board');
     f.root.querySelector('[data-game-close]').click(); f.chat.render(); check(f.root.querySelector('.wb-2048-panel').hidden, 'explicit collapse remains respected'); cases.push('game-visibility');
+    f = make({ messages: [user('a')], review: { state: 'awaiting-answer' } });
+    const boardBeforeReply = JSON.stringify(f.chat.serialize()[0].game2048);
+    check(!f.root.querySelector('.wb-2048-panel').hidden, 'default board is open while waiting');
+    f.data.tasks = [task('a')]; f.data.review = { state: 'reviewing', analysisTaskId: 'a' }; f.chat.render();
+    check(f.root.querySelector('.wb-2048-panel').hidden, 'default collapses at reply arrival before summary completion');
+    check(JSON.stringify({ ...f.chat.serialize()[0].game2048, open: true }) === boardBeforeReply, 'collapse preserves cells, score and best');
+    f.root.querySelector('[data-game-open]').click(); f.chat.render();
+    check(!f.root.querySelector('.wb-2048-panel').hidden, 'manual reopen survives repeated completion polls');
+    f.data.tasks = [task('b')]; f.data.review = { state: 'ready' };
+    f.chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: [user('b')], game2048: f.chat.serialize()[0].game2048 }]); f.chat.render();
+    check(f.root.querySelector('.wb-2048-panel').hidden, 'a different reply collapses again');
+    f.data.behavior = 'always-open'; f.chat.render();
+    check(!f.root.querySelector('.wb-2048-panel').hidden, 'keep expanded immediately reopens the board');
+    f.chat.render(); check(!f.root.querySelector('.wb-2048-panel').hidden, 'keep expanded survives completed reply polls');
+    f.data.behavior = 'auto-collapse'; f.chat.render();
+    check(f.root.querySelector('.wb-2048-panel').hidden, 'switching back applies auto collapse to arrived reply');
+    cases.push('game-auto-collapse');
     f = make({ review: { state: 'reviewing' } });
     f.member.ready = false; f.member.activity.state = 'working';
     const composer = f.root.querySelector('#wbSummaryInput'); composer.value = 'send me now';
@@ -103,6 +120,6 @@ exports.run = async evaluate => {
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
     return cases;
   })()`);
-  assert.equal(result.length, 14);
+  assert.equal(result.length, 15);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };

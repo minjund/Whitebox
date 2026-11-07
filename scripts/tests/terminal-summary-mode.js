@@ -91,6 +91,7 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
   await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', 'keyboard mode toggle');
   assert(await summary());
+  assert.equal(await evaluate('document.querySelector("#wbSummaryGameBehavior").value'), 'auto-collapse', 'game behavior defaults to auto-collapse');
   assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'always', 'game setting defaults to always');
   assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden && !document.querySelector(".wb-2048-panel").hidden'), 'game starts open before any summary request');
   assert(await evaluate('document.querySelector("#wbSummarySend").classList.contains("ui-buttonc")'), 'actual affectUI send button mounted');
@@ -160,7 +161,7 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
     fixture.setDelayed(false); await capture();
     await waitFor(`document.querySelector('#wbSummaryMessages').textContent.includes('요약: AFTER_SUMMARY_${provider}')`, 'delayed summary catches up');
     if (provider === 'claude') {
-      assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), false, 'completion keeps game open');
+      assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), true, 'reply completion automatically collapses the game');
       await waitFor('document.querySelector("#wbSummaryGame").dataset.waiting === "false"', 'completed summary updates open game');
     }
   }
@@ -173,8 +174,11 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   assert(fixture.capturedReplies.has(priorReply.id), 'exact archived completion is captured before the next write');
   for (const jobId of historyIds) fixture.controller.jobs.delete(jobId);
   await capture();
+  await evaluate('document.querySelector("[data-game-open]").click()');
   const gameBeforeSettings = await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()');
   await click('[data-action=settings]'); await click('[data-settings-section=analysis]');
+  await evaluate('document.querySelector("#wbSummaryGameBehavior").value="always-open"; document.querySelector("#wbSummaryGameBehavior").dispatchEvent(new Event("change"))');
+  assert(await evaluate('!document.querySelector(".wb-2048-panel").hidden'), 'keep expanded opens completed board');
   await evaluate('document.querySelector("#wbSummaryGameVisibility").value="summarizing"; document.querySelector("#wbSummaryGameVisibility").dispatchEvent(new Event("change"))');
   assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'summarizing-only setting hides completed game');
   fixture.setDelayed(true); await capture();
@@ -196,6 +200,7 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload summary chat'); await capture();
   await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', 'mode restored');
   assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'summarizing', 'visibility setting survives reload');
+  assert.equal(await evaluate('document.querySelector("#wbSummaryGameBehavior").value'), 'always-open', 'game behavior survives reload');
   assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'reload respects summarizing-only setting');
   assert.equal(await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()'), gameBeforeSettings, 'setting and reload preserve the board');
   await evaluate('document.querySelector("#wbSummaryGameVisibility").value="always"; document.querySelector("#wbSummaryGameVisibility").dispatchEvent(new Event("change"))');
