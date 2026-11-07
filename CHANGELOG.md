@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.23 - 2026-11-08
+
+- Collapse the Summary mode 2048 board when an AI reply arrives by default, preserving its tiles and score and allowing it to be reopened.
+- Add a saved “Keep expanded” game setting; retain the existing always-visible and summarizing-only visibility choices.
+- Verify official 2.0.22 installers alongside all retained Windows and macOS update cohorts.
+
 ## 2.0.22 - 2026-11-06
 
 - Preserve live startup terminal identity when an early PID event is followed by a stale metadata response, while keeping real stop events authoritative.

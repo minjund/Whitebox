@@ -51,8 +51,9 @@
     return { ...trace, game: next, spawned: spawn(next.cells, random), gain: next.score - game.score };
   }
   function over(game) { return directions.every(direction => slide(game, direction).cells.every((tile, i) => tile === game.cells[i])); }
-  function createView({ root, t, read, save, visibility = () => 'always' }) {
-    let waiting = false, completed = false, swipe = null;
+  function createView({ root, t, read, save, visibility = () => 'always', behavior = () => 'auto-collapse' }) {
+    let waiting = false, completed = false, swipe = null, replyKey = null;
+    const observed = new WeakMap();
     let animationOwner = null, animationGame = null, animationEpoch = 0;
     const animations = new Set(), ghosts = new Set();
     root.innerHTML = `<button type="button" data-game-open></button><div class="wb-2048-panel" hidden>
@@ -101,16 +102,29 @@
       });
     }
     function render(options) {
-      if (options) { waiting = options.waiting; completed = options.completed ?? !waiting; }
+      if (options) { waiting = options.waiting; completed = options.completed ?? !waiting; replyKey = options.replyKey || null; }
       root.dataset.waiting = String(Boolean(waiting));
       const value = read();
       if (value && !value.game2048) { value.game2048 = start(); save(); }
       const game = value?.game2048;
+      let restoreFocus = false;
+      if (game) {
+        const previous = observed.get(value), policy = behavior();
+        const freshReply = replyKey && previous?.replyKey !== replyKey;
+        const reopen = previous?.policy !== policy && policy === 'always-open';
+        const collapse = policy === 'auto-collapse' && (freshReply || previous?.policy !== policy && replyKey);
+        observed.set(value, { policy, replyKey: replyKey || previous?.replyKey });
+        if ((collapse && game.open) || (reopen && !game.open)) {
+          restoreFocus = Boolean(collapse && root.contains(document.activeElement));
+          game.open = !collapse; save();
+        }
+      }
       root.hidden = !value || visibility() === 'summarizing' && !waiting;
       if (animationOwner && (animationOwner !== value || animationGame !== game || root.hidden || !game?.open)) clearAnimation();
       $('[data-game-open]').hidden = Boolean(game?.open);
       $('[data-game-open]').textContent = t('잠깐 놀기 · 2048');
       $('.wb-2048-panel').hidden = !game?.open;
+      if (restoreFocus && !root.hidden) $('[data-game-open]').focus({ preventScroll: true });
       if (!game?.open) return;
       $('[data-game-close]').textContent = t('접기');
       $('[data-game-new]').textContent = t('새 게임');

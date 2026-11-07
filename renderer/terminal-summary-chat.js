@@ -15,7 +15,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const notice = root.querySelector('#wbSummaryNotice');
   const jobsById = new Map();
   const game = window.Whitebox2048.createView({ root: root.querySelector('#wbSummaryGame'), t, esc,
-    read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always' });
+    read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always', behavior: () => context.gameBehavior?.() || 'auto-collapse' });
   const identity = member => ({ targetCreationId: member.creationId, targetProviderPid: member.providerPid, targetProvider: member.provider });
   function control(label, attributes, disabled = false, variant = 'ghost', translate = true) {
     return `<span data-summary-control data-variant="${variant}"><button type="button" ${attributes} ${disabled ? 'disabled' : ''}>${esc(translate ? t(label) : label)}</button></span>`;
@@ -345,7 +345,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryNext').hidden = !summaryDone;
     $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
       || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
-    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone });
+    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone, replyKey: replyDone && !interrupted ? sent?.id || task?.taskId || preview?.taskId : null });
   }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
