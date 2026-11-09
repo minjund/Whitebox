@@ -92,8 +92,12 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   await waitFor('document.querySelector("#terminalWorkspace").classList.contains("summary-mode")', 'keyboard mode toggle');
   assert(await summary());
   assert.equal(await evaluate('document.querySelector("#wbSummaryGameBehavior").value'), 'auto-collapse', 'game behavior defaults to auto-collapse');
-  assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'always', 'game setting defaults to always');
-  assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden && !document.querySelector(".wb-2048-panel").hidden'), 'game starts open before any summary request');
+  assert.equal(await evaluate('document.querySelector("#wbSummaryGameVisibility").value'), 'summarizing', 'game defaults to summarizing-only');
+  assert(await evaluate('document.querySelector("#wbSummaryGame").hidden'), 'no game before any summary is being generated');
+  assert(await evaluate('document.querySelector("#wbSummaryGameBehavior").disabled'), 'the collapse option applies only when the game is unlocked');
+  // The rest of this flow exercises the unlocked game.
+  await evaluate('document.querySelector("#wbSummaryGameVisibility").value="always"; document.querySelector("#wbSummaryGameVisibility").dispatchEvent(new Event("change"))');
+  assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden && !document.querySelector(".wb-2048-panel").hidden && !document.querySelector("#wbSummaryGameBehavior").disabled'), 'unlocking shows the game at any time');
   assert(await evaluate('document.querySelector("#wbSummarySend").classList.contains("ui-buttonc")'), 'actual affectUI send button mounted');
   assert(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).display === "none" && getComputedStyle(document.querySelector("#wbReview")).display === "none"'));
   await evaluate('document.querySelector("#wbSummaryInput").value="/comp"; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
