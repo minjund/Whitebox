@@ -22,6 +22,24 @@ module.exports = async function policyChecks() {
   assert.equal(plan.actual, '네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.', 'a short deferred reply is shown verbatim instead of a placeholder');
   assert.match(classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n' + '먼저 문서를 살펴보겠습니다. '.repeat(60) }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a long deferred reply keeps the placeholder');
   assert.match(classifyEvidence({ ...asking, text: 'USER:\n수정해줘\n\nASSISTANT (completed answer):\n완료했습니다.' , request: '수정해줘' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a generic completion claim is not a result to show');
+  {
+    // A waiting card published during the turn shows the real reply once it
+    // arrives, instead of keeping the placeholder until analysis finishes.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-waiting-card-'));
+    try {
+      const service = new TerminalReview({ file: path.join(dir, 'reviews.json') });
+      const placeholder = classifyEvidence({ ...asking, text: '' }, []).actual;
+      const entry = { key: '["t","c",1,"x"]', latest: {}, seen: {}, pending: [], result: { tasks: [{ taskId: 'w', request: asking.request, lifecycle: 'in-progress', deferred: true, recordOnly: true, analysisDepth: 'deferred', actual: placeholder }] } };
+      const longReply = 'GraphQL이 일부는 해소해 줍니다. '.repeat(60);
+      service.enqueue('t', entry, { ...asking, taskId: 'w', lifecycle: 'completed', text: 'USER:\n' + asking.request + '\n\nASSISTANT (completed answer):\n' + longReply });
+      const card = entry.result.tasks[0];
+      assert.equal(card.lifecycle, 'completed');
+      assert.equal(card.actual, longReply.trim(), 'a finished reply replaces the placeholder on the waiting card');
+      entry.result.tasks.push({ taskId: 'r', request: 'relay', lifecycle: 'completed', recordOnly: true, analysisDepth: 'record', actual: 'Codex에 보냈고 답을 받았어요' });
+      service.enqueue('t', entry, { ...asking, taskId: 'r', lifecycle: 'completed', text: 'USER:\nrelay\n\nASSISTANT (completed answer):\n다른 글' });
+      assert.equal(entry.result.tasks[1].actual, 'Codex에 보냈고 답을 받았어요', 'a recorded result card is never overwritten');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
   assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).mode, 'analyze', 'a recorded awaiting-response turn is analyzed');
   assert.equal(classifyEvidence(relay, [{ ...jobs[0], sentAt: 1 }]).mode, 'defer');
   assert.equal(classifyEvidence({ ...relay, request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기 그리고 오류 수정해줘' }, jobs).mode, 'defer');

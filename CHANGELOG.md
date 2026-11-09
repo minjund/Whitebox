@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## Unreleased
+
+- Follow the latest request by time in Summary mode, and show the transcript in time order, so an older unfinished turn saved later no longer keeps “Waiting for the AI reply” after the newer answer is done.
+- Show the AI's actual reply on a finished turn's Summary card while its analysis is still queued, instead of “no concrete result yet”.
+
 ## 2.0.25 - 2026-11-09
 
 - Keep a valid Summary brief when the model quotes the request or reply with normalized whitespace, and tell the repair pass exactly which citation to copy verbatim (typos and markdown included) instead of reporting a missing brief.

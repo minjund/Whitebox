@@ -185,8 +185,22 @@ exports.run = async evaluate => {
     await type('/'); key('Escape'); check(commands().hidden, 'Escape closes the list');
     await type('hello /compact'); check(commands().hidden, 'a slash inside text is not a command');
     check(f.stats.catalogs === 1, 'the catalog is fetched once per terminal and provider'); cases.push('slash-commands');
+    // A saved transcript can hold an old, never-finished turn after a newer
+    // finished one (imports, restarts). Progress follows the latest turn by
+    // time, and the transcript is shown in time order.
+    {
+      const now = Date.now(), early = now - 3 * 3600000;
+      const latest = task('latest', { request: '최근 요청', submittedAt: now - 60000, actual: '최근 요청을 처리했습니다.' });
+      const stale = task('stale', { request: '오래된 요청', submittedAt: early, lifecycle: 'in-progress', analysisLifecycle: 'in-progress', deferred: true, analysisDepth: 'deferred', actual: '결과가 수집되면 분석할게요.' });
+      f = make({ tasks: [latest], messages: [
+        user('latest', { text: '최근 요청', at: now - 60000, sentAt: now - 60000, answerKey: 'latest' }), { role: 'answer', id: 'answer:latest', key: 'latest', task: latest },
+        user('stale', { text: '오래된 요청', at: early, sentAt: early, answerKey: 'stale' }), { role: 'answer', id: 'answer:stale', key: 'stale', task: stale }] });
+      check(f.state().title === '답변과 요약이 도착했어요' && !f.state().loading, 'progress follows the latest finished turn, not an older one saved later: ' + JSON.stringify(f.state()));
+      check(f.chat.serialize()[0].messages.map(message => message.id).join(',') === 'stale,answer:stale,latest,answer:latest', 'transcript is shown in time order: ' + f.chat.serialize()[0].messages.map(message => message.id).join(','));
+      cases.push('latest-turn-by-time');
+    }
     return cases;
   })()`);
-  assert.equal(result.length, 22);
+  assert.equal(result.length, 23);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };

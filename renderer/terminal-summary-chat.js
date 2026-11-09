@@ -115,7 +115,28 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         value.messages.splice(before < 0 ? value.messages.length : before, 0, ...request, answer);
       }
     }
-    value.messages = value.messages.slice(-100);
+    value.messages = chronological(value.messages).slice(-100);
+  }
+  // Saved transcripts can hold turns out of order (imported history, restarts,
+  // a send acknowledged after a later import). Show each request with its
+  // answer in submission time order; unsent messages stay last in send order.
+  const sentTime = message => Number(message.sentAt || message.at) || 0;
+  function chronological(messages) {
+    const units = [], claimed = new Set();
+    for (const message of messages) {
+      if (message.role === 'answer') {
+        if (claimed.has(message)) continue;
+        units.push({ items: [message], time: Number(message.task?.submittedAt) || Date.parse(message.task?.observedAt) || 0 });
+        continue;
+      }
+      const answers = message.answerKey ? messages.filter(item => item.role === 'answer' && item.key === message.answerKey && !claimed.has(item)) : [];
+      answers.forEach(item => claimed.add(item));
+      units.push({ items: [message, ...answers], time: ['queued', 'sending'].includes(message.state) ? Infinity : sentTime(message) });
+    }
+    // An unknown time keeps the unit next to the one before it.
+    let previous = 0;
+    for (const unit of units) { if (!unit.time) unit.time = previous; previous = unit.time; }
+    return units.map((unit, index) => ({ ...unit, index })).sort((a, b) => a.time - b.time || a.index - b.index).flatMap(unit => unit.items);
   }
   function fallBack(id, message) {
     const value = record(id);
@@ -385,7 +406,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const users = value.messages.filter(message => message.role === 'user' && ['sent', 'sending', 'interrupted', 'stopped'].includes(message.state));
     // Imported historical requests may arrive later than a user's new send.
     // Follow submission identity/time, not the last rendered bubble.
-    const outgoing = [...users].reverse().find(message => message.targetCreationId);
+    const outgoing = users.filter(message => message.targetCreationId)
+      .reduce((latest, message) => !latest || sentTime(message) >= sentTime(latest) ? message : latest, null);
     const preview = review?.preview;
     const current = preview && (users.find(message => preview.submissionId === message.id || preview.taskId && preview.taskId === message.answerKey)
       || { id: preview.submissionId || `request:${preview.taskId}`, answerKey: preview.taskId, state: 'sent', at: preview.submittedAt });

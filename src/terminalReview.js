@@ -6,7 +6,7 @@ const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { completedTurn, currentTurnEvidence, isNonTaskRequest } = require('./terminalReviewTurns');
 const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement } = require('./terminalReviewPolicy');
-const { bounded } = require('./terminalReviewBudget');
+const { bounded, answerText } = require('./terminalReviewBudget');
 const { screenTools, compactTools } = require('./terminalReviewTools');
 const { compactContext, compactUpdates } = require('./terminalReviewContext');
 const { normalizeReviewSettings } = require('./terminalReviewSettings');
@@ -375,9 +375,14 @@ class TerminalReview extends EventEmitter {
     chunk.digest = evidenceDigest(chunk);
     entry.latest[chunk.taskId] = chunk;
     const existing = this.task(entry, chunk.taskId);
-    if (existing && existing.lifecycle !== chunk.lifecycle) {
+    // A waiting card shows the AI's actual reply as soon as it exists, instead
+    // of "no concrete result yet", until the analysis replaces it.
+    const reply = existing?.deferred ? answerText(chunk.text) : '';
+    const shownReply = reply ? bounded(reply, 4000) : '';
+    if (existing && (existing.lifecycle !== chunk.lifecycle || shownReply && existing.actual !== shownReply)) {
       existing.lifecycle = chunk.lifecycle;
       existing.awaitingResponse = Boolean(chunk.awaitingResponse);
+      if (shownReply) existing.actual = shownReply;
       this.persist(id, entry);
     }
     const seen = entry.seen[chunk.taskId];
