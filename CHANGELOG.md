@@ -12,6 +12,11 @@ GitHub release notes remain the authoritative version history.
 - Never show a line the AI printed mid-turn (for example “Verified. Now updating local state…”) as a turn's answer; a waiting card shows the finished reply only.
 - Follow the latest request by time in Summary mode, and show the transcript in time order, so an older unfinished turn saved later no longer keeps “Waiting for the AI reply” after the newer answer is done.
 - Show the AI's actual reply on a finished turn's Summary card while its analysis is still queued, instead of “no concrete result yet”.
+- A Summary request sent as a paste, or sent with “Send anyway” while the AI was working, now completes when its reply finishes instead of holding later requests in the queue for 15 minutes.
+- The Summary review status shows the reviewer's live state (watching the work, preparing evidence, analyzing), matching terminal mode, instead of “Waiting”.
+- Long-running background commands and background helper AIs keep their sidebar icon while they run, including commands with quotes or multiple lines.
+- The terminal redraws sharply after zooming or moving the window to a display with a different pixel density.
+- Read Claude sessions from every Claude config folder (for example `~/.claude-ubion` used by claude-ubion), so their completion, Summary, review, background icons and usage work, and install the attention hooks in each folder.
 - Verify official 2.0.25 installers alongside all retained Windows and macOS update cohorts.
 
 ## 2.0.25 - 2026-11-09
