@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   terminalGet: (id, includeReplay = true) => ipcRenderer.invoke('terminals:get', id, includeReplay),
   terminalCompletionRead: payload => ipcRenderer.invoke('terminals:completion-read', payload),
   terminalCollaboration: payload => ipcRenderer.invoke('terminals:collaboration', payload),
+  slashCommands: payload => ipcRenderer.invoke('terminals:slash-commands', payload),
   terminalReview: payload => ipcRenderer.invoke('terminals:review', payload),
   terminalCreate: options => ipcRenderer.invoke('terminals:create', options),
   terminalWrite,

@@ -18,6 +18,11 @@ const CONTINUATION_TOOLS = new Set([
   'write_stdin',
 ]);
 
+// Claude Code's Monitor tool runs a script off-screen and streams its events
+// as task notifications. It is a background execution with its own task id.
+const MONITOR_TOOLS = new Set(['monitor']);
+const STOP_TOOLS = new Set(['taskstop']);
+
 function toolName(value) {
   return String(value || '').trim().toLowerCase().split(/[.:/]/).filter(Boolean).pop() || '';
 }
@@ -91,7 +96,8 @@ function executionInput(name, args = {}, rawInput = '') {
     || args.detach === true
     || booleanProperty(source, 'run_in_background') === true
     || booleanProperty(source, 'background') === true;
-  if (!shell && !runInBackground) return null;
+  const monitor = MONITOR_TOOLS.has(normalizedName);
+  if (!shell && !runInBackground && !monitor) return null;
   if (/^(?:task|agent|spawn_agent)$/.test(normalizedName)) return null;
   const command = args.command || args.cmd || args.script
     || quotedProperty(source, 'cmd') || quotedProperty(source, 'command');
@@ -99,8 +105,8 @@ function executionInput(name, args = {}, rawInput = '') {
     || quotedProperty(source, 'workdir') || quotedProperty(source, 'cwd');
   const description = args.description || quotedProperty(source, 'description');
   return {
-    kind: shell ? 'shell' : 'background',
-    mode: runInBackground ? 'background' : 'foreground',
+    kind: monitor ? 'monitor' : shell ? 'shell' : 'background',
+    mode: runInBackground || monitor ? 'background' : 'foreground',
     command: String(command || ''),
     cwd: String(cwd || ''),
     description: String(description || ''),
@@ -129,6 +135,7 @@ function firstCommandLine(value, fallback = '') {
 function runtimeHandle(value) {
   const text = outputText(value);
   const patterns = [
+    { type: 'task', pattern: /^\s*monitor started \(task\s+([A-Za-z0-9._:-]+)/i },
     { type: 'cell', pattern: /(?:cell(?:\s+id)?|cell_id)[\s:=`"']+([A-Za-z0-9._:-]+)/i },
     { type: 'session', pattern: /(?:session(?:\s+id)?|session_id)[\s:=`"']+([A-Za-z0-9._:-]+)/i },
     { type: 'task', pattern: /(?:background(?:\s+(?:task|command))?(?:\s+with)?(?:\s+id)?|task_id)[\s:=`"']+([A-Za-z0-9._:-]+)/i },
@@ -165,7 +172,7 @@ function outputStatus(value, explicitError = false) {
   if (firstLine.startsWith('script running')) return 'running';
   const code = exitCode(text);
   if (explicitError || (code != null && code !== 0) || /(?:script|command|process)\s+failed|isError["':\s]+true|fatal error/i.test(text)) return 'failed';
-  if (/^(?:command|process)\s+(?:is\s+)?(?:still\s+)?running\b|\brunning\s+in\s+(?:the\s+)?background\b|^background\s+(?:task|command)\b.*\brunning\b|\byielded\b/i.test(firstLine)) return 'running';
+  if (/^(?:command|process)\s+(?:is\s+)?(?:still\s+)?running\b|\brunning\s+in\s+(?:the\s+)?background\b|^background\s+(?:task|command)\b.*\brunning\b|\byielded\b|^monitor started\b/i.test(firstLine)) return 'running';
   return 'completed';
 }
 
@@ -228,6 +235,20 @@ function createExecutionTracker(options = {}) {
     return activity;
   }
 
+  function findByHandle(handle) {
+    if (!handle || !handle.id) return null;
+    return [...activities].reverse().find(activity => activity.backgroundId === handle.id && activity.status === 'running') || null;
+  }
+
+  // A streamed event proves the off-screen task is still alive without
+  // changing its state. Only a running task with that exact id is touched.
+  function recordHeartbeat({ args = {}, at }) {
+    const activity = findByHandle(handleFromArgs(args));
+    if (!activity) return null;
+    activity.updatedAt = timestamp(at, activity.updatedAt);
+    return activity;
+  }
+
   function findContinuation(args = {}) {
     const handle = handleFromArgs(args);
     if (handle) return byHandle.get(`${handle.type}:${handle.id}`) || byHandle.get(handle.id) || null;
@@ -239,10 +260,24 @@ function createExecutionTracker(options = {}) {
     const normalizedName = pendingContinuation && pendingContinuation.name || toolName(name);
     const effectiveArgs = pendingContinuation && pendingContinuation.args || args;
     const continuation = CONTINUATION_TOOLS.has(normalizedName);
-    const activity = continuation ? findContinuation(effectiveArgs) : byCallId.get(String(callId || ''));
+    const stop = STOP_TOOLS.has(normalizedName);
+    const activity = continuation ? findContinuation(effectiveArgs)
+      : byCallId.get(String(callId || '')) || (stop || !callId ? findByHandle(handleFromArgs(effectiveArgs)) : null);
     if (!activity) {
       continuations.delete(String(callId || ''));
       return null;
+    }
+    if (stop) {
+      // Only a confirmed stop ends the task; a failed stop leaves it running.
+      const text = outputText(output);
+      const target = String(effectiveArgs.task_id || effectiveArgs.taskId || effectiveArgs.shell_id || '');
+      const missing = target && new RegExp(`no task found with id:\\s*${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+      if (!missing && (isError || !/(?:^|[\s"':])successfully stopped task\b/i.test(text))) return activity;
+      activity.status = 'cancelled';
+      activity.statusDetail = '요청으로 중단됨';
+      activity.updatedAt = timestamp(at, activity.updatedAt);
+      activity.completedAt = activity.updatedAt;
+      return activity;
     }
     const status = outputStatus(output, isError);
     const observedOutput = compactText(outputText(output), 2400);
@@ -286,7 +321,7 @@ function createExecutionTracker(options = {}) {
     return [...selected].sort((a, b) => a - b).map(index => ({ ...activities[index] }));
   }
 
-  return { activities, recordCall, recordOutput, finalize };
+  return { activities, recordCall, recordOutput, recordHeartbeat, finalize };
 }
 
 function reconcileExecutionActivities(activities = [], options = {}) {
@@ -324,6 +359,7 @@ function reconcileExecutionActivities(activities = [], options = {}) {
 
 module.exports = {
   CONTINUATION_TOOLS,
+  MONITOR_TOOLS,
   SHELL_TOOLS,
   createExecutionTracker,
   executionInput,

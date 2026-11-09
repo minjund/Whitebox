@@ -11,7 +11,7 @@ const { screenTools, compactTools } = require('./terminalReviewTools');
 const { compactContext, compactUpdates } = require('./terminalReviewContext');
 const { normalizeReviewSettings } = require('./terminalReviewSettings');
 const { assessDecision, repairPrompt, combinedUsage } = require('./terminalReviewDecision');
-const { contentInstructions, assessContent, historyContent } = require('./terminalReviewContent');
+const { contentInstructions, assessContent, historyContent, sourceExcerpt } = require('./terminalReviewContent');
 const { artifactText } = require('./terminalReviewArtifacts');
 
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
@@ -141,16 +141,19 @@ function parseReview(raw, source, locale = 'ko', request = '', lifecycle = 'comp
     throw responseFormatError(({ ko: '요청 하나에 대한 검토를 읽지 못했습니다. 다시 검토를 눌러 주세요.', en: 'Could not read a review for this single request. Please review again.', 'zh-CN': '无法读取此单条请求的审查，请重新审查。' })[locale] || 'Invalid single-request review',
       'exactly one task for the current REQUEST');
   }
-  const quote = value => {
-    const result = clip(value, 1000);
-    return result && source.includes(result) ? result : '';
-  };
+  // Models normalize whitespace when quoting; recover the exact original
+  // bytes. Any other rewrite (fixed typos, dropped markdown) is unsupported.
+  const quote = (value, from = source) => sourceExcerpt(clip(value, 1000), from);
   return {
     tasks: value.tasks.slice(-12).map(task => {
       const requestQuote = request ? clip(task.requestQuote, 1000) : quote(task.requestQuote);
-      const validRequestQuote = request ? (requestQuote && request.includes(requestQuote) ? requestQuote : '') : requestQuote;
+      const validRequestQuote = request ? quote(requestQuote, request) : requestQuote;
       const evidenceQuote = quote(task.evidenceQuote);
       const supported = validRequestQuote && evidenceQuote;
+      // Name the failed citation so a repair pass copies the original text
+      // verbatim instead of guessing why the whole brief was dropped.
+      const citationIssues = [...(!validRequestQuote ? ['requestQuote must be an exact substring of REQUEST, copied verbatim including typos'] : []),
+        ...(!evidenceQuote ? ['evidenceQuote must be an exact CURRENT record substring, copied verbatim including markdown'] : [])];
       const conflictQuote = quote(task.conflictQuote);
       const unsupportedConflict = task.alignment === 'different'
         && (task.assessmentBasis !== 'observed-conflict' || !conflictQuote);
@@ -180,7 +183,7 @@ function parseReview(raw, source, locale = 'ko', request = '', lifecycle = 'comp
         remaining: '',
         impact: evidenceQuote ? clip(task.impact) : '',
         content: supported ? content.content : null,
-        contentIssues: content.issues,
+        contentIssues: [...content.issues, ...(task.content !== undefined ? citationIssues : [])],
         decision: decision.decision,
         decisionIssues: decision.issues,
         nextStep: scopedDecision !== undefined ? decision.decision?.action.request || ''
@@ -809,9 +812,11 @@ class TerminalReview extends EventEmitter {
         }
         const task = parsed.tasks[0];
         if (!task) throw new Error('분석 결과에 요청이 없습니다.');
+        // Report the actual cause: an unlinked citation drops the brief, so it
+        // must not be reported as a missing brief.
+        if (!task.requestQuote || !task.evidenceQuote) throw new Error('분석의 근거를 현재 요청의 기록과 연결하지 못했어요. 확인된 사실을 먼저 보여드려요.');
         if (requiresContent && !task.content || requiresCompact && task.content?.version !== 2) throw new Error('실제 답과 근거를 갖춘 짧은 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다. 다시 검토해 주세요.');
         if (requiresHandoff && !task.content.handoff) throw new Error('시점과 다음 판단을 갖춘 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다.');
-        if (!task.requestQuote || !task.evidenceQuote) throw new Error('분석의 근거를 현재 요청의 기록과 연결하지 못했어요. 확인된 사실을 먼저 보여드려요.');
         const latest = entry.latest[chunk.taskId];
         // A stopped task is never graded as failure merely because it was stopped.
         if (latest?.lifecycle === 'interrupted' || chunk.lifecycle !== 'completed') task.alignment = 'in-progress';

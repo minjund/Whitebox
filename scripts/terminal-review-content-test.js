@@ -123,6 +123,48 @@ async function main() {
     assert.deepEqual(historyContent(reviews), []);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   assert.match(reviewPrompt(record, 'ko', request), /ANSWER-FIRST FORMAT/u);
+
+  // Citation recovery: a rewritten request/evidence quote must name itself as
+  // the repair issue instead of silently dropping a valid brief, and exact
+  // original bytes are recovered after whitespace normalization only.
+  const typoRequest = '설졔지식은 담은 스킬을 알려줘봐';
+  const typoRecord = `USER:\n${typoRequest}\n\nASSISTANT (completed answer):\n설계 지식을 담은 스킬은 다음과 같습니다.\n\n**이미 설치됨** (\`~/.claude/skills/\`)\n- \`database-design\`: 일반 설계 원칙입니다.\n  - \`neki\`: PlanetScale 샤디드 Postgres 안내.`;
+  const brief = () => ({ version: 2, answer: { text: '설치된 스킬과 추가 후보를 안내했습니다.', basis: 'reported', quote: '설계 지식을 담은 스킬은 다음과 같습니다.' }, details: [], limitations: [], nextAction: null, deliverables: [], background: [],
+    handoff: { kind: 'finish', temporal: null, priority: { text: '설명이 끝났으므로 추가 요청이 필요 없습니다.', basis: 'inference', quote: '일반 설계 원칙입니다.' }, prompt: null } });
+  const cite = (requestQuote, evidenceQuote) => parseReview(JSON.stringify({ tasks: [{ requestQuote, evidenceQuote, alignment: 'aligned', content: brief() }] }), typoRecord, 'ko', typoRequest, 'completed').tasks[0];
+  let cited = cite('설졔지식은  담은 스킬을\n알려줘봐', '- `database-design`:\n일반 설계 원칙입니다.\n  - `neki`: PlanetScale 샤디드 Postgres 안내.');
+  assert.equal(cited.requestQuote, typoRequest, 'whitespace-normalized request quotes recover the original bytes');
+  assert.equal(cited.evidenceQuote, '- `database-design`: 일반 설계 원칙입니다.\n  - `neki`: PlanetScale 샤디드 Postgres 안내.');
+  assert.ok(cited.content && cited.contentIssues.length === 0);
+  cited = cite('설계지식을 담은 스킬을 알려줘봐', '일반 설계 원칙입니다.');
+  assert.equal(cited.content, null, 'a corrected typo is not the user request');
+  assert.deepEqual(cited.contentIssues, ['requestQuote must be an exact substring of REQUEST, copied verbatim including typos']);
+  cited = cite(typoRequest, '이미 설치됨 (~/.claude/skills/)');
+  assert.deepEqual(cited.contentIssues, ['evidenceQuote must be an exact CURRENT record substring, copied verbatim including markdown'], 'dropped markdown names the evidence citation');
+  assert.equal(parseReview(JSON.stringify({ tasks: [{ requestQuote: 'wrong', evidenceQuote: 'wrong', alignment: 'aligned' }] }), typoRecord, 'ko', typoRequest).tasks[0].contentIssues.length, 0, 'legacy responses without content keep their own repair path');
+  let citationCalls = 0, repairPromptText = '';
+  const citeSession = { id: 'citation', creationId: 'one', pid: 1, status: 'running' };
+  const citeService = new TerminalReview({ manager: () => ({ get: () => citeSession }), now: () => 2000, quietMs: 0,
+    monitor: { scan: () => ({ available: true, processes: [{ provider: 'claude', pid: 2, ancestorPids: [1] }] }) },
+    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: typoRecord }) },
+    runner: { generateTerminalReview: async ({ prompt }) => { citationCalls++; if (citationCalls === 2) repairPromptText = prompt;
+      return { reviewFormat: 'answer-first-v2', handoffRequired: true, text: JSON.stringify({ tasks: [{ requestQuote: citationCalls === 1 ? '설계지식을 담은 스킬을 알려줘봐' : typoRequest, evidenceQuote: '일반 설계 원칙입니다.', alignment: 'aligned', content: brief() }] }) }; } } });
+  await citeService.capture({ id: citeSession.id, creationId: citeSession.creationId, text: '', submission: { id: 'r', request: typoRequest, at: 1000 } });
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(citationCalls, 2, 'a rewritten citation gets the one bounded repair');
+  assert.match(repairPromptText, /copied verbatim including typos/u, 'the repair names the failed citation');
+  const citeEntry = citeService.entries.get(citeSession.id);
+  assert.equal(citeEntry.state, 'ready', `repaired citation publishes the brief: ${citeEntry.message}`);
+  assert.ok(citeEntry.result.tasks[0].content, 'the valid brief survives once the citation is exact');
+  citationCalls = 0;
+  const stubborn = new TerminalReview({ manager: () => ({ get: () => citeSession }), now: () => 2000, quietMs: 0,
+    monitor: { scan: () => ({ available: true, processes: [{ provider: 'claude', pid: 2, ancestorPids: [1] }] }) },
+    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: typoRecord }) },
+    runner: { generateTerminalReview: async () => ({ reviewFormat: 'answer-first-v2', handoffRequired: true, text: JSON.stringify({ tasks: [{ requestQuote: '설계지식을 담은 스킬을 알려줘봐', evidenceQuote: '일반 설계 원칙입니다.', alignment: 'aligned', content: brief() }] }) }) } });
+  await stubborn.capture({ id: citeSession.id, creationId: citeSession.creationId, text: '', submission: { id: 'r', request: typoRequest, at: 1000 } });
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stubborn.entries.get(citeSession.id).state, 'error');
+  assert.match(stubborn.entries.get(citeSession.id).message, /근거를 현재 요청의 기록과 연결하지 못했어요/u, 'an unlinked citation is reported as the cause, not as a missing brief');
   console.log('PASS answer-first content: direct answer, visible mechanism/limits/commands, exact outputs, provenance validation, safe rendering, archived identity and non-destructive import');
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });

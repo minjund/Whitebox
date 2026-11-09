@@ -61,6 +61,13 @@
 #wbSummaryStopHost[hidden] { display:none; }
 #terminalWorkspace #wbSummaryComposerHint { color:var(--wb-muted); font-size:10px; }
 #terminalWorkspace #wbSummaryNotice { margin-top:6px; color:var(--wb-muted); font-size:12px; }
+#terminalWorkspace .wb-summary-commands { list-style:none; margin:0 0 8px; padding:4px 0; max-height:240px; overflow:auto; border:1px solid var(--wb-line); border-radius:8px; background:var(--wb-panel); }
+#terminalWorkspace .wb-summary-commands[hidden] { display:none; }
+#terminalWorkspace .wb-summary-commands li { display:flex; align-items:baseline; gap:10px; padding:6px 10px; cursor:pointer; font-size:12px; }
+#terminalWorkspace .wb-summary-commands li[aria-selected=true], #terminalWorkspace .wb-summary-commands li:hover { background:var(--wb-wash, rgba(127,127,127,.12)); }
+#terminalWorkspace .wb-summary-commands code { font:inherit; font-family:var(--wb-mono, ui-monospace, SFMono-Regular, Menlo, monospace); color:var(--wb-text); white-space:nowrap; }
+#terminalWorkspace .wb-summary-commands span { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--wb-muted); }
+#terminalWorkspace .wb-summary-commands small { flex:none; color:var(--wb-muted); font-size:10px; }
 #wbSummaryNotice:empty { display:none; }
 #terminalWorkspace .wb-summary-footnote { flex:none; margin:0 20px 14px; text-align:center; color:var(--wb-muted); font-size:10px; }
 #terminalWorkspace .wb-summary .ui-buttonc { --ui-btnc-ink:var(--wb-text); --ui-btnc-muted:var(--wb-muted); --ui-btnc-title:var(--wb-text); --ui-btnc-solid:var(--wb-text); --ui-btnc-solid-hover:var(--wb-muted); --ui-btnc-on-solid:var(--wb-bg); --ui-btnc-surface:var(--wb-panel); --ui-btnc-wash:var(--wb-soft); --ui-btnc-shadow:0 0 0 1px var(--wb-line); --ui-btnc-shadow-hover:0 0 0 1px var(--wb-muted); display:inline-flex; align-items:center; justify-content:center; gap:var(--gap); height:var(--h); min-height:var(--h); padding:0 var(--px); border:0; border-radius:var(--radius); font-size:12px; line-height:var(--lh); font-weight:500; }

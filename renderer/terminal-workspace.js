@@ -14,6 +14,7 @@
     plus: '<path d="M12 5v14M5 12h14"/>',
     terminal: '<path d="m5 6 6 6-6 6m9 0h5"/>',
     layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5m-18 5 9 5 9-5"/>',
+    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
     split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
     down: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>',
     solo: '<rect x="3" y="4" width="18" height="16" rx="2"/>',
@@ -116,7 +117,7 @@
           <div class="wb-summary-conversation">
             <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span></li></ol>
             <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
-            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><ul id="wbSummaryCommands" class="wb-summary-commands" role="listbox" aria-label="명령어" hidden></ul><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
             <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
           </div>
           <aside class="wb-summary-rail" aria-label="이번 요청 상태">
@@ -228,7 +229,7 @@
       return [result.preview?.submissionId, result.preview?.latestSubmissionId].includes(job.id) && finished(result.preview)
         || result.result?.tasks?.some(task => task.submissionId === job.id && finished(task));
     },
-    reveal: id => selectInstance(id), report: message => report(new Error(message), 'summary'),
+    reveal: id => selectInstance(id), report: (message, id) => report(new Error(message), 'summary', id),
     // Mirror a terminal Esc: the review marks the current turn interrupted.
     interrupted: id => { interruptions.set(id, { id: uuid(), at: Date.now() }); captureReviews(); },
     submitted: job => {
@@ -497,9 +498,11 @@
   let arrangingId = '';
   let pendingCreation = null;
 
-  function report(error, scope = 'general') {
+  function report(error, scope = 'general', terminalId = '') {
     $('#wbError').hidden = false;
     $('#wbError').dataset.scope = scope;
+    // A terminal-scoped notice (Summary fallback) belongs to that terminal only.
+    $('#wbError').dataset.terminalId = terminalId || '';
     const message = String(error?.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
     $('#wbError').dataset.connection = String(/명령창.*연결|터미널.*연결/u.test(message));
     $('#wbError').innerHTML = `<span>${esc(message)}</span><button data-action="dismiss-error" aria-label="${t('닫기')}">${icon('close')}</button>`;
@@ -594,11 +597,23 @@
       && ['running', 'waiting'].includes(item.state)).slice(0, 32);
     return items.length ? { ...value, items, activity } : null;
   }
+  // Monitors (off-screen watchers) get their own eye badge beside the
+  // background badge so a watch is visible without opening the list.
+  function backgroundCounts(value) {
+    if (!value) return { background: 0, monitors: 0 };
+    const monitors = value.items.filter(item => item.kind === 'monitor').length;
+    return { background: Math.max(0, value.count - monitors), monitors };
+  }
   function backgroundBadge(id) {
     const value = terminalBackground(id);
     if (!value) return '';
-    const label = `${t('백그라운드 작업')} ${value.count.toLocaleString(window.WhiteboxI18n.getLocaleTag())} · ${t('작업 내역 보기')}`;
-    return `<button type="button" class="wb-background-badge ${value.count > 9 ? 'is-many' : ''}" data-background-terminal="${esc(id)}" title="${esc(label)}" aria-label="${esc(title(id))} · ${esc(label)}" aria-expanded="${backgroundPopover?.id === id}" aria-controls="wbBackgroundPopover">${icon('layers')}<span>${value.count > 99 ? '99+' : value.count}</span></button>`;
+    const counts = backgroundCounts(value);
+    const badge = (kind, count, iconName, text) => {
+      if (!count) return '';
+      const label = `${t(text)} ${count.toLocaleString(window.WhiteboxI18n.getLocaleTag())} · ${t('작업 내역 보기')}`;
+      return `<button type="button" class="wb-background-badge wb-${kind}-badge ${count > 9 ? 'is-many' : ''}" data-background-terminal="${esc(id)}" data-background-kind="${kind}" title="${esc(label)}" aria-label="${esc(title(id))} · ${esc(label)}" aria-expanded="${backgroundPopover?.id === id}" aria-controls="wbBackgroundPopover">${icon(iconName)}<span>${count > 99 ? '99+' : count}</span></button>`;
+    };
+    return badge('monitor', counts.monitors, 'eye', '모니터') + badge('work', counts.background, 'layers', '백그라운드 작업');
   }
   function closeBackgroundPopover(restoreFocus = false) {
     const id = backgroundPopover?.id;
@@ -630,7 +645,7 @@
     };
     $('#wbBackgroundCount').textContent = value.count.toLocaleString(window.WhiteboxI18n.getLocaleTag());
     $('#wbBackgroundOwner').textContent = title(backgroundPopover.id);
-    const markup = value.items.map(item => `<li><div>${icon(item.kind === 'agent' ? 'layers' : 'terminal')}<span>${esc(item.label)}</span></div><small>${t(item.state === 'waiting' ? '입력 대기' : '실행 중')}<span>${esc(elapsed(item.startedAt))}</span></small></li>`).join('');
+    const markup = value.items.map(item => `<li><div>${icon(item.kind === 'agent' ? 'layers' : item.kind === 'monitor' ? 'eye' : 'terminal')}<span>${esc(item.label)}</span></div><small>${t(item.kind === 'monitor' ? '감시 중' : item.state === 'waiting' ? '입력 대기' : '실행 중')}<span>${esc(elapsed(item.startedAt))}</span></small></li>`).join('');
     if ($('#wbBackgroundJobs').innerHTML !== markup) $('#wbBackgroundJobs').innerHTML = markup;
     const more = Math.max(0, value.count - value.items.length);
     $('#wbBackgroundMore').hidden = !more;
@@ -801,8 +816,8 @@
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
-        const background = backgroundBadge(id);
-        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${terminalBackground(id)?.count > 9 ? 'has-many-background' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 종료')}" aria-label="${esc(title(id))} ${t('터미널 종료')}">${icon('trash')}</button></div>`;
+        const background = backgroundBadge(id), counts = backgroundCounts(terminalBackground(id));
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 종료')}" aria-label="${esc(title(id))} ${t('터미널 종료')}">${icon('trash')}</button></div>`;
       }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
@@ -1242,7 +1257,12 @@
     pinnedPanels = pinnedPanels.filter(id => all.some(panel => panel.id === id));
     return [...new Set([...pinnedPanels.map(id => all.find(panel => panel.id === id)), tab()].filter(Boolean))];
   }
+  function hideForeignTerminalError() {
+    const banner = $('#wbError');
+    if (!banner.hidden && banner.dataset.terminalId && banner.dataset.terminalId !== activeId()) banner.hidden = true;
+  }
   function renderLayout(focus = true) {
+    hideForeignTerminalError();
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
     const current = tab();

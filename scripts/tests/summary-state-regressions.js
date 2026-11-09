@@ -16,13 +16,13 @@ exports.run = async evaluate => {
         activeId: () => 'states', session: () => ({ status: 'running', creationId: 'epoch', pid: 100 }),
         member: () => member, tasks: () => data.tasks, review: () => data.review,
         snapshot: () => ({ text: '' }), label: () => 'states', groupId: () => 'group',
-        gameVisibility: () => data.visibility, gameBehavior: () => data.behavior || 'auto-collapse', save: () => {}, reveal: () => {}, report: () => {}, submitted: () => {},
+        gameVisibility: () => data.visibility, gameBehavior: () => data.behavior || 'auto-collapse', save: () => {}, reveal: () => {}, report: (message, id) => { stats.reports = [...(stats.reports || []), { message, id }]; }, submitted: () => {},
         refresh: async () => {
           stats.lookups.push(chat.pendingJobs());
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
         }, captureReply: async () => { stats.captures++; return data.captureResult ?? true; },
         interrupted: () => { stats.interrupts = (stats.interrupts || 0) + 1; },
-        api: { terminalCollaboration: async payload => { if (payload.operation === 'summary-stop') { stats.stops = (stats.stops || 0) + 1; return { ok: true, stopped: data.jobs.filter(job => job.state === 'running').map(job => job.id) }; } stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
+        api: { slashCommands: async ({ provider }) => { stats.catalogs = (stats.catalogs || 0) + 1; return provider === 'codex' ? [{ name: 'compact', description: '대화 압축', source: 'builtin' }, { name: 'model', description: '모델 선택', source: 'builtin' }, { name: 'khala:khala', description: 'Khala', source: 'plugin' }] : []; }, terminalCollaboration: async payload => { if (payload.operation === 'summary-stop') { stats.stops = (stats.stops || 0) + 1; return { ok: true, stopped: data.jobs.filter(job => job.state === 'running').map(job => job.id) }; } stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
       chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: structuredClone(data.messages || []) }]);
       chat.render();
       const text = id => root.querySelector('#' + id).textContent;
@@ -163,8 +163,30 @@ exports.run = async evaluate => {
     f.root.querySelector('[data-summary-send-now]').click(); await tick(); await tick();
     check(f.chat.serialize()[0].messages[0].state === 'interrupted', 'lost immediate acknowledgement is explicit');
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
+    f = make({ review: { state: 'error', message: 'analysis failed' } });
+    check(f.stats.reports?.length === 1 && f.stats.reports[0].id === 'states' && f.stats.reports[0].message.includes('요약하지 못했습니다'), 'summary fallback names its own terminal so the notice stays scoped to it');
+    check(f.chat.serialize()[0].mode === 'terminal', 'fallback returns that terminal to terminal mode'); cases.push('fallback-scoped');
+    f = make();
+    const type = async text => { f.root.querySelector('#wbSummaryInput').value = text; f.root.querySelector('#wbSummaryInput').dispatchEvent(new Event('input')); await tick(); await tick(); };
+    const key = (k, init = {}) => f.root.querySelector('#wbSummaryInput').dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
+    const commands = () => f.root.querySelector('#wbSummaryCommands');
+    await type('/');
+    check(!commands().hidden && [...commands().querySelectorAll('[data-command-index] code')].map(node => node.textContent).join(',') === '/compact,/model,/khala:khala', 'typing "/" lists the provider commands');
+    await type('/mo'); check([...commands().querySelectorAll('[data-command-index] code')].map(node => node.textContent).join(',') === '/model', 'prefix filtering');
+    await type('/kha'); check(commands().textContent.includes('/khala:khala') && commands().textContent.includes('플러그인'), 'namespaced plugin commands match with their source');
+    await type('/'); key('ArrowDown'); check(commands().querySelector('[aria-selected=true] code').textContent === '/model', 'arrow keys move the selection');
+    key('Enter'); await tick();
+    check(f.root.querySelector('#wbSummaryInput').value === '/model ' && commands().hidden && f.stats.sends === 0, 'Enter inserts the chosen command without sending');
+    await type('/compact'); key('Enter'); await tick();
+    // requestSubmit() is inert on this detached fixture form; the real form submits.
+    check(commands().hidden && f.root.querySelector('#wbSummaryInput').value === '/compact', 'an exactly typed command is kept and sent on Enter instead of being re-inserted');
+    f.root.querySelector('#wbSummaryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
+    check(f.stats.sends === 1 && f.stats.payloads.at(-1).message === '/compact', 'the typed command is delivered');
+    await type('/'); key('Escape'); check(commands().hidden, 'Escape closes the list');
+    await type('hello /compact'); check(commands().hidden, 'a slash inside text is not a command');
+    check(f.stats.catalogs === 1, 'the catalog is fetched once per terminal and provider'); cases.push('slash-commands');
     return cases;
   })()`);
-  assert.equal(result.length, 20);
+  assert.equal(result.length, 22);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };

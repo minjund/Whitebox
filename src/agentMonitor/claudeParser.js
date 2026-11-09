@@ -83,7 +83,18 @@ function createClaudeParser(dependencies) {
 
   function recordTaskNotification(state, value, at) {
     const notification = taskNotification(value);
-    if (!notification || !/^(?:completed|failed|error|cancelled)$/.test(notification.status)) return null;
+    if (!notification) return null;
+    // Monitor events carry no status: an event is a liveness proof, and the
+    // expiry/ended notice ends the task.
+    if (!notification.status && /<summary>\s*Monitor event\b/i.test(notification.text)) {
+      const ended = /\[Monitor (?:expired|stopped|ended|source ended)\b/i.test(notification.text);
+      for (const taskId of notification.taskIds) {
+        if (ended) state.executionTracker.recordOutput({ name: 'monitor', callId: '', args: { task_id: taskId }, output: notification.text, at, isError: false });
+        else state.executionTracker.recordHeartbeat({ args: { task_id: taskId }, at });
+      }
+      return null; // Not a subagent completion: never touches spawn records.
+    }
+    if (!/^(?:completed|failed|error|cancelled)$/.test(notification.status)) return null;
     for (const taskId of notification.taskIds.length ? notification.taskIds : ['']) {
       state.executionTracker.recordOutput({
         name: 'bash',

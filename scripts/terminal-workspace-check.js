@@ -97,6 +97,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:jev-configure', (_event, payload) => { jevConfigureCalls++; if (jevConfigureFailure) throw new Error(jevConfigureFailure); jevSavedKey = payload.remove ? '' : payload.apiKey; jevConfigured = Boolean(jevSavedKey); return { configured: jevConfigured }; });
     ipcMain.handle('terminals:jev-reveal', async () => { jevRevealCalls++; if(jevRevealDeferred) await new Promise(resolve=>setTimeout(resolve,250)); return {apiKey:jevSavedKey}; });
     ipcMain.handle('terminals:review-models', () => ({ codex: [{id:'fixture-model',label:'Fixture model'}], claude: [{id:'sonnet',label:'Sonnet'}] }));
+    ipcMain.handle('terminals:slash-commands', (_event, payload) => require('../src/slashCommandCatalog').listSlashCommands({ provider: payload?.provider, home: profile }));
     ipcMain.handle('providers:usage', () => { accountUsageCalls++; return ({ providers: {codex:{available:true,updatedAt:new Date().toISOString(),weekly:{label:'주간 한도',usedPercent:12.3}},claude:{available:false}} }); });
     ipcMain.handle('clipboard:write', (_event, text) => { clipboardText = text; return { ok: true }; });
     ipcMain.handle('wsl:list-distros', () => []);
