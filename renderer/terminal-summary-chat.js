@@ -14,8 +14,20 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const transcript = root.querySelector('#wbSummaryTranscript');
   const notice = root.querySelector('#wbSummaryNotice');
   const jobsById = new Map();
+  const CAPTURE_GRACE_MS = 15000;
+  // One 2048 board is shared by every terminal and session, so play continues
+  // when switching conversations or after an AI session restarts.
+  let sharedGame = null;
   const game = window.Whitebox2048.createView({ root: root.querySelector('#wbSummaryGame'), t, esc,
-    read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always', behavior: () => context.gameBehavior?.() || 'auto-collapse' });
+    read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always', behavior: () => context.gameBehavior?.() || 'auto-collapse',
+    store: { get: () => sharedGame, set: (_, value) => { sharedGame = value; } } });
+  const adoptGame = value => {
+    const restored = window.Whitebox2048.restore(value);
+    if (!restored) return;
+    // An untouched fresh board loses nothing when a saved game replaces it.
+    if (!sharedGame || sharedGame.score === 0 && restored.score > 0) sharedGame = { ...restored, best: Math.max(restored.best, sharedGame?.best || 0) };
+    else sharedGame.best = Math.max(sharedGame.best, restored.best);
+  };
   const identity = member => ({ targetCreationId: member.creationId, targetProviderPid: member.providerPid, targetProvider: member.provider });
   function control(label, attributes, disabled = false, variant = 'ghost', translate = true) {
     return `<span data-summary-control data-variant="${variant}"><button type="button" ${attributes} ${disabled ? 'disabled' : ''}>${esc(translate ? t(label) : label)}</button></span>`;
@@ -70,7 +82,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   function tasksFor(id) { return context.tasks(id).filter(task => !nonTask(task.request)
     && (task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred')); }
   function mergeAnswers(value) {
-    value.messages = value.messages.filter(message => !nonTask(message.role === 'answer' ? message.task?.request : message.text));
+    // A slash command typed here must still be delivered; it is dropped from
+    // the transcript (and never awaits a summary) once it has been sent.
+    value.messages = value.messages.filter(message => ['queued', 'sending'].includes(message.state)
+      || !nonTask(message.role === 'answer' ? message.task?.request : message.text));
     for (const task of tasksFor(value.id)) {
       const key = taskKey(task);
       const previous = value.messages.find(message => message.role === 'answer' && message.key === key);
@@ -250,7 +265,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           const job = jobsById.get(sent.id);
           if (job?.state !== 'completed') { waiting = true; break; }
           try {
-            if (!await context.captureReply(job)) { waiting = true; break; }
+            // The backend already confirmed this exact reply finished. Archiving
+            // it is best effort and must not hold the next request forever.
+            const settled = Number(job.finishedAt) > 0 && Date.now() - job.finishedAt > CAPTURE_GRACE_MS;
+            if (!await context.captureReply(job) && !settled) { waiting = true; break; }
             sent.replyCaptured = true;
             context.save();
           } catch (error) { notice.textContent = String(error.message || error); waiting = true; break; }
@@ -345,7 +363,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryNext').hidden = !summaryDone;
     $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
       || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
-    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone, replyKey: replyDone && !interrupted ? sent?.id || task?.taskId || preview?.taskId : null });
+    // Fold the game only once the summary itself is done, not at reply arrival.
+    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone, replyKey: summaryDone ? sent?.id || task?.taskId || preview?.taskId : null });
   }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
@@ -439,8 +458,14 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       mergeAnswers(value);
       return value.mode === 'summary' || value.messages.some(message => message.state === 'sent' && !message.answerKey);
     },
-    serialize: () => [...records.values()].slice(-100).map(value => ({ ...value, messages: value.messages.slice(-100) })),
+    serialize: () => [...records.values()].slice(-100).map(({ game2048, ...value }) => ({ ...value, messages: value.messages.slice(-100) })),
+    serializeGame: () => sharedGame,
+    restoreGame(value) { adoptGame(value); },
     restore(values) {
+      // Older versions saved one board per terminal: keep the furthest one.
+      const legacy = (Array.isArray(values) ? values : []).map(item => window.Whitebox2048.restore(item?.game2048)).filter(Boolean)
+        .sort((a, b) => b.score - a.score || b.best - a.best);
+      for (const value of legacy) adoptGame(value);
       for (const item of (Array.isArray(values) ? values : []).slice(-100)) {
         const session = context.session(item?.id);
         if (!session || item.creationId !== session.creationId) continue;
@@ -452,7 +477,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           message.state = 'interrupted'; message.error = t('앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.');
         }
         records.set(item.id, { id: item.id, creationId: item.creationId, mode: item.mode === 'summary' ? 'summary' : 'terminal',
-          draft: String(item.draft || '').slice(0, 8000), messages, game2048: window.Whitebox2048.restore(item.game2048) });
+          draft: String(item.draft || '').slice(0, 8000), messages });
       }
     },
     forget(id) { records.delete(id); },

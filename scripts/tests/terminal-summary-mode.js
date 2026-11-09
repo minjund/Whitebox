@@ -147,10 +147,15 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(target)}).includes('esc to interrupt')`, `${provider} working`);
     await waitFor('!document.querySelector("#wbSummaryGame").hidden', 'game invitation while summarizing');
     if (provider === 'claude') {
-      assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), false, '2048 is open by default');
+      // One board is shared by every terminal: a new conversation continues it.
+      if (await evaluate('document.querySelector(".wb-2048-panel").hidden')) await evaluate('document.querySelector("[data-game-open]").click()');
+      assert.equal(await evaluate('document.querySelector(".wb-2048-panel").hidden'), false, 'shared 2048 board opens in the new terminal');
       await evaluate('document.querySelector(".wb-2048-board").focus()');
       const cells = await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent)');
-      assert.equal(cells.filter(Boolean).length, 2);
+      assert(cells.filter(Boolean).length >= 2, 'shared board keeps its tiles');
+      await click(`.wb-instance[data-instance="${id}"]`);
+      assert.equal(await evaluate('[...document.querySelectorAll(".wb-2048-cell")].map(cell=>cell.textContent).join()'), cells.join(), 'switching terminals keeps the same board');
+      await click(`.wb-instance[data-instance="${target}"]`);
       await evaluate('document.querySelector(".wb-2048-board").dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true,cancelable:true}))');
       assert.equal(await evaluate('document.querySelector("#wbSummaryInput").value'), '', 'game keys never type into composer');
     }

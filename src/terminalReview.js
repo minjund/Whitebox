@@ -537,7 +537,7 @@ class TerminalReview extends EventEmitter {
       // when its delayed renderer submission arrives.
       const adopted = newSubmission && entry.turn?.nativeKey === nativeKey && currentNative;
       if (newSubmission) entry.lastSubmission = submission.id;
-      if (adopted) entry.turn.submissionId = submission.id;
+      if (adopted) { entry.turn.submissionId = submission.id; entry.turn.latestSubmissionId = submission.id; }
       if (!adopted) {
         const previous = entry.turn || entry.following;
         const confirmedContinuation = rootKey && entry.roots[rootKey]
@@ -554,6 +554,9 @@ class TerminalReview extends EventEmitter {
         const prior = this.task(entry, taskId);
         entry.turn = { taskId, id: newSubmission ? submission.id : nativeKey,
           submissionId: newSubmission ? submission.id : (confirmedContinuation || pendingResponse) ? previous?.submissionId || prior?.submissionId || '' : '',
+          // A reply to the AI's question continues the original task; keep the
+          // newest delivery identity so the chat can confirm that reply too.
+          latestSubmissionId: newSubmission ? submission.id : '',
           request: (confirmedContinuation || pendingResponse) ? previous?.request || prior?.request || requested : requested,
           response: (confirmedContinuation || pendingResponse) ? requested : '',
           submittedAt: (confirmedContinuation || pendingResponse) ? previous?.submittedAt || prior?.submittedAt || submittedAt : submittedAt,
@@ -587,7 +590,7 @@ class TerminalReview extends EventEmitter {
         else evidence = completed ? '' : currentTurnEvidence(frame, turn.response || turn.request);
       }
       if (matches || evidence) {
-        const chunk = { taskId: turn.taskId, terminalId: id, request: turn.request, submissionId: turn.submissionId,
+        const chunk = { taskId: turn.taskId, terminalId: id, request: turn.request, submissionId: turn.submissionId, latestSubmissionId: turn.latestSubmissionId || '',
           submittedAt: turn.submittedAt, observedAt: this.now(), lifecycle, text: evidence,
           relatedTaskId: turn.relatedTaskId, relation: turn.relation,
           context: matches ? completion.context : null, updates: matches ? completion.updates : null,
@@ -868,7 +871,7 @@ class TerminalReview extends EventEmitter {
       retryAt: entry.retryAt || null,
       stale: Boolean(entry.turn || entry.pending.length), startedAt: entry.active?.startedAt || null,
       elapsedSeconds: entry.active ? Math.max(0, Math.floor((this.now() - entry.active.startedAt) / 1000)) : 0,
-      preview: chunk ? { taskId: chunk.taskId, submissionId: chunk.submissionId || '', submittedAt: chunk.submittedAt, request: chunk.request, lifecycle: chunk.lifecycle, facts: observedFacts(chunk, entry.locale) } : null,
+      preview: chunk ? { taskId: chunk.taskId, submissionId: chunk.submissionId || '', latestSubmissionId: chunk.latestSubmissionId || '', submittedAt: chunk.submittedAt, request: chunk.request, lifecycle: chunk.lifecycle, awaitingResponse: Boolean(chunk.awaitingResponse), facts: observedFacts(chunk, entry.locale) } : null,
       result: entry.result };
   }
 

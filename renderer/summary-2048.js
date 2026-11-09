@@ -51,7 +51,9 @@
     return { ...trace, game: next, spawned: spawn(next.cells, random), gain: next.score - game.score };
   }
   function over(game) { return directions.every(direction => slide(game, direction).cells.every((tile, i) => tile === game.cells[i])); }
-  function createView({ root, t, read, save, visibility = () => 'always', behavior = () => 'auto-collapse' }) {
+  function createView({ root, t, read, save, visibility = () => 'always', behavior = () => 'auto-collapse',
+    store = { get: value => value?.game2048, set: (value, game) => { value.game2048 = game; } } }) {
+    // `read` is the viewed conversation; `store` may hold one board shared by all of them.
     let waiting = false, completed = false, swipe = null, replyKey = null;
     const observed = new WeakMap();
     let animationOwner = null, animationGame = null, animationEpoch = 0;
@@ -94,7 +96,7 @@
       Promise.allSettled(slides).then(() => {
         if (epoch !== animationEpoch) return;
         clearAnimation();
-        if (read() !== value || value.game2048 !== result.game || root.hidden) return;
+        if (read() !== value || store.get(value) !== result.game || root.hidden) return;
         animationOwner = value; animationGame = result.game;
         for (const index of result.merged) animate(cells[index], [{ transform: 'scale(1)' }, { transform: 'scale(1.18)', offset: .45 }, { transform: 'scale(1)' }], { duration: 170 });
         if (result.spawned !== null) animate(cells[result.spawned], [{ transform: 'scale(.2)', opacity: 0 }, { transform: 'scale(1)', opacity: 1 }], { duration: 150 });
@@ -105,8 +107,8 @@
       if (options) { waiting = options.waiting; completed = options.completed ?? !waiting; replyKey = options.replyKey || null; }
       root.dataset.waiting = String(Boolean(waiting));
       const value = read();
-      if (value && !value.game2048) { value.game2048 = start(); save(); }
-      const game = value?.game2048;
+      if (value && !store.get(value)) { store.set(value, start()); save(); }
+      const game = value ? store.get(value) : null;
       let restoreFocus = false;
       if (game) {
         const previous = observed.get(value), policy = behavior();
@@ -141,20 +143,20 @@
     }
     function play(direction) {
       const value = read();
-      if (!value?.game2048?.open) return;
+      if (!value || !store.get(value)?.open) return;
       clearAnimation();
-      const result = step(value.game2048, direction);
-      if (result.game !== value.game2048) { value.game2048 = result.game; save(); render(); animateMove(value, result); }
+      const result = step(store.get(value), direction);
+      if (result.game !== store.get(value)) { store.set(value, result.game); save(); render(); animateMove(value, result); }
     }
     root.addEventListener('click', event => {
       const value = read(); if (!value) return;
       const button = event.target.closest('button'); if (!button) return;
-      if (button.hasAttribute('data-game-open')) { value.game2048 = value.game2048 || start(); value.game2048.open = true; }
-      else if (button.hasAttribute('data-game-close')) value.game2048.open = false;
-      else if (button.hasAttribute('data-game-new')) value.game2048 = start(value.game2048?.best);
+      if (button.hasAttribute('data-game-open')) { if (!store.get(value)) store.set(value, start()); store.get(value).open = true; }
+      else if (button.hasAttribute('data-game-close')) store.get(value).open = false;
+      else if (button.hasAttribute('data-game-new')) store.set(value, start(store.get(value)?.best));
       else if (button.dataset.gameDirection) { play(button.dataset.gameDirection); return; }
       save(); render();
-      if (value.game2048.open) board.focus();
+      if (store.get(value).open) board.focus();
       else if (!root.hidden) $('[data-game-open]').focus({ preventScroll: true });
     });
     board.addEventListener('keydown', event => {

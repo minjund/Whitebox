@@ -40,6 +40,8 @@ module.exports = async function continuationChecks() {
     assert(!JSON.stringify(state.context || []).includes('continued from'));
   }
   assert(turns.isNonTaskRequest(summary));
+  for (const command of ['/clear', '/compact focus', '/init', '/project:sync', '<command-name>/foo-bar</command-name>']) assert(turns.isNonTaskRequest(command), `${command} is a CLI command`);
+  for (const request of ['/Users/me/app.js 고쳐줘', '이 /clear 명령은 뭐야?', 'Explain /compact']) assert.equal(turns.isNonTaskRequest(request), false, 'paths and questions about commands remain genuine requests');
   assert.equal(turns.submittedPrompt('❯ ## ' + summary + '\n────────'), '');
   for (const request of ['요약에 This session is being continued 라고 나와. 수정해줘', 'Explain this text:\n' + summary, '```\n' + summary + '\n```']) {
     assert.equal(turns.isNonTaskRequest(request), false, 'a genuine request quoting a summary stays a task');

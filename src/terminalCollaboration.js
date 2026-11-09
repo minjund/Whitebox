@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { exactProcess } = require('./terminalReview');
-const { completedTurn, completionStamp, inputReady } = require('./terminalReviewTurns');
+const { completedTurn, completionStamp, inputReady, isNonTaskRequest } = require('./terminalReviewTurns');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
@@ -283,6 +283,14 @@ class TerminalCollaboration {
         if (this.now() - job.sentAt > 15 * 60 * 1000) throw new Error('15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.');
         const target = await this.target(job.groupId, job.targetId);
         if (target.child.pid !== job.providerPid || target.live.creationId !== job.creationId) throw new Error('상대의 AI 세션이 바뀌었습니다.');
+        if (isNonTaskRequest(job.request)) {
+          // Slash commands never produce a provider turn record. Release the
+          // target once its own input prompt is back, so later chat requests
+          // are not deferred behind a command that already finished.
+          if (this.now() - job.sentAt >= 2000 && target.frame.at > job.sentAt + 1000 && !target.frame.inputDraft
+            && inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) Object.assign(job, { state: 'completed', answer: '', finishedAt: this.now() });
+          this.save(job); continue;
+        }
         const native = await this.completion.observe(target.child);
         const evidence = native.available
           ? native.state === 'completed' && native.requestId !== job.baseline && native.requestAt >= job.sentAt && String(native.request).trim() === job.request ? native.evidence : ''

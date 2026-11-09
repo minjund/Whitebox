@@ -94,7 +94,7 @@ async function startupChecks() {
   const capture = extra => service.capture({ id: session.id, creationId: session.creationId, text: 'Claude Code welcome screen', ...extra });
   await capture({ force: true });
   assert.equal(calls.length, 0, 'initial capture never analyzes restored conversation history');
-  for (const request of ['claude', 'codex --resume', 'Try "fix the bug"', 'Yes, I trust this folder', '<command-name>/clear</command-name>', '/reload-skills']) {
+  for (const request of ['claude', 'codex --resume', 'Try "fix the bug"', 'Yes, I trust this folder', '<command-name>/clear</command-name>', '/reload-skills', '/compact', '/project:sync 오늘 것', '<command-message>review</command-message>\n<command-name>/review</command-name>', '<local-command-stdout>Compacted</local-command-stdout>']) {
     now += 100;
     completion = { ...completion, requestId: String(now), request, requestAt: now };
     const view = await capture({ submission: { id: String(now), request, at: now }, force: true });

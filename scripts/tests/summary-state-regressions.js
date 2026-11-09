@@ -20,7 +20,7 @@ exports.run = async evaluate => {
         refresh: async () => {
           stats.lookups.push(chat.pendingJobs());
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
-        }, captureReply: async () => { stats.captures++; return true; },
+        }, captureReply: async () => { stats.captures++; return data.captureResult ?? true; },
         api: { terminalCollaboration: async payload => { stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
       chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: structuredClone(data.messages || []) }]);
       chat.render();
@@ -65,6 +65,17 @@ exports.run = async evaluate => {
     check(f.stats.captures === 1 && f.stats.sends === 1 && f.stats.payloads[0].sendNow === false,
       'completed reply releases the queue automatically while model analysis is still reviewing');
     f.chat.observe(f.data.jobs); await tick(); check(f.stats.sends === 1, 'completed reply releases exactly once'); cases.push('automatic-after-answer');
+    f = make({ messages: [user('a')], captureResult: false, jobs: [{ id: 'a', operation: 'summary', state: 'completed', finishedAt: Date.now() }] });
+    await f.send();
+    check(f.stats.sends === 0 && f.chat.serialize()[0].messages.at(-1).state === 'queued', 'a fresh completed reply is archived before the next send');
+    f.data.jobs = [{ id: 'a', operation: 'summary', state: 'completed', finishedAt: Date.now() - 20000 }];
+    f.chat.observe(f.data.jobs); await tick(); await tick();
+    check(f.stats.sends === 1, 'a confirmed finished reply cannot hold the next message in the queue forever'); cases.push('finished-reply-release');
+    f = make();
+    f.root.querySelector('#wbSummaryInput').value = '/compact';
+    f.root.querySelector('#wbSummaryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
+    check(f.stats.sends === 1 && f.stats.payloads[0].message === '/compact', 'a slash command typed in summary mode is delivered, not silently dropped');
+    check(!f.chat.serialize()[0].messages.length && !f.chat.pendingJobs().length, 'a delivered slash command never waits for a summary reply'); cases.push('slash-command');
     const trust = "2. Trust all and continue\\n3. Continue without trusting (hooks won't run)";
     const bogus = task('trust', { request: trust, lifecycle: 'interrupted', recordOnly: true, actual: '요청이 중단됐어요. 수행 결과는 수집되지 않았어요.' });
     f = make({ tasks: [bogus], messages: [{ role: 'user', id: 'request:trust', text: trust, state: 'sent', answerKey: 'trust' },
@@ -73,7 +84,7 @@ exports.run = async evaluate => {
     check(f.chat.serialize()[0].messages.length === 0 && f.stats.sends === 0, 'menu filtering removes saved bogus messages without sending anything'); cases.push('trust-history');
     f = make();
     check(!f.root.querySelector('.wb-2048-panel').hidden && !f.root.querySelector('#wbSummaryGame').hidden, '2048 opens by default while idle');
-    const before = JSON.stringify(f.chat.serialize()[0].game2048.cells);
+    const before = JSON.stringify(f.chat.serializeGame().cells);
     f.data.visibility = 'summarizing'; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'summarizing-only hides an idle board');
     f.member.activity.state = 'working'; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'provider work without summary generation does not reveal summarizing-only game');
     f.member.activity.state = 'idle';
@@ -82,18 +93,20 @@ exports.run = async evaluate => {
     f.data.review = { state: 'reviewing' }; f.chat.render(); check(!f.root.querySelector('#wbSummaryGame').hidden, 'summarizing-only reveals actual analysis');
     f.data.review = { state: 'ready' }; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'analysis completion hides summarizing-only game');
     f.data.visibility = 'always'; f.chat.render();
-    check(!f.root.querySelector('#wbSummaryGame').hidden && JSON.stringify(f.chat.serialize()[0].game2048.cells) === before, 'visibility changes preserve the board');
+    check(!f.root.querySelector('#wbSummaryGame').hidden && JSON.stringify(f.chat.serializeGame().cells) === before, 'visibility changes preserve the board');
     f.root.querySelector('[data-game-close]').click(); f.chat.render(); check(f.root.querySelector('.wb-2048-panel').hidden, 'explicit collapse remains respected'); cases.push('game-visibility');
     f = make({ messages: [user('a')], review: { state: 'awaiting-answer' } });
-    const boardBeforeReply = JSON.stringify(f.chat.serialize()[0].game2048);
+    const boardBeforeReply = JSON.stringify(f.chat.serializeGame());
     check(!f.root.querySelector('.wb-2048-panel').hidden, 'default board is open while waiting');
-    f.data.tasks = [task('a')]; f.data.review = { state: 'reviewing', analysisTaskId: 'a' }; f.chat.render();
-    check(f.root.querySelector('.wb-2048-panel').hidden, 'default collapses at reply arrival before summary completion');
-    check(JSON.stringify({ ...f.chat.serialize()[0].game2048, open: true }) === boardBeforeReply, 'collapse preserves cells, score and best');
+    f.data.tasks = [task('a', { analysisLifecycle: 'in-progress' })]; f.data.review = { state: 'reviewing', analysisTaskId: 'a' }; f.chat.render();
+    check(!f.root.querySelector('.wb-2048-panel').hidden, 'reply arrival keeps the board open while the summary is still running');
+    f.data.tasks = [task('a')]; f.data.review = { state: 'ready' }; f.chat.render();
+    check(f.root.querySelector('.wb-2048-panel').hidden, 'default collapses once the summary completes');
+    check(JSON.stringify({ ...f.chat.serializeGame(), open: true }) === boardBeforeReply, 'collapse preserves cells, score and best');
     f.root.querySelector('[data-game-open]').click(); f.chat.render();
     check(!f.root.querySelector('.wb-2048-panel').hidden, 'manual reopen survives repeated completion polls');
     f.data.tasks = [task('b')]; f.data.review = { state: 'ready' };
-    f.chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: [user('b')], game2048: f.chat.serialize()[0].game2048 }]); f.chat.render();
+    f.chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: [user('b')], game2048: f.chat.serializeGame() }]); f.chat.render();
     check(f.root.querySelector('.wb-2048-panel').hidden, 'a different reply collapses again');
     f.data.behavior = 'always-open'; f.chat.render();
     check(!f.root.querySelector('.wb-2048-panel').hidden, 'keep expanded immediately reopens the board');
@@ -101,6 +114,21 @@ exports.run = async evaluate => {
     f.data.behavior = 'auto-collapse'; f.chat.render();
     check(f.root.querySelector('.wb-2048-panel').hidden, 'switching back applies auto collapse to arrived reply');
     cases.push('game-auto-collapse');
+    f = make();
+    const sharedBoard = f.chat.serializeGame();
+    f.root.querySelector('[data-game-direction="left"]').click(); f.root.querySelector('[data-game-direction="up"]').click();
+    const played = JSON.stringify(f.chat.serializeGame());
+    f.chat.forget('states'); f.chat.render();
+    check(sharedBoard && JSON.stringify(f.chat.serializeGame()) === played, 'a new session continues the same shared board');
+    check(f.chat.serialize().every(value => !('game2048' in value)), 'the board is no longer saved per terminal');
+    f = make();
+    const far = { cells: [1024, 512, ...Array(14).fill(0)], score: 9000, best: 9000, open: false };
+    const near = { cells: [2, 2, ...Array(14).fill(0)], score: 4, best: 12000, open: true };
+    f.chat.restore([{ id: 'other', creationId: 'gone', game2048: near }, { id: 'old', creationId: 'gone', game2048: far }]);
+    check(f.chat.serializeGame().score === 9000 && f.chat.serializeGame().cells[0] === 1024 && f.chat.serializeGame().best === 12000, 'legacy per-terminal boards migrate to the furthest game and best score');
+    f = make();
+    f.chat.restoreGame(far); check(f.chat.serializeGame().score === 9000 && f.chat.serializeGame().best === 9000, 'a saved shared board replaces an untouched fresh board');
+    cases.push('game-shared');
     f = make({ review: { state: 'reviewing' } });
     f.member.ready = false; f.member.activity.state = 'working';
     const composer = f.root.querySelector('#wbSummaryInput'); composer.value = 'send me now';
@@ -120,6 +148,6 @@ exports.run = async evaluate => {
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
     return cases;
   })()`);
-  assert.equal(result.length, 15);
+  assert.equal(result.length, 18);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };
