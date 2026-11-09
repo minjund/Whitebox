@@ -3,7 +3,7 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
-## Unreleased
+## 2.0.25 - 2026-11-09
 
 - Keep a valid Summary brief when the model quotes the request or reply with normalized whitespace, and tell the repair pass exactly which citation to copy verbatim (typos and markdown included) instead of reporting a missing brief.
 - Scope the “Could not create a summary” notice to the terminal whose summary failed; switching to another terminal no longer shows it.
@@ -13,6 +13,7 @@ GitHub release notes remain the authoritative version history.
 - When a reply is too short to analyze, the Summary card shows the reply itself instead of the “no concrete result yet” placeholder.
 - The sidebar trash icon now moves a terminal to the trash (stopping its session and keeping output and review records restorable) instead of terminating and removing it outright.
 - “Send anyway” on a queued Summary request delivers while the AI is still working; a repainting spinner no longer sends the request back to the queue.
+- Verify official 2.0.24 installers alongside all retained Windows and macOS update cohorts.
 
 ## 2.0.24 - 2026-11-09
 
