@@ -14,7 +14,7 @@ require('./summary-2048-test');
   const manager = { list: () => [session], get: async id => id === session.id ? session : null,
     rawWriteDeliverySupported: () => true,
     write: async (id, data, options) => { assert.equal(options.expectedOutputSequence, session.outputSequence); writes.push({ id, data, options }); if (uncertain) throw Object.assign(Error('ack lost'), { deliveryState: 'unknown' }); },
-    respond: async (id, key, options) => { assert.equal(options.expectedOutputSequence, session.outputSequence); responses.push({ id, key, options }); } };
+    respond: async (id, key, options) => { if (key !== 'Escape') assert.equal(options.expectedOutputSequence, session.outputSequence); responses.push({ id, key, options }); } };
   const options = { directory, manager: () => manager, enableControl: false, now: () => now,
     activity: { observe: async () => new Map() }, completion: { observe: async () => ({ available: false }) },
     monitor: { scan: () => ({ available: true, processes: hasProvider ? [{ pid: providerPid, ancestorPids: [session.pid], provider: 'codex' }] : [] }) } };
@@ -87,6 +87,17 @@ require('./summary-2048-test');
     draft = ''; text = "Would you like to make the following edits?\n1. Yes, proceed (y)\n2. Yes, and don't ask again (a)\n3. No, and tell Codex what to do differently (esc)"; session.outputSequence++; await sync();
     assert.deepEqual(await c.summarySend({ ...request(), sendNow: true }), { deferred: true }, 'send anyway cannot type a task into an approval menu');
     assert.equal(writes.length, immediateCount);
+    const stopIdentity = { groupId: 'panel', targetId: session.id, targetCreationId: session.creationId, targetProviderPid: providerPid, targetProvider: 'codex' };
+    await assert.rejects(c.summaryStop({ ...stopIdentity, targetProviderPid: providerPid + 1 }), /세션이 바뀌/, 'stop never reaches a replaced provider');
+    const responseCount = responses.length;
+    const stopped = await c.summaryStop(stopIdentity);
+    assert.equal(stopped.ok, true); assert.equal(responses.at(-1).key, 'Escape', 'stop sends exactly one Escape');
+    assert.equal(responses.length, responseCount + 1);
+    assert(stopped.stopped.includes(immediate.id) && c.jobs.get(immediate.id).state === 'stopped', 'the running request is marked stopped, not interrupted');
+    c.completion = { observe: async () => ({ available: true, state: 'completed', requestId: 'done' }) };
+    await assert.rejects(c.summaryStop(stopIdentity), /멈출 작업/, 'nothing running means no stray Escape');
+    assert.equal(responses.length, responseCount + 1);
+    const reloaded = new TerminalCollaboration(options); assert.equal(reloaded.jobs.get(immediate.id).state, 'stopped', 'a stopped job survives restart as stopped');
     console.log('PASS summary chat guarded delivery: busy/draft queue, Unicode, exact AI/session, foreign/shell rejection, no duplicate/restart/unknown replay, current approval and duplicate-choice guard');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

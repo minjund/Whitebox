@@ -6,7 +6,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const ui = window.WhiteboxWorkspaceUI;
   const $ = selector => root.querySelector(selector);
   const records = new Map();
-  let flushing = false, selected = '', lastMarkup = '', approvalBusy = false, retryBusy = false, modeKey = '', sendKey = '', thinkingLabel = '';
+  let flushing = false, selected = '', lastMarkup = '', approvalBusy = false, retryBusy = false, stopBusy = false, modeKey = '', sendKey = '', stopKey = '', thinkingLabel = '';
   const actionHosts = new Set();
   const form = root.querySelector('#wbSummaryForm');
   const input = root.querySelector('#wbSummaryInput');
@@ -142,6 +142,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
   }
   root.querySelectorAll('[data-workspace-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.workspaceMode)));
+  root.querySelector('#wbSummaryStopHost').addEventListener('click', event => { if (event.target.closest('button')) stop(); });
   input.addEventListener('input', () => {
     const value = record(context.activeId());
     if (value) { value.draft = input.value; context.save(); }
@@ -194,6 +195,26 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     message.state = 'cancelled'; context.save(); render();
   });
+  async function stop() {
+    const id = context.activeId(), value = record(id), member = context.member(id);
+    if (stopBusy || !value || !eligible(id)) return;
+    stopBusy = true; render();
+    try {
+      const result = await api.terminalCollaboration({ operation: 'summary-stop', groupId: context.groupId(id), targetId: id, ...identity(member) });
+      if (!result?.ok) throw new Error(t('요청을 멈추지 못했습니다. 터미널을 확인해 주세요.'));
+      const stopped = new Set(result.stopped || []);
+      // Requests typed in the terminal have no job; stop the newest unanswered one.
+      const latest = [...value.messages].reverse().find(message => message.role === 'user' && message.state === 'sent' && message.targetCreationId);
+      for (const message of value.messages) if (message.role === 'user' && (stopped.has(message.id) || message === latest && !message.replyCaptured)) {
+        message.state = 'stopped'; message.replyCaptured = true; delete message.error;
+      }
+      context.interrupted?.(id);
+      notice.textContent = t('요청을 멈췄어요.');
+      context.save();
+      await context.refresh();
+    } catch (error) { notice.textContent = String(error.message || error); }
+    finally { stopBusy = false; render(); }
+  }
   function detectedPrompt(id) {
     return window.WhiteboxTerminalPrompts.detectPendingPrompt(context.snapshot(id).text || '');
   }
@@ -289,7 +310,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   }
   function renderProgress(value, member, review, prompt) {
     const failure = window.WhiteboxReviewDecision.reviewFailure(review);
-    const users = value.messages.filter(message => message.role === 'user' && ['sent', 'sending', 'interrupted'].includes(message.state));
+    const users = value.messages.filter(message => message.role === 'user' && ['sent', 'sending', 'interrupted', 'stopped'].includes(message.state));
     // Imported historical requests may arrive later than a user's new send.
     // Follow submission identity/time, not the last rendered bubble.
     const outgoing = [...users].reverse().find(message => message.targetCreationId);
@@ -305,18 +326,21 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       || matchesPreview && review.analysisTaskId === preview?.taskId : matchesPreview;
     const needsResponse = Boolean(prompt || member.activity?.state === 'waiting');
     const working = member.activity?.state === 'working';
-    const interrupted = sent?.state === 'interrupted' || task?.lifecycle === 'interrupted';
+    const stopped = sent?.state === 'stopped';
+    const interrupted = stopped || sent?.state === 'interrupted' || task?.lifecycle === 'interrupted';
     const analyzing = !interrupted && matchesAnalysis && review?.state === 'reviewing';
     const collecting = !interrupted && matchesAnalysis && review?.state === 'collecting';
     const backoff = collecting && review?.retryAt > Date.now();
-    const awaiting = !interrupted && (matchesPreview && review?.state === 'awaiting-answer'
+    // A reply that ends by asking the user something is finished too: the
+    // review keeps that turn open for the answer, but the AI is not replying.
+    const finished = item => item?.lifecycle === 'completed' || item?.awaitingResponse === true;
+    const replyDone = !working && (job?.state === 'completed' || finished(task) || matchesPreview && finished(preview));
+    const awaiting = !interrupted && !replyDone && (matchesPreview && review?.state === 'awaiting-answer'
       || sent?.state === 'sending' || sent?.state === 'sent' && !task && job?.state !== 'completed');
-    const replyDone = !working && (job?.state === 'completed' || task?.lifecycle === 'completed'
-      || matchesPreview && preview?.lifecycle === 'completed');
     const deferred = Boolean(task?.deferred || task?.analysisDepth === 'deferred');
     const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !analyzing && !collecting && !awaiting && !working && !interrupted
       && (!failure || failure.kind === 'reanalysis' && failure.retainedLifecycle === 'completed')
-      && !needsResponse && (!task.lifecycle || task.lifecycle === 'completed'));
+      && !needsResponse && (!task.lifecycle || finished(task)));
     const loading = !needsResponse && !interrupted && (analyzing || working || awaiting);
     const label = analyzing ? '요약 중…' : working ? 'AI가 작업 중입니다.' : 'AI 답변을 기다리고 있어요';
     $('#wbSummaryWorking').hidden = !loading;
@@ -333,6 +357,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     let title = '다음 요청을 입력하세요.', description = '같은 AI 세션에서 대화를 이어갑니다.';
     if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; }
     else if (failure) { title = failure.title; description = failure.description; }
+    else if (stopped) { title = '요청을 멈췄어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
     else if (interrupted) { title = '요청이 중단됐어요'; description = '터미널에서 수행 기록을 확인한 뒤 다음 요청을 이어가세요.'; }
     else if (working) { title = 'AI가 작업 중입니다.'; description = '작업 중 보낸 요청은 전송 대기로 보관합니다.'; }
     else if (summaryDone) { title = '답변과 요약이 도착했어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
@@ -344,7 +369,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryStateTitle').textContent = t(title);
     $('#wbSummaryStateDescription').textContent = t(description);
     $('#wbSummaryStateTitle').dataset.state = failure || interrupted ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
-    const replyState = needsResponse ? '응답 필요' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
+    const replyState = needsResponse ? '응답 필요' : stopped ? '멈춤' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
     const reviewState = failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
       : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing ? '정리 중' : deferred || collecting || replyDone ? '분석 대기' : '대기 중';
     $('#wbSummaryReplyState').textContent = t(replyState);
@@ -360,6 +385,14 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       step.querySelector('b').textContent = done[index] ? '✓' : String(index + 1);
       if (step.dataset.state === 'current') step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
     });
+    const canStop = !needsResponse && !interrupted && !replyDone && (working || awaiting) && eligible(value.id);
+    const nextStopKey = JSON.stringify([t('멈추기'), stopBusy]);
+    if (ui?.actionButton && nextStopKey !== stopKey) {
+      ui.actionButton($('#wbSummaryStopHost'), { label: `${t('멈추기')} ■`, variant: 'secondary' });
+      $('#wbSummaryStopHost button').id = 'wbSummaryStop'; stopKey = nextStopKey;
+    }
+    $('#wbSummaryStopHost').hidden = !canStop;
+    $('#wbSummaryStop').disabled = stopBusy;
     $('#wbSummaryNext').hidden = !summaryDone;
     $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
       || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
@@ -398,7 +431,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (selected !== `${id}:${value.creationId}`) {
       selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = '';
     }
-    const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요') };
+    const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
     let markup = value.messages.map(message => {
       if (message.role === 'answer') {
         const task = message.task;
@@ -442,6 +475,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     for (const value of records.values()) for (const message of value.messages) {
       const job = jobs.find(item => item.operation === 'summary' && item.id === message.id);
       if (job && ['failed', 'interrupted'].includes(job.state)) { message.state = 'interrupted'; message.error = job.error; }
+      else if (job?.state === 'stopped' && message.state === 'sent') { message.state = 'stopped'; message.replyCaptured = true; }
     }
     render(); flush().catch(error => { notice.textContent = String(error.message || error); });
   }

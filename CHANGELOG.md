@@ -9,6 +9,8 @@ GitHub release notes remain the authoritative version history.
 - Fold the Summary mode 2048 board when the summary finishes instead of when the reply arrives.
 - Share one 2048 board across every terminal and session so play continues after switching or restarting; older per-terminal boards migrate to the furthest game and best score.
 - Release queued Summary messages when the AI reply has finished, including replies that end with a question and answers to such questions.
+- Add a Stop control in Summary mode that interrupts the request you sent with one guarded Escape to the same AI session.
+- Stop showing “Waiting for the AI reply” once the reply has finished, including replies that end by asking you a question.
 - Verify official 2.0.23 installers alongside all retained Windows and macOS update cohorts.
 
 ## 2.0.23 - 2026-11-08

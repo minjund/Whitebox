@@ -30,7 +30,7 @@ class TerminalCollaboration {
       try {
         const job = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
         if (!safeId(job.id)) continue;
-        if (!['completed', 'failed', 'interrupted'].includes(job.state)) Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' });
+        if (!['completed', 'failed', 'interrupted', 'stopped'].includes(job.state)) Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' });
         this.jobs.set(job.id, job); this.save(job);
       } catch { /* Malformed local records are never executed. */ }
     }
@@ -220,6 +220,27 @@ class TerminalCollaboration {
       const deliveryId = `summary-approval:${require('crypto').createHash('sha256').update(JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint, choiceId])).digest('hex')}`;
       await this.manager().respond(targetId, choice.key, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
       return { ok: true, requiresText: choice.requiresText === true };
+    });
+  }
+  // The user's explicit stop for the request they sent from Summary mode. A
+  // working provider redraws constantly, so this sends one Escape guarded by
+  // the exact terminal/provider identity rather than a frozen output frame.
+  summaryStop(payload) {
+    return this.serialize(async () => {
+      const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider } = payload || {};
+      if (!safeId(groupId) || !safeId(targetId) || typeof targetCreationId !== 'string'
+        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !['claude', 'codex'].includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
+      const { member } = this.member(groupId, targetId);
+      const live = await this.manager().get(targetId, false);
+      const child = live && exactProcess(live, await scanProcesses(this.monitor));
+      if (!live || live.status !== 'running' || live.creationId !== member.creationId || live.pid !== member.pid
+        || live.creationId !== targetCreationId || child?.pid !== targetProviderPid || child.provider !== targetProvider) throw new Error('멈추려는 AI 세션이 바뀌었습니다.');
+      const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'summary' && ['sending', 'running'].includes(job.state));
+      const native = await this.completion.observe(child);
+      if (!running.length && !(native.available && native.state === 'working') && member.activity?.state !== 'working') throw new Error('멈출 작업이 없습니다.');
+      await this.manager().respond(targetId, 'Escape', { deliveryId: `summary-stop:${randomUUID()}` });
+      for (const job of running) { Object.assign(job, { state: 'stopped', error: '', finishedAt: this.now() }); this.save(job); }
+      return { ok: true, stopped: running.map(job => job.id) };
     });
   }
   connect(groupId, sourceId) { return this.serialize(() => this.connectNow(groupId, sourceId)); }

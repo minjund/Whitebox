@@ -57,6 +57,8 @@
 #terminalWorkspace .wb-summary-composer textarea { display:block; width:100%; min-height:56px; max-height:180px; resize:none; border:0; outline:0; padding:0; background:transparent; color:var(--wb-text); font:inherit; font-size:13px; line-height:1.8; }
 #terminalWorkspace .wb-summary-composer textarea::placeholder { color:var(--wb-muted); }
 .wb-summary-composer > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+#wbSummaryStopHost { margin-left:auto; }
+#wbSummaryStopHost[hidden] { display:none; }
 #terminalWorkspace #wbSummaryComposerHint { color:var(--wb-muted); font-size:10px; }
 #terminalWorkspace #wbSummaryNotice { margin-top:6px; color:var(--wb-muted); font-size:12px; }
 #wbSummaryNotice:empty { display:none; }

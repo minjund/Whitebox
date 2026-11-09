@@ -116,7 +116,7 @@
           <div class="wb-summary-conversation">
             <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span></li></ol>
             <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
-            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
             <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
           </div>
           <aside class="wb-summary-rail" aria-label="이번 요청 상태">
@@ -229,6 +229,8 @@
         || result.result?.tasks?.some(task => task.submissionId === job.id && finished(task));
     },
     reveal: id => selectInstance(id), report: message => report(new Error(message), 'summary'),
+    // Mirror a terminal Esc: the review marks the current turn interrupted.
+    interrupted: id => { interruptions.set(id, { id: uuid(), at: Date.now() }); captureReviews(); },
     submitted: job => {
       submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
       setTimeout(() => captureReviews(), 0);

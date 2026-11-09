@@ -21,7 +21,8 @@ exports.run = async evaluate => {
           stats.lookups.push(chat.pendingJobs());
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
         }, captureReply: async () => { stats.captures++; return data.captureResult ?? true; },
-        api: { terminalCollaboration: async payload => { stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
+        interrupted: () => { stats.interrupts = (stats.interrupts || 0) + 1; },
+        api: { terminalCollaboration: async payload => { if (payload.operation === 'summary-stop') { stats.stops = (stats.stops || 0) + 1; return { ok: true, stopped: data.jobs.filter(job => job.state === 'running').map(job => job.id) }; } stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
       chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: structuredClone(data.messages || []) }]);
       chat.render();
       const text = id => root.querySelector('#' + id).textContent;
@@ -76,6 +77,22 @@ exports.run = async evaluate => {
     f.root.querySelector('#wbSummaryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
     check(f.stats.sends === 1 && f.stats.payloads[0].message === '/compact', 'a slash command typed in summary mode is delivered, not silently dropped');
     check(!f.chat.serialize()[0].messages.length && !f.chat.pendingJobs().length, 'a delivered slash command never waits for a summary reply'); cases.push('slash-command');
+    f = make({ messages: [user('q')], tasks: [task('q', { lifecycle: 'in-progress', awaitingResponse: true, analysisLifecycle: 'completed' })], review: { state: 'awaiting-answer', preview: { taskId: 'q', submissionId: 'q', lifecycle: 'in-progress', awaitingResponse: true } } });
+    check(f.state().thinking !== 'AI 답변을 기다리고 있어요' && f.state().title !== 'AI 답변을 기다리고 있어요' && f.state().reply === '완료', 'a reply that asks the user a question is a finished reply, not still awaited');
+    f = make({ messages: [user('j')], review: { state: 'awaiting-answer', preview: { taskId: 'j', submissionId: 'j', lifecycle: 'in-progress' } }, jobs: [{ id: 'j', operation: 'summary', state: 'completed', finishedAt: Date.now() }] });
+    f.chat.observe(f.data.jobs); await tick();
+    check(f.state().title !== 'AI 답변을 기다리고 있어요' && f.state().thinking !== 'AI 답변을 기다리고 있어요' && f.state().reply === '완료', 'a confirmed finished reply never shows the reply-waiting loader'); cases.push('reply-finished-status');
+    f = make({ messages: [user('s')], review: { state: 'awaiting-answer', preview: { taskId: 's', submissionId: 's', lifecycle: 'in-progress' } }, jobs: [{ id: 's', operation: 'summary', state: 'running' }] });
+    f.chat.observe(f.data.jobs); await tick();
+    const stopHost = f.root.querySelector('#wbSummaryStopHost');
+    check(!stopHost.hidden, 'stop is offered while the AI is replying to my request');
+    stopHost.querySelector('button').click(); await tick(); await tick();
+    check(f.stats.stops === 1 && f.stats.interrupts === 1, 'stop sends one guarded stop and marks the review interrupted');
+    check(f.chat.serialize()[0].messages[0].state === 'stopped' && f.state().title === '요청을 멈췄어요' && !f.state().loading, 'a stopped request is shown as stopped without a loader');
+    check(f.root.querySelector('#wbSummaryStopHost').hidden, 'stop disappears once stopped');
+    f.data.jobs = [{ id: 's', operation: 'summary', state: 'stopped' }]; f.chat.observe(f.data.jobs); await tick();
+    f.root.querySelector('#wbSummaryInput').value = '다음'; f.root.querySelector('#wbSummaryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
+    check(f.stats.sends === 1, 'the next request is not held behind a stopped one'); cases.push('stop');
     const trust = "2. Trust all and continue\\n3. Continue without trusting (hooks won't run)";
     const bogus = task('trust', { request: trust, lifecycle: 'interrupted', recordOnly: true, actual: '요청이 중단됐어요. 수행 결과는 수집되지 않았어요.' });
     f = make({ tasks: [bogus], messages: [{ role: 'user', id: 'request:trust', text: trust, state: 'sent', answerKey: 'trust' },
@@ -148,6 +165,6 @@ exports.run = async evaluate => {
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
     return cases;
   })()`);
-  assert.equal(result.length, 18);
+  assert.equal(result.length, 20);
   console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
 };
