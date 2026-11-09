@@ -3,6 +3,18 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.25 - 2026-11-09
+
+- Keep a valid Summary brief when the model quotes the request or reply with normalized whitespace, and tell the repair pass exactly which citation to copy verbatim (typos and markdown included) instead of reporting a missing brief.
+- Scope the “Could not create a summary” notice to the terminal whose summary failed; switching to another terminal no longer shows it.
+- Type `/` in the Summary composer to list the AI's slash commands (built-in, custom, skills and installed plugin commands for Claude; built-in and custom prompts for Codex) with arrow-key, Tab/Enter and click selection.
+- Show Claude Code monitors as an eye badge on the terminal in the left tree, beside the background-task badge, with each watch listed in the task popover until it is stopped or expires.
+- Summarize a finished reply that asks you to choose or clarify instead of parking it as “no concrete result yet”; only a bare promise of future work without a question still waits for evidence.
+- When a reply is too short to analyze, the Summary card shows the reply itself instead of the “no concrete result yet” placeholder.
+- The sidebar trash icon now moves a terminal to the trash (stopping its session and keeping output and review records restorable) instead of terminating and removing it outright.
+- “Send anyway” on a queued Summary request delivers while the AI is still working; a repainting spinner no longer sends the request back to the queue.
+- Verify official 2.0.24 installers alongside all retained Windows and macOS update cohorts.
+
 ## 2.0.24 - 2026-11-09
 
 - Never summarize provider slash commands such as `/clear`, `/compact` or custom skill commands; commands typed in Summary mode are still delivered and release the queue once the prompt returns.

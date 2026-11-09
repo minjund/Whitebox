@@ -127,7 +127,11 @@
 #terminalWorkspace #wbBackgroundJobs li>div .wb-icon{margin-top:2px;color:var(--clean-muted)}
 #terminalWorkspace #wbBackgroundJobs small{display:flex;gap:10px;margin:5px 0 0 20px;font-size:11px;color:var(--clean-muted);font-variant-numeric:tabular-nums}
 #terminalWorkspace #wbBackgroundMore{font-size:11px;color:var(--clean-muted);margin:5px 0 0}
-@container(max-width:200px){#terminalWorkspace .wb-background-badge{right:38px}}
+#terminalWorkspace .wb-instance-row.has-two-badges .wb-monitor-badge{right:72px}
+#terminalWorkspace .wb-instance-row.has-two-badges.has-many-background .wb-monitor-badge{right:81px}
+#terminalWorkspace .wb-instance-row.has-two-badges .wb-instance-copy strong{padding-right:66px}
+#terminalWorkspace .wb-instance-row.has-two-badges.has-many-background .wb-instance-copy strong{padding-right:84px}
+@container(max-width:200px){#terminalWorkspace .wb-background-badge{right:38px}#terminalWorkspace .wb-instance-row.has-two-badges .wb-monitor-badge{right:69px}}
 @media(pointer:coarse){#terminalWorkspace .wb-background-badge{min-height:32px}#terminalWorkspace .wb-background-popover>header button{min-width:36px;min-height:36px}}
 
 /* Keep title and usage readable while retaining every pane action below. */

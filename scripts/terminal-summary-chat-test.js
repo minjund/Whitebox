@@ -13,7 +13,7 @@ require('./summary-2048-test');
   const writes = [], responses = [];
   const manager = { list: () => [session], get: async id => id === session.id ? session : null,
     rawWriteDeliverySupported: () => true,
-    write: async (id, data, options) => { assert.equal(options.expectedOutputSequence, session.outputSequence); writes.push({ id, data, options }); if (uncertain) throw Object.assign(Error('ack lost'), { deliveryState: 'unknown' }); },
+    write: async (id, data, options) => { if (options.expectedOutputSequence !== undefined) assert.equal(options.expectedOutputSequence, session.outputSequence); writes.push({ id, data, options }); if (uncertain) throw Object.assign(Error('ack lost'), { deliveryState: 'unknown' }); },
     respond: async (id, key, options) => { if (key !== 'Escape') assert.equal(options.expectedOutputSequence, session.outputSequence); responses.push({ id, key, options }); } };
   const options = { directory, manager: () => manager, enableControl: false, now: () => now,
     activity: { observe: async () => new Map() }, completion: { observe: async () => ({ available: false }) },
@@ -82,11 +82,20 @@ require('./summary-2048-test');
     assert.equal(writes.at(-1).data, '\x1b[200~send while busy\x1b[201~\r');
     const immediateCount = writes.length;
     await c.summarySend(immediate); assert.equal(writes.length, immediateCount, 'immediate send remains idempotent');
+    // A working AI repaints its spinner, so the captured frame's output
+    // sequence is always behind the live one: explicit send still delivers.
+    session.outputSequence += 3;
+    const spinning = { ...request('send during spinner'), sendNow: true };
+    assert.equal((await c.summarySend(spinning)).ok, true, 'send anyway tolerates output that moved on since the frame capture');
+    assert.equal(writes.at(-1).data, '\x1b[200~send during spinner\x1b[201~\r');
+    assert.equal(writes.at(-1).options.expectedOutputSequence, undefined, 'explicit send does not pin a sequence the spinner will have passed');
+    assert.deepEqual(await c.summarySend(request('queued behind spinner')), { deferred: true }, 'automatic delivery still waits for a current frame');
+    await sync();
     draft = 'terminal draft'; await sync();
     assert.deepEqual(await c.summarySend({ ...request(), sendNow: true }), { deferred: true }, 'send anyway preserves an existing terminal draft');
     draft = ''; text = "Would you like to make the following edits?\n1. Yes, proceed (y)\n2. Yes, and don't ask again (a)\n3. No, and tell Codex what to do differently (esc)"; session.outputSequence++; await sync();
     assert.deepEqual(await c.summarySend({ ...request(), sendNow: true }), { deferred: true }, 'send anyway cannot type a task into an approval menu');
-    assert.equal(writes.length, immediateCount);
+    assert.equal(writes.length, immediateCount + 1, 'only the spinner-time explicit send wrote');
     const stopIdentity = { groupId: 'panel', targetId: session.id, targetCreationId: session.creationId, targetProviderPid: providerPid, targetProvider: 'codex' };
     await assert.rejects(c.summaryStop({ ...stopIdentity, targetProviderPid: providerPid + 1 }), /세션이 바뀌/, 'stop never reaches a replaced provider');
     const responseCount = responses.length;

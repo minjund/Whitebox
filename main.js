@@ -2456,6 +2456,11 @@ function registerIpcHandlers() {
   handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
   handleTrusted('terminals:review-models', () => require('./src/terminalReviewSettings').reviewModelCatalog());
+  handleTrusted('terminals:slash-commands', async payload => {
+    const provider = ['claude', 'codex'].includes(payload?.provider) ? payload.provider : '';
+    const session = terminalManager && typeof payload?.id === 'string' ? await terminalManager.get(payload.id, false) : null;
+    return provider ? require('./src/slashCommandCatalog').listSlashCommands({ provider, cwd: session?.cwd || '' }) : [];
+  });
   registerTerminalIpc({
     createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),
     cmuxClient,

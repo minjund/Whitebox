@@ -124,7 +124,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     for (const pending of value.messages.filter(item => item.state === 'queued')) { pending.state = 'interrupted'; pending.error = message; }
     context.save();
     context.reveal(id);
-    context.report(message);
+    context.report(message, id);
   }
   function setMode(mode) {
     const id = context.activeId(), value = record(id);
@@ -143,12 +143,84 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   }
   root.querySelectorAll('[data-workspace-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.workspaceMode)));
   root.querySelector('#wbSummaryStopHost').addEventListener('click', event => { if (event.target.closest('button')) stop(); });
+  // Slash-command list: typing "/" offers the provider's commands (built-in,
+  // custom, skills, plugins) like the CLI does. Names and descriptions only.
+  const commandList = root.querySelector('#wbSummaryCommands');
+  const commandCatalog = new Map();
+  const sourceLabel = { builtin: '내장', user: '사용자', project: '프로젝트', skill: '스킬', plugin: '플러그인' };
+  let commandMatches = [], commandIndex = 0, commandQuery = null;
+  function commandPrefix() {
+    const match = input.value.match(/^\/([\w:.-]*)$/u);
+    return match ? match[1] : null;
+  }
+  function catalogFor(id) {
+    const provider = context.member(id)?.provider;
+    if (!provider || typeof api?.slashCommands !== 'function') return Promise.resolve([]);
+    const key = `${id}:${provider}`, cached = commandCatalog.get(key);
+    if (cached?.promise) return cached.promise;
+    if (cached && Date.now() - cached.at < 60000) return Promise.resolve(cached.items);
+    const promise = Promise.resolve(api.slashCommands({ id, provider })).then(items => {
+      const list = (Array.isArray(items) ? items : []).filter(item => typeof item?.name === 'string' && /^[\w:.-]+$/u.test(item.name)).slice(0, 400);
+      commandCatalog.set(key, { at: Date.now(), items: list }); return list;
+    }).catch(() => { commandCatalog.delete(key); return []; });
+    commandCatalog.set(key, { at: 0, items: [], promise });
+    return promise;
+  }
+  function closeCommands() { commandQuery = null; commandMatches = []; commandList.hidden = true; commandList.innerHTML = ''; }
+  function renderCommands() {
+    commandList.innerHTML = commandMatches.map((item, index) => `<li role="option" data-command-index="${index}" aria-selected="${index === commandIndex}"><code>/${esc(item.name)}</code><span>${esc(item.description || '')}</span><small>${esc(t(sourceLabel[item.source] || ''))}</small></li>`).join('')
+      + `<li class="wb-summary-commands-hint" aria-hidden="true"><small>${esc(t('↑↓ 선택 · Tab/Enter 입력 · Esc 닫기'))}</small></li>`;
+    commandList.hidden = false;
+    commandList.querySelector('[aria-selected=true]')?.scrollIntoView?.({ block: 'nearest' });
+  }
+  async function updateCommands() {
+    const query = commandPrefix();
+    if (query === null) { closeCommands(); return; }
+    const items = await catalogFor(context.activeId());
+    if (commandPrefix() !== query) return;
+    const lower = query.toLowerCase();
+    const starts = items.filter(item => item.name.toLowerCase().startsWith(lower));
+    const contains = items.filter(item => !item.name.toLowerCase().startsWith(lower) && item.name.toLowerCase().includes(lower));
+    commandMatches = [...starts, ...contains].slice(0, 12);
+    if (!commandMatches.length) { closeCommands(); return; }
+    if (commandQuery !== query) commandIndex = 0;
+    commandQuery = query;
+    renderCommands();
+  }
+  function pickCommand(index) {
+    const item = commandMatches[index];
+    if (!item) return;
+    input.value = `/${item.name} `;
+    input.dispatchEvent(new Event('input'));
+    input.focus({ preventScroll: true });
+    input.setSelectionRange?.(input.value.length, input.value.length);
+  }
+  commandList.addEventListener('mousedown', event => event.preventDefault());
+  commandList.addEventListener('click', event => {
+    const item = event.target.closest('[data-command-index]');
+    if (item) pickCommand(Number(item.dataset.commandIndex));
+  });
   input.addEventListener('input', () => {
     const value = record(context.activeId());
     if (value) { value.draft = input.value; context.save(); }
     input.style.height = 'auto'; input.style.height = `${Math.min(180, input.scrollHeight)}px`;
+    updateCommands().catch(() => closeCommands());
   });
+  input.addEventListener('blur', () => closeCommands());
   input.addEventListener('keydown', event => {
+    if (!commandList.hidden && commandMatches.length && !event.isComposing && event.keyCode !== 229) {
+      const current = commandMatches[commandIndex];
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        commandIndex = (commandIndex + (event.key === 'ArrowDown' ? 1 : commandMatches.length - 1)) % commandMatches.length;
+        renderCommands(); return;
+      }
+      if (event.key === 'Escape') { event.preventDefault(); closeCommands(); return; }
+      if (event.key === 'Tab' || event.key === 'Enter' && !event.shiftKey && current?.name !== commandQuery) {
+        event.preventDefault(); pickCommand(commandIndex); return;
+      }
+      if (event.key === 'Enter') closeCommands(); // An exactly typed command sends as usual.
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault(); form.requestSubmit();
     }
@@ -429,7 +501,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryConnection').dataset.connected = String(available);
     $('#wbSummaryConnectionState').textContent = t(available ? '같은 대화에 연결됨' : '연결 확인 중');
     if (selected !== `${id}:${value.creationId}`) {
-      selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = '';
+      selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = ''; closeCommands();
     }
     const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
     let markup = value.messages.map(message => {

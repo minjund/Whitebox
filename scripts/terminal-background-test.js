@@ -94,7 +94,27 @@ async function main() {
     const activity = new TerminalActivity({ now: () => now, platform: 'darwin', execute: async () => ({ stdout: table }) });
     const value = (await activity.observe([{ id: 'terminal', creationId: 'epoch', pid: 100 }], new Map())).get('terminal');
     assert.equal(value.background.count, 1); assert.equal(value.state, 'working', 'background work never rewrites the existing foreground dot');
-    console.log('PASS terminal background: real Claude/Codex parsers and owned log binding, command/agent lifecycle, duplicates/privacy/stale/restart guards and POSIX job groups');
+    // Claude Code Monitor: visible as a monitor job while it watches; events keep
+    // it alive, and a confirmed stop or the expiry notice removes it.
+    const monitorRows = [
+      { type: 'user', sessionId, uuid: 'm-request', timestamp: stamp(1000), message: { role: 'user', content: 'CI를 지켜봐줘' } },
+      { type: 'assistant', sessionId, uuid: 'm-call', timestamp: stamp(2000), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'monitor-1', name: 'Monitor', input: { description: 'PR CI checks', timeout_ms: 1800000, command: 'while true; do gh pr checks PRIVATE_ARG; sleep 60; done' } }] } },
+      { type: 'user', sessionId, uuid: 'm-output', timestamp: stamp(3000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'monitor-1', content: 'Monitor started (task bsrtzcywd, expires in 30m unless the source ends first). You will be notified on each event.' }] } },
+      { type: 'user', sessionId, uuid: 'm-event', timestamp: stamp(4000), message: { role: 'user', content: '<task-notification>\n<task-id>bsrtzcywd</task-id>\n<summary>Monitor event: "PR CI checks"</summary>\n<event>CodeQL: pass</event>\n</task-notification>' } },
+    ];
+    await fs.writeFile(file, monitorRows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    let monitorSnapshot = { generatedAt: new Date(now).toISOString(), sessions: [await parsed(file, parseClaude)] };
+    const monitorJobs = conversationBackground(await reader.observe(child), child, monitorSnapshot, now);
+    assert.equal(monitorJobs.length, 1); assert.equal(monitorJobs[0].kind, 'monitor'); assert.equal(monitorJobs[0].label, 'PR CI checks');
+    assert(!JSON.stringify(monitorJobs).includes('PRIVATE_ARG'), 'monitor commands stay private');
+    assert.equal(monitorSnapshot.sessions[0].collaboration.spawns.length, 0, 'monitor events never create subagent records');
+    monitorRows.push({ type: 'assistant', sessionId, uuid: 'm-stop', timestamp: stamp(5000), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'stop-1', name: 'TaskStop', input: { task_id: 'bsrtzcywd' } }] } },
+      { type: 'user', sessionId, uuid: 'm-stopped', timestamp: stamp(6000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'stop-1', content: '{"message":"Successfully stopped task: bsrtzcywd (while true; do gh pr checks)"}' }] } });
+    await fs.writeFile(file, monitorRows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    monitorSnapshot = { generatedAt: new Date(now).toISOString(), sessions: [await parsed(file, parseClaude)] };
+    assert.deepEqual(conversationBackground(await reader.observe(child), child, monitorSnapshot, now), [], 'a confirmed stop removes the monitor');
+    await write();
+    console.log('PASS terminal background: real Claude/Codex parsers and owned log binding, command/agent/monitor lifecycle, duplicates/privacy/stale/restart guards and POSIX job groups');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 module.exports = main;

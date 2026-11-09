@@ -96,6 +96,10 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   assert(await evaluate('!document.querySelector("#wbSummaryGame").hidden && !document.querySelector(".wb-2048-panel").hidden'), 'game starts open before any summary request');
   assert(await evaluate('document.querySelector("#wbSummarySend").classList.contains("ui-buttonc")'), 'actual affectUI send button mounted');
   assert(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).display === "none" && getComputedStyle(document.querySelector("#wbReview")).display === "none"'));
+  await evaluate('document.querySelector("#wbSummaryInput").value="/comp"; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
+  await waitFor('!document.querySelector("#wbSummaryCommands").hidden && document.querySelector("#wbSummaryCommands").textContent.includes("/compact")', 'typing "/" lists real provider commands in Summary mode');
+  await evaluate('document.querySelector("#wbSummaryInput").value=""; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
+  await waitFor('document.querySelector("#wbSummaryCommands").hidden', 'clearing the composer closes the command list');
   await send('한글 SUMMARY_HOLD');
   await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('esc to interrupt')`, 'chat delivered to real PTY');
   await waitFor('Boolean(document.querySelector("#wbSummaryThinking .ui-tlc"))', 'actual affectUI working loader');

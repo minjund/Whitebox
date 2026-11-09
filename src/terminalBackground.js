@@ -50,7 +50,8 @@ function conversationBackground(native, child, snapshot, now, rows = []) {
     const candidate = short(item.label);
     const fromCommand = commandLabel && commandLabel.startsWith(candidate.replace(/…$/u, ''));
     const label = candidate && !fromCommand ? candidate : short(item.runtime || '명령창');
-    jobs.set(id, { id, kind: 'command', label: label || '명령창', state: 'running', startedAt: timestamp(item.startedAt) });
+    const monitor = item.kind === 'monitor';
+    jobs.set(id, { id, kind: monitor ? 'monitor' : 'command', label: monitor ? candidate || '모니터' : label || '명령창', state: 'running', startedAt: timestamp(item.startedAt) });
   }
   const ordered = [...jobs.entries()].reverse();
   jobs.clear();

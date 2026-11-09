@@ -99,4 +99,25 @@ function activityFor(command, options = {}) {
   assert.equal(projected.some(item => item.id === activity.id && item.status === 'running'), true);
 }
 
-process.stdout.write('실행 작업 감지 테스트 7개 통과\n');
+{
+  // Claude Code's Monitor tool: an off-screen watch with its own task id. Events
+  // keep it alive, a confirmed TaskStop cancels it, the expiry notice ends it.
+  const tracker = createExecutionTracker({ compactText: value => String(value || ''), timestamp: value => value || null });
+  tracker.recordCall({ name: 'Monitor', callId: 'monitor-1', args: { description: 'PR CI checks', timeout_ms: 1800000, command: 'while true; do gh pr checks 163; sleep 60; done' }, at: '2026-11-09T00:38:40.000Z' });
+  const monitor = tracker.activities[0];
+  assert.equal(monitor.kind, 'monitor'); assert.equal(monitor.mode, 'background'); assert.equal(monitor.label, 'PR CI checks');
+  tracker.recordOutput({ name: 'Monitor', callId: 'monitor-1', output: 'Monitor started (task bsrtzcywd, expires in 30m unless the source ends first; you get one notice at expiry). You will be notified on each event.', at: '2026-11-09T00:38:48.000Z' });
+  assert.equal(monitor.status, 'running'); assert.equal(monitor.backgroundId, 'bsrtzcywd');
+  tracker.recordHeartbeat({ args: { task_id: 'bsrtzcywd' }, at: '2026-11-09T00:39:10.000Z' });
+  assert.equal(monitor.updatedAt, '2026-11-09T00:39:10.000Z', 'an event is liveness proof');
+  tracker.recordOutput({ name: 'TaskStop', callId: 'stop-1', args: { task_id: 'other' }, output: 'failed', at: '2026-11-09T00:40:00.000Z', isError: true });
+  assert.equal(monitor.status, 'running', 'a failed or foreign stop changes nothing');
+  tracker.recordOutput({ name: 'TaskStop', callId: 'stop-2', args: { task_id: 'bsrtzcywd' }, output: '{"message":"Successfully stopped task: bsrtzcywd (cd /project; gh pr checks)"}', at: '2026-11-09T00:43:10.000Z' });
+  assert.equal(monitor.status, 'cancelled'); assert.equal(monitor.completedAt, '2026-11-09T00:43:10.000Z');
+  tracker.recordCall({ name: 'Monitor', callId: 'monitor-2', args: { description: 'second', command: 'x' }, at: '2026-11-09T00:43:12.000Z' });
+  tracker.recordOutput({ name: 'Monitor', callId: 'monitor-2', output: 'Monitor started (task bagqj261y, expires in 30m)', at: '2026-11-09T00:43:13.000Z' });
+  tracker.recordOutput({ name: 'monitor', callId: '', args: { task_id: 'bagqj261y' }, output: '<task-notification>\n<task-id>bagqj261y</task-id>\n<summary>Monitor event: "second"</summary>\n<event>[Monitor expired after 30m with 13 events delivered.]</event>\n</task-notification>', at: '2026-11-09T01:13:13.000Z' });
+  assert.equal(tracker.activities[1].status, 'completed', 'the expiry notice ends the watch');
+}
+
+process.stdout.write('실행 작업 감지 테스트 8개 통과\n');

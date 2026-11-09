@@ -83,10 +83,10 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   await reopen(independent);
   assert.deepEqual(await visible(), [independent]);
   assert.deepEqual(identities(), independentIds);
-  // The explicitly labelled sidebar termination remains distinct from hiding.
-  await click(`.wb-instance-row [data-close-terminal="${independent}"]`);
-  await waitFor(`!WhiteboxWorkspace.getState().busy && !WhiteboxWorkspace.getState().sessions.some(s=>s.id===${JSON.stringify(independent)})`, 'explicit terminal termination');
-  assert.equal(manager.get(independent), null);
+  // The sidebar trash icon archives the terminal; it remains distinct from hiding.
+  await click(`.wb-instance-row [data-trash-terminal="${independent}"]`);
+  await waitFor(`!WhiteboxWorkspace.getState().busy && WhiteboxWorkspace.getState().trash.some(i=>i.id===${JSON.stringify(independent)}) && !document.querySelector('[data-terminal-id="${independent}"]')`, 'sidebar trash icon moves the terminal to the trash');
+  assert.equal(manager.get(independent)?.status, 'stopped', 'the archived session is stopped, not removed');
   assert(manager.get(first) && manager.get(second) && manager.get(third));
   assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces.length'), before.owners.length - 1);
   // Capture the actual empty view for manual inspection.
