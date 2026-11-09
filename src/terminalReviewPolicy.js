@@ -74,7 +74,10 @@ function classifyEvidence(chunk, records, locale = 'ko') {
   if (chunk.lifecycle === 'interrupted' && !tools.length && !workResult) return { mode: 'record', actual: text(locale, '요청이 중단됐어요. 수행 결과는 수집되지 않았어요.', 'Request interrupted. No execution result was collected.', '请求已中断，尚未收集到执行结果。') };
   // A completed explanation is itself a result; generic completion claims aren't.
   const finalContent = chunk.lifecycle === 'completed' && substantive;
-  const planOnly = /(?:하겠습니다|할게요|예정입니다|살펴보겠습니다|조사하겠습니다|\bI(?:'ll| will)\b)/iu.test(answer) && !resultReport(answer);
+  // A reply that asks the user for a choice or more information is this
+  // turn's result: the user has to read the question, not wait for evidence.
+  const asksUser = Boolean(chunk.awaitingResponse) || /(?:[?？]|알려\s*주(?:세요|시면|십시오)|(?:선택|말씀|지정)해\s*주(?:세요|시면)|please (?:tell|let me know|specify|choose|confirm))\s*$/imu.test(answer);
+  const planOnly = /(?:하겠습니다|할게요|예정입니다|살펴보겠습니다|조사하겠습니다|\bI(?:'ll| will)\b)/iu.test(answer) && !resultReport(answer) && !asksUser;
   const mutation = /수정|바꿔|변경|구현|만들어|삭제|rename|implement|fix|modify|delete/iu.test(chunk.request);
   const unsupportedMutation = mutation && !tools.some(tool => tool.excerpt) && answer.length < 80 && !/[“"‘'`]/u.test(answer);
   if (verification || workResult || (finalContent && !planOnly && !unsupportedMutation)) return { mode: 'analyze' };

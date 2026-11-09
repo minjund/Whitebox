@@ -12,6 +12,13 @@ module.exports = async function policyChecks() {
   const jobs = [{ sourceId: 'one', provider: 'codex', request: 'ㅎㅇ', state: 'completed', sentAt: 20, finishedAt: 25, answer: 'ASSISTANT: 반가워요!' }];
   assert.equal(classifyEvidence(relay, jobs).mode, 'record');
   assert.equal(classifyEvidence(relay, [{ ...jobs[0], sourceId: 'other' }]).mode, 'defer');
+  // A completed reply that asks the user to choose or clarify is a result to
+  // summarize; only a bare promise of future work without a question defers.
+  const asking = { request: '한국말로 해서 해줘봐', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', tools: { items: [] }, updates: { items: [] },
+    text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 아직 무엇을 설계할지 요청이 없습니다.\n\n- 범위: 새 테이블 설계, 기존 엔티티 검토, 마이그레이션 계획 중 어느 것인가요?\n- 대상 DB: H2 기준인지 PostgreSQL 기준인지 알려주세요.\n\n패키지를 지목해 주시면 스키마 안을 제안하겠습니다.' };
+  assert.equal(classifyEvidence(asking, []).mode, 'analyze', 'a clarifying question is this turn\'s result');
+  assert.equal(classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.' }, []).mode, 'defer', 'a bare plan without a question still waits for evidence');
+  assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).mode, 'analyze', 'a recorded awaiting-response turn is analyzed');
   assert.equal(classifyEvidence(relay, [{ ...jobs[0], sentAt: 1 }]).mode, 'defer');
   assert.equal(classifyEvidence({ ...relay, request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기 그리고 오류 수정해줘' }, jobs).mode, 'defer');
   const rename = { request: '파일 "a.txt" 이름을 "b.txt"로 바꿔줘', lifecycle: 'completed', text: 'ASSISTANT: 변경했습니다.' };
