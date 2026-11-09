@@ -4,6 +4,7 @@ const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 const { AgentMonitor, buildSummary } = require('./agentMonitor');
+const { claudeHomes } = require('./claudeHomes');
 const { TmuxMonitor, linkAgentSessions } = require('./tmuxMonitor');
 const {
   ProcessMonitor,
@@ -69,7 +70,9 @@ function resolveWatchPath(file) {
 }
 
 for (const root of [
-  path.join(workerData.home, '.claude', 'projects'),
+  ...new Set([path.join(workerData.home, '.claude', 'projects'),
+    // claude-ubion and similar wrappers write under ~/.claude-<name>.
+    ...claudeHomes({ home: workerData.home }).map(dir => path.join(dir, 'projects'))]),
   path.join(workerData.home, '.codex', 'sessions'),
   path.join(workerData.home, '.gemini', 'tmp'),
   path.join(workerData.home, '.grok', 'sessions'),

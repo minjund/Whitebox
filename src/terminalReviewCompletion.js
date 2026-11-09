@@ -15,6 +15,7 @@ const { acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
 const { observeClaudeUsage, observeCodexUsage, tokenUsage } = require('./terminalTokenUsage');
 const { isNonTaskRequest, readableRequest } = require('./terminalReviewTurns');
+const { cachedClaudeHomes } = require('./claudeHomes');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.filter(item => ['text', 'input_text', 'output_text'].includes(item?.type)).map(item => String(item.text || '')).join('\n') : '';
@@ -112,8 +113,11 @@ function project(state, idle = true) {
 // Read only logs explicitly owned by the already matched child process. Never
 // pick the newest conversation, infer ownership from cwd, or inspect key files.
 class TerminalReviewCompletion {
-  constructor({ claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), platform = process.platform, execute = runFile } = {}) {
-    this.claudeHome = claudeHome; this.codexHome = codexHome; this.platform = platform; this.execute = execute;
+  constructor({ claudeHome = '', claudeHomes = null, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), platform = process.platform, execute = runFile } = {}) {
+    // Each Claude process writes sessions/<pid>.json under its own config
+    // folder (claude-ubion uses ~/.claude-ubion), so search all of them.
+    this.claudeHomes = claudeHomes || (claudeHome ? () => [claudeHome] : cachedClaudeHomes());
+    this.codexHome = codexHome; this.platform = platform; this.execute = execute;
     this.logs = new Map(); this.paths = new Map(); this.evidence = new ReviewEvidenceIndex();
   }
 
@@ -208,14 +212,19 @@ class TerminalReviewCompletion {
   async observe(child) {
     try {
       if (child.provider === 'claude') {
-        const file = path.join(this.claudeHome, 'sessions', `${child.pid}.json`);
-        if ((await fs.stat(file)).size > 65536) return { available: false };
+        let claudeHome = '', file = '', size = 0;
+        for (const candidate of this.claudeHomes()) {
+          const found = path.join(candidate, 'sessions', `${child.pid}.json`);
+          const stat = await fs.stat(found).catch(() => null);
+          if (stat?.isFile()) { claudeHome = candidate; file = found; size = stat.size; break; }
+        }
+        if (!file || size > 65536) return { available: false };
         const metadata = JSON.parse(await fs.readFile(file, 'utf8'));
         const start = Date.parse(child.startedAt), recorded = Number(metadata.startedAt);
         if (metadata.pid !== child.pid || metadata.kind !== 'interactive' || !uuid(metadata.sessionId)
           || !Number.isFinite(start) || !Number.isFinite(recorded) || recorded < start - 2000 || recorded > start + 30000
           || typeof metadata.cwd !== 'string' || !path.isAbsolute(metadata.cwd)) return { available: false };
-        const log = path.join(this.claudeHome, 'projects', metadata.cwd.replace(/[^a-zA-Z0-9]/gu, '-'), `${metadata.sessionId}.jsonl`);
+        const log = path.join(claudeHome, 'projects', metadata.cwd.replace(/[^a-zA-Z0-9]/gu, '-'), `${metadata.sessionId}.jsonl`);
         const state = await this.logState(log, 'claude', metadata.sessionId);
         const current = JSON.parse(await fs.readFile(file, 'utf8'));
         if (current.sessionId !== metadata.sessionId || current.startedAt !== metadata.startedAt || current.pid !== child.pid) return { available: false };

@@ -180,6 +180,7 @@ async function main() {
   await startupChecks();
   await commandBoundaryChecks();
   await require('./terminal-review-completion-test')();
+  await require('./claude-config-folders-test')();
   assert.equal(stableScreen('[Fable 5] | task | ⏱️ 40m'), stableScreen('[Fable 5] | task | ⏱️ 41m'));
   const idleBefore = '  [Fable 5 ◑ high] │ project │ ⏱️  1h 15m │ Cost $0.238\n  Context ░░░░░░ 4% │ Usage ░░░░░░ 2% (resets in 1h 38m)';
   const idleAfter = idleBefore.replace('1h 15m', '1h 16m').replace('1h 38m', '1h 37m');

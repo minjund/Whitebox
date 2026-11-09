@@ -161,6 +161,31 @@ function fakeIdentity(runtimeFile, port = 31_337, nonce = 'a'.repeat(64)) {
 }
 
 function registerAttentionHookTests(context) {
+  context.test('claude-ubion 같은 다른 Claude 설정 폴더에도 훅을 설치·제거하고, 깨진 설정은 건너뛴다', () => {
+    const home = temporaryRoot();
+    const ubion = path.join(home, '.claude-ubion'), broken = path.join(home, '.claude-broken'), empty = path.join(home, '.claude-empty');
+    for (const dir of [path.join(home, '.claude'), path.join(ubion, 'sessions'), broken, empty]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(ubion, 'settings.json'), `${JSON.stringify({ theme: 'dark' }, null, 2)}\n`);
+    fs.writeFileSync(path.join(broken, 'settings.json'), '{ not json');
+    const options = { home, env: {}, nodeExecutable: process.execPath, runtimeFile: path.join(home, 'runtime.json') };
+    const installed = installAttentionHooks({ ...options, identity: fakeIdentity(options.runtimeFile) });
+    const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const file of [path.join(home, '.claude', 'settings.json'), path.join(ubion, 'settings.json')]) {
+      const settings = read(file);
+      assert(settings.hooks.PermissionRequest.some(group => group.hooks.some(isOwnClaudeHandler)), `${file}: PermissionRequest 훅`);
+      assert(settings.hooks.PreToolUse.some(group => group.matcher === 'AskUserQuestion' && group.hooks.some(isOwnClaudeHandler)), `${file}: AskUserQuestion 훅`);
+    }
+    assert.equal(read(path.join(ubion, 'settings.json')).theme, 'dark', '기존 설정은 유지한다');
+    assert.equal(fs.readFileSync(path.join(broken, 'settings.json'), 'utf8'), '{ not json', '깨진 설정 파일은 건드리지 않는다');
+    assert(installed.warnings.some(warning => warning.includes(path.join(broken, 'settings.json'))), '건너뛴 파일을 알린다');
+    assert.equal(fs.existsSync(path.join(empty, 'settings.json')), false, 'Claude가 쓰지 않은 빈 폴더는 설정 폴더가 아니다');
+    const explicit = installAttentionHooks({ ...options, claudeSettingsPath: path.join(home, 'only.json'), identity: fakeIdentity(options.runtimeFile) });
+    assert.equal(Object.keys(explicit.files).some(name => name.startsWith('claude:')), false, '파일을 지정하면 그 파일만 바꾼다');
+    uninstallAttentionHooks(options);
+    for (const file of [path.join(home, '.claude', 'settings.json'), path.join(ubion, 'settings.json')]) {
+      assert.equal(JSON.stringify(read(file)).includes('/whitebox/attention/'), false, `${file}: 제거`);
+    }
+  });
   context.test('앱 종료는 미완성 HTTP 요청과 헤더 없는 연결을 닫고 실제 서버 종료까지 기다린다', async () => {
     const server = new AttentionHookServer({ runtimeFile: path.join(temporaryRoot(), 'runtime.json') });
     const identity = await server.start();
