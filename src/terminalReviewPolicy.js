@@ -81,6 +81,9 @@ function classifyEvidence(chunk, records, locale = 'ko') {
   const mutation = /수정|바꿔|변경|구현|만들어|삭제|rename|implement|fix|modify|delete/iu.test(chunk.request);
   const unsupportedMutation = mutation && !tools.some(tool => tool.excerpt) && answer.length < 80 && !/[“"‘'`]/u.test(answer);
   if (verification || workResult || (finalContent && !planOnly && !unsupportedMutation)) return { mode: 'analyze' };
+  // A short reply has nothing to condense: show the reply itself instead of a
+  // placeholder, so the user reads what the AI actually said.
+  if (answer && !generic(answer) && answer.length <= 600) return { mode: 'defer', actual: answer };
   return { mode: 'defer', actual: text(locale,
     '요청 결과를 판단할 구체적인 내용이 아직 기록에 없어요. 결과가 수집되면 분석할게요.',
     'No concrete result for this request is recorded yet. Analysis will begin when evidence arrives.',

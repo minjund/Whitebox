@@ -17,6 +17,7 @@ GitHub release notes remain the authoritative version history.
 - Type `/` in the Summary composer to list the AI's slash commands (built-in, custom, skills and installed plugin commands for Claude; built-in and custom prompts for Codex) with arrow-key, Tab/Enter and click selection.
 - Show Claude Code monitors as an eye badge on the terminal in the left tree, beside the background-task badge, with each watch listed in the task popover until it is stopped or expires.
 - Summarize a finished reply that asks you to choose or clarify instead of parking it as “no concrete result yet”; only a bare promise of future work without a question still waits for evidence.
+- When a reply is too short to analyze, the Summary card shows the reply itself instead of the “no concrete result yet” placeholder.
 
 ## 2.0.23 - 2026-11-08
 
