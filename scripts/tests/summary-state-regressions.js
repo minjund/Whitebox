@@ -51,7 +51,9 @@ exports.run = async evaluate => {
     check(f.state().next && !f.state().loading && f.state().review === '완료', 'old unmatched request cannot block the newest completed summary'); cases.push('old-unmatched');
     f = make({ tasks: [task('a', { submittedAt: 1 })], messages: [user('b', { at: 2 })], review: { state: 'awaiting-answer', preview: { taskId: 'b', submissionId: 'b', lifecycle: 'in-progress' } } });
     check(f.state().reply !== '완료' && f.state().title === 'AI 답변을 기다리고 있어요', 'late historical reply cannot complete the newer request');
-    check(f.chat.serialize()[0].messages[0].id === 'request:a', 'historical reply is inserted before the newer request'); cases.push('late-history');
+    { const items = [...f.root.querySelector('#wbSummaryTranscript').children].map(node => node.className);
+      check(items.indexOf('wb-summary-answer') >= 0 && items.indexOf('wb-summary-answer') < items.lastIndexOf('wb-summary-user'), 'historical reply is shown before the newer request: ' + items.join(',')); }
+    cases.push('late-history');
     f = make({ tasks: [task('b')], messages: [user('b')], review: { state: 'reviewing', analysisTaskId: 'a', preview: { taskId: 'b', submissionId: 'b', lifecycle: 'completed' } } });
     check(f.state().next && !f.state().loading, 'older model analysis cannot invalidate a completed newer summary'); cases.push('old-analysis');
     f = make({ tasks: [task('a', { lifecycle: 'interrupted', recordOnly: true })], messages: [user('a')] });
@@ -196,7 +198,15 @@ exports.run = async evaluate => {
         user('latest', { text: '최근 요청', at: now - 60000, sentAt: now - 60000, answerKey: 'latest' }), { role: 'answer', id: 'answer:latest', key: 'latest', task: latest },
         user('stale', { text: '오래된 요청', at: early, sentAt: early, answerKey: 'stale' }), { role: 'answer', id: 'answer:stale', key: 'stale', task: stale }] });
       check(f.state().title === '답변과 요약이 도착했어요' && !f.state().loading, 'progress follows the latest finished turn, not an older one saved later: ' + JSON.stringify(f.state()));
-      check(f.chat.serialize()[0].messages.map(message => message.id).join(',') === 'stale,answer:stale,latest,answer:latest', 'transcript is shown in time order: ' + f.chat.serialize()[0].messages.map(message => message.id).join(','));
+      check(f.root.querySelector('#wbSummaryTranscript').textContent.indexOf('오래된 요청') < f.root.querySelector('#wbSummaryTranscript').textContent.indexOf('최근 요청'), 'transcript is shown in time order');
+      check(f.chat.serialize()[0].messages.every(message => message.role === 'user' && !message.id.startsWith('request:')), 'only own sends are saved; answers are derived from review results');
+      // A saved answer copy that the review no longer has is not shown.
+      f = make({ tasks: [latest], messages: [user('latest', { text: '최근 요청', at: now - 60000, sentAt: now - 60000, answerKey: 'latest' }),
+        { role: 'answer', id: 'answer:ghost', key: 'ghost', task: task('ghost', { request: '사라진 요청', actual: '요청 결과를 판단할 구체적인 내용이 아직 기록에 없어요.' }) }] });
+      check(!f.root.querySelector('#wbSummaryTranscript').textContent.includes('구체적인 내용이 아직 기록에 없어요'), 'stale saved answer copies are not restored');
+      // Content follows the review result: an updated analysis replaces the shown text.
+      f.data.tasks = [{ ...latest, actual: '분석이 갱신됐습니다.' }]; f.chat.render();
+      check(f.root.querySelector('#wbSummaryTranscript').textContent.includes('분석이 갱신됐습니다.'), 'Summary shows the same, current content as the review panel');
       cases.push('latest-turn-by-time');
     }
     return cases;

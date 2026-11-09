@@ -14,7 +14,7 @@ const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = requir
 const { acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
 const { observeClaudeUsage, observeCodexUsage, tokenUsage } = require('./terminalTokenUsage');
-const { isNonTaskRequest } = require('./terminalReviewTurns');
+const { isNonTaskRequest, readableRequest } = require('./terminalReviewTurns');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.filter(item => ['text', 'input_text', 'output_text'].includes(item?.type)).map(item => String(item.text || '')).join('\n') : '';
@@ -29,7 +29,7 @@ function applyClaudeRow(state, row, sessionId) {
       if (at >= state.requestAt) for (const item of results) addResult(state, item.tool_use_id, item.content, item.is_error);
       return;
     }
-    const request = textContent(row.message.content);
+    const request = readableRequest(textContent(row.message.content));
     if (isNonTaskRequest(request)) return;
     if (/^\[Request interrupted by user(?: for tool use)?\]/u.test(request)) { state.aborted = true; state.complete = false; return; }
     // Claude writes background-agent notifications as user rows, sometimes

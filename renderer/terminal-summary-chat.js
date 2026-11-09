@@ -81,41 +81,31 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const nonTask = request => window.WhiteboxTerminalReviewTurns?.isNonTaskRequest(request);
   function tasksFor(id) { return context.tasks(id).filter(task => !nonTask(task.request)
     && (task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred')); }
+  // Answers are never stored here: each render derives them from the same
+  // review results the terminal-mode panel shows. Summary keeps only the
+  // user's own sends (queue, delivery state, links to the turn they started).
+  const ownSend = message => message.role === 'user' && !String(message.id).startsWith('request:');
   function mergeAnswers(value) {
-    // A slash command typed here must still be delivered; it is dropped from
+    // A slash control typed here must still be delivered; it is dropped from
     // the transcript (and never awaits a summary) once it has been sent.
-    value.messages = value.messages.filter(message => ['queued', 'sending'].includes(message.state)
-      || !nonTask(message.role === 'answer' ? message.task?.request : message.text));
+    const own = value.messages.filter(message => ownSend(message)
+      && (['queued', 'sending'].includes(message.state) || !nonTask(message.text)));
+    const derived = [];
     for (const task of tasksFor(value.id)) {
       const key = taskKey(task);
-      const previous = value.messages.find(message => message.role === 'answer' && message.key === key);
-      // A review event can arrive before the send acknowledgement. Reconcile
-      // existing answers too, once the outgoing request becomes `sent`.
-      const pending = value.messages.find(message => message.role === 'user' && message.state === 'sent'
-        && !message.answerKey && (task.submissionId ? task.submissionId === message.id
+      let mine = own.find(message => message.answerKey === key);
+      if (!mine) {
+        // A review event can arrive before the send acknowledgement; link the
+        // turn once the outgoing request becomes `sent`.
+        mine = own.find(message => message.state === 'sent' && !message.answerKey && (task.submissionId ? task.submissionId === message.id
           : message.text.trim() === String(task.request || '').trim() && !message.baseline?.includes(key)));
-      if (pending) pending.answerKey = key;
-      if (previous) {
-        const duplicateRequest = pending && (previous.task?.submissionId === pending.id
-          || String(previous.task?.request || '').trim() === pending.text.trim());
-        previous.task = task;
-        if (pending) {
-          value.messages = value.messages.filter(message => message !== previous && !(duplicateRequest && message.id === `request:${key}`));
-          value.messages.splice(value.messages.indexOf(pending) + 1, 0, previous);
-        }
-        continue;
+        if (mine) mine.answerKey = key;
       }
-      const answer = { role: 'answer', id: `answer:${key}`, key, task };
-      if (pending) value.messages.splice(value.messages.indexOf(pending) + 1, 0, answer);
-      else {
-        const at = Number(task.submittedAt) || 0;
-        const before = at ? value.messages.findIndex(message => message.role === 'user' && (message.sentAt || message.at || 0) > at) : -1;
-        const request = task.request ? [{ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key,
-          at: at || Date.parse(task.observedAt) || 0 }] : [];
-        value.messages.splice(before < 0 ? value.messages.length : before, 0, ...request, answer);
-      }
+      if (!mine && task.request) derived.push({ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key,
+        at: Number(task.submittedAt) || Date.parse(task.observedAt) || 0 });
+      derived.push({ role: 'answer', id: `answer:${key}`, key, task });
     }
-    value.messages = chronological(value.messages).slice(-100);
+    value.messages = chronological([...own, ...derived]).slice(-100);
   }
   // Saved transcripts can hold turns out of order (imported history, restarts,
   // a send acknowledged after a later import). Show each request with its
@@ -586,7 +576,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       mergeAnswers(value);
       return value.mode === 'summary' || value.messages.some(message => message.state === 'sent' && !message.answerKey);
     },
-    serialize: () => [...records.values()].slice(-100).map(({ game2048, ...value }) => ({ ...value, messages: value.messages.slice(-100) })),
+    serialize: () => [...records.values()].slice(-100).map(({ game2048, ...value }) => ({ ...value, messages: value.messages.filter(ownSend).slice(-100) })),
     serializeGame: () => sharedGame,
     restoreGame(value) { adoptGame(value); },
     restore(values) {
@@ -597,10 +587,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       for (const item of (Array.isArray(values) ? values : []).slice(-100)) {
         const session = context.session(item?.id);
         if (!session || item.creationId !== session.creationId) continue;
+        // Older versions saved answer copies and imported requests; both are
+        // derived from the live review results now and are not restored.
         const messages = (Array.isArray(item.messages) ? item.messages : []).filter(message => message && typeof message.id === 'string'
-          && (message.role === 'user' && typeof message.text === 'string' && message.text.length <= 8000
-          || message.role === 'answer' && message.task && typeof message.task === 'object')
-          && !nonTask(message.role === 'answer' ? message.task.request : message.text)).slice(-100);
+          && ownSend(message) && typeof message.text === 'string' && message.text.length <= 8000 && !nonTask(message.text)).slice(-100);
         for (const message of messages) if (['queued', 'sending'].includes(message.state)) {
           message.state = 'interrupted'; message.error = t('앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.');
         }

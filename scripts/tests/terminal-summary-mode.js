@@ -98,6 +98,8 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   assert(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).display === "none" && getComputedStyle(document.querySelector("#wbReview")).display === "none"'));
   await evaluate('document.querySelector("#wbSummaryInput").value="/comp"; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
   await waitFor('!document.querySelector("#wbSummaryCommands").hidden && document.querySelector("#wbSummaryCommands").textContent.includes("/compact")', 'typing "/" lists real provider commands in Summary mode');
+  const commandGeometry = await evaluate('(() => { const list = document.querySelector("#wbSummaryCommands").getBoundingClientRect(), input = document.querySelector("#wbSummaryInput").getBoundingClientRect(), form = document.querySelector("#wbSummaryForm").getBoundingClientRect(); return { listBottom: list.bottom, formTop: form.top, inputTop: input.top, height: list.height }; })()');
+  assert(commandGeometry.height > 0 && commandGeometry.listBottom <= commandGeometry.formTop, `the command list floats above the composer: ${JSON.stringify(commandGeometry)}`);
   await evaluate('document.querySelector("#wbSummaryInput").value=""; document.querySelector("#wbSummaryInput").dispatchEvent(new Event("input"))');
   await waitFor('document.querySelector("#wbSummaryCommands").hidden', 'clearing the composer closes the command list');
   await send('한글 SUMMARY_HOLD');

@@ -8,6 +8,25 @@ const { classifyEvidence, evidenceDigest } = require('../src/terminalReviewPolic
 const { addCall, addResult, toolEvidence } = require('../src/terminalReviewTools');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 module.exports = async function policyChecks() {
+  {
+    // Built-in controls stay out of review; a custom command or skill with
+    // content is the user's request and is recorded the way it was typed.
+    const { isNonTaskRequest, readableRequest, submittedPrompt } = require('../src/terminalReviewTurns');
+    for (const control of ['/clear', '/compact focus on tests', '/model opus', '/reload-skills', '/project:sync', '<command-message>review</command-message>\n<command-name>/review</command-name>', '<local-command-stdout>ok</local-command-stdout>'])
+      assert.equal(isNonTaskRequest(control), true, control);
+    const tagged = '<command-message>grill-me</command-message>\n<command-name>/grill-me</command-name>\n<command-args>GraphQL 질문</command-args>';
+    for (const request of ['/grill-me GraphQL 질문', '/project:sync 오늘 것', tagged, '/Users/me/a.js 열어줘']) assert.equal(isNonTaskRequest(request), false, request);
+    assert.equal(readableRequest(tagged), '/grill-me GraphQL 질문');
+    assert.equal(submittedPrompt('❯ /grill-me GraphQL 질문\n'), '/grill-me GraphQL 질문', 'a typed skill request is a submitted prompt');
+    assert.equal(submittedPrompt('❯ /compact\n'), '', 'a typed control is not');
+    const { applyClaudeRow } = require('../src/terminalReviewCompletion');
+    const state = { requestAt: 0 }, sid = '00000000-0000-4000-8000-000000000001', at = n => new Date(Date.UTC(2026, 10, 9, 0, 0, n)).toISOString();
+    applyClaudeRow(state, { type: 'user', sessionId: sid, uuid: 'u1', timestamp: at(1), message: { role: 'user', content: tagged } }, sid);
+    applyClaudeRow(state, { type: 'user', sessionId: sid, uuid: 'm1', isMeta: true, timestamp: at(1), message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /x' }] } }, sid);
+    applyClaudeRow(state, { type: 'assistant', sessionId: sid, uuid: 'a1', timestamp: at(3), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Q1 질문입니다.' }] } }, sid);
+    assert.equal(state.request, '/grill-me GraphQL 질문', 'a skill invocation starts a recorded turn');
+    assert.equal(state.complete, true, 'and its answer completes that turn');
+  }
   const relay = { request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', text: 'ASSISTANT: 완료했습니다.' };
   const jobs = [{ sourceId: 'one', provider: 'codex', request: 'ㅎㅇ', state: 'completed', sentAt: 20, finishedAt: 25, answer: 'ASSISTANT: 반가워요!' }];
   assert.equal(classifyEvidence(relay, jobs).mode, 'record');
