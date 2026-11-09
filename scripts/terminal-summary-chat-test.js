@@ -107,6 +107,32 @@ require('./summary-2048-test');
     await assert.rejects(c.summaryStop(stopIdentity), /멈출 작업/, 'nothing running means no stray Escape');
     assert.equal(responses.length, responseCount + 1);
     const reloaded = new TerminalCollaboration(options); assert.equal(reloaded.jobs.get(immediate.id).state, 'stopped', 'a stopped job survives restart as stopped');
+    // Claude wraps a bracketed paste in <pasted_content> tags in its log. The
+    // finished reply must still release the queue instead of a 15-minute wait.
+    draft = ''; text = '› Ask Codex to do anything'; session.outputSequence++; await sync();
+    c.completion = { observe: async () => ({ available: true, state: 'completed', requestId: 'before-paste', requestAt: now - 1000, completedAt: now - 500 }) };
+    const pasted = request('@ElementCollection\n    @OrderColumn(name = "cell_order")\n    private List<Cell> cells;');
+    assert.equal((await c.summarySend(pasted)).ok, true);
+    now += 1000; const pasteFrame = text;
+    c.completion = { observe: async () => ({ available: true, state: 'completed', requestId: 'paste-turn', requestAt: now, completedAt: now + 10,
+      request: `\n\n<pasted_content id="07fc">\n${pasted.message}\n</pasted_content>`, evidence: 'USER: paste\nASSISTANT: done' }) };
+    text = pasteFrame; await sync();
+    assert.equal(c.jobs.get(pasted.id).state, 'completed', 'a pasted request recorded inside <pasted_content> completes');
+    // "Send anyway" while the AI works is absorbed into the running turn; its
+    // completion after the send releases the job.
+    c.completion = { observe: async () => ({ available: true, state: 'working', requestId: 'running-turn', requestAt: now - 5000 }) };
+    const absorbed = { ...request('수정해서 커밋,배포까지 진행해줘'), sendNow: true };
+    assert.equal((await c.summarySend(absorbed)).ok, true);
+    c.completion = { observe: async () => ({ available: true, state: 'completed', requestId: 'running-turn', requestAt: now - 5000, completedAt: now - 1, request: 'earlier', evidence: 'earlier' }) };
+    await sync(); assert.equal(c.jobs.get(absorbed.id).state, 'running', 'a turn finished before the send is not its answer');
+    now += 2000;
+    c.completion = { observe: async () => ({ available: true, state: 'completed', requestId: 'running-turn', requestAt: now - 7000, completedAt: now, request: 'earlier', evidence: 'USER: earlier\nASSISTANT: committed' }) };
+    await sync(); assert.equal(c.jobs.get(absorbed.id).state, 'completed', 'the absorbing turn finishing after the send completes it');
+    const automatic = request('automatic same turn');
+    c.jobs.set(automatic.id, { id: automatic.id, operation: 'summary', sourceId: session.id, targetId: session.id, groupId: 'panel', request: automatic.message,
+      state: 'running', sentAt: now - 10, baseline: 'running-turn', providerPid, creationId: session.creationId, provider: 'codex' });
+    await sync(); assert.equal(c.jobs.get(automatic.id).state, 'running', 'only an explicit send-anyway may match the turn it was absorbed into');
+    c.jobs.delete(automatic.id);
     console.log('PASS summary chat guarded delivery: busy/draft queue, Unicode, exact AI/session, foreign/shell rejection, no duplicate/restart/unknown replay, current approval and duplicate-choice guard');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -454,8 +454,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryStateDescription').textContent = t(description);
     $('#wbSummaryStateTitle').dataset.state = failure || interrupted ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
     const replyState = needsResponse ? '응답 필요' : stopped ? '멈춤' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
+    // Same live reviewer wording as terminal mode, so analysis never looks stalled.
+    const live = review?.state === 'reviewing' ? review.phase === 'evidence' ? '근거 준비 중…' : '분석중…'
+      : review?.state === 'awaiting-answer' && (working || awaiting) ? '작업 관찰 중' : '';
     const reviewState = failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
-      : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing ? '정리 중' : deferred || collecting || replyDone ? '분석 대기' : '대기 중';
+      : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing && replyDone ? '정리 중' : live
+        || (deferred || collecting || replyDone ? '분석 대기' : '대기 중');
     $('#wbSummaryReplyState').textContent = t(replyState);
     $('#wbSummaryReplyState').dataset.state = interrupted ? 'warning' : needsResponse ? 'waiting' : replyDone ? 'done' : 'working';
     $('#wbSummaryReviewState').textContent = t(reviewState);

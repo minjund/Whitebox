@@ -8,6 +8,13 @@ const { completedTurn, completionStamp, inputReady, isNonTaskRequest } = require
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
+// Claude records a bracketed paste wrapped in <pasted_content id="…"> tags and
+// the parser bounds request text at 8000 characters. Compare what was typed.
+const typedText = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
+function sameRequest(recorded, sent) {
+  const a = typedText(recorded), b = typedText(sent);
+  return Boolean(a) && (a === b || String(recorded).length >= 8000 && a.length > 40 && b.startsWith(a.slice(0, -40)));
+}
 
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
@@ -201,7 +208,7 @@ class TerminalCollaboration {
       // Persist before the first write. A lost acknowledgement is never replayed.
       const job = { id, operation: 'summary', sourceId: targetId, targetId, groupId, request: message,
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
-        state: 'sending', createdAt: this.now(), sentAt: this.now() };
+        immediate, state: 'sending', createdAt: this.now(), sentAt: this.now() };
       this.jobs.set(id, job); this.save(job);
       try { Object.assign(job, await this.send(groupId, targetId, message, `summary:${id}`, payload, true, immediate), { state: 'running' }); }
       catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
@@ -317,7 +324,10 @@ class TerminalCollaboration {
         }
         const native = await this.completion.observe(target.child);
         const evidence = native.available
-          ? native.state === 'completed' && native.requestId !== job.baseline && native.requestAt >= job.sentAt && String(native.request).trim() === job.request ? native.evidence : ''
+          ? native.state === 'completed' && (native.requestId !== job.baseline && native.requestAt >= job.sentAt && sameRequest(native.request, job.request)
+            // "Send anyway" while the AI works: Claude absorbs the message into
+            // the running turn as a queued command, with no new user row.
+            || job.immediate === true && job.baseline && native.requestId === job.baseline && native.completedAt >= job.sentAt) ? native.evidence : ''
           : completedTurn(target.frame.text, job.request, job.provider, job.stamp, { exactRequest: true });
         if (evidence) Object.assign(job, { state: 'completed', answer: evidence, finishedAt: this.now() });
         else if (this.now() - job.sentAt > 15 * 60 * 1000) Object.assign(job, { state: 'interrupted', error: '15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.' });
