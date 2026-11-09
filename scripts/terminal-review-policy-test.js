@@ -36,6 +36,7 @@ module.exports = async function policyChecks() {
   const asking = { request: '한국말로 해서 해줘봐', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', tools: { items: [] }, updates: { items: [] },
     text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 아직 무엇을 설계할지 요청이 없습니다.\n\n- 범위: 새 테이블 설계, 기존 엔티티 검토, 마이그레이션 계획 중 어느 것인가요?\n- 대상 DB: H2 기준인지 PostgreSQL 기준인지 알려주세요.\n\n패키지를 지목해 주시면 스키마 안을 제안하겠습니다.' };
   assert.equal(classifyEvidence(asking, []).mode, 'analyze', 'a clarifying question is this turn\'s result');
+  assert.match(classifyEvidence({ ...asking, lifecycle: 'in-progress', text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (current report):\nVerified. Now updating local state.' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'an in-progress line is not shown as a short reply');
   const plan = classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.' }, []);
   assert.equal(plan.mode, 'defer', 'a bare plan without a question still waits for evidence');
   assert.equal(plan.actual, '네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.', 'a short deferred reply is shown verbatim instead of a placeholder');
@@ -54,9 +55,15 @@ module.exports = async function policyChecks() {
       const card = entry.result.tasks[0];
       assert.equal(card.lifecycle, 'completed');
       assert.equal(card.actual, longReply.trim(), 'a finished reply replaces the placeholder on the waiting card');
+      const midTurn = { taskId: 'p', request: asking.request, lifecycle: 'in-progress', deferred: true, recordOnly: true, analysisDepth: 'deferred', actual: placeholder };
+      entry.result.tasks.push(midTurn);
+      service.enqueue('t', entry, { ...asking, taskId: 'p', lifecycle: 'in-progress', text: 'USER:\n' + asking.request + '\n\nASSISTANT (current report):\nVerified. Now updating local state and closing the run record.' });
+      assert.equal(midTurn.actual, placeholder, 'a mid-turn progress line is never shown as the answer');
+      service.enqueue('t', entry, { ...asking, taskId: 'p', lifecycle: 'completed', text: 'USER:\n' + asking.request + '\n\nASSISTANT (completed answer):\n1, 3번은 진행 중, 2번은 완료로 바꿨고 4번은 그대로 뒀습니다.' });
+      assert.equal(midTurn.actual, '1, 3번은 진행 중, 2번은 완료로 바꿨고 4번은 그대로 뒀습니다.', 'the finished reply replaces it');
       entry.result.tasks.push({ taskId: 'r', request: 'relay', lifecycle: 'completed', recordOnly: true, analysisDepth: 'record', actual: 'Codex에 보냈고 답을 받았어요' });
       service.enqueue('t', entry, { ...asking, taskId: 'r', lifecycle: 'completed', text: 'USER:\nrelay\n\nASSISTANT (completed answer):\n다른 글' });
-      assert.equal(entry.result.tasks[1].actual, 'Codex에 보냈고 답을 받았어요', 'a recorded result card is never overwritten');
+      assert.equal(entry.result.tasks.find(item => item.taskId === 'r').actual, 'Codex에 보냈고 답을 받았어요', 'a recorded result card is never overwritten');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
   assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).mode, 'analyze', 'a recorded awaiting-response turn is analyzed');

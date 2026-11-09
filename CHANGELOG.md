@@ -8,6 +8,7 @@ GitHub release notes remain the authoritative version history.
 - Summary mode shows the same answers and content as the terminal-mode review panel: answers are read from the live review results instead of saved copies, so stale or out-of-order entries and leftover “no concrete result yet” cards no longer appear. Summary keeps only your own sends.
 - A custom command or skill sent with content, such as `/grill-me <question>`, is treated as a request: its reply is captured, summarized and shown as typed. Built-in controls such as `/clear`, `/compact` or `/model` stay out of review.
 - The `/` command list in the Summary composer opens above the input instead of pushing it down.
+- Never show a line the AI printed mid-turn (for example “Verified. Now updating local state…”) as a turn's answer; a waiting card shows the finished reply only.
 - Follow the latest request by time in Summary mode, and show the transcript in time order, so an older unfinished turn saved later no longer keeps “Waiting for the AI reply” after the newer answer is done.
 - Show the AI's actual reply on a finished turn's Summary card while its analysis is still queued, instead of “no concrete result yet”.
 - Verify official 2.0.25 installers alongside all retained Windows and macOS update cohorts.

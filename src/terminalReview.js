@@ -375,9 +375,10 @@ class TerminalReview extends EventEmitter {
     chunk.digest = evidenceDigest(chunk);
     entry.latest[chunk.taskId] = chunk;
     const existing = this.task(entry, chunk.taskId);
-    // A waiting card shows the AI's actual reply as soon as it exists, instead
-    // of "no concrete result yet", until the analysis replaces it.
-    const reply = existing?.deferred ? answerText(chunk.text) : '';
+    // A waiting card shows the AI's finished reply instead of "no concrete
+    // result yet" until the analysis replaces it. Mid-turn progress lines are
+    // never shown as the answer.
+    const reply = existing?.deferred && chunk.lifecycle === 'completed' ? answerText(chunk.text) : '';
     const shownReply = reply ? bounded(reply, 4000) : '';
     if (existing && (existing.lifecycle !== chunk.lifecycle || shownReply && existing.actual !== shownReply)) {
       existing.lifecycle = chunk.lifecycle;
