@@ -710,6 +710,7 @@
   ["앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.", "The app restarted. Check the delivery status.", "应用已重启，请确认发送状态。"],
   ['화면에서 숨기기', 'Hide from view', '从视图中隐藏'],
   ['터미널 종료', 'Terminate terminal', '终止终端'],
+  ['휴지통으로 이동', 'Move to trash', '移入回收站'],
   ['화면에 표시된 터미널이 없습니다.', 'No terminals are visible.', '当前没有显示的终端。'],
   ['왼쪽 터미널을 선택하면 다시 표시됩니다.', 'Select a terminal on the left to show it again.', '选择左侧终端以再次显示。'],
   ['터미널 닫기', 'Close terminal', '关闭终端'],

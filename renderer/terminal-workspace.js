@@ -817,7 +817,7 @@
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
         const background = backgroundBadge(id), counts = backgroundCounts(terminalBackground(id));
-        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-close-terminal="${esc(id)}" class="wb-trash-instance" title="${t('터미널 종료')}" aria-label="${esc(title(id))} ${t('터미널 종료')}">${icon('trash')}</button></div>`;
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-terminal="${esc(id)}" class="wb-trash-instance" title="${t('휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
       }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
@@ -1372,25 +1372,6 @@
     rememberCanvas(owner);
     expanded = false; root.classList.remove('terminal-expanded');
     renderLayout(false);
-  }
-
-  async function closeInstance(id) {
-    if (busy) return;
-    const session = sessions.get(id);
-    if (!session) return;
-    busy = true; renderNav();
-    try {
-      const live = await api.terminalGet(id, false);
-      if (live) {
-        if (live.creationId !== session.creationId || live.pid !== session.pid) throw new Error(t('터미널 세션이 바뀌어 종료하지 않았습니다.'));
-        await api.terminalClose(id);
-        if (await api.terminalGet(id, false)) throw new Error(t('터미널 제거를 확인하지 못해 창을 닫지 않았습니다.'));
-      }
-      if (sessions.get(id)?.creationId === session.creationId) removeTerminalLocally(id);
-      renderLayout(false); renderTrash();
-      if ($('#wbError').dataset.scope === 'close') $('#wbError').hidden = true;
-    } catch (error) { report(error, 'close'); }
-    finally { busy = false; renderNav(); }
   }
 
   function trashed(id) { return trash.some(item => item.id === id && trashSession(item)); }
@@ -2020,7 +2001,9 @@
     if (button.dataset.newProject) createTerminal('', spaces.find(item => item.id === button.dataset.newProject)).catch(report);
     if (button.dataset.removeProject) removeProject(button.dataset.removeProject).catch(report);
     if (button.dataset.hideTerminal) hideInstance(button.dataset.hideTerminal);
-    if (button.dataset.closeTerminal) closeInstance(button.dataset.closeTerminal).catch(report);
+    // The sidebar trash icon archives: the session stops and its output and
+    // review records stay restorable from the trash.
+    if (button.dataset.trashTerminal) trashInstance(button.dataset.trashTerminal).catch(report);
     if (button.dataset.restoreInstance) restoreInstance(button.dataset.restoreInstance).catch(report);
     if (button.dataset.purgeInstance) purgeInstance(button.dataset.purgeInstance).catch(report);
   });

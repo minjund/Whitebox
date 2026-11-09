@@ -146,18 +146,21 @@ class TerminalCollaboration {
     if (!member) throw new Error('같은 패널의 실행 중인 터미널만 연결할 수 있습니다.');
     return { group, member };
   }
-  async target(groupId, id) {
+  // An explicit "send anyway" accepts a frame whose output sequence moved on:
+  // a working AI repaints its spinner continuously, so sequence equality
+  // would never hold. Identity and freshness are still required.
+  async target(groupId, id, immediate = false) {
     const { member } = this.member(groupId, id);
     const live = await this.manager().get(id, false);
     if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('터미널 실행 세션이 바뀌었습니다.');
     const child = exactProcess(live, await scanProcesses(this.monitor));
     if (!child) throw new Error('이 터미널에서 Claude 또는 Codex를 먼저 실행해 주세요.');
     const frame = this.frames.get(id);
-    if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || frame.outputSequence !== live.outputSequence) throw Object.assign(new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.'), { code: 'TERMINAL_FRAME_STALE' });
+    if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || !immediate && frame.outputSequence !== live.outputSequence) throw Object.assign(new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.'), { code: 'TERMINAL_FRAME_STALE' });
     return { member, live, child, frame };
   }
   async send(groupId, id, message, deliveryId, expected = null, submit = true, immediate = false) {
-    const target = await this.target(groupId, id);
+    const target = await this.target(groupId, id, immediate);
     if (expected?.targetCreationId && (expected.targetCreationId !== target.live.creationId || expected.targetProviderPid !== target.child.pid || expected.targetProvider !== target.child.provider)) throw new Error('목록 조회 이후 상대 AI 세션이 바뀌었습니다. list를 다시 조회해 주세요.');
     if (target.frame.inputDraft || immediate && require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
       || !immediate && !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) throw new Error('상대가 작업 중이거나 입력 중인 글이 있습니다. 입력창이 비어 있고 답변이 끝났을 때 다시 요청해 주세요.');
@@ -168,7 +171,7 @@ class TerminalCollaboration {
       || exactProcess(live, await scanProcesses(this.monitor))?.pid !== target.child.pid) throw new Error('터미널 실행 세션이 바뀌었습니다.');
     if (!this.manager().rawWriteDeliverySupported?.()) throw new Error('현재 터미널 호스트는 안전한 협업 전달을 지원하지 않습니다.');
     // One guarded write prevents an intervening draft between paste and Enter.
-    await this.manager().write(id, `\x1b[200~${message}\x1b[201~${submit ? '\r' : ''}`, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
+    await this.manager().write(id, `\x1b[200~${message}\x1b[201~${submit ? '\r' : ''}`, { deliveryId, ...(immediate ? {} : { expectedOutputSequence: target.frame.outputSequence }) });
     return { baseline: native.requestId || '', stamp: completionStamp(target.frame.text, target.child.provider), provider: target.child.provider, providerPid: target.child.pid, creationId: target.member.creationId, pid: target.member.pid };
   }
   summarySend(payload) {
@@ -185,11 +188,11 @@ class TerminalCollaboration {
           || existing.expectedProviderPid !== targetProviderPid || existing.expectedProvider !== targetProvider) throw new Error('채팅 전송 식별자가 다른 요청에 사용되었습니다.');
         return { ok: ['running', 'completed'].includes(existing.state), job: existing };
       }
+      const immediate = payload.sendNow === true;
       let target;
-      try { target = await this.target(groupId, targetId); }
+      try { target = await this.target(groupId, targetId, immediate); }
       catch (error) { if (error.code === 'TERMINAL_FRAME_STALE') return { deferred: true }; throw error; }
       if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('채팅을 작성한 AI 세션이 바뀌었습니다.');
-      const immediate = payload.sendNow === true;
       if (target.frame.inputDraft || require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
         || !immediate && ([...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))
           || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider))) return { deferred: true };
