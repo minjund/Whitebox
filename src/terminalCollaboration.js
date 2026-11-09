@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { exactProcess } = require('./terminalReview');
-const { completedTurn, completionStamp, inputReady } = require('./terminalReviewTurns');
+const { completedTurn, completionStamp, inputReady, isNonTaskRequest } = require('./terminalReviewTurns');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
@@ -30,7 +30,7 @@ class TerminalCollaboration {
       try {
         const job = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
         if (!safeId(job.id)) continue;
-        if (!['completed', 'failed', 'interrupted'].includes(job.state)) Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' });
+        if (!['completed', 'failed', 'interrupted', 'stopped'].includes(job.state)) Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' });
         this.jobs.set(job.id, job); this.save(job);
       } catch { /* Malformed local records are never executed. */ }
     }
@@ -222,6 +222,27 @@ class TerminalCollaboration {
       return { ok: true, requiresText: choice.requiresText === true };
     });
   }
+  // The user's explicit stop for the request they sent from Summary mode. A
+  // working provider redraws constantly, so this sends one Escape guarded by
+  // the exact terminal/provider identity rather than a frozen output frame.
+  summaryStop(payload) {
+    return this.serialize(async () => {
+      const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider } = payload || {};
+      if (!safeId(groupId) || !safeId(targetId) || typeof targetCreationId !== 'string'
+        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !['claude', 'codex'].includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
+      const { member } = this.member(groupId, targetId);
+      const live = await this.manager().get(targetId, false);
+      const child = live && exactProcess(live, await scanProcesses(this.monitor));
+      if (!live || live.status !== 'running' || live.creationId !== member.creationId || live.pid !== member.pid
+        || live.creationId !== targetCreationId || child?.pid !== targetProviderPid || child.provider !== targetProvider) throw new Error('멈추려는 AI 세션이 바뀌었습니다.');
+      const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'summary' && ['sending', 'running'].includes(job.state));
+      const native = await this.completion.observe(child);
+      if (!running.length && !(native.available && native.state === 'working') && member.activity?.state !== 'working') throw new Error('멈출 작업이 없습니다.');
+      await this.manager().respond(targetId, 'Escape', { deliveryId: `summary-stop:${randomUUID()}` });
+      for (const job of running) { Object.assign(job, { state: 'stopped', error: '', finishedAt: this.now() }); this.save(job); }
+      return { ok: true, stopped: running.map(job => job.id) };
+    });
+  }
   connect(groupId, sourceId) { return this.serialize(() => this.connectNow(groupId, sourceId)); }
   async connectNow(groupId, sourceId) {
     const { member } = this.member(groupId, sourceId);
@@ -283,6 +304,14 @@ class TerminalCollaboration {
         if (this.now() - job.sentAt > 15 * 60 * 1000) throw new Error('15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.');
         const target = await this.target(job.groupId, job.targetId);
         if (target.child.pid !== job.providerPid || target.live.creationId !== job.creationId) throw new Error('상대의 AI 세션이 바뀌었습니다.');
+        if (isNonTaskRequest(job.request)) {
+          // Slash commands never produce a provider turn record. Release the
+          // target once its own input prompt is back, so later chat requests
+          // are not deferred behind a command that already finished.
+          if (this.now() - job.sentAt >= 2000 && target.frame.at > job.sentAt + 1000 && !target.frame.inputDraft
+            && inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) Object.assign(job, { state: 'completed', answer: '', finishedAt: this.now() });
+          this.save(job); continue;
+        }
         const native = await this.completion.observe(target.child);
         const evidence = native.available
           ? native.state === 'completed' && native.requestId !== job.baseline && native.requestAt >= job.sentAt && String(native.request).trim() === job.request ? native.evidence : ''

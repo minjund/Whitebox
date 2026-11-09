@@ -116,7 +116,7 @@
           <div class="wb-summary-conversation">
             <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span></li></ol>
             <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
-            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
             <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
           </div>
           <aside class="wb-summary-rail" aria-label="이번 요청 상태">
@@ -174,7 +174,7 @@
       </section>
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
-        <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>답변 도착 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">답변 오면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
+        <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>요약 완료 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">요약 끝나면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
         <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 표시</strong><span>요약 화면의 게임 표시 방식</span></label><select id="wbSummaryGameVisibility"><option value="always">항상 표시</option><option value="summarizing">AI 요약 중에만 표시</option></select></div>
         <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
@@ -222,10 +222,15 @@
       if (sessions.get(session.id)?.creationId !== session.creationId || !acceptReview(session.id, result)) throw new Error(t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'));
       const history = retainReview(session, result);
       reviews.set(session.id, history ? { ...result, result: history.result } : result);
-      return result.preview?.submissionId === job.id && result.preview.lifecycle === 'completed'
-        || result.result?.tasks?.some(task => task.submissionId === job.id && task.lifecycle === 'completed');
+      // A reply that ends with a question to the user stays in-progress for
+      // review, yet the turn is finished and the next message answers it.
+      const finished = item => item?.lifecycle === 'completed' || item?.awaitingResponse === true;
+      return [result.preview?.submissionId, result.preview?.latestSubmissionId].includes(job.id) && finished(result.preview)
+        || result.result?.tasks?.some(task => task.submissionId === job.id && finished(task));
     },
     reveal: id => selectInstance(id), report: message => report(new Error(message), 'summary'),
+    // Mirror a terminal Esc: the review marks the current turn interrupted.
+    interrupted: id => { interruptions.set(id, { id: uuid(), at: Date.now() }); captureReviews(); },
     submitted: job => {
       submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
       setTimeout(() => captureReviews(), 0);
@@ -507,7 +512,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -2220,6 +2225,7 @@
       const tabs = (Array.isArray(item.tabs) ? item.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });
+    summaryChat.restoreGame(saved.summaryGame2048);
     summaryChat.restore(saved.summaryChats);
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);

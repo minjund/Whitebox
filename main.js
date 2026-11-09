@@ -2449,6 +2449,7 @@ function registerIpcHandlers() {
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
     if (payload?.operation === 'summary-send') return terminalCollaboration.summarySend(payload);
     if (payload?.operation === 'summary-respond') return terminalCollaboration.summaryRespond(payload);
+    if (payload?.operation === 'summary-stop') return terminalCollaboration.summaryStop(payload);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });
   handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
