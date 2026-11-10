@@ -21,9 +21,16 @@ const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(val
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.filter(item => ['text', 'input_text', 'output_text'].includes(item?.type)).map(item => String(item.text || '')).join('\n') : '';
 
+// The model and effort of the latest reply, shown beside the connection.
+function observeRunSettings(state, model, effort) {
+  if (typeof model === 'string' && model && !model.startsWith('<')) state.model = model.slice(0, 80);
+  if (typeof effort === 'string' && /^[a-z]{2,12}$/u.test(effort)) state.effort = effort;
+}
+
 function applyClaudeRow(state, row, sessionId) {
   observeClaudeUsage(state, row, sessionId);
   if (row.sessionId !== sessionId || row.isSidechain || row.isMeta || row.isCompactSummary === true) return;
+  if (row.type === 'assistant') observeRunSettings(state, row.message?.model, row.effort);
   const at = Date.parse(row.timestamp);
   if (row.type === 'user' && row.message?.role === 'user') {
     const results = Array.isArray(row.message.content) ? row.message.content.filter(item => item?.type === 'tool_result') : [];
@@ -41,7 +48,15 @@ function applyClaudeRow(state, row, sessionId) {
     if (request && row.uuid && Number.isFinite(at) && row.uuid !== state.requestId) {
       const continuationOf = state.awaitingResponse && acknowledgement(request) ? state.rootRequestId || state.requestId : '';
       archiveRequest(state);
-      Object.assign(state, { rootRequestId: continuationOf || row.uuid, continuationOf, aborted: false, awaitingResponse: false, request, requestId: row.uuid, requestAt: at, answer: '', complete: false, completedTail: '', turnFinishedAt: null, tools: [], toolsOmitted: 0, updates: [], updatesOmitted: 0 });
+      Object.assign(state, { rootRequestId: continuationOf || row.uuid, continuationOf, aborted: false, awaitingResponse: false, request, requestId: row.uuid, requestAt: at, answer: '', complete: false, completedTail: '', turnFinishedAt: null, tools: [], toolsOmitted: 0, updates: [], updatesOmitted: 0, absorbed: [] });
+    }
+  } else if (row.type === 'attachment' && row.attachment?.type === 'queued_command' && state.requestId) {
+    // A message typed while Claude works joins the running turn. Claude logs it
+    // here, not as a new user row, so that turn's end is also its reply.
+    const item = row.attachment;
+    const text = typeof item.prompt === 'string' ? item.prompt : '';
+    if (text && Number.isFinite(at) && at >= state.requestAt && (!item.origin?.kind || item.origin.kind === 'human')) {
+      state.absorbed = [...(state.absorbed || []), { text: text.slice(0, 8000), at }].slice(-8);
     }
   } else if (row.type === 'api-request') {
     state.aborted = false;
@@ -71,6 +86,7 @@ function applyClaudeRow(state, row, sessionId) {
 function applyCodexRow(state, row) {
   observeCodexUsage(state, row);
   const event = row.payload || {};
+  if (row.type === 'turn_context') observeRunSettings(state, event.model, event.effort || event.collaboration_mode?.settings?.reasoning_effort);
   const at = Date.parse(row.timestamp);
   if (row.type === 'event_msg' && event.type === 'task_started') {
     const continuationParent = state.awaitingResponse ? state.rootRequestId || state.requestId : '';
@@ -107,6 +123,8 @@ function project(state, idle = true) {
   return { available: true, inputWaiting: idle, state: state.aborted ? 'interrupted' : completed ? 'completed' : idle ? 'unconfirmed' : 'working',
     request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
+    absorbed: (state.absorbed || []).map(item => ({ text: item.text, at: item.at })),
+    model: state.model || '', effort: state.effort || '',
     tools: toolEvidence(state), context: reviewContext(state), updates: assistantUpdates(state),
     usage: tokenUsage(state), partialEvidence: evidence, evidence: completed ? evidence : '',
     progress: idle ? null : currentProgress(state) };

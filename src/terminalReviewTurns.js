@@ -5,9 +5,14 @@
 // followed by its input prompt. Silence, elapsed time and tool pauses are never
 // completion signals. Unknown UI formats remain waiting instead of guessing.
 const promptPattern = /^\s*[❯›]\s?(.*)$/u;
-const busyPattern = /esc to (?:interrupt|cancel)|ctrl\+c to interrupt|press (?:enter|return) to (?:continue|confirm)|do you want to proceed|allow this|waiting for (?:approval|permission)|enter to confirm|is this a project you created or one you trust/iu;
+// Claude's live status line is a spinner glyph, a verb ending in an ellipsis
+// and the elapsed time: "✢ Nucleating… (1m 1s · ↓ 4.0k tokens · thought for 3s)".
+// Current Claude Code shows no "esc to interrupt" while it works.
+const busyPattern = /esc to (?:interrupt|cancel)|ctrl\+c to interrupt|press (?:enter|return) to (?:continue|confirm)|do you want to proceed|allow this|waiting for (?:approval|permission)|enter to confirm|is this a project you created or one you trust|(?:^|\n)\s*[✻✽✶✢✳✺✼*·]\s+[^\n]*…\s*(?:\(\d|$|\n)/iu;
 const finishedPattern = {
-  claude: /^\s*[✻✽✶✢✳✺✼*]\s+.+(?:\bfor\s+\d|\bdone\s+\d)/iu,
+  // "✻ Churned for 8m 18s · done 2:57 PM". The live line above can also say
+  // "thought for 3s", so a line with the spinner's ellipsis is never a finish.
+  claude: /^\s*[✻✽✶✢✳✺✼*]\s+(?![^\n]*…).+(?:\bfor\s+\d|\bdone\s+\d)/iu,
   codex: /^\s*(?:[─━-]+\s*(?:Worked|Working time|Completed|Finished)\b|Worked for \d+(?:[smh]|\s+(?:seconds?|minutes?|hours?))\b.*[•·]\s*\d{1,2}:\d{2})/iu,
 };
 

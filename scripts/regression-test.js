@@ -47,6 +47,7 @@ registerCoreUpdateWorkspaceTests(context);
 registerAttentionNotifierTests(context);
 require('./tests/attention-project').registerAttentionProjectTests(context);
 require('./tests/attention-popup-manager').registerAttentionPopupManagerTests(context);
+require('./tests/summary-absorbed-completion').registerSummaryAbsorbedCompletionTests(context);
 registerAutomationMonitorTests(context);
 registerSessionIntelligenceTests(context);
 registerTerminalInteractionTests(context);

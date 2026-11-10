@@ -22,14 +22,14 @@ exports.run = async evaluate => {
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
         }, captureReply: async () => { stats.captures++; return data.captureResult ?? true; },
         interrupted: () => { stats.interrupts = (stats.interrupts || 0) + 1; },
-        api: { slashCommands: async ({ provider }) => { stats.catalogs = (stats.catalogs || 0) + 1; return provider === 'codex' ? [{ name: 'compact', description: '대화 압축', source: 'builtin' }, { name: 'model', description: '모델 선택', source: 'builtin' }, { name: 'khala:khala', description: 'Khala', source: 'plugin' }] : []; }, terminalCollaboration: async payload => { if (payload.operation === 'summary-stop') { stats.stops = (stats.stops || 0) + 1; return { ok: true, stopped: data.jobs.filter(job => job.state === 'running').map(job => job.id) }; } stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
+        api: { providerUsage: async () => ({ providers: data.accounts || {} }), slashCommands: async ({ provider }) => { stats.catalogs = (stats.catalogs || 0) + 1; return provider === 'codex' ? [{ name: 'compact', description: '대화 압축', source: 'builtin' }, { name: 'model', description: '모델 선택', source: 'builtin' }, { name: 'khala:khala', description: 'Khala', source: 'plugin' }] : []; }, terminalCollaboration: async payload => { if (payload.operation === 'summary-stop') { stats.stops = (stats.stops || 0) + 1; return { ok: true, stopped: data.jobs.filter(job => job.state === 'running').map(job => job.id) }; } stats.sends++; stats.payloads.push(payload); if (data.deliveryError) throw Error('ack lost'); return { ok: true, job: { id: payload.id, state: 'running', sentAt: Date.now() } }; } } });
       chat.restore([{ id: 'states', creationId: 'epoch', mode: 'summary', messages: structuredClone(data.messages || []) }]);
       chat.render();
       const text = id => root.querySelector('#' + id).textContent;
       return { root, chat, data, member, stats, text,
         state: () => ({ title: text('wbSummaryStateTitle'), reply: text('wbSummaryReplyState'),
           review: text('wbSummaryReviewState'), loading: !root.querySelector('#wbSummaryWorking').hidden,
-          thinking: text('wbSummaryThinking'), next: !root.querySelector('#wbSummaryNext').hidden }),
+          thinking: text('wbSummaryThinking'), next: root.querySelector('[data-summary-step=review]').dataset.state === 'done' }),
         send: async () => { root.querySelector('#wbSummaryInput').value = '다음 요청';
           root.querySelector('#wbSummaryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick(); } };
     }
@@ -135,6 +135,53 @@ exports.run = async evaluate => {
     f.data.behavior = 'auto-collapse'; f.chat.render();
     check(f.root.querySelector('.wb-2048-panel').hidden, 'switching back applies auto collapse to arrived reply');
     cases.push('game-auto-collapse');
+    // A reply ending with a question keeps its turn open for the answer, so its
+    // analysis stays "in-progress"; its summary is still the finished result.
+    f = make({ messages: [user('q')], review: { state: 'awaiting-answer' } });
+    check(!f.root.querySelector('.wb-2048-panel').hidden, 'board is open while the question reply is pending');
+    f.data.tasks = [task('q', { lifecycle: 'in-progress', analysisLifecycle: 'in-progress', awaitingResponse: true })];
+    f.data.review = { state: 'awaiting-answer', analysisTaskId: 'q' }; f.chat.render();
+    check(f.root.querySelector('.wb-2048-panel').hidden, 'a reply that asks the user folds the board once its summary is shown');
+    check(f.state().title === '답변과 요약이 도착했어요' && f.state().next && !f.state().loading, 'a question reply with its summary is done: ' + JSON.stringify(f.state()));
+    cases.push('game-question-reply');
+    // A message sent while the AI worked was absorbed into the running turn:
+    // the one answer shows after it, and the chat is done, not waiting.
+    f = make({ tasks: [task('first', { joinedSubmissionIds: ['joined'] })], messages: [user('first', { at: 1 }), user('joined', { at: 2 })],
+      jobs: [{ id: 'first', operation: 'summary', state: 'completed', finishedAt: Date.now() - 20000 }, { id: 'joined', operation: 'summary', state: 'completed', finishedAt: Date.now() - 20000 }] });
+    await f.chat.observe(f.data.jobs); f.chat.render();
+    { const items = [...f.root.querySelector('#wbSummaryTranscript').children].map(node => node.className.split(' ')[0]);
+      check(items.join(',') === 'wb-summary-user,wb-summary-user,wb-summary-answer', 'the absorbed message is followed by the shared answer: ' + items.join(',')); }
+    check(f.state().title === '답변과 요약이 도착했어요' && f.state().next && !f.state().loading, 'an absorbed send is answered, not stuck: ' + JSON.stringify(f.state()));
+    cases.push('absorbed-send');
+    // Header: model and effort from the AI's own log, each AI's account limit,
+    // and per-request token history in a panel that keeps the chat readable.
+    f = make({ messages: [user('h1', { at: 1 })], accounts: {
+      claude: { available: true, shortWindow: { usedPercent: 86, resetsAt: new Date(Date.now() + 41 * 60000).toISOString() }, weekly: { usedPercent: 30, resetsAt: '' } },
+      codex: { available: true, shortWindow: null, weekly: { usedPercent: 12, resetsAt: new Date(Date.now() + 5 * 86400000).toISOString() } } } });
+    Object.assign(f.member.activity, { model: 'gpt-6.1-sol', effort: 'xhigh', usage: { total: 1000 }, conversationId: 'conv' });
+    f.chat.render(); await tick(); await tick(); f.chat.render();
+    check(f.text('wbSummaryModel') === 'GPT-6.1 Sol' && f.text('wbSummaryProvider') === 'Codex', 'model label: ' + f.text('wbSummaryModel'));
+    check(!f.root.querySelector('#wbSummaryEffort').hidden && f.text('wbSummaryEffortValue') === 'xhigh'
+      && f.root.querySelectorAll('.wb-summary-effort-level i.is-on').length === 4, 'effort shows its level');
+    const meters = [...f.root.querySelectorAll('.wb-usage-meter')];
+    check(meters.length === 2, 'one meter per signed-in AI: ' + meters.length);
+    check(meters[0].textContent.includes('86%') && meters[0].querySelector('.wb-usage-warn')?.textContent.includes('한도 임박'), 'a near-limit window warns');
+    check(meters[1].textContent.includes('주간') && meters[1].textContent.includes('이 대화 1,000'), 'weekly-only account and this chat usage: ' + meters[1].textContent);
+    f.data.tasks = [task('h1', { submittedAt: Date.now() + 1000, analysisUsage: { total: 420 } })];
+    f.member.activity.usage = { total: 4000 }; f.chat.render();
+    f.root.querySelector('#wbSummaryHistoryButton').click();
+    const sheet = f.root.querySelector('#wbSummaryHistory');
+    check(!sheet.hidden && f.root.querySelector('#wbSummaryHistoryButton').getAttribute('aria-expanded') === 'true', 'history opens');
+    const rows = [...sheet.querySelectorAll('.wb-usage-item')];
+    check(rows.length === 1 && rows[0].querySelector('b').textContent === '3,000' && rows[0].textContent.includes('xhigh') && rows[0].textContent.includes('420'),
+      'a finished reply records the tokens it used, its effort and summary tokens: ' + rows.map(row => row.textContent).join('|'));
+    check(f.chat.serializeUsage().entries.length === 1, 'history is saved outside the terminal record');
+    f.chat.render(); check(sheet.querySelectorAll('.wb-usage-item').length === 1, 'repeated renders never duplicate a request');
+    sheet.querySelector('[data-usage-scope="week"]').click();
+    check(sheet.querySelector('[data-usage-scope="week"]').getAttribute('aria-selected') === 'true' && sheet.querySelectorAll('.wb-usage-col').length === 7, 'last-7-days view');
+    sheet.querySelector('.wb-usage-panel').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check(sheet.hidden, 'Escape closes the history');
+    cases.push('usage-header');
     f = make();
     const sharedBoard = f.chat.serializeGame();
     f.root.querySelector('[data-game-direction="left"]').click(); f.root.querySelector('[data-game-direction="up"]').click();
@@ -254,8 +301,32 @@ exports.run = async evaluate => {
     f = make({ tasks: [recordCard], messages: [user('rec')], review: { state: 'ready' } });
     check(f.root.querySelector('#wbSummaryTranscript [data-result-kind="summary"]')?.textContent.includes('Whitebox 요약'), 'a result settled by the record alone is a summary');
     cases.push('result-kinds');
+    // Past requests: every request newest first with the summary's answer,
+    // a request right after an AI question marked as a decision, and a click
+    // that jumps to the request without leaving summary mode.
+    f = make({ tasks: [task('a', { submittedAt: 1, awaitingResponse: true, content: { answer: { text: '어느  쪽으로\\n할까요?' } } }),
+      task('c', { submissionId: undefined, request: '터미널에서 친 요청', submittedAt: 2, content: { answer: { text: 'C를 마쳤어요.' } } }),
+      task('b', { submittedAt: 3, lifecycle: 'in-progress', analysisLifecycle: 'in-progress' })],
+      messages: [user('a', { at: 1, sentAt: 1 }), user('b', { at: 3, sentAt: 3, text: '이어서 해줘' })] });
+    f.member.activity = { state: 'working' }; f.chat.render();
+    { const rows = [...f.root.querySelectorAll('#wbSummaryPast [data-summary-past]')].map(node => ({ id: node.dataset.summaryPast, state: node.dataset.state,
+        request: node.querySelector('.wb-summary-past-request > span').textContent, judgement: Boolean(node.querySelector('em')),
+        answer: node.querySelector('.wb-summary-past-answer').textContent }));
+      check(JSON.stringify(rows.map(row => row.id)) === JSON.stringify(['b', 'request:c', 'a']), 'past requests are newest first, terminal requests included: ' + JSON.stringify(rows));
+      check(rows[0].state === 'live' && rows[0].answer === 'AI가 작업 중 · 요약은 답이 끝나면 붙어요', 'the working request is highlighted without a summary: ' + JSON.stringify(rows[0]));
+      check(rows[1].judgement && !rows[0].judgement && !rows[2].judgement, 'only the request after an AI question is a decision: ' + JSON.stringify(rows));
+      check(rows[1].request === '터미널에서 친 요청' && rows[2].answer === '어느 쪽으로 할까요?', 'request and actual answer are shown as written, on one line: ' + JSON.stringify(rows));
+      check(f.text('wbSummaryPastCount') === '3개 · 최신순' && !f.root.querySelector('#wbSummaryPastSection').hidden, 'past request count is shown');
+      check(!f.root.querySelector('.wb-summary-state-card, #wbSummaryNext, #wbSummaryQueueRow'), 'the old status block is gone'); }
+    f.root.querySelector('#wbSummaryPast [data-summary-past="request:c"]').click();
+    check(f.root.classList.contains('summary-mode') && f.chat.serialize()[0].mode === 'summary', 'opening a past request keeps summary mode');
+    check(f.root.querySelector('#wbSummaryTranscript [data-summary-message="request:c"]').hasAttribute('data-summary-flash'), 'the opened request is highlighted in the conversation');
+    check(f.root.querySelector('#wbSummaryPast [data-summary-past="request:c"]').getAttribute('aria-current') === 'true', 'the opened request is marked in the list');
+    cases.push('past-requests');
+    f = make({ messages: [user('q', { state: 'queued' })] });
+    check(f.root.querySelector('#wbSummaryPastSection').hidden, 'a request that never reached the AI is not a past request'); cases.push('past-requests-empty');
     return cases;
   })()`);
-  assert.equal(result.length, 26);
-  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls, default/settings-aware 2048, no raw reply while summarizing, live AI step, result card kinds');
+  assert.equal(result.length, 31);
+  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls, default/settings-aware 2048, no raw reply while summarizing, live AI step, result card kinds, past requests');
 };

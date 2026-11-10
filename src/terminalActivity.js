@@ -111,8 +111,10 @@ class TerminalActivity {
       }
       // Live, model-free description of the current step for working AIs only.
       const progress = state === 'working' && native.available && native.progress ? native.progress : null;
+      const model = native.available && typeof native.model === 'string' ? native.model : '';
+      const effort = native.available && typeof native.effort === 'string' ? native.effort : '';
       result.set(member.id, { state, completed, ...(requestId ? { requestId } : {}), ...(progress ? { progress } : {}), providerPid,
-        provider: child?.provider || '', usage, conversationId, usageStatus,
+        provider: child?.provider || '', usage, conversationId, usageStatus, ...(model ? { model } : {}), ...(effort ? { effort } : {}),
         background: { count: background.length, items: background.slice(0, 32) }, creationId: member.creationId, pid: member.pid });
     }));
     return result;

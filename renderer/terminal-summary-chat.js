@@ -7,6 +7,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const $ = selector => root.querySelector(selector);
   const records = new Map();
   let flushing = false, selected = '', lastMarkup = '', approvalBusy = false, retryBusy = false, stopBusy = false, modeKey = '', sendKey = '', stopKey = '', thinkingLabel = '';
+  let lastPastMarkup = '', pastSelected = '', flashTimer = 0;
   const actionHosts = new Set();
   const form = root.querySelector('#wbSummaryForm');
   const input = root.querySelector('#wbSummaryInput');
@@ -21,6 +22,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const game = window.Whitebox2048.createView({ root: root.querySelector('#wbSummaryGame'), t, esc,
     read: () => record(context.activeId()), save: () => context.save(), visibility: () => context.gameVisibility?.() || 'always', behavior: () => context.gameBehavior?.() || 'auto-collapse',
     store: { get: () => sharedGame, set: (_, value) => { sharedGame = value; } } });
+  // Model/effort, account limits and the token history live in the header.
+  const usage = root.querySelector('#wbSummaryHistoryButton') && window.WhiteboxSummaryUsage?.createView({ meters: root.querySelector('#wbSummaryUsageMeters'),
+    button: root.querySelector('#wbSummaryHistoryButton'), sheet: root.querySelector('#wbSummaryHistory'), t, esc,
+    providerUsage: () => context.api?.providerUsage?.(), save: () => context.save() });
   const adoptGame = value => {
     const restored = window.Whitebox2048.restore(value);
     if (!restored) return;
@@ -101,6 +106,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           : message.text.trim() === String(task.request || '').trim() && !message.baseline?.includes(key)));
         if (mine) mine.answerKey = key;
       }
+      // A message sent while the AI worked can be absorbed into this turn; the
+      // one reply answers it too.
+      for (const joinedId of task.joinedSubmissionIds || []) {
+        const joined = own.find(message => message.id === joinedId && message.state === 'sent' && !message.answerKey);
+        if (joined) joined.answerKey = key;
+      }
       if (!mine && task.request) derived.push({ role: 'user', id: `request:${key}`, text: task.request, state: 'sent', answerKey: key,
         at: Number(task.submittedAt) || Date.parse(task.observedAt) || 0 });
       derived.push({ role: 'answer', id: `answer:${key}`, key, task });
@@ -113,13 +124,21 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const sentTime = message => Number(message.sentAt || message.at) || 0;
   function chronological(messages) {
     const units = [], claimed = new Set();
+    // A turn that absorbed later messages shows its answer after the last one.
+    const answerOwner = new Map();
+    for (const message of messages) {
+      if (message.role === 'answer' || !message.answerKey) continue;
+      const current = answerOwner.get(message.answerKey);
+      if (!current || sentTime(message) >= sentTime(current)) answerOwner.set(message.answerKey, message);
+    }
     for (const message of messages) {
       if (message.role === 'answer') {
         if (claimed.has(message)) continue;
         units.push({ items: [message], time: Number(message.task?.submittedAt) || Date.parse(message.task?.observedAt) || 0 });
         continue;
       }
-      const answers = message.answerKey ? messages.filter(item => item.role === 'answer' && item.key === message.answerKey && !claimed.has(item)) : [];
+      const answers = message.answerKey && answerOwner.get(message.answerKey) === message
+        ? messages.filter(item => item.role === 'answer' && item.key === message.answerKey && !claimed.has(item)) : [];
       answers.forEach(item => claimed.add(item));
       units.push({ items: [message, ...answers], time: ['queued', 'sending'].includes(message.state) ? Infinity : sentTime(message) });
     }
@@ -451,7 +470,9 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const awaiting = !interrupted && !replyDone && (matchesPreview && review?.state === 'awaiting-answer'
       || sent?.state === 'sending' || sent?.state === 'sent' && !task && job?.state !== 'completed');
     const deferred = Boolean(task?.deferred || task?.analysisDepth === 'deferred');
-    const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !analyzing && !collecting && !awaiting && !working && !interrupted
+    // A reply that asks the user something keeps its turn open for the answer,
+    // so its analysis stays "in-progress"; its summary is still complete.
+    const summaryDone = Boolean(task && (task.analysisLifecycle !== 'in-progress' || task.awaitingResponse === true) && !deferred && !analyzing && !collecting && !awaiting && !working && !interrupted
       && (!failure || failure.kind === 'reanalysis' && failure.retainedLifecycle === 'completed')
       && !needsResponse && (!task.lifecycle || finished(task)));
     const summaryQueued = !needsResponse && !interrupted && !failure && !analyzing && summaryPending(task, review);
@@ -500,9 +521,6 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryReplyState').dataset.state = interrupted ? 'warning' : needsResponse ? 'waiting' : replyDone ? 'done' : 'working';
     $('#wbSummaryReviewState').textContent = t(reviewState);
     $('#wbSummaryReviewState').dataset.state = summaryFailed ? 'warning' : summaryDone || passThroughDone ? 'done' : 'working';
-    const queueCount = value.messages.filter(message => message.state === 'queued').length;
-    $('#wbSummaryQueueRow').hidden = queueCount === 0;
-    $('#wbSummaryQueueCount').textContent = String(queueCount);
     const done = [sent?.state === 'sent', replyDone, summaryDone || passThroughDone];
     root.querySelectorAll('[data-summary-step]').forEach((step, index) => {
       step.dataset.state = done[index] ? 'done' : index === done.findIndex(value => !value) ? 'current' : 'pending';
@@ -517,16 +535,68 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     $('#wbSummaryStopHost').hidden = !canStop;
     $('#wbSummaryStop').disabled = stopBusy;
-    $('#wbSummaryNext').hidden = !summaryDone;
-    $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
-      || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
     // The wait covers the AI's own work and the summary that follows it,
     // including the gap between the reply and the analysis start. Fold the
     // game only once the summary itself is done, not at reply arrival.
     const pendingSummary = replyDone && !summaryDone && !deferred && !failure && !backoff;
     const gameWait = !needsResponse && !interrupted && (loading || collecting && !backoff || pendingSummary);
     game.render({ waiting: gameWait, completed: summaryDone, replyKey: summaryDone ? sent?.id || task?.taskId || preview?.taskId : null });
+    // The request still in progress, for the past-request list.
+    return { liveId: !interrupted && (loading || pendingSummary) ? sent?.id || '' : '', replyDone };
   }
+  // Past requests: every request of this conversation, newest first, each
+  // with the summary's actual answer as written (no extra model call).
+  const oneLine = text => String(text || '').replace(/\s+/gu, ' ').trim().slice(0, 240);
+  const clock = time => Number.isFinite(time) && time > 0 ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+  const asksUser = task => Boolean(task && (task.awaitingResponse === true || task.content?.choices?.length || task.choices?.length));
+  function answerLine(message, task, live) {
+    if (typeof task?.content?.answer?.text === 'string' && task.content.answer.text.trim()) return { text: task.content.answer.text };
+    if (task?.decision && (task.actual || task.decision.conclusion)) return { text: task.actual || task.decision.conclusion };
+    if (task?.passThrough && task.actual) return { text: task.actual };
+    if (message.state === 'stopped') return { text: t('멈춘 요청이에요.'), state: 'muted' };
+    if (message.state === 'interrupted' || task?.lifecycle === 'interrupted') return { text: t('요청이 중단됐어요.'), state: 'muted' };
+    if (task?.summaryFailure) return { text: t('요약하지 못했어요 · 누르면 AI 원문을 볼 수 있어요'), state: 'muted' };
+    if (task?.explanation || task?.summary) return { text: task.explanation || task.summary };
+    if (live) return { text: t(live.replyDone ? '요약 중…' : 'AI가 작업 중 · 요약은 답이 끝나면 붙어요'), state: 'live' };
+    if (task?.lifecycle === 'completed' && !task.content && !task.deferred && task.analysisDepth !== 'deferred') return { text: t('요약 중…'), state: 'live' };
+    return { text: t('요약이 없어요.'), state: 'muted' };
+  }
+  function renderPast(value, progress) {
+    const answers = new Map(value.messages.filter(message => message.role === 'answer').map(message => [message.key, message.task]));
+    let previousTask = null;
+    const items = [];
+    for (const message of value.messages) {
+      if (message.role === 'answer') { previousTask = message.task; continue; }
+      // A request that never reached the AI is not a past request.
+      if (!['sent', 'sending', 'stopped'].includes(message.state) && !(message.state === 'interrupted' && (message.sentAt || message.answerKey))) continue;
+      const task = answers.get(message.answerKey);
+      const live = progress.liveId && message.id === progress.liveId ? progress : null;
+      items.push({ message, task, live, judgement: asksUser(previousTask) });
+    }
+    items.reverse();
+    const markup = items.map(({ message, task, live, judgement }) => {
+      const answer = answerLine(message, task, live);
+      return `<li><button type="button" data-summary-past="${esc(message.id)}" data-state="${live ? 'live' : 'done'}"${pastSelected === message.id ? ' aria-current="true"' : ''}><span class="wb-summary-past-request">${judgement ? `<em>${esc(t('판단'))}</em>` : ''}<span>${esc(oneLine(message.text))}</span><time>${esc(clock(message.sentAt || message.at))}</time></span><span class="wb-summary-past-answer" data-state="${answer.state || 'summary'}">${esc(oneLine(answer.text))}</span></button></li>`;
+    }).join('');
+    $('#wbSummaryPastSection').hidden = !items.length;
+    $('#wbSummaryPastCount').textContent = items.length ? `${t('{count}개').replace('{count}', items.length)} · ${t('최신순')}` : '';
+    if (markup !== lastPastMarkup) { $('#wbSummaryPast').innerHTML = markup; lastPastMarkup = markup; }
+  }
+  // Jump to a past request without leaving summary mode.
+  function showPast(id) {
+    const target = [...transcript.querySelectorAll('[data-summary-message]')].find(node => node.dataset.summaryMessage === id);
+    if (!target) return;
+    pastSelected = id; lastPastMarkup = ''; render();
+    target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    transcript.querySelectorAll('[data-summary-flash]').forEach(node => node.removeAttribute('data-summary-flash'));
+    target.setAttribute('data-summary-flash', '');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => target.removeAttribute('data-summary-flash'), 1800);
+  }
+  $('#wbSummaryPast').addEventListener('click', event => {
+    const button = event.target.closest('[data-summary-past]');
+    if (button) showPast(button.dataset.summaryPast);
+  });
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
     const stillRunning = member && member.providerPid > 0 && ['claude', 'codex'].includes(member.provider)
@@ -550,11 +620,20 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     root.querySelector('#wbSummaryTarget').textContent = context.title?.(id) || context.label(id);
     root.querySelector('#wbSummaryTarget').title = context.label(id);
     root.querySelector('#wbSummaryProvider').textContent = member.provider === 'claude' ? 'Claude' : 'Codex';
-    $('#wbSummaryRailProvider').textContent = member.provider.toUpperCase();
     $('#wbSummaryConnection').dataset.connected = String(available);
     $('#wbSummaryConnectionState').textContent = t(available ? '같은 대화에 연결됨' : '연결 확인 중');
+    // The model and effort of the AI's latest reply, read from its own log.
+    const activity = member.activity || {};
+    const usageApi = window.WhiteboxSummaryUsage;
+    $('#wbSummaryModel').textContent = usageApi ? usageApi.modelLabel(activity.model) : '';
+    const level = usageApi ? usageApi.effortLevel(activity.effort) : 0;
+    $('#wbSummaryEffort').hidden = !level;
+    $('#wbSummaryEffortValue').textContent = level ? activity.effort : '';
+    $('#wbSummaryEffort').title = level ? `${t('추론 강도')} · ${activity.effort}` : '';
+    $('#wbSummaryEffort').querySelectorAll('.wb-summary-effort-level i').forEach((bar, index) => bar.classList.toggle('is-on', index < level));
+    usage?.render({ terminalId: id, provider: member.provider, activity, tasks: tasksFor(id) });
     if (selected !== `${id}:${value.creationId}`) {
-      selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = ''; closeCommands();
+      selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = ''; lastPastMarkup = ''; pastSelected = ''; closeCommands();
     }
     const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
     let markup = value.messages.map(message => {
@@ -571,9 +650,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           : `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`);
         return `<article class="wb-summary-answer" data-result-kind="${kind}"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t(heading))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${body}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
       }
-      const time = message.sentAt || message.at;
-      const timestamp = Number.isFinite(time) ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';
-      return `<article class="wb-summary-user" data-state="${esc(message.state)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
+      const timestamp = clock(message.sentAt || message.at);
+      return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
     }).join('');
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;
     const prompt = detectedPrompt(id);
@@ -592,7 +670,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       list.querySelectorAll('details').forEach((node, index) => { node.open = opened.includes(index); });
       if (nearBottom) list.scrollTop = list.scrollHeight;
     }
-    renderProgress(value, member, review, prompt);
+    renderPast(value, renderProgress(value, member, review, prompt));
     input.disabled = !available;
     const nextSendKey = JSON.stringify([t('전송'), available]);
     if (ui?.actionButton && $('#wbSummarySendHost') && nextSendKey !== sendKey) {
@@ -627,6 +705,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     },
     serialize: () => [...records.values()].slice(-100).map(({ game2048, ...value }) => ({ ...value, messages: value.messages.filter(ownSend).slice(-100) })),
     serializeGame: () => sharedGame,
+    serializeUsage: () => usage?.serialize() || null,
+    restoreUsage(value) { usage?.restore(value); },
     restoreGame(value) { adoptGame(value); },
     restore(values) {
       // Older versions saved one board per terminal: keep the furthest one.
