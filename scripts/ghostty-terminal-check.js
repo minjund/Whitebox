@@ -97,6 +97,22 @@ app.whenReady().then(async () => {
     assert.deepEqual(alignment, { shifted: true, restored: true, transform: '' });
     console.log('PASS: terminal canvas snaps to device pixels at subpixel pane origins');
 
+    // Zooming out at once (Cmd -) lowers devicePixelRatio. The canvas bitmap
+    // must be redrawn for the new ratio, not stretched from the old one.
+    const sharpness = async () => evaluate(async () => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      entry.fit.fit();
+      const canvas = term.renderer.getCanvas(), ratio = window.devicePixelRatio;
+      return { ratio, bitmap: canvas.width, expected: Math.round(parseFloat(canvas.style.width) * ratio), rendererRatio: term.renderer.devicePixelRatio };
+    });
+    for (const factor of [0.67, 1.25, 1]) {
+      win.webContents.setZoomFactor(factor);
+      const zoomed = await sharpness();
+      assert.equal(zoomed.rendererRatio, zoomed.ratio, `zoom ${factor}: renderer follows devicePixelRatio`);
+      assert(Math.abs(zoomed.bitmap - zoomed.expected) <= 1, `zoom ${factor}: canvas bitmap ${zoomed.bitmap} maps 1:1 to ${zoomed.expected} device pixels`);
+    }
+    console.log('PASS: terminal canvas stays sharp after zoom changes the device pixel ratio');
+
     const vt = await evaluate(async () => {
       await write('한글😀 ABC\x1b[31m RED\x1b[0m');
       const unicode = contents();

@@ -148,6 +148,7 @@
       this.backend.focus = () => this.focus();
       this.opening = true;
       try { this.backend.open(element); } finally { this.opening = false; }
+      this.watchPixelRatio();
       // Ghostty's mouse protocol sends one step per wheel event. Trackpads emit
       // many subpixel events, so normalize distance once for every buffer mode.
       let remainder = 0, lastAt = 0, lastMode = '';
@@ -356,6 +357,7 @@
     writeln(data, callback) { this.write(`${data}\r\n`, callback); }
     resize(cols, rows) {
       this.contentVersion += 1;
+      this.syncPixelRatio();
       this.backend.resize(cols, rows);
       // 0.4 overwrites the DPR-scaled canvas after renderer.resize(). Restore it.
       this.renderer.resize(this.cols, this.rows);
@@ -367,9 +369,35 @@
     // compositor and every glyph turns blurry. Small panes hit this often: the
     // wrapped pane header and split percentages give the grid subpixel origins.
     // Shift the canvas by under one device pixel so its bitmap maps 1:1.
+    // The renderer reads devicePixelRatio once when it is created. Zooming the
+    // window (Cmd -/+) or moving it to another display changes the ratio, and a
+    // bitmap drawn for the old ratio is stretched and blurry. Redraw for the
+    // current ratio; metrics are rounded to device pixels, so remeasure too.
+    syncPixelRatio() {
+      const renderer = this.renderer, ratio = window.devicePixelRatio || 1;
+      if (this.disposed || !renderer || renderer.devicePixelRatio === ratio) return false;
+      renderer.devicePixelRatio = ratio;
+      renderer.remeasureFont?.();
+      renderer.resize(this.cols, this.rows);
+      return true;
+    }
+    watchPixelRatio() {
+      if (this.pixelRatioQuery || typeof window.matchMedia !== 'function') return;
+      const listen = () => {
+        this.pixelRatioQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        this.pixelRatioQuery.addEventListener('change', this.onPixelRatioChange, { once: true });
+      };
+      this.onPixelRatioChange = () => {
+        if (this.disposed) return;
+        if (this.syncPixelRatio()) { this.refresh(); this.alignToDevicePixels(); }
+        listen();
+      };
+      listen();
+    }
     alignToDevicePixels() {
       const canvas = this.renderer?.getCanvas?.();
       if (this.disposed || !canvas?.isConnected) return;
+      if (this.syncPixelRatio()) this.refresh();
       const ratio = window.devicePixelRatio || 1;
       const previous = this.pixelShift || { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
@@ -486,6 +514,7 @@
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
+      this.pixelRatioQuery?.removeEventListener('change', this.onPixelRatioChange);
       this.textSnapshot = null;
       for (const addon of this.addons) addon.dispose();
       this.addons = [];

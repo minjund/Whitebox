@@ -56,6 +56,26 @@ async function main() {
     assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [twice] }, now, [proc(500)]).length, 1, 'one live process never revives a finished duplicate');
     const quoting = { ...quiet, executions: [{ ...quiet.executions[0], command: "printf 'x'" }] };
     assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [quoting] }, now, [proc(500, { commandLine: "/bin/zsh -c eval 'printf '\\''x'\\''' < /dev/null" })]).length, 1, 'shell-quoted commands still match');
+    // Exact command lines Claude Code 2.1.319 produced on macOS: a single quote
+    // becomes '"'"' and ps prints an embedded newline as the literal \012.
+    const claudeQuoted = { ...quiet, executions: [{ ...quiet.executions[0], command: `sleep 901 && echo 'probe' "$HOME"` }] };
+    assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [claudeQuoted] }, now, [proc(500, { commandLine: `/bin/zsh -c source snap && eval 'sleep 901 && echo '"'"'probe'"'"' "$HOME"' < /dev/null && pwd -P >| /tmp/claude-e83e-cwd` })]).length, 1, "Claude's '\"'\"' quoting still proves a quiet command");
+    const multiline = { ...quiet, executions: [{ ...quiet.executions[0], command: 'sleep 902\necho probe' }] };
+    assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [multiline] }, now, [proc(500, { commandLine: "/bin/zsh -c eval 'sleep 902\\012echo probe' < /dev/null" })]).length, 1, 'a multi-line command printed by macOS ps still matches');
+    assert.equal(conversationBackground(native, child, { ...snapshot, sessions: [multiline] }, now, [proc(500, { commandLine: "/bin/bash -c eval 'sleep 902?echo probe' < /dev/null" })]).length, 1, 'a multi-line command printed by Linux ps still matches');
+    assert.deepEqual(conversationBackground(native, child, { ...snapshot, sessions: [multiline] }, now, [proc(500, { commandLine: "/bin/zsh -c eval 'sleep 902' < /dev/null" })]), [], 'part of a multi-line command is not evidence');
+    // A background helper AI keeps writing its own transcript while the parent
+    // log is quiet; the parser marks the spawn unverified after five minutes.
+    const parentId = snapshot.sessions[0].id;
+    const spawn = { callId: 'task-1', childId: 'claude:agent-1', taskName: 'audit', status: 'unverified', startedAt: stamp(1500) };
+    const helperParent = { ...snapshot.sessions[0], executions: [], collaboration: { spawns: [spawn] } };
+    const helper = (extra = {}) => ({ id: 'claude:agent-1', parentId, provider: 'claude', status: 'running', updatedAt: new Date(now - 30_000).toISOString(), ...extra });
+    const agents = sessions => conversationBackground(native, child, { ...snapshot, sessions: [helperParent, ...sessions] }, now);
+    assert.deepEqual(agents([helper()]).map(job => [job.kind, job.state]), [['agent', 'running']], 'a helper still writing its transcript keeps its icon');
+    assert.deepEqual(agents([]), [], 'an unverified helper without its transcript stays hidden');
+    assert.deepEqual(agents([helper({ updatedAt: new Date(now - 6 * 60_000).toISOString() })]), [], 'a quiet helper transcript is not proof');
+    assert.deepEqual(agents([helper({ status: 'completed' })]), [], 'a completed helper is not running');
+    assert.deepEqual(agents([helper({ parentId: 'claude:other' })]), [], "another conversation's helper is not proof");
     rows.push({ type: 'user', sessionId, uuid: 'notification', isMeta: true, timestamp: stamp(4000), message: { role: 'user', content: '<task-notification><task-id>bg-1</task-id><tool-use-id>bash-1</tool-use-id><status>completed</status></task-notification>' } });
     await write();
     assert.equal(conversationBackground(await reader.observe(child), child, { ...snapshot, sessions: [await parsed(file, parseClaude)] }, now).length, 0, 'completion removes the actual parsed background command');

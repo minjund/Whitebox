@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { EventEmitter } = require('events');
+const { cachedClaudeHomes } = require('./claudeHomes');
 const {
   providerList,
   modelContextWindow,
@@ -767,6 +768,19 @@ class AgentMonitor extends EventEmitter {
     return files;
   }
 
+  // Wrappers such as claude-ubion keep Claude logs under ~/.claude-<name>.
+  // Scan each extra local Claude config folder as a Claude-only home, after
+  // the existing homes so their cache keys stay unchanged.
+  scanHomes() {
+    const local = this.historyHomes[0];
+    if (!local) return this.historyHomes;
+    this.extraClaudeHomes ||= cachedClaudeHomes({ home: local.home, env: path.resolve(local.home) === path.resolve(os.homedir()) ? process.env : {} });
+    const standard = path.resolve(local.home, '.claude');
+    const extra = this.extraClaudeHomes().filter(dir => dir !== standard)
+      .map(dir => ({ ...local, files: null, claudeOnly: true, claudeRoot: path.join(dir, 'projects') }));
+    return [...this.historyHomes, ...extra];
+  }
+
   setHistoryHomes(historyHomes = []) {
     const localKind = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux');
     const localLabel = process.platform === 'win32' ? '이 컴퓨터의 Windows' : (process.platform === 'darwin' ? '이 컴퓨터의 macOS' : '이 컴퓨터의 Linux');
@@ -976,10 +990,10 @@ class AgentMonitor extends EventEmitter {
       const startupRecoveryCandidates = [];
       const scanStartedAt = Date.now();
 
-      for (const [homeIndex, history] of this.historyHomes.entries()) {
-        const codexTitles = this.codexConversationTitles(history.home);
+      for (const [homeIndex, history] of this.scanHomes().entries()) {
+        const codexTitles = history.claudeOnly ? new Map() : this.codexConversationTitles(history.home);
         const roots = {
-          claude: path.join(history.home, '.claude', 'projects'),
+          claude: history.claudeRoot || path.join(history.home, '.claude', 'projects'),
           codex: path.join(history.home, '.codex', 'sessions'),
           gemini: path.join(history.home, '.gemini', 'tmp'),
           grok: path.join(history.home, '.grok', 'sessions'),
@@ -1047,9 +1061,9 @@ class AgentMonitor extends EventEmitter {
           }
         };
         addSessions('claude', (_f, name) => name.endsWith('.jsonl'), MAX_FILES_PER_PROVIDER, item => parseClaude(item, { maxBytes: this.cardJsonlBytes }));
-        addSessions('codex', (_f, name) => name.endsWith('.jsonl'), MAX_FILES_PER_PROVIDER, item => parseCodex(item, { maxBytes: this.cardJsonlBytes }));
-        addSessions('gemini', (_f, name) => /\.(json|jsonl)$/i.test(name), 50, item => parseGeneric(item, 'gemini', { maxBytes: this.cardJsonlBytes }));
-        addSessions('grok', (_f, name) => /\.(json|jsonl)$/i.test(name), 50, item => parseGeneric(item, 'grok', { maxBytes: this.cardJsonlBytes }));
+        if (!history.claudeOnly) addSessions('codex', (_f, name) => name.endsWith('.jsonl'), MAX_FILES_PER_PROVIDER, item => parseCodex(item, { maxBytes: this.cardJsonlBytes }));
+        if (!history.claudeOnly) addSessions('gemini', (_f, name) => /\.(json|jsonl)$/i.test(name), 50, item => parseGeneric(item, 'gemini', { maxBytes: this.cardJsonlBytes }));
+        if (!history.claudeOnly) addSessions('grok', (_f, name) => /\.(json|jsonl)$/i.test(name), 50, item => parseGeneric(item, 'grok', { maxBytes: this.cardJsonlBytes }));
       }
 
       let recoveryFilesRead = 0;

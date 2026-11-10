@@ -3,6 +3,22 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.26 - 2026-11-09
+
+- Summary mode shows the same answers and content as the terminal-mode review panel: answers are read from the live review results instead of saved copies, so stale or out-of-order entries and leftover “no concrete result yet” cards no longer appear. Summary keeps only your own sends.
+- A custom command or skill sent with content, such as `/grill-me <question>`, is treated as a request: its reply is captured, summarized and shown as typed. Built-in controls such as `/clear`, `/compact` or `/model` stay out of review.
+- The `/` command list in the Summary composer opens above the input instead of pushing it down.
+- 2048 is now for the wait while a summary is generated: by default it appears only while the AI is summarizing and closes when the summary arrives. Choose “Any time” under Settings › Play 2048 to keep playing whenever; the collapse option applies to that mode.
+- Never show a line the AI printed mid-turn (for example “Verified. Now updating local state…”) as a turn's answer; a waiting card shows the finished reply only.
+- Follow the latest request by time in Summary mode, and show the transcript in time order, so an older unfinished turn saved later no longer keeps “Waiting for the AI reply” after the newer answer is done.
+- Show the AI's actual reply on a finished turn's Summary card while its analysis is still queued, instead of “no concrete result yet”.
+- A Summary request sent as a paste, or sent with “Send anyway” while the AI was working, now completes when its reply finishes instead of holding later requests in the queue for 15 minutes.
+- The Summary review status shows the reviewer's live state (watching the work, preparing evidence, analyzing), matching terminal mode, instead of “Waiting”.
+- Long-running background commands and background helper AIs keep their sidebar icon while they run, including commands with quotes or multiple lines.
+- The terminal redraws sharply after zooming or moving the window to a display with a different pixel density.
+- Read Claude sessions from every Claude config folder (for example `~/.claude-ubion` used by claude-ubion), so their completion, Summary, review, background icons and usage work, and install the attention hooks in each folder.
+- Verify official 2.0.25 installers alongside all retained Windows and macOS update cohorts.
+
 ## 2.0.25 - 2026-11-09
 
 - Keep a valid Summary brief when the model quotes the request or reply with normalized whitespace, and tell the repair pass exactly which citation to copy verbatim (typos and markdown included) instead of reporting a missing brief.

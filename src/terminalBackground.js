@@ -2,7 +2,8 @@
 
 const path = require('path');
 const short = (value, limit = 100) => String(value || '').replace(/[\u0000-\u001f\u007f]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, limit);
-const timestamp = value => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+const CHILD_QUIET_MS = 5 * 60_000;
+const timestamp = value =>Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 
 // Reuse the worker's parsed execution/agent lifecycle. Bind it to the native
 // log already proven to belong to this exact live AI process, never to cwd,
@@ -12,18 +13,28 @@ const timestamp = value => Number.isFinite(Date.parse(value)) ? new Date(value).
 // a few quiet minutes. A live process under the same AI process whose command
 // line carries the exact command proves it is still running. Each process
 // proves one execution only, so a finished duplicate is never revived.
+// macOS ps prints a newline or tab inside arguments as the literal \012 / \011,
+// Linux ps as "?". Claude quotes a single quote as '"'"', other shells as '\''.
+const psText = value => value.replace(/\\01([12])/gu, (_, code) => code === '1' ? '\t' : '\n');
+function commandForms(text) {
+  const forms = new Set();
+  for (const quoted of [text, text.replace(/'/gu, "'\\''"), text.replace(/'/gu, `'"'"'`)]) {
+    forms.add(quoted); forms.add(quoted.replace(/[\n\t]/gu, '?'));
+  }
+  return [...forms];
+}
 function liveExecutionProof(rows, child) {
   const used = new Set();
   const live = (rows || []).filter(row => row?.ancestorPids?.includes(child.pid) && !/^[TZ]/u.test(row.stat || '')
-    && typeof row.commandLine === 'string');
+    && typeof row.commandLine === 'string').map(row => ({ row, text: psText(row.commandLine) }));
   return command => {
     const text = String(command || '').trim();
     if (!text) return false;
-    const quoted = text.replace(/'/gu, "'\\''");
-    const row = live.find(item => !used.has(item.pid) && (item.commandLine.includes(text) || item.commandLine.includes(quoted)));
+    const forms = commandForms(text);
+    const row = live.find(item => !used.has(item.row.pid) && forms.some(form => item.text.includes(form)))?.row;
     if (!row) return false;
     // A pipeline or wrapper shell shares the command; claim its whole group.
-    for (const item of live) if (item.pgid === row.pgid) used.add(item.pid);
+    for (const item of live) if (item.row.pgid === row.pgid) used.add(item.row.pid);
     used.add(row.pid);
     return true;
   };
@@ -56,10 +67,20 @@ function conversationBackground(native, child, snapshot, now, rows = []) {
   const ordered = [...jobs.entries()].reverse();
   jobs.clear();
   for (const [id, job] of ordered) jobs.set(id, job);
+  // The parent log goes quiet while a background helper AI keeps working in
+  // its own transcript, so the parser marks the spawn unverified. That exact
+  // child transcript (same parent, same child id) still being written proves it.
+  const children = (snapshot.sessions || []).filter(session => session.parentId === matches[0].id);
+  const childLive = item => {
+    const session = item.childId && children.find(candidate => candidate.id === item.childId);
+    const at = Date.parse(session?.updatedAt);
+    return Boolean(session) && !['completed', 'failed', 'cancelled'].includes(session.status)
+      && Number.isFinite(at) && at <= now + 2000 && now - at < CHILD_QUIET_MS;
+  };
   for (const item of matches[0].collaboration?.spawns || []) {
-    if (!['running', 'waiting'].includes(item.status) || !owned(item)) continue;
+    if (!(['running', 'waiting'].includes(item.status) || item.status === 'unverified' && childLive(item)) || !owned(item)) continue;
     const id = `agent:${item.childId || item.agentPath || item.callId}`;
-    jobs.set(id, { id, kind: 'agent', label: short(item.taskName || item.agentName || '도움 AI'), state: item.status, startedAt: timestamp(item.startedAt) });
+    jobs.set(id, { id, kind: 'agent', label: short(item.taskName || item.agentName || '도움 AI'), state: item.status === 'waiting' ? 'waiting' : 'running', startedAt: timestamp(item.startedAt) });
   }
   return [...jobs.values()];
 }

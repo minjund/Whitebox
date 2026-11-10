@@ -38,7 +38,9 @@
   let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false, restoringId = '';
   let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
-  let summaryGameVisibility = 'always';
+  // 2048 is for the wait while a summary is generated; it closes when the
+  // summary arrives unless the user unlocks it for any time.
+  let summaryGameVisibility = 'summarizing';
   let summaryGameBehavior = 'auto-collapse';
   let reviewView = 'current';
   let reviewTask = null;
@@ -176,7 +178,7 @@
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
         <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>요약 완료 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">요약 끝나면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
-        <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 표시</strong><span>요약 화면의 게임 표시 방식</span></label><select id="wbSummaryGameVisibility"><option value="always">항상 표시</option><option value="summarizing">AI 요약 중에만 표시</option></select></div>
+        <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 사용</strong><span>요약 화면에서 게임을 할 수 있는 때</span></label><select id="wbSummaryGameVisibility"><option value="summarizing">AI 요약 중에만 · 요약이 끝나면 닫힘</option><option value="always">언제나 사용</option></select></div>
         <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
           <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
@@ -515,7 +517,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -2089,7 +2091,8 @@
     save(); summaryChat.render();
   });
   $('#wbSummaryGameVisibility').addEventListener('change', event => {
-    summaryGameVisibility = event.target.value === 'summarizing' ? 'summarizing' : 'always';
+    summaryGameVisibility = event.target.value === 'always' ? 'always' : 'summarizing';
+    $('#wbSummaryGameBehavior').disabled = summaryGameVisibility !== 'always';
     save(); summaryChat.render();
   });
 
@@ -2189,8 +2192,11 @@
     renderSettingsTheme(); renderFontPreview();
     setReviewWidth(Number(saved.reviewWidth) || 332);
     autoReview = saved.autoReview !== false;
-    summaryGameVisibility = saved.summaryGameVisibility === 'summarizing' ? 'summarizing' : 'always';
+    // Earlier versions saved "always show" as a default nobody chose, so the
+    // old key is not read: everyone starts summarizing-only until unlocked.
+    summaryGameVisibility = saved.summaryGameAvailability === 'always' ? 'always' : 'summarizing';
     $('#wbSummaryGameVisibility').value = summaryGameVisibility;
+    $('#wbSummaryGameBehavior').disabled = summaryGameVisibility !== 'always';
     summaryGameBehavior = saved.summaryGameBehavior === 'always-open' ? 'always-open' : 'auto-collapse';
     $('#wbSummaryGameBehavior').value = summaryGameBehavior;
     const trashIds = new Set();

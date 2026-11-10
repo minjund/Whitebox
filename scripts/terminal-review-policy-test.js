@@ -8,6 +8,25 @@ const { classifyEvidence, evidenceDigest } = require('../src/terminalReviewPolic
 const { addCall, addResult, toolEvidence } = require('../src/terminalReviewTools');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 module.exports = async function policyChecks() {
+  {
+    // Built-in controls stay out of review; a custom command or skill with
+    // content is the user's request and is recorded the way it was typed.
+    const { isNonTaskRequest, readableRequest, submittedPrompt } = require('../src/terminalReviewTurns');
+    for (const control of ['/clear', '/compact focus on tests', '/model opus', '/reload-skills', '/project:sync', '<command-message>review</command-message>\n<command-name>/review</command-name>', '<local-command-stdout>ok</local-command-stdout>'])
+      assert.equal(isNonTaskRequest(control), true, control);
+    const tagged = '<command-message>grill-me</command-message>\n<command-name>/grill-me</command-name>\n<command-args>GraphQL 질문</command-args>';
+    for (const request of ['/grill-me GraphQL 질문', '/project:sync 오늘 것', tagged, '/Users/me/a.js 열어줘']) assert.equal(isNonTaskRequest(request), false, request);
+    assert.equal(readableRequest(tagged), '/grill-me GraphQL 질문');
+    assert.equal(submittedPrompt('❯ /grill-me GraphQL 질문\n'), '/grill-me GraphQL 질문', 'a typed skill request is a submitted prompt');
+    assert.equal(submittedPrompt('❯ /compact\n'), '', 'a typed control is not');
+    const { applyClaudeRow } = require('../src/terminalReviewCompletion');
+    const state = { requestAt: 0 }, sid = '00000000-0000-4000-8000-000000000001', at = n => new Date(Date.UTC(2026, 10, 9, 0, 0, n)).toISOString();
+    applyClaudeRow(state, { type: 'user', sessionId: sid, uuid: 'u1', timestamp: at(1), message: { role: 'user', content: tagged } }, sid);
+    applyClaudeRow(state, { type: 'user', sessionId: sid, uuid: 'm1', isMeta: true, timestamp: at(1), message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /x' }] } }, sid);
+    applyClaudeRow(state, { type: 'assistant', sessionId: sid, uuid: 'a1', timestamp: at(3), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Q1 질문입니다.' }] } }, sid);
+    assert.equal(state.request, '/grill-me GraphQL 질문', 'a skill invocation starts a recorded turn');
+    assert.equal(state.complete, true, 'and its answer completes that turn');
+  }
   const relay = { request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', text: 'ASSISTANT: 완료했습니다.' };
   const jobs = [{ sourceId: 'one', provider: 'codex', request: 'ㅎㅇ', state: 'completed', sentAt: 20, finishedAt: 25, answer: 'ASSISTANT: 반가워요!' }];
   assert.equal(classifyEvidence(relay, jobs).mode, 'record');
@@ -17,11 +36,36 @@ module.exports = async function policyChecks() {
   const asking = { request: '한국말로 해서 해줘봐', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', tools: { items: [] }, updates: { items: [] },
     text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 아직 무엇을 설계할지 요청이 없습니다.\n\n- 범위: 새 테이블 설계, 기존 엔티티 검토, 마이그레이션 계획 중 어느 것인가요?\n- 대상 DB: H2 기준인지 PostgreSQL 기준인지 알려주세요.\n\n패키지를 지목해 주시면 스키마 안을 제안하겠습니다.' };
   assert.equal(classifyEvidence(asking, []).mode, 'analyze', 'a clarifying question is this turn\'s result');
+  assert.match(classifyEvidence({ ...asking, lifecycle: 'in-progress', text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (current report):\nVerified. Now updating local state.' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'an in-progress line is not shown as a short reply');
   const plan = classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.' }, []);
   assert.equal(plan.mode, 'defer', 'a bare plan without a question still waits for evidence');
   assert.equal(plan.actual, '네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.', 'a short deferred reply is shown verbatim instead of a placeholder');
   assert.match(classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n' + '먼저 문서를 살펴보겠습니다. '.repeat(60) }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a long deferred reply keeps the placeholder');
   assert.match(classifyEvidence({ ...asking, text: 'USER:\n수정해줘\n\nASSISTANT (completed answer):\n완료했습니다.' , request: '수정해줘' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a generic completion claim is not a result to show');
+  {
+    // A waiting card published during the turn shows the real reply once it
+    // arrives, instead of keeping the placeholder until analysis finishes.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-waiting-card-'));
+    try {
+      const service = new TerminalReview({ file: path.join(dir, 'reviews.json') });
+      const placeholder = classifyEvidence({ ...asking, text: '' }, []).actual;
+      const entry = { key: '["t","c",1,"x"]', latest: {}, seen: {}, pending: [], result: { tasks: [{ taskId: 'w', request: asking.request, lifecycle: 'in-progress', deferred: true, recordOnly: true, analysisDepth: 'deferred', actual: placeholder }] } };
+      const longReply = 'GraphQL이 일부는 해소해 줍니다. '.repeat(60);
+      service.enqueue('t', entry, { ...asking, taskId: 'w', lifecycle: 'completed', text: 'USER:\n' + asking.request + '\n\nASSISTANT (completed answer):\n' + longReply });
+      const card = entry.result.tasks[0];
+      assert.equal(card.lifecycle, 'completed');
+      assert.equal(card.actual, longReply.trim(), 'a finished reply replaces the placeholder on the waiting card');
+      const midTurn = { taskId: 'p', request: asking.request, lifecycle: 'in-progress', deferred: true, recordOnly: true, analysisDepth: 'deferred', actual: placeholder };
+      entry.result.tasks.push(midTurn);
+      service.enqueue('t', entry, { ...asking, taskId: 'p', lifecycle: 'in-progress', text: 'USER:\n' + asking.request + '\n\nASSISTANT (current report):\nVerified. Now updating local state and closing the run record.' });
+      assert.equal(midTurn.actual, placeholder, 'a mid-turn progress line is never shown as the answer');
+      service.enqueue('t', entry, { ...asking, taskId: 'p', lifecycle: 'completed', text: 'USER:\n' + asking.request + '\n\nASSISTANT (completed answer):\n1, 3번은 진행 중, 2번은 완료로 바꿨고 4번은 그대로 뒀습니다.' });
+      assert.equal(midTurn.actual, '1, 3번은 진행 중, 2번은 완료로 바꿨고 4번은 그대로 뒀습니다.', 'the finished reply replaces it');
+      entry.result.tasks.push({ taskId: 'r', request: 'relay', lifecycle: 'completed', recordOnly: true, analysisDepth: 'record', actual: 'Codex에 보냈고 답을 받았어요' });
+      service.enqueue('t', entry, { ...asking, taskId: 'r', lifecycle: 'completed', text: 'USER:\nrelay\n\nASSISTANT (completed answer):\n다른 글' });
+      assert.equal(entry.result.tasks.find(item => item.taskId === 'r').actual, 'Codex에 보냈고 답을 받았어요', 'a recorded result card is never overwritten');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
   assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).mode, 'analyze', 'a recorded awaiting-response turn is analyzed');
   assert.equal(classifyEvidence(relay, [{ ...jobs[0], sentAt: 1 }]).mode, 'defer');
   assert.equal(classifyEvidence({ ...relay, request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기 그리고 오류 수정해줘' }, jobs).mode, 'defer');

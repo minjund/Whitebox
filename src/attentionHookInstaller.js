@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { claudeHomes } = require('./claudeHomes');
 
 const OWNER_MARKER = '--whitebox-attention-hook';
 const OWN_HTTP_URL = /^http:\/\/127\.0\.0\.1:\d+\/whitebox\/attention\/v1\/[a-f0-9]{32,128}$/iu;
@@ -741,10 +742,20 @@ function enableCodexHooksFeature(source) {
 
 function resolveInstallerOptions(options = {}) {
   const paths = defaultPaths(options.home || os.homedir(), options.env || process.env);
+  const claudeSettingsPath = path.resolve(options.claudeSettingsPath || paths.claudeSettingsPath);
+  // Wrappers such as claude-ubion run Claude with another config folder
+  // (~/.claude-ubion). Its settings need the same hooks. An explicit settings
+  // path names exactly one file, so it never reaches into other folders.
+  const extraClaudeSettingsPaths = Array.isArray(options.extraClaudeSettingsPaths)
+    ? options.extraClaudeSettingsPaths.map(file => path.resolve(file))
+    : options.claudeSettingsPath ? []
+      : claudeHomes({ home: options.home || os.homedir(), env: options.env || process.env })
+        .map(dir => path.join(dir, 'settings.json')).filter(file => file !== claudeSettingsPath);
   return {
     ...paths,
     ...options,
-    claudeSettingsPath: path.resolve(options.claudeSettingsPath || paths.claudeSettingsPath),
+    claudeSettingsPath,
+    extraClaudeSettingsPaths: [...new Set(extraClaudeSettingsPaths)].filter(file => file !== claudeSettingsPath),
     codexHooksPath: path.resolve(options.codexHooksPath || paths.codexHooksPath),
     codexConfigPath: path.resolve(options.codexConfigPath || paths.codexConfigPath),
     runtimeFile: path.resolve(options.runtimeFile || paths.runtimeFile),
@@ -787,6 +798,19 @@ function applyPlans(plans) {
   return results;
 }
 
+// An extra Claude config folder is best effort: an unreadable or invalid
+// settings file there is reported and left untouched, never blocking the
+// default folder's hooks.
+function extraClaudePlans(files = [], plan) {
+  const plans = [], warnings = [];
+  for (const file of files) {
+    try { plans.push({ ...plan(file), name: `claude:${file}` }); } catch (error) {
+      warnings.push(`Skipped Claude settings ${file}: ${error.message}`);
+    }
+  }
+  return { plans, warnings };
+}
+
 function installAttentionHooks(rawOptions = {}) {
   const identity = validateIdentity(rawOptions.identity);
   const options = resolveInstallerOptions({
@@ -808,12 +832,14 @@ function installAttentionHooks(rawOptions = {}) {
     statusMessage: 'Waiting for Whitebox response',
   };
 
-  const claude = planJsonConfig(options.claudeSettingsPath, config => {
-    removeOwnedHandlers(config, isOwnClaudeHandler, options.claudeSettingsPath);
-    appendHandler(config, 'PermissionRequest', '', httpHandler, options.claudeSettingsPath);
-    appendHandler(config, 'PreToolUse', 'AskUserQuestion', httpHandler, options.claudeSettingsPath);
+  const claudePlan = file => planJsonConfig(file, config => {
+    removeOwnedHandlers(config, isOwnClaudeHandler, file);
+    appendHandler(config, 'PermissionRequest', '', httpHandler, file);
+    appendHandler(config, 'PreToolUse', 'AskUserQuestion', httpHandler, file);
     return config;
   });
+  const claude = claudePlan(options.claudeSettingsPath);
+  const extra = extraClaudePlans(options.extraClaudeSettingsPaths, claudePlan);
   const codex = planJsonConfig(options.codexHooksPath, config => {
     upsertOwnCodexPermissionHandler(config, commandHandler, options.codexHooksPath);
     return config;
@@ -834,9 +860,10 @@ function installAttentionHooks(rawOptions = {}) {
       name: 'codexConfig', file: options.codexConfigPath,
       source: trust.source, previousSource: configSource,
     },
+    ...extra.plans,
   ];
   const files = applyPlans(plans);
-  const warnings = [];
+  const warnings = [...extra.warnings];
   const backupFailures = Object.entries(files)
     .filter(([, result]) => result.backupPruneError)
     .map(([name]) => name);
@@ -858,16 +885,18 @@ function uninstallAttentionHooks(rawOptions = {}) {
   const options = resolveInstallerOptions(rawOptions);
   const claude = planJsonRemoval(options.claudeSettingsPath, isOwnClaudeHandler);
   const codex = planJsonRemoval(options.codexHooksPath, isOwnCodexHandler);
+  const extra = extraClaudePlans(options.extraClaudeSettingsPaths, file => planJsonRemoval(file, isOwnClaudeHandler));
   const files = applyPlans([
     { ...claude, name: 'claude' },
     { ...codex, name: 'codexHooks' },
+    ...extra.plans,
   ]);
   return {
     action: 'uninstall',
     changed: Object.values(files).some(result => result.changed),
     files,
     feature: { enabled: null, state: 'preserved' },
-    warnings: [],
+    warnings: extra.warnings,
   };
 }
 
