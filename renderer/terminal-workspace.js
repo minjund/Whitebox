@@ -115,19 +115,16 @@
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbSummary" class="wb-summary" aria-label="요약 채팅" hidden>
-        <header class="wb-summary-heading"><div><h1 id="wbSummaryTarget"></h1><p id="wbSummaryConnection"><i aria-hidden="true"></i><span id="wbSummaryProvider"></span><span>·</span><span id="wbSummaryConnectionState">같은 대화에 연결됨</span></p></div><small>화면을 바꿔도 대화는 이어져요</small></header>
+        <header class="wb-summary-heading"><div><h1 id="wbSummaryTarget"></h1><p id="wbSummaryConnection"><i aria-hidden="true"></i><span class="wb-summary-model"><b id="wbSummaryProvider"></b> <span id="wbSummaryModel"></span></span><span class="wb-summary-effort" id="wbSummaryEffort" hidden><span class="wb-summary-effort-level" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="wb-summary-effort-label">effort</span> <b id="wbSummaryEffortValue"></b></span><span class="wb-summary-sep" aria-hidden="true"></span><span id="wbSummaryConnectionState">같은 대화에 연결됨</span></p></div><div class="wb-summary-usage"><div class="wb-summary-usage-meters" id="wbSummaryUsageMeters"></div><button type="button" class="wb-summary-history-button" id="wbSummaryHistoryButton"></button></div></header><div class="wb-summary-history" id="wbSummaryHistory" hidden></div>
         <div class="wb-summary-body">
           <div class="wb-summary-conversation">
-            <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span></li></ol>
+            <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span><span class="sr-only" id="wbSummaryReplyState"></span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span><span class="sr-only" id="wbSummaryReviewState"></span></li></ol><p class="sr-only" role="status" aria-live="polite"><span id="wbSummaryStateTitle"></span> <span id="wbSummaryStateDescription"></span></p>
             <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
             <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><ul id="wbSummaryCommands" class="wb-summary-commands" role="listbox" aria-label="명령어" hidden></ul><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
             <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
           </div>
-          <aside class="wb-summary-rail" aria-label="이번 요청 상태">
-            <div class="wb-summary-rail-heading"><span>이번 요청</span><span id="wbSummaryRailProvider"></span></div>
-            <div class="wb-summary-state-card" role="status" aria-live="polite"><h2 id="wbSummaryStateTitle"></h2><p id="wbSummaryStateDescription"></p></div>
-            <dl class="wb-summary-state-list"><div><dt>AI 답변</dt><dd id="wbSummaryReplyState"></dd></div><div><dt>이해 · 검토</dt><dd id="wbSummaryReviewState"></dd></div><div id="wbSummaryQueueRow" hidden><dt>전송 대기</dt><dd id="wbSummaryQueueCount"></dd></div></dl>
-            <div class="wb-summary-next" id="wbSummaryNext"><h3>다음으로 할 일</h3><p id="wbSummaryNextText"></p></div>
+          <aside class="wb-summary-rail" aria-label="지난 요청">
+            <div class="wb-summary-past" id="wbSummaryPastSection" hidden><div class="wb-summary-rail-heading"><h2>지난 요청</h2><span id="wbSummaryPastCount"></span></div><ol id="wbSummaryPast" class="wb-summary-past-list"></ol></div>
             <section id="wbSummaryGame" class="wb-summary-game" aria-label="2048" hidden></section>
           </aside>
         </div>
@@ -520,7 +517,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), summaryTokenHistory: summaryChat.serializeUsage(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -2249,6 +2246,7 @@
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });
     summaryChat.restoreGame(saved.summaryGame2048);
+    summaryChat.restoreUsage(saved.summaryTokenHistory);
     summaryChat.restore(saved.summaryChats);
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);

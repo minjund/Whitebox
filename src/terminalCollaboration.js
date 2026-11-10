@@ -327,7 +327,12 @@ class TerminalCollaboration {
           ? native.state === 'completed' && (native.requestId !== job.baseline && native.requestAt >= job.sentAt && sameRequest(native.request, job.request)
             // "Send anyway" while the AI works: Claude absorbs the message into
             // the running turn as a queued command, with no new user row.
-            || job.immediate === true && job.baseline && native.requestId === job.baseline && native.completedAt >= job.sentAt) ? native.evidence : ''
+            || job.immediate === true && job.baseline && native.requestId === job.baseline && native.completedAt >= job.sentAt
+            // A send that reached Claude mid-turn for any other reason is
+            // absorbed the same way; Claude logs it as that turn's queued
+            // command. Without this the job waits out the 15-minute limit and
+            // holds every later queued message.
+            || native.completedAt >= job.sentAt && (native.absorbed || []).some(item => item.at >= job.sentAt - 2000 && sameRequest(item.text, job.request))) ? native.evidence : ''
           : completedTurn(target.frame.text, job.request, job.provider, job.stamp, { exactRequest: true });
         if (evidence) Object.assign(job, { state: 'completed', answer: evidence, finishedAt: this.now() });
         else if (this.now() - job.sentAt > 15 * 60 * 1000) Object.assign(job, { state: 'interrupted', error: '15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.' });

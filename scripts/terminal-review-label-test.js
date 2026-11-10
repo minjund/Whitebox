@@ -40,6 +40,13 @@ assert.equal(block.options[2].text, '같은 화면, 항목만 다르다');
 assert.equal(block.recommendation.label, 'b');
 assert.equal(pendingChoices('어떻게 할까요?\n1. 지금 배포\n2. 내일 배포\n\n추천은 2번입니다.')[0].recommendation.label, '2');
 assert.deepEqual(pendingChoices('이게 맞나요? 네 맞습니다.\n- 이유 하나'), [], 'prose with a question mark is not a choice list');
+// Options first, question last: the list before a closing decision question.
+const trailing = pendingChoices('**고칠 목록 (배포 없음)**\n1. **전송 대기:** 판정 고치기\n2. 2048 접기\n3. 선택지 보이기\n\n세 가지를 한 브랜치에서 같이 진행할까요? 배포는 하지 않겠습니다.');
+assert.equal(trailing.length, 1);
+assert.equal(trailing[0].question, '세 가지를 한 브랜치에서 같이 진행할까요?');
+assert.deepEqual(trailing[0].options.map(item => [item.label, item.text]), [['1', '전송 대기: 판정 고치기'], ['2', '2048 접기'], ['3', '선택지 보이기']]);
+assert.deepEqual(pendingChoices('변경 요약\n1. 파일 수정\n2. 테스트 추가\n\n궁금한 점 있으면 말씀해 주세요?'), [], 'a generic closing question does not turn a summary list into choices');
+assert.deepEqual(pendingChoices('결과\n1. 테스트 통과\n2. 빌드 성공\n\n중간 설명 문단입니다.\n\n진행할까요?'), [], 'the list must sit right before the closing question');
 const shown = { version: 2, answer: { text: '조건부 답입니다.', basis: 'reported', quote: '' }, details: [], limitations: [], background: [], nextAction: null,
   deliverables: [{ label: '비교표', kind: 'text', value: '| 방식 | 비용 |\n|---|---|\n| **BFF** | 작음 |\n| GraphQL | <큼> |', basis: 'reported', quote: '' }], choices: [block] };
 const html = render({ content: shown }, { t: v => v, esc, taskKey: 'choices' });

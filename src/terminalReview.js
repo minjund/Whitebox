@@ -15,6 +15,10 @@ const { contentInstructions, assessContent, historyContent, sourceExcerpt, pendi
 const { artifactText } = require('./terminalReviewArtifacts');
 
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
+// Claude records a bracketed paste wrapped in <pasted_content> tags; compare
+// what was typed.
+const typed = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
+const sameTyped = (a, b) => Boolean(typed(a)) && typed(a) === typed(b);
 const RESPONSE_CACHE_VERSION = 1;
 const RESPONSE_CACHE_LIMIT = 48;
 const RESPONSE_CACHE_MAX_CHARS = 64 * 1024;
@@ -369,7 +373,8 @@ class TerminalReview extends EventEmitter {
       analysisUsage: usage, reviewContext: chunk.context, assistantUpdates: chunk.updates,
       toolEvidence: chunk.tools || { source: 'unavailable', items: [], omitted: 0 },
       evidenceDigest: chunk.digest, reviewEvidence: bounded(chunk.text || '', 12000),
-      facts: observedFacts(latest, entry.locale), awaitingResponse: Boolean(chunk.awaitingResponse) };
+      facts: observedFacts(latest, entry.locale), awaitingResponse: Boolean(chunk.awaitingResponse),
+      joinedSubmissionIds: [...new Set([...(previous?.joinedSubmissionIds || []), ...(latest.joinedSubmissionIds || []), ...(chunk.joinedSubmissionIds || [])])].slice(-8) };
     // A newer request can finish while an older review is running. Sort by request
     // submission, never by model completion time, so late results stay in history.
     let tasks = mergeTasks(entry.result?.tasks || [], [value]);
@@ -411,6 +416,11 @@ class TerminalReview extends EventEmitter {
       if (shownReply) existing.actual = shownReply;
       this.persist(id, entry);
     }
+    // Link absorbed sends to the card at once, before any analysis finishes.
+    if (existing && chunk.joinedSubmissionIds?.some(item => !(existing.joinedSubmissionIds || []).includes(item))) {
+      existing.joinedSubmissionIds = [...new Set([...(existing.joinedSubmissionIds || []), ...chunk.joinedSubmissionIds])].slice(-8);
+      this.persist(id, entry);
+    }
     const seen = entry.seen[chunk.taskId];
     if (!chunk.reanalyze && entry.failed?.taskId === chunk.taskId && entry.failed.digest === chunk.digest) return;
     if (entry.failed?.taskId === chunk.taskId) { entry.failed = null; entry.message = ''; }
@@ -436,6 +446,22 @@ class TerminalReview extends EventEmitter {
   interrupt(id, entry) {
     const turn = entry.turn;
     if (!turn) return;
+    // A reply that ended by asking the user something was complete; the turn
+    // stayed open only for the answer. A different next request closes it as
+    // completed instead of relabelling a finished reply "interrupted".
+    if (turn.awaitingResponse === true && turn.latest?.lifecycle !== 'interrupted') {
+      const old = this.task(entry, turn.taskId);
+      if (old) {
+        old.lifecycle = 'completed'; old.awaitingResponse = false;
+        if (old.analysisLifecycle === 'in-progress') old.analysisLifecycle = 'completed';
+      }
+      // A still-queued analysis of that reply publishes with this lifecycle.
+      const latest = entry.latest[turn.taskId];
+      if (latest) entry.latest[turn.taskId] = { ...latest, lifecycle: 'completed', awaitingResponse: false };
+      entry.turn = null; entry.following = null;
+      this.persist(id, entry);
+      return turn.taskId;
+    }
     const chunk = { ...(turn.latest || {}), taskId: turn.taskId, request: turn.request, submissionId: turn.submissionId,
       terminalId: id, submittedAt: turn.submittedAt, observedAt: this.now(), endedAt: this.now(),
       lifecycle: 'interrupted', text: turn.latest?.text || '', awaitingResponse: false };
@@ -562,7 +588,19 @@ class TerminalReview extends EventEmitter {
     }
     const adoptingNative = nativeNew && entry.turn && !entry.turn.nativeKey
       && completion.requestAt >= (entry.turn.matchAfter || entry.turn.submittedAt);
-    if (newSubmission || nativeNew && !adoptingNative) {
+    // A request sent while the provider still works on the observed turn joins
+    // that turn. Claude absorbs it into the running reply, or queues it as its
+    // next turn (which arrives later as a new native request). Either way the
+    // running turn is still producing the answer, so it is never interrupted.
+    const joining = Boolean(newSubmission && !nativeNew && entry.turn?.nativeKey && entry.turn.nativeKey === nativeKey
+      && completion.state === 'working' && !isNonTaskRequest(submission.request));
+    if (joining) {
+      entry.lastSubmission = submission.id;
+      entry.turn.joined = [...(entry.turn.joined || []),
+        { id: submission.id, request: submission.request.trim().slice(0, 4000), at: Number(submission.at) || this.now() }].slice(-8);
+      this.persist(id, entry);
+    }
+    if (!joining && (newSubmission || nativeNew && !adoptingNative)) {
       entry.watchingNative = '';
       const requested = newSubmission ? submission.request.trim().slice(0, 4000) : completion.request;
       const submittedAt = newSubmission ? Math.min(this.now(), Number(submission.at) || this.now()) : completion.requestAt;
@@ -586,8 +624,11 @@ class TerminalReview extends EventEmitter {
         const taskId = confirmedContinuation ? entry.roots[rootKey] : pendingResponse ? previous.taskId
           : `${binding}:${currentNative ? nativeKey : submission?.id || nativeKey}`;
         const prior = this.task(entry, taskId);
+        // A joined request Claude queued instead of absorbing becomes its own
+        // native turn here; keep the chat's delivery identity for it.
+        const queuedJoin = !newSubmission ? (previous?.joined || []).find(item => sameTyped(item.request, requested)) : null;
         entry.turn = { taskId, id: newSubmission ? submission.id : nativeKey,
-          submissionId: newSubmission ? submission.id : (confirmedContinuation || pendingResponse) ? previous?.submissionId || prior?.submissionId || '' : '',
+          submissionId: newSubmission ? submission.id : (confirmedContinuation || pendingResponse) ? previous?.submissionId || prior?.submissionId || '' : queuedJoin?.id || '',
           // A reply to the AI's question continues the original task; keep the
           // newest delivery identity so the chat can confirm that reply too.
           latestSubmissionId: newSubmission ? submission.id : '',
@@ -623,8 +664,16 @@ class TerminalReview extends EventEmitter {
         if (completed && this.now() - turn.candidateAt >= this.quietMs) { evidence = completed; lifecycle = 'completed'; }
         else evidence = completed ? '' : currentTurnEvidence(frame, turn.response || turn.request);
       }
+      // Joined requests Claude absorbed into this reply are answered by it; the
+      // summary sees them and the chat shows this answer after them.
+      const absorbed = matches ? (turn.joined || []).filter(item => (completion.absorbed || [])
+        .some(record => record.at >= item.at - 2000 && sameTyped(record.text, item.request))) : [];
+      if (absorbed.length && evidence) {
+        evidence = `${evidence}\n\n${absorbed.map(item => `USER (sent while the assistant was working; answered in this same reply):\n${item.request}`).join('\n\n')}`;
+      }
       if (matches || evidence) {
         const chunk = { taskId: turn.taskId, terminalId: id, request: turn.request, submissionId: turn.submissionId, latestSubmissionId: turn.latestSubmissionId || '',
+          joinedSubmissionIds: absorbed.map(item => item.id),
           submittedAt: turn.submittedAt, observedAt: this.now(), lifecycle, text: evidence,
           relatedTaskId: turn.relatedTaskId, relation: turn.relation,
           context: matches ? completion.context : null, updates: matches ? completion.updates : null,
@@ -888,7 +937,11 @@ class TerminalReview extends EventEmitter {
         // Report the actual cause: an unlinked citation drops the brief, so it
         // must not be reported as a missing brief.
         if (!task.requestQuote || !task.evidenceQuote) throw new Error('분석의 근거를 현재 요청의 기록과 연결하지 못했어요. 확인된 사실을 먼저 보여드려요.');
-        if (requiresContent && !task.content || requiresCompact && task.content?.version !== 2) throw new Error('실제 답과 근거를 갖춘 짧은 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다. 다시 검토해 주세요.');
+        if (requiresContent && !task.content || requiresCompact && task.content?.version !== 2) {
+          // Keep the checks that rejected it, so a failed summary can say why.
+          throw Object.assign(new Error('실제 답과 근거를 갖춘 짧은 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다. 다시 검토해 주세요.'),
+            { reviewIssues: [...(task.contentIssues || []), ...(task.decisionIssues || [])].slice(0, 8) });
+        }
         if (requiresHandoff && !task.content.handoff) throw new Error('시점과 다음 판단을 갖춘 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다.');
         // Options the reply asks the user to choose from, copied from the reply.
         const choices = task.content ? pendingChoices(answerText(chunk.text || '')) : [];
@@ -939,7 +992,8 @@ class TerminalReview extends EventEmitter {
         const previous = this.task(entry, chunk.taskId);
         if (chunk.lifecycle === 'completed' && (!previous || previous.recordOnly || previous.deferred)) {
           this.publish(id, entry, chunk, { actual: bounded(answerText(chunk.text || ''), 4000) || previous?.actual || '', alignment: 'not-reviewed',
-            recordOnly: true, deferred: true, analysisDepth: 'deferred', summaryFailure: { kind } }, zeroUsage());
+            recordOnly: true, deferred: true, analysisDepth: 'deferred',
+            summaryFailure: { kind, ...(kind === 'quality' && error.reviewIssues?.length ? { issues: error.reviewIssues.slice(0, 8) } : {}) } }, zeroUsage());
         }
       }).finally(() => {
         if (entry.active === active) entry.active = null;

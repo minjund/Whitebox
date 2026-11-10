@@ -188,6 +188,41 @@ module.exports = async function policyChecks() {
     await finish(calls.at(-1), '결과창을 만들어줘', '결과창을 추가했습니다.');
     assert.equal(service.entries.get('one').result.tasks.length, 1);
     assert.equal(service.entries.get('one').result.tasks[0].alignment, 'aligned');
+    // A different request after a question reply closes that finished reply as
+    // completed; the reply was never interrupted.
+    service = new TerminalReview({ ...options, file: '' });
+    completion = { available: true };
+    await capture();
+    await submit('asked', '배포 방식 정리해줘', { state: 'completed', awaitingResponse: true,
+      evidence: 'ASSISTANT: 두 가지 방식이 있습니다. 하나는 태그 배포, 하나는 수동 배포입니다. ' + '각 방식은 검증 단계가 다릅니다. '.repeat(24) + '어느 쪽으로 진행할까요?' });
+    await finish(calls.at(-1), '배포 방식 정리해줘', '두 가지 방식이 있습니다.');
+    const askedTask = service.entries.get('one').result.tasks.at(-1);
+    assert.equal(askedTask.awaitingResponse, true);
+    await submit('different', '2048 버그 고쳐줘');
+    const closed = service.entries.get('one').result.tasks.find(t => t.taskId === askedTask.taskId);
+    assert.equal(closed.lifecycle, 'completed', 'a finished question reply is not relabelled interrupted');
+    assert.equal(closed.analysisLifecycle, 'completed');
+    assert.equal(service.entries.get('one').pending.some(chunk => chunk.taskId === askedTask.taskId && chunk.lifecycle === 'interrupted'), false, 'no interrupted re-analysis is queued for it');
+    // A request sent while the AI still works joins the running turn: Claude
+    // absorbs it, and the one reply answers both. Nothing is interrupted.
+    service = new TerminalReview({ ...options, file: '' });
+    completion = { available: true };
+    await capture();
+    await submit('running', '요약 상단 초안 그려줘', { evidence: '', partialEvidence: 'ASSISTANT: 초안을 그리는 중입니다.' });
+    const runningTask = service.entries.get('one').turn.taskId;
+    now += 100;
+    await capture({ submission: { id: 'joined', at: now, request: 'effort 표시와 기록 기능도 넣어줘' } });
+    assert.equal(service.entries.get('one').turn?.taskId, runningTask, 'the running turn is not interrupted by a mid-turn send');
+    assert.deepEqual(service.entries.get('one').turn.joined.map(item => item.id), ['joined']);
+    completion = { ...completion, state: 'completed', absorbed: [{ text: 'effort 표시와 기록 기능도 넣어줘', at: now + 20 }],
+      evidence: 'ASSISTANT: effort 표시와 기록 패널까지 넣은 초안을 바탕화면에 저장했습니다. ' + '상단은 두 줄로 유지하고 상세는 패널로 옮겼습니다. '.repeat(20) };
+    await capture();
+    await finish(calls.at(-1), '요약 상단 초안 그려줘', 'effort 표시와 기록 패널까지 넣은 초안을 바탕화면에 저장했습니다.');
+    const joinedTask = service.entries.get('one').result.tasks.find(t => t.taskId === runningTask);
+    assert.equal(joinedTask.lifecycle, 'completed');
+    assert.deepEqual(joinedTask.joinedSubmissionIds, ['joined'], 'the card links the absorbed send');
+    assert.match(calls.at(-1).prompt || JSON.stringify(calls.at(-1)), /effort 표시와 기록 기능도 넣어줘/u, 'the summary sees the absorbed request');
+    assert.equal(service.entries.get('one').result.tasks.some(t => t.lifecycle === 'interrupted'), false);
     // A fresh completion signal justifies a final verdict, then stays deduplicated.
     await submit('checkpoint', '검사 결과 설명해줘', { partialEvidence: 'ASSISTANT: 첫 검사를 통과했습니다.', tools: { items: [{ name: 'Bash', status: 'returned', excerpt: '2 tests passed' }] } });
     await finish(calls.at(-1), '검사 결과 설명해줘', '첫 검사를 통과했습니다.');

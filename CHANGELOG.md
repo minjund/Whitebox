@@ -3,6 +3,16 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.28 - 2026-11-10
+
+- The right side of Summary mode now lists Past requests: every request in this conversation, including ones typed in the terminal, newest first, each with the summary's actual answer on one line. A request sent right after the AI asked you something is tagged “Decision”, and the request in progress is highlighted. Clicking one scrolls the conversation to that request and highlights it without leaving Summary mode. The old status block is gone; progress shows in the steps at the top and the line above the input.
+- The Summary header shows the model and effort of the AI's latest reply, the account usage limits, and a Token history panel for this conversation and the last seven days.
+- A message sent while the AI is working joins the running turn: its answer appears under that message, and it no longer reads as a stuck “Queued” request or holds later requests for 15 minutes. A pasted message is matched by what was typed.
+- A reply that asks you a question counts as finished: answering it with a different request closes it as completed instead of “interrupted”, and 2048 folds when its summary arrives.
+- Options listed before a closing question such as “Shall I go ahead with all three?” are shown as the reply's choices.
+- Code-change replies no longer fail to summarize for lack of a quoted code line; only written documents must appear verbatim. A summary that fails its checks records why.
+- Verify official 2.0.27 installers alongside all retained Windows and macOS update cohorts.
+
 ## 2.0.27 - 2026-11-10
 
 - Summary cards say what they are: a Whitebox summary, an AI reply shown as written (a short reply without work, shown at once with no summary call), or a failed summary that shows the reply, the reason and a “Summarize again” button. A failed summary no longer switches to the terminal or cancels queued requests.

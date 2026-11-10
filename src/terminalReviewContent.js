@@ -118,7 +118,12 @@ function assessContent(value, { source = '', observed = '', authored = '', reque
   if (new Set(texts).size !== texts.length) issues.push('repeated content');
   // Require some actual authored content on the default screen when it exists.
   // Exact overlap is a mechanical coverage check, not semantic fact checking.
-  const bodyLines = authored.split(/\n/u).filter(line => line.length >= 16 && !/^(?:RECORDED |ACK excerpt:|Partial |\[omitted)/u.test(line));
+  // Only authored documents must surface verbatim. For code edits the
+  // explanation is the content; requiring a quoted code line failed coding
+  // summaries even when they were accurate.
+  const documents = authored.split(/(?=^RECORDED (?:edit|write): )/mu)
+    .filter(block => /^RECORDED (?:edit|write): [^\n]*\.mdx?\s*$/iu.test(block.split('\n')[0])).join('\n');
+  const bodyLines = documents.split(/\n/u).filter(line => line.length >= 16 && !/^(?:RECORDED |ACK excerpt:|Partial |\[omitted)/u.test(line));
   const coversBody = [answer, ...details, ...deliverables].some(item => item.quote?.length >= 16
     && bodyLines.some(line => item.quote.includes(line) || line.includes(item.quote)));
   if (bodyLines.length && !coversBody) issues.push('authored content omitted from default explanation');
@@ -208,6 +213,28 @@ function historyContent(file) {
 // never from the model, so a short summary cannot drop or reword a choice.
 const OPTION = /^\s*(?:[-*•]\s*)?(?:\*\*)?(?:\(([A-Za-z0-9])\)|([A-Za-z0-9])[.)]|([①-⑩]))(?:\*\*)?\s+(\S[\s\S]*)$/u;
 const plain = value => value.replace(/\*\*|__|`/gu, '').replace(/^\s*(?:#{1,6}\s+|[-*•>]\s+)/u, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim();
+// Options listed first and asked about last: a numbered list, then a short
+// closing paragraph such as "세 가지를 한 브랜치에서 같이 진행할까요?".
+const DECISION_QUESTION = /진행|할까요|하실|하시겠|고르|선택|어느|어떤|어떻게|원하시|정해|괜찮|which|should I|shall I|want me|would you like|prefer/iu;
+function trailingChoices(lines) {
+  let end = lines.length - 1;
+  while (end >= 0 && !lines[end].trim()) end--;
+  let start = end;
+  while (start > 0 && lines[start - 1].trim()) start--;
+  if (end < 0 || end - start > 2 || lines.slice(start, end + 1).some(line => OPTION.test(line))) return null;
+  const asked = lines.slice(start, end + 1).map(plain).join(' ').match(/[^.!?。？]*[?？]/gu)?.at(-1)?.trim();
+  if (!asked || !DECISION_QUESTION.test(asked)) return null;
+  let row = start - 1;
+  while (row >= 0 && !lines[row].trim()) row--;
+  const options = [];
+  for (; row >= 0 && lines[row].trim(); row--) {
+    const match = lines[row].match(OPTION);
+    if (match) options.unshift({ label: match[1] || match[2] || match[3], text: plain(match[4]).slice(0, 300) });
+    else if (!/^\s+\S/u.test(lines[row])) break; // a heading or prose line ends the list
+  }
+  if (options.length < 2 || options.length > 8 || new Set(options.map(item => item.label.toLowerCase())).size !== options.length) return null;
+  return { question: asked.slice(0, 300), options, recommendation: null };
+}
 function pendingChoices(answer) {
   const lines = String(answer || '').split('\n');
   const blocks = [];
@@ -236,6 +263,8 @@ function pendingChoices(answer) {
     blocks.push({ question: plain(lines[index]).slice(0, 300), options, recommendation });
     index = row - 1;
   }
+  const trailing = trailingChoices(lines);
+  if (trailing) blocks.push(trailing);
   return blocks.slice(-3);
 }
 

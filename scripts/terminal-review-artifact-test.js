@@ -59,6 +59,15 @@ module.exports = async function artifactChecks() {
   const useful = { ...base, answer: { text: '검증과 저장을 다른 묶음으로 두고 개념이 바뀌면 빈 줄로 구분하도록 규칙을 추가했습니다.', basis: 'reported', quote: clause } };
   assert(assessContent(useful, evidence).content);
   assert(!assessContent({ ...useful, answer: { ...useful.answer, basis: 'observed' } }, evidence).content, 'authored text plus acknowledgement is not an independent file read');
+  // A code fix is explained, not quoted: a summary of a JS edit passes without
+  // copying a code line onto the default screen.
+  const codeState = { requestId: 'code-fix' };
+  addCall(codeState, 'code', 'Edit', { file_path: '/repo/src/queue.js', old_string: 'if (ready) send();\n', new_string: 'if (ready && !busyLine(screen)) send(message, { deliveryId });\n' });
+  addResult(codeState, 'code', 'The file /repo/src/queue.js has been updated successfully.', false);
+  const codeRequest = '전송 대기가 계속 걸리는 버그 고쳐줘';
+  const codeEvidence = evidenceFor({ reviewEvidence: `USER: ${codeRequest}\nASSISTANT: 작업 중 표시를 준비 완료로 오인하던 판정을 고쳤습니다.`, toolEvidence: toolEvidence(codeState) });
+  const codeSummary = { version: 2, answer: { text: '작업 중 표시를 준비 완료로 오인하던 판정을 고쳐, 메시지가 15분씩 대기하지 않습니다.', basis: 'reported', quote: '작업 중 표시를 준비 완료로 오인하던 판정을 고쳤습니다.' }, details: [], limitations: [], deliverables: [], background: [], nextAction: null };
+  assert.equal(assessContent(codeSummary, codeEvidence).issues.includes('authored content omitted from default explanation'), false, 'a code edit does not require a quoted code line');
 
   let calls = 0;
   const session = { id: 'artifact', creationId: 'c', pid: 10, status: 'running' };
