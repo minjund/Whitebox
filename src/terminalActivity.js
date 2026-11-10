@@ -109,7 +109,9 @@ class TerminalActivity {
           state = /^R/u.test(shell.stat) ? 'working' : 'idle';
         }
       }
-      result.set(member.id, { state, completed, ...(requestId ? { requestId } : {}), providerPid,
+      // Live, model-free description of the current step for working AIs only.
+      const progress = state === 'working' && native.available && native.progress ? native.progress : null;
+      result.set(member.id, { state, completed, ...(requestId ? { requestId } : {}), ...(progress ? { progress } : {}), providerPid,
         provider: child?.provider || '', usage, conversationId, usageStatus,
         background: { count: background.length, items: background.slice(0, 32) }, creationId: member.creationId, pid: member.pid });
     }));

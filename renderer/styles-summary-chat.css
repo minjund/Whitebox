@@ -173,3 +173,8 @@
  #terminalWorkspace .wb-summary-user { margin-left:8px; padding:13px 14px; }
  #terminalWorkspace #wbSummaryConnection { flex-wrap:wrap; font-size:11px; }
 }
+
+#terminalWorkspace .wb-summary-answer .wb-summary-reply { color:var(--wb-text); font-size:14px; line-height:1.85; white-space:normal; overflow-wrap:anywhere; }
+#terminalWorkspace .wb-summary-answer[data-result-kind="failed"] .wb-summary-answer-heading { color:#b26b2b; }
+#terminalWorkspace .wb-summary-failure { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; padding:10px 12px; border:1px solid color-mix(in srgb,#b26b2b 35%,var(--clean-line)); border-radius:8px; background:color-mix(in srgb,#b26b2b 7%,transparent); }
+#terminalWorkspace .wb-summary-failure p { margin:0; font-size:13px; line-height:1.7; color:var(--wb-text); }

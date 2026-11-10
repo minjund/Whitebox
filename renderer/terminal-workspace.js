@@ -37,7 +37,8 @@
   const base = path => String(path).split(/[\\/]/u).filter(Boolean).at(-1) || path;
   let bootstrap, spaces = [], trash = [], selectedSpace = '', busy = false, reviewBusy = false, restoringId = '';
   let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
-  let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false;
+  let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false, uiFont = 'pretendard';
+  const applyUiFont = () => { if (uiFont === 'pretendard') delete document.documentElement.dataset.uiFont; else document.documentElement.dataset.uiFont = uiFont; };
   // 2048 is for the wait while a summary is generated; it closes when the
   // summary arrives unless the user unlocks it for any time.
   let summaryGameVisibility = 'summarizing';
@@ -52,7 +53,7 @@
   let projectQuery = '';
   let standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: '.', tabs: [], activeTab: '', nextNumber: 1 };
   const owners = () => [...spaces, standalone];
-  let analysisSettings = { provider: 'auto', jevEnabled: false, models: { claude: '', codex: '' } };
+  let analysisSettings = { provider: 'auto', jevEnabled: false, models: { claude: '', codex: '' }, effort: 'low' };
   let jevConfigured = false, jevSaveTask = null;
   let jevViewingSavedKey = false, jevRevealBusy = false, jevRevealGeneration = 0;
   let modelCatalog = { claude: [], codex: [] };
@@ -158,6 +159,7 @@
       </nav><div class="wb-settings-content" id="wbSettingsContent">
       <section data-settings-page="general" aria-labelledby="wbSettingsGeneralTitle"><div class="wb-settings-section-title"><h3 id="wbSettingsGeneralTitle">일반</h3><p>화면과 언어, 알림을 설정합니다.</p></div>
         <div class="wb-setting-row"><div><strong>모양</strong><p>앱 전체에 적용할 테마</p></div><div id="wbSettingsTheme"></div></div>
+        <div class="wb-setting-row"><label for="wbUiFont"><strong>화면 글꼴</strong><span>요약·메뉴 등 화면 글자 · 터미널 글꼴은 따로 설정</span></label><select id="wbUiFont"><option value="pretendard">Pretendard (한글·영문 가독성)</option><option value="system">시스템 기본</option><option value="geist">Geist (이전 글꼴)</option></select></div>
         <div class="wb-setting-row"><label for="wbLanguage"><strong>언어</strong><span>메뉴와 설정 화면의 표시 언어</span></label><select id="wbLanguage"><option value="ko">한국어</option><option value="en">English</option><option value="zh-CN">简体中文</option></select></div>
         <div id="wbAttentionCard" class="wb-setting-row wb-attention-setting"><div><label for="wbAttentionEnabled"><strong>입력 요청 알림</strong></label><p id="wbAttentionDescription">AI가 권한이나 답변을 요청하면 다른 창 위에서도 바로 확인하고 응답할 수 있는 작은 창을 표시합니다.</p></div><label class="wb-setting-switch"><input id="wbAttentionEnabled" type="checkbox" role="switch" aria-label="입력 요청 알림" aria-describedby="wbAttentionDescription wbAttentionStatus" checked/><span></span></label><p id="wbAttentionStatus" role="status" aria-live="polite"></p></div>
         <fieldset id="wbUpdateSettings" class="wb-analysis-settings"><legend>앱 업데이트</legend>
@@ -178,7 +180,7 @@
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
         <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>요약 완료 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">요약 끝나면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
-        <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 사용</strong><span>요약 화면에서 게임을 할 수 있는 때</span></label><select id="wbSummaryGameVisibility"><option value="summarizing">AI 요약 중에만 · 요약이 끝나면 닫힘</option><option value="always">언제나 사용</option></select></div>
+        <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 사용</strong><span>요약 화면 게임을 자동으로 접는 때 · 게임은 늘 열 수 있음</span></label><select id="wbSummaryGameVisibility"><option value="summarizing">AI 작업·요약이 끝나면 접기</option><option value="always">언제나 사용</option></select></div>
         <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
           <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
@@ -186,6 +188,7 @@
           <label id="wbClaudeCustomRow" hidden>모델 ID <input id="wbClaudeCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
           <label data-model-row="codex">Codex 모델 <select id="wbCodexModel"></select></label>
           <label id="wbCodexCustomRow" hidden>모델 ID <input id="wbCodexCustom" type="text" maxlength="128" placeholder="모델 ID 직접 입력"/></label>
+          <div class="wb-setting-row"><label for="wbAnalysisEffort"><strong>분석 사고량 (effort)</strong><span>낮을수록 요약이 빨리 나옵니다 · Claude 분석에 적용</span></label><select id="wbAnalysisEffort"><option value="low">낮음 · 빠름 (권장)</option><option value="medium">보통</option><option value="high">높음 · 느림</option><option value="inherit">터미널 AI 설정 따르기</option></select></div>
           <p>다음 분석부터 적용됩니다. 터미널에서 작업 중인 AI의 모델은 바꾸지 않습니다. 선택한 서비스의 로그인과 모델 이용 권한이 필요합니다.</p><p id="wbModelNotice" role="status"></p>
         </fieldset>
         <p class="wb-budget-note">기록만으로 확인할 수 있는 작업은 AI 호출 없이 표시합니다. 해석이 필요한 결과는 변경 이유와 동작 방식을 함께 설명합니다.</p>
@@ -517,7 +520,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -1582,6 +1585,7 @@
 
   function renderModelSettings() {
     $('#wbAnalysisProvider').value = analysisSettings.provider;
+    $('#wbAnalysisEffort').value = analysisSettings.effort;
     for (const provider of ['claude', 'codex']) {
       const name = provider === 'claude' ? 'Claude' : 'Codex';
       const select = $(`#wb${name}Model`), custom = $(`#wb${name}Custom`);
@@ -1595,6 +1599,10 @@
   }
   $('#wbJevEnabled').addEventListener('change', event => { analysisSettings.jevEnabled = jevConfigured && event.target.checked; save(); renderJevControls(); });
   $('#wbAnalysisProvider').addEventListener('change', event => { analysisSettings.provider = event.target.value; save(); renderModelSettings(); renderJevControls(); });
+  $('#wbAnalysisEffort').addEventListener('change', event => {
+    analysisSettings.effort = ['low', 'medium', 'high', 'inherit'].includes(event.target.value) ? event.target.value : 'low';
+    save(); $('#wbModelNotice').textContent = t('다음 분석부터 적용됩니다.');
+  });
   for (const provider of ['claude', 'codex']) {
     const name = provider === 'claude' ? 'Claude' : 'Codex';
     $(`#wb${name}Model`).addEventListener('change', event => {
@@ -2086,6 +2094,10 @@
     // An in-flight poll may still carry the previous setting; observe again after it.
     (reviewBusy ? reviewTask.catch(() => {}) : Promise.resolve()).then(() => captureReviews());
   });
+  $('#wbUiFont').addEventListener('change', event => {
+    uiFont = ['pretendard', 'system', 'geist'].includes(event.target.value) ? event.target.value : 'pretendard';
+    applyUiFont(); save();
+  });
   $('#wbSummaryGameBehavior').addEventListener('change', event => {
     summaryGameBehavior = event.target.value === 'always-open' ? 'always-open' : 'auto-collapse';
     save(); summaryChat.render();
@@ -2182,7 +2194,7 @@
     try { contentHistory = (await api.terminalReview?.({ historyContent: true }))?.entries || []; }
     catch { /* Originals stay readable when optional historical additions are unavailable. */ }
     for (const id of saved.handledCollaborations || []) if (typeof id === 'string') handledCollaborations.add(id);
-    analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', jevEnabled: typeof saved.analysisSettings?.jevEnabled === 'boolean' ? saved.analysisSettings.jevEnabled : saved.analysisSettings?.provider === 'jev', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') } };
+    analysisSettings = { provider: ['claude', 'codex'].includes(saved.analysisSettings?.provider) ? saved.analysisSettings.provider : 'auto', jevEnabled: typeof saved.analysisSettings?.jevEnabled === 'boolean' ? saved.analysisSettings.jevEnabled : saved.analysisSettings?.provider === 'jev', models: { claude: String(saved.analysisSettings?.models?.claude || ''), codex: String(saved.analysisSettings?.models?.codex || '') }, effort: ['low', 'medium', 'high', 'inherit'].includes(saved.analysisSettings?.effort) ? saved.analysisSettings.effort : 'low' };
     try { modelCatalog = await api.terminalReviewModels?.() || modelCatalog; } catch { /* Keep CLI defaults and custom model entry available. */ }
     renderModelSettings();
     try { const jev = await api.terminalJevStatus?.(); if (jev) showJevStatus(jev); } catch { /* Explicit setup errors appear when saving a key. */ }
@@ -2199,6 +2211,8 @@
     $('#wbSummaryGameBehavior').disabled = summaryGameVisibility !== 'always';
     summaryGameBehavior = saved.summaryGameBehavior === 'always-open' ? 'always-open' : 'auto-collapse';
     $('#wbSummaryGameBehavior').value = summaryGameBehavior;
+    uiFont = ['pretendard', 'system', 'geist'].includes(saved.uiFont) ? saved.uiFont : 'pretendard';
+    $('#wbUiFont').value = uiFont; applyUiFont();
     const trashIds = new Set();
     trash = (Array.isArray(saved.trash) ? saved.trash : []).filter(item => {
       if (!item || typeof item.id !== 'string' || typeof item.cwd !== 'string' || !item.cwd || trashIds.has(item.id)) return false;

@@ -62,7 +62,7 @@ async function queueChecks() {
   for (const s of sessions) await capture(s);
   for (const [i, s] of sessions.entries()) {
     states.set(s.pid + 1000, { available: true, state: 'completed', requestId: `q${i}`, requestAt: ++clock, request: `설명해줘 ${i}`,
-      evidence: `USER: 설명해줘 ${i}\nASSISTANT: 결과 ${i}는 isEmpty로 검사합니다.`, tools: { source: 'session', items: [] } });
+      evidence: `USER: 설명해줘 ${i}\nASSISTANT: 결과 ${i}는 isEmpty로 검사합니다. ${'빈 값이면 안내 문구를 보여 주고 다음 단계로 넘어가지 않습니다. '.repeat(20)}`, tools: { source: 'session', items: [] } }); // Long: summarized.
     await capture(s);
   }
   const answer = call => {
@@ -85,7 +85,7 @@ async function queueChecks() {
   for (let i = 0; i < 20; i++) {
     const n = 100 + i;
     states.set(sessions[0].pid + 1000, { available: true, state: 'completed', requestId: `next-${i}`, requestAt: ++clock,
-      request: `설명해줘 ${n}`, evidence: `USER: 설명해줘 ${n}\nASSISTANT: 결과 ${n}는 isEmpty로 검사합니다.`, tools: { source: 'session', items: [] } });
+      request: `설명해줘 ${n}`, evidence: `USER: 설명해줘 ${n}\nASSISTANT: 결과 ${n}는 isEmpty로 검사합니다. ${'빈 값이면 안내 문구를 보여 주고 다음 단계로 넘어가지 않습니다. '.repeat(20)}`, tools: { source: 'session', items: [] } });
     await capture(sessions[0]);
   }
   for (let i = 0; i < 20; i++) {

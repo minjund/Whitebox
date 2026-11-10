@@ -154,7 +154,7 @@ module.exports = async function completionChecks() {
       await poll(); assert.equal(reviews, 0, 'reconnect does not analyze unfinished history');
       reconnected = new TerminalReview(reconnectOptions);
       await poll(); assert.equal(reviews, 0, 'restoring an observed in-flight turn does not analyze it early');
-      observed = { ...observed, state: 'completed', evidence: 'USER: 설명해줘\\nASSISTANT: 결과를 설명합니다. 새 결과의 구체적인 동작과 의미를 설명합니다.' };
+      observed = { ...observed, state: 'completed', evidence: 'USER: 설명해줘\\nASSISTANT: 결과를 설명합니다. 새 결과의 구체적인 동작과 의미를 설명합니다. ' + '각 단계가 어떤 입력을 받아 무엇을 돌려주는지 차례로 설명합니다. '.repeat(16) }; // Long: summarized.
       await poll(); await new Promise(resolve => setImmediate(resolve));
       assert.equal(reviews, 1, provider + ' completion after reconnect starts analysis');
       await poll(); assert.equal(reviews, 1, 'reconnected completion is analyzed exactly once');

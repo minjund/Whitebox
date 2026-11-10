@@ -6,15 +6,15 @@ const { artifactText, continuationCommands, spacingExamples } = require('./termi
 
 const contentInstructions = `Return content:{"version":2,"answer":{"text":"actual answer","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"},"details":[{"text":"essential mechanism or reason","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"}],"limitations":[{"text":"material uncertainty","quote":"exact evidence substring or empty"}],"nextAction":null,"deliverables":[{"label":"output name","kind":"command|text|path|url","value":"exact output","basis":"observed|reported","quote":"exact evidence containing value"}],"background":[],"handoff":{"kind":"verify|decide|continue|finish|reply","temporal":{"text":"time or later change","basis":"reported","quote":"exact evidence"},"priority":{"text":"first need and why","basis":"inference","quote":"exact evidence"},"prompt":{"text":"suggested next request","basis":"inference","quote":"exact evidence"}}}.
 PYRAMID: Judgment → decisive reasons → necessary action. Failed required tests mean incomplete work. Explain the actual result or system behavior, never merely that the assistant finished explaining.
-STANDALONE: No conversation/project knowledge assumed. Name target and purpose; explain jargon, commands and referents from source-backed context. Name missing facts.
+STANDALONE: No conversation/project knowledge assumed. Name target and purpose; explain jargon, commands, labels like F1 and referents from source-backed context. Name missing facts.
 LIMIT FIRST: In answer itself, pair the result with the loss, exception or verification boundary that changes the user's judgment. Possible lost edits outrank 'autosave added / tests passed'. An explained workflow with an untried central stage must say upfront that this stage is unverified in use. Narrow checks do not prove complete real-world operation. Details/limitations add specifics, never a buried reversal of the opening.
 WORKFLOW: Input → processing → human answer/approval → resumption → finish and output meaning. Preserve automatic/manual boundaries, conditions and human handoff; omit peripheral history.
 CONCISE: Use short plain sentences. No repetition, filler or generic caveats. Simple changes/relays need no details. Aim for 3-5 short sentences, 180-350 Korean chars; hard total 560 across answer+details+limitations+nextAction. Answer <=220; 0-2 details <=140 each; 0-2 limitations <=140 each. Cut peripheral detail, never decisive evidence or uncertainty.
-HANDOFF: Always supply handoff for fresh analysis. temporal is null or a claim <=140 for recorded-time/later changes/current unknowns. Only supplied same-target later records supersede earlier advice; dates alone prove nothing. Never infer today's installed state or borrow another project's result. priority is ALWAYS a claim <=140: one need plus why, or why finish needs no request. Tie it to the user's goal; if a prominent failure is not first, explain why without inventing its cause. prompt is a natural next request <=240: target, action, observable result; basis=inference, exact supporting quote, never execution authority. kind=verify/decide/continue/reply requires prompt; finish requires prompt=null. Each non-null temporal/priority/prompt is {text,basis,quote}. Narrow choices without inventing preferences. Diagnose one decision-changing unknown; never rebuild unverified work or repeat completed checks. Temporal+priority+prompt <=360; nextAction=null. No invented follow-up for completed explanations/greetings.
+HANDOFF: Always supply handoff for fresh analysis. temporal is null or a claim <=140 for recorded-time/later changes/current unknowns. Only supplied same-target later records supersede earlier advice; dates alone prove nothing. Never infer today's installed state or borrow another project's result. priority is ALWAYS a claim <=140: one need plus why, or why finish needs no request. Tie it to the user's goal; if a prominent failure is not first, explain why without inventing its cause. prompt is a natural next request <=240: target, action, observable result; basis=inference, exact supporting quote, never execution authority. kind=verify/decide/continue/reply requires prompt; finish requires prompt=null. Each non-null temporal/priority/prompt is {text,basis,quote}. decide: name the question and options in words; invent no preference. Diagnose one decision-changing unknown; never rebuild unverified work or repeat completed checks. Temporal+priority+prompt <=360; nextAction=null. No invented follow-up for completed explanations/greetings.
 DECISION: Preserve actual options, optional/required and proposed/current behavior. Name work, not counts. Give source-backed usage examples.
 OUTPUTS: Status/path/test totals are not content. Summarize actual added rules with ONE short applied example; do not repeat long policy paragraphs as deliverables. Distinguish user wishes and pre-edit reads from acknowledged changes. Guides need prerequisites → sequence → expected outcome → resume point; retain the actual next command when explaining how to continue. Use recorded bodies/diffs/authored fragments; request missing indexed records. Never invent missing body. A failure elsewhere does not prove these edits failed. 0-8 exact outputs <=8000 chars, quotes <=10000. Requested commands remain visible, exempt from prose limits. background: 0-8 claims <=1600 chars, usually empty; no core content/limits hidden.
 PROVENANCE: Each non-unknown claim needs an exact quote supporting ALL its facts; expand the excerpt or split the claim. observed requires a quote in OBSERVED TOOL EXCERPTS; it means output was recorded, not all assertions are verified. Assistant explanations/code/claimed tests are reported. Mixed observed+reported facts use reported. Unsupported reasoning, including suggested diagnostics, is inference with explicit conditions; unknown has an empty quote. Keep failures and uncertainty visible. Page metadata proves no body; process exit proves no window closure. Shortened excerpts prove no full-source absence. Separate errors from claims. Omit unrelated warnings.
-SELF-CHECK: Can a new reader understand the answer, its limit and next decision without the transcript? Resolve contradictions from original records. Optional subject:{text,basis,quote}, <=100 chars, names the task goal when the title is raw markup or vague. Explain internal IDs at first use or omit them. For commands superseded by supplied later evidence set usage:"historical" and usageNote:{text,basis,quote}, <=140, citing why. Never relabel old commands as current or silently rewrite their bytes. Other commands are recorded-time instructions, not proof of present applicability.`;
+SELF-CHECK: Can a new reader understand the answer, its limit and next decision without the transcript? Resolve contradictions from original records. Optional subject:{text,basis,quote}, <=100 chars, names the task goal when the title is raw markup or vague. For commands superseded by supplied later evidence set usage:"historical" and usageNote:{text,basis,quote}, <=140, citing why. Never relabel old commands as current or silently rewrite their bytes. Other commands are recorded-time instructions, not proof of present applicability.`;
 
 
 function evidenceFor(task) {
@@ -129,7 +129,29 @@ function assessContent(value, { source = '', observed = '', authored = '', reque
   const examples = /예시|빈\s*(?:행|줄)|example|blank\s*line/iu.test(request) ? spacingExamples(authored) : [];
   if (examples.length && !examples.some(example => deliverables.some(item => item.value.includes(example)))) issues.push(`include one actual applied spacing example as a visible literal output: ${examples[0]}`);
   if (issues.length) return { content: null, issues: [...new Set(issues)] };
-  return { content: { version: value.version, answer, details, limitations, deliverables, ...(compact ? { background, nextAction, ...(subject ? { subject } : {}), ...(handoff ? { handoff } : {}) } : {}) }, issues: [] };
+  const visible = [answer, handoff?.temporal, handoff?.priority, handoff?.prompt, ...limitations, ...details, nextAction].filter(Boolean).map(item => item.text);
+  const bare = compact ? unexplainedLabels(visible, source) : [];
+  return { content: { version: value.version, answer, details, limitations, deliverables, ...(compact ? { background, nextAction, ...(subject ? { subject } : {}), ...(handoff ? { handoff } : {}) } : {}) }, issues: [],
+    advisories: bare.length ? [`explain each conversation label at its first visible use, e.g. "F1(코드 포맷 도구 선택)", or replace it with words: ${bare.join(', ')}`] : [] };
+}
+
+// Labels a conversation assigns (F1, E3~E11) are opaque to a reader who never
+// saw the transcript. Well-known product/technical names are not such labels.
+const KNOWN_LABELS = new Set(['S3', 'EC2', 'M1', 'M2', 'M3', 'M4', 'M5', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'L1', 'L2', 'L3', 'G1', 'A4', 'P50', 'P90', 'P95', 'P99', 'IE11', 'F5', 'F11', 'F12']);
+const LABEL = /(?<![A-Za-z0-9_./-])([A-Z]{1,2})(\d{1,3})(?:\s*[~–-]\s*\1?\d{1,3})?(?![A-Za-z0-9_])/gu;
+function unexplainedLabels(texts, source) {
+  const seen = new Set(), bare = [];
+  for (const text of texts) {
+    for (const match of text.matchAll(LABEL)) {
+      const label = `${match[1]}${match[2]}`;
+      if (seen.has(label) || KNOWN_LABELS.has(label) || !source.includes(label)) continue;
+      seen.add(label);
+      const before = text.slice(0, match.index), after = text.slice(match.index + match[0].length);
+      const glossed = /^\s*(?:[(（]\s*[^)）\s]|[:：]\s*\S)/u.test(after) || /[^\s(（]\s*[(（]\s*$/u.test(before);
+      if (!glossed) bare.push(match[0].replace(/\s+/gu, ''));
+    }
+  }
+  return bare;
 }
 
 // Models often normalize indentation/blank lines when quoting terminal output.
@@ -181,4 +203,40 @@ function historyContent(file) {
   } catch { return []; } // No sidecar is normal; corrupt additions cannot replace originals.
 }
 
-module.exports = { contentInstructions, assessContent, evidenceFor, contentIdentity, historyContent, sourceExcerpt };
+// A reply that ends by asking the user to pick among listed options must show
+// the question and every option verbatim. These come from the reply itself,
+// never from the model, so a short summary cannot drop or reword a choice.
+const OPTION = /^\s*(?:[-*•]\s*)?(?:\*\*)?(?:\(([A-Za-z0-9])\)|([A-Za-z0-9])[.)]|([①-⑩]))(?:\*\*)?\s+(\S[\s\S]*)$/u;
+const plain = value => value.replace(/\*\*|__|`/gu, '').replace(/^\s*(?:#{1,6}\s+|[-*•>]\s+)/u, '').replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, '').trim();
+function pendingChoices(answer) {
+  const lines = String(answer || '').split('\n');
+  const blocks = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (!/[?？]\s*(?:\*\*)?\s*$/u.test(lines[index]) || OPTION.test(lines[index])) continue;
+    const options = [];
+    let row = index + 1;
+    for (; row < lines.length; row++) {
+      if (!lines[row].trim() && !options.length) continue;
+      const match = lines[row].match(OPTION);
+      if (!match) break;
+      options.push({ label: match[1] || match[2] || match[3], text: plain(match[4]).slice(0, 300) });
+    }
+    if (options.length < 2 || options.length > 8 || new Set(options.map(item => item.label.toLowerCase())).size !== options.length) continue;
+    // The assistant's own pick, when it names one option right after the list.
+    let recommendation = null;
+    for (let next = row; next < Math.min(lines.length, row + 4) && !recommendation; next++) {
+      const line = lines[next];
+      if (!/➡|→|권장|추천|제안|봅니다|recommend|suggest|I'd (?:pick|choose)|建议|推荐/iu.test(line)) continue;
+      // The first option named wins: "(b)라고 봅니다 … (a)는 권하지 않습니다".
+      const named = options.map(item => ({ item, at: line.search(new RegExp(`\\(${item.label}\\)|(?<![A-Za-z0-9])${item.label}\\s*(?:안|번)|\\boption\\s+${item.label}\\b`, 'iu')) }))
+        .filter(entry => entry.at >= 0).sort((a, b) => a.at - b.at);
+      const picked = named[0]?.item;
+      if (picked) recommendation = { label: picked.label, text: plain(line).slice(0, 400) };
+    }
+    blocks.push({ question: plain(lines[index]).slice(0, 300), options, recommendation });
+    index = row - 1;
+  }
+  return blocks.slice(-3);
+}
+
+module.exports = { contentInstructions, assessContent, evidenceFor, contentIdentity, historyContent, sourceExcerpt, pendingChoices };

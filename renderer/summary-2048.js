@@ -114,14 +114,17 @@
         const previous = observed.get(value), policy = behavior();
         const freshReply = replyKey && previous?.replyKey !== replyKey;
         const reopen = previous?.policy !== policy && policy === 'always-open';
-        const collapse = policy === 'auto-collapse' && (freshReply || previous?.policy !== policy && replyKey);
-        observed.set(value, { policy, replyKey: replyKey || previous?.replyKey });
+        // "While the AI works or summarizes" folds the board when that wait
+        // ends; the game itself and its open button always stay available.
+        const waitEnded = visibility() === 'summarizing' && previous?.waiting === true && !waiting;
+        const collapse = waitEnded || policy === 'auto-collapse' && (freshReply || previous?.policy !== policy && replyKey);
+        observed.set(value, { policy, replyKey: replyKey || previous?.replyKey, waiting: Boolean(waiting) });
         if ((collapse && game.open) || (reopen && !game.open)) {
           restoreFocus = Boolean(collapse && root.contains(document.activeElement));
           game.open = !collapse; save();
         }
       }
-      root.hidden = !value || visibility() === 'summarizing' && !waiting;
+      root.hidden = !value;
       if (animationOwner && (animationOwner !== value || animationGame !== game || root.hidden || !game?.open)) clearAnimation();
       $('[data-game-open]').hidden = Boolean(game?.open);
       $('[data-game-open]').textContent = t('잠깐 놀기 · 2048');

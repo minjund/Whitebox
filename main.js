@@ -1680,7 +1680,9 @@ async function updateWorkloadImpact(appPath = process.execPath) {
   return {
     externalHost,
     terminalSessions: externalHost ? [] : sessions.filter(requiresUpdateShutdown),
-    agentRuns: backgroundAgentRuns(),
+    // Summary analyses are Whitebox's own disposable calls: they are requeued
+    // and re-run after the restart, so they never hold an update back.
+    agentRuns: backgroundAgentRuns().filter(run => run.kind !== 'terminal-review'),
   };
 }
 
@@ -1759,6 +1761,13 @@ function recordUpdateInstallEvent(attemptId, stage, detail = {}) {
   } catch (error) { reportRecoverableError('update-install-log', error); }
 }
 
+function updateBlockedByRunsMessage(runs) {
+  const questionnaires = runs.filter(run => run.kind === 'questionnaire').length;
+  const direct = runs.length - questionnaires;
+  const parts = [questionnaires ? `질문지 생성 ${questionnaires}개` : '', direct ? `앱에서 직접 실행한 AI 작업 ${direct}개` : ''].filter(Boolean).join('와 ');
+  return `${parts}가 진행 중이라 설치를 보류했습니다. 앱을 재시작하면 이 작업이 끊기므로 강제 종료하지 않았습니다. 끝난 뒤 다시 업데이트해 주세요. 터미널 작업과 요약 분석은 업데이트를 막지 않습니다.`;
+}
+
 async function performDownloadedUpdateInstall(attemptId) {
   if (!updateManager) throw new Error('업데이트 기능이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.');
   recordUpdateInstallEvent(attemptId, 'download');
@@ -1780,11 +1789,12 @@ async function performDownloadedUpdateInstall(attemptId) {
   };
   let terminalShutdownAttempted = false;
   let agentRunnerPrepared = false;
+  let reviewStoppedForUpdate = false;
   let prepareWorkload = null;
   if (canInstallSilently(launchOptions)) {
     const impact = await updateWorkloadImpact(installPlan.appPath);
     if (impact.agentRuns.length) {
-      throw new Error('직접 실행 작업을 유지하기 위해 설치를 보류했습니다. 해당 작업이 완료된 뒤 다시 업데이트해 주세요. 작업을 강제 종료하지 않았습니다.');
+      throw new Error(updateBlockedByRunsMessage(impact.agentRuns));
     }
     if (!impact.externalHost && impact.terminalSessions.length) {
       throw new Error('현재 명령창은 구버전 앱의 설치 폴더에서 실행 중입니다. 작업을 유지하기 위해 설치를 보류했습니다. 작업을 마친 뒤 업데이트하면 이후 명령창은 앱 재시작 중에도 계속 실행됩니다.');
@@ -1794,6 +1804,10 @@ async function performDownloadedUpdateInstall(attemptId) {
     }
     prepareWorkload = async () => {
       recordUpdateInstallEvent(attemptId, 'workload-shutdown');
+      if (terminalReview) {
+        reviewStoppedForUpdate = true;
+        recordUpdateInstallEvent(attemptId, 'review-requeued', terminalReview.stopForUpdate());
+      }
       if (runner) {
         runner.prepareForUpdate(impact.agentRuns);
         agentRunnerPrepared = true;
@@ -1838,6 +1852,7 @@ async function performDownloadedUpdateInstall(attemptId) {
       guardedError.cause = error;
       failure = guardedError;
     }
+    if (reviewStoppedForUpdate) terminalReview?.resumeAfterUpdate();
     if (agentRunnerPrepared && runner && !runner.resumeAfterUpdateFailure()) {
       if (!cancellationUnconfirmed) {
         const stoppedError = new Error(`${error.message} 직접 실행 작업 기능은 안전을 위해 중지된 상태입니다. Whitebox를 다시 시작해 주세요.`);

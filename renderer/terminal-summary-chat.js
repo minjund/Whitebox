@@ -391,6 +391,35 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       }
     } finally { flushing = false; }
   }
+  // The live step of a working AI, from its session log (no model call). Shell
+  // commands arrive as a kind or program name only, never their arguments.
+  const PROGRESS = {
+    test: ['테스트 실행 중', '테스트 결과 확인 중'], build: ['빌드 중', '빌드 결과 확인 중'], install: ['패키지 설치 중', '설치 결과 확인 중'],
+    git: ['git 실행 중', 'git 결과 확인 중'], read: ['파일 읽는 중', '읽은 내용 정리 중'], search: ['코드 검색 중', '검색 결과 확인 중'],
+    edit: ['파일 수정 중', '수정 내용 확인 중'], web: ['웹에서 확인 중', '웹 결과 정리 중'], agent: ['보조 에이전트 작업 중', '보조 에이전트 결과 확인 중'],
+    plan: ['작업 계획 정리 중', '작업 계획 정리 중'], ask: ['질문 준비 중', '질문 준비 중'], skill: ['스킬 실행 중', '스킬 결과 확인 중'],
+    mcp: ['연결 도구 사용 중', '도구 결과 확인 중'], command: ['명령 실행 중', '명령 결과 확인 중'], tool: ['도구 사용 중', '도구 결과 확인 중'],
+    thinking: ['생각 중', '생각 중'],
+  };
+  // A finished reply whose summary is still being made: Summary mode shows
+  // only the status, never the raw reply in place of the summary.
+  // Why a summary failed, in the words the user acts on.
+  const FAILURE_REASON = {
+    'rate-limit': '사용 한도에 걸려 요약하지 못했어요. 한도가 풀린 뒤 다시 요약해 주세요.',
+    auth: '분석에 쓰는 AI에 로그인되어 있지 않거나 권한이 없어요. 설정 → 이해 · 검토에서 분석 서비스를 확인해 주세요.',
+    quality: '요약이 내용 검사를 통과하지 못했어요. 아래는 AI 원문입니다.',
+    transient: '요약 중 오류가 나서 한 번 더 시도했지만 실패했어요. 아래는 AI 원문입니다.',
+  };
+  const summaryPending = (task, review) => Boolean(task && !task.content && task.deferred && !task.passThrough && !task.summaryFailure && task.lifecycle === 'completed'
+    && ['reviewing', 'collecting'].includes(review?.state)
+    && [review.analysisTaskId, review.currentTaskId, review.preview?.taskId].includes(task.taskId));
+  function progressText(progress) {
+    if (!progress || typeof progress.kind !== 'string') return '';
+    if (progress.kind === 'note') return String(progress.detail || '').slice(0, 90);
+    const labels = PROGRESS[progress.kind] || PROGRESS.tool;
+    const detail = typeof progress.detail === 'string' && progress.detail && progress.kind !== 'thinking' ? ` · ${progress.detail.slice(0, 60)}` : '';
+    return `${t(labels[progress.phase === 'after' ? 1 : 0])}${detail}…`;
+  }
   function renderProgress(value, member, review, prompt) {
     const failure = window.WhiteboxReviewDecision.reviewFailure(review);
     const users = value.messages.filter(message => message.role === 'user' && ['sent', 'sending', 'interrupted', 'stopped'].includes(message.state));
@@ -425,21 +454,28 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const summaryDone = Boolean(task && task.analysisLifecycle !== 'in-progress' && !deferred && !analyzing && !collecting && !awaiting && !working && !interrupted
       && (!failure || failure.kind === 'reanalysis' && failure.retainedLifecycle === 'completed')
       && !needsResponse && (!task.lifecycle || finished(task)));
-    const loading = !needsResponse && !interrupted && (analyzing || working || awaiting);
-    const label = analyzing ? '요약 중…' : working ? 'AI가 작업 중입니다.' : 'AI 답변을 기다리고 있어요';
+    const summaryQueued = !needsResponse && !interrupted && !failure && !analyzing && summaryPending(task, review);
+    const loading = !needsResponse && !interrupted && (analyzing || working || awaiting || summaryQueued);
+    const liveStep = working && !analyzing ? progressText(member.activity?.progress) : '';
+    const label = analyzing ? t('요약 중…') : summaryQueued ? t('답변 완료 · 요약 준비 중…') : liveStep || t(working ? 'AI가 작업 중입니다.' : 'AI 답변을 기다리고 있어요');
     $('#wbSummaryWorking').hidden = !loading;
     if (loading) {
-      if (t(label) !== thinkingLabel) {
-        if (ui?.thinking) ui.thinking($('#wbSummaryThinking'), t(label));
-        else $('#wbSummaryThinking').textContent = t(label);
-        thinkingLabel = t(label);
+      if (label !== thinkingLabel) {
+        if (ui?.thinking) ui.thinking($('#wbSummaryThinking'), label);
+        else $('#wbSummaryThinking').textContent = label;
+        thinkingLabel = label;
       }
       $('#wbSummaryWorkingDescription').textContent = t(analyzing && replyDone
         ? 'AI 답변은 도착했어요. 요청과 결과를 비교해 요약으로 정리하고 있어요.'
         : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
     } else if (thinkingLabel) { ui?.clear?.($('#wbSummaryThinking')); thinkingLabel = ''; }
     let title = '다음 요청을 입력하세요.', description = '같은 AI 세션에서 대화를 이어갑니다.';
+    // A pass-through reply needs no summary; a failed summary is final.
+    const passThroughDone = Boolean(replyDone && !working && task?.passThrough && !task.content);
+    const summaryFailed = Boolean(!failure && !working && task?.summaryFailure && !task.content);
     if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; }
+    else if (summaryFailed) { title = '요약하지 못했어요'; description = '아래 카드에서 AI 원문과 이유를 확인하고 다시 요약할 수 있어요.'; }
+    else if (passThroughDone) { title = '답변이 도착했어요'; description = '짧은 답이라 요약 없이 그대로 보여 드려요.'; }
     else if (failure) { title = failure.title; description = failure.description; }
     else if (stopped) { title = '요청을 멈췄어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
     else if (interrupted) { title = '요청이 중단됐어요'; description = '터미널에서 수행 기록을 확인한 뒤 다음 요청을 이어가세요.'; }
@@ -452,22 +488,22 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     else if (awaiting) { title = 'AI 답변을 기다리고 있어요'; description = '같은 AI 세션에서 대화를 이어갑니다.'; }
     $('#wbSummaryStateTitle').textContent = t(title);
     $('#wbSummaryStateDescription').textContent = t(description);
-    $('#wbSummaryStateTitle').dataset.state = failure || interrupted ? 'warning' : needsResponse ? 'waiting' : summaryDone ? 'done' : 'working';
+    $('#wbSummaryStateTitle').dataset.state = failure || interrupted || summaryFailed ? 'warning' : needsResponse ? 'waiting' : summaryDone || passThroughDone ? 'done' : 'working';
     const replyState = needsResponse ? '응답 필요' : stopped ? '멈춤' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
     // Same live reviewer wording as terminal mode, so analysis never looks stalled.
     const live = review?.state === 'reviewing' ? review.phase === 'evidence' ? '근거 준비 중…' : '분석중…'
       : review?.state === 'awaiting-answer' && (working || awaiting) ? '작업 관찰 중' : '';
-    const reviewState = failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
+    const reviewState = summaryFailed ? '요약 실패' : passThroughDone ? '요약 필요 없음' : failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
       : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing && replyDone ? '정리 중' : live
         || (deferred || collecting || replyDone ? '분석 대기' : '대기 중');
-    $('#wbSummaryReplyState').textContent = t(replyState);
+    $('#wbSummaryReplyState').textContent = replyState === '작업 중' && liveStep ? liveStep : t(replyState);
     $('#wbSummaryReplyState').dataset.state = interrupted ? 'warning' : needsResponse ? 'waiting' : replyDone ? 'done' : 'working';
     $('#wbSummaryReviewState').textContent = t(reviewState);
-    $('#wbSummaryReviewState').dataset.state = summaryDone ? 'done' : 'working';
+    $('#wbSummaryReviewState').dataset.state = summaryFailed ? 'warning' : summaryDone || passThroughDone ? 'done' : 'working';
     const queueCount = value.messages.filter(message => message.state === 'queued').length;
     $('#wbSummaryQueueRow').hidden = queueCount === 0;
     $('#wbSummaryQueueCount').textContent = String(queueCount);
-    const done = [sent?.state === 'sent', replyDone, summaryDone];
+    const done = [sent?.state === 'sent', replyDone, summaryDone || passThroughDone];
     root.querySelectorAll('[data-summary-step]').forEach((step, index) => {
       step.dataset.state = done[index] ? 'done' : index === done.findIndex(value => !value) ? 'current' : 'pending';
       step.querySelector('b').textContent = done[index] ? '✓' : String(index + 1);
@@ -484,8 +520,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     $('#wbSummaryNext').hidden = !summaryDone;
     $('#wbSummaryNextText').textContent = task?.content?.nextAction?.text || task?.content?.handoff?.priority?.text
       || task?.decision?.action?.text || task?.nextStep || t('변경 내용을 확인한 뒤, 이 대화에서 다음 작업을 이어가세요.');
-    // Fold the game only once the summary itself is done, not at reply arrival.
-    game.render({ waiting: analyzing && !needsResponse, completed: summaryDone, replyKey: summaryDone ? sent?.id || task?.taskId || preview?.taskId : null });
+    // The wait covers the AI's own work and the summary that follows it,
+    // including the gap between the reply and the analysis start. Fold the
+    // game only once the summary itself is done, not at reply arrival.
+    const pendingSummary = replyDone && !summaryDone && !deferred && !failure && !backoff;
+    const gameWait = !needsResponse && !interrupted && (loading || collecting && !backoff || pendingSummary);
+    game.render({ waiting: gameWait, completed: summaryDone, replyKey: summaryDone ? sent?.id || task?.taskId || preview?.taskId : null });
   }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
@@ -506,9 +546,6 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     const review = context.review(id);
     const retainedFailure = window.WhiteboxReviewDecision.reviewFailure(review);
-    if (review?.state === 'error' && !retainedFailure) {
-      fallBack(id, t('요약하지 못했습니다. 터미널에서 원문을 확인해 주세요.')); return;
-    }
     mergeAnswers(value);
     root.querySelector('#wbSummaryTarget').textContent = context.title?.(id) || context.label(id);
     root.querySelector('#wbSummaryTarget').title = context.label(id);
@@ -524,7 +561,15 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       if (message.role === 'answer') {
         const task = message.task;
         const retained = window.WhiteboxReviewDecision.matchesRetainedAnalysis(task, retainedFailure);
-        return `<article class="wb-summary-answer"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t('Whitebox 요약'))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${window.WhiteboxReviewDecision.render(task, { t, esc, taskKey: message.key }) || `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
+        if (!retained && summaryPending(task, review)) return '';
+        const decision = window.WhiteboxReviewDecision, analyzed = decision.render(task, { t, esc, taskKey: message.key });
+        const failed = !analyzed && task.summaryFailure ? task.summaryFailure : null, passThrough = !analyzed && !failed && task.passThrough;
+        const kind = failed ? 'failed' : passThrough ? 'pass-through' : 'summary';
+        const heading = { failed: '요약하지 못했어요 · AI 원문', 'pass-through': 'AI 답변 · 짧아서 그대로 보여요', summary: 'Whitebox 요약' }[kind];
+        const body = analyzed || (failed || passThrough
+          ? `${failed ? `<div class="wb-summary-failure" data-summary-failure><p>${esc(t(FAILURE_REASON[failed.kind] || FAILURE_REASON.transient))}</p>${control('다시 요약', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<p class="wb-summary-reply">${decision.plainReply(task.actual || '', esc)}</p>${passThrough ? decision.renderChoices(task.choices, { t, esc }) : ''}`
+          : `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`);
+        return `<article class="wb-summary-answer" data-result-kind="${kind}"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t(heading))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${body}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
       }
       const time = message.sentAt || message.at;
       const timestamp = Number.isFinite(time) ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';

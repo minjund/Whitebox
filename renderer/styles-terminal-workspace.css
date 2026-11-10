@@ -510,3 +510,13 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 #terminalWorkspace .wb-content-time p{margin:3px 0}
 #terminalWorkspace .wb-content-handoff{border:1px solid var(--wb-line);border-radius:8px;padding:10px;margin:12px 0}
 #terminalWorkspace .wb-content-handoff blockquote{margin:6px 0 0;padding:8px;border-left:2px solid var(--wb-accent);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+
+#terminalWorkspace .wb-content-choices ol{margin:6px 0 0;padding-left:0;list-style:none;display:grid;gap:4px}
+#terminalWorkspace .wb-content-choices li{padding:6px 8px;border:1px solid var(--wb-line);border-radius:6px;overflow-wrap:anywhere}
+#terminalWorkspace .wb-content-choices li b{margin-right:6px}
+#terminalWorkspace .wb-content-choices li[data-recommended="true"]{border-color:var(--wb-accent)}
+#terminalWorkspace .wb-content-choices li small{margin-left:6px;color:var(--wb-accent)}
+#terminalWorkspace .wb-content-table{overflow-x:auto;max-width:100%}
+#terminalWorkspace .wb-content-table table{border-collapse:collapse;font-size:13px;line-height:1.5;min-width:100%}
+#terminalWorkspace .wb-content-table th,#terminalWorkspace .wb-content-table td{border:1px solid var(--wb-line);padding:6px 8px;text-align:left;vertical-align:top}
+#terminalWorkspace .wb-content-table th{font-weight:600}

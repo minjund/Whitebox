@@ -669,7 +669,8 @@ class AgentRunner extends EventEmitter {
   }
 
   listActive() {
-    return [...this.active.values()].map(item => ({ runId: item.id, provider: item.provider, pid: item.child.pid, externalId: item.state.externalId }));
+    return [...this.active.values()].map(item => ({ runId: item.id, provider: item.provider, pid: item.child.pid, externalId: item.state.externalId,
+      kind: item.terminalReview ? 'terminal-review' : item.internalQuestionnaire ? 'questionnaire' : 'agent' }));
   }
 
   listVisibleActive() {
@@ -687,7 +688,7 @@ class AgentRunner extends EventEmitter {
     return this.generateQuestionnaire({ ...options, terminalReview: true }).then(result => ({ ...result, reviewFormat: 'answer-first-v2', handoffRequired: true }));
   }
 
-  generateQuestionnaire({ provider, prompt, model = '', terminalReview = false }) {
+  generateQuestionnaire({ provider, prompt, model = '', terminalReview = false, effort = '' }) {
     if ([...this.active.values()].some(run => run.internalQuestionnaire)) {
       return Promise.reject(new Error(terminalReview ? '이전 검토 요청이 아직 종료되지 않았습니다.' : '이전 질문지 요청이 아직 종료되지 않았습니다.'));
     }
@@ -722,7 +723,7 @@ class AgentRunner extends EventEmitter {
       if (terminalReview) this.on('review-rate-limited', onRateLimited);
       let result;
       try {
-        result = this.start({ provider, prompt, model, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: terminalReview ? 'terminal-review' : true });
+        result = this.start({ provider, prompt, model, effort, cwd: this.questionnaireCwd, [INTERNAL_QUESTIONNAIRE]: terminalReview ? 'terminal-review' : true });
       } catch (error) {
         cleanup();
         reject(error);
@@ -749,7 +750,9 @@ class AgentRunner extends EventEmitter {
       .map(run => String(run && (run.runId || run.id) || ''))
       .filter(Boolean));
     const active = this.listActive();
-    if (active.some(run => !confirmedIds.has(run.runId))) {
+    // Summary analyses are disposable: the review queue re-runs them after the
+    // restart, so one starting now does not invalidate the user's confirmation.
+    if (active.some(run => run.kind !== 'terminal-review' && !confirmedIds.has(run.runId))) {
       throw new Error('업데이트 준비 중 새 직접 실행 작업이 시작되었습니다. 상태를 확인한 뒤 다시 시도해 주세요.');
     }
     this.disposing = true;
@@ -801,7 +804,7 @@ class AgentRunner extends EventEmitter {
     let child;
     try {
       const spec = internalQuestionnaire
-        ? questionnaireCommand(provider, cwd, raw.model || '', this.platform, raw[INTERNAL_QUESTIONNAIRE] === 'terminal-review')
+        ? questionnaireCommand(provider, cwd, raw.model || '', this.platform, raw[INTERNAL_QUESTIONNAIRE] === 'terminal-review', raw.effort || '')
         : commandSpec(provider, opts, executable);
       child = this.spawn(spec.command, spec.args, {
         cwd,

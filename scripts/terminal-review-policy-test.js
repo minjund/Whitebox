@@ -30,18 +30,20 @@ module.exports = async function policyChecks() {
   const relay = { request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', text: 'ASSISTANT: 완료했습니다.' };
   const jobs = [{ sourceId: 'one', provider: 'codex', request: 'ㅎㅇ', state: 'completed', sentAt: 20, finishedAt: 25, answer: 'ASSISTANT: 반가워요!' }];
   assert.equal(classifyEvidence(relay, jobs).mode, 'record');
-  assert.equal(classifyEvidence(relay, [{ ...jobs[0], sourceId: 'other' }]).mode, 'defer');
-  // A completed reply that asks the user to choose or clarify is a result to
-  // summarize; only a bare promise of future work without a question defers.
+  assert.equal(classifyEvidence(relay, [{ ...jobs[0], sourceId: 'other' }]).mode, 'analyze', 'a bare completion claim is summarized from the conversation');
+  // A short reply without work is shown as written (pass-through); a long one
+  // is summarized. A clarifying question keeps its options verbatim.
   const asking = { request: '한국말로 해서 해줘봐', terminalId: 'one', submittedAt: 10, observedAt: 30, lifecycle: 'completed', tools: { items: [] }, updates: { items: [] },
     text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 아직 무엇을 설계할지 요청이 없습니다.\n\n- 범위: 새 테이블 설계, 기존 엔티티 검토, 마이그레이션 계획 중 어느 것인가요?\n- 대상 DB: H2 기준인지 PostgreSQL 기준인지 알려주세요.\n\n패키지를 지목해 주시면 스키마 안을 제안하겠습니다.' };
-  assert.equal(classifyEvidence(asking, []).mode, 'analyze', 'a clarifying question is this turn\'s result');
+  assert.deepEqual([classifyEvidence(asking, []).mode, classifyEvidence(asking, []).passThrough], ['defer', true], 'a short clarifying question is shown as written');
   assert.match(classifyEvidence({ ...asking, lifecycle: 'in-progress', text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (current report):\nVerified. Now updating local state.' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'an in-progress line is not shown as a short reply');
   const plan = classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.' }, []);
-  assert.equal(plan.mode, 'defer', 'a bare plan without a question still waits for evidence');
+  assert.deepEqual([plan.mode, plan.passThrough], ['defer', true], 'a short reply without work is shown as written');
   assert.equal(plan.actual, '네, 한국어로 진행하겠습니다. 먼저 모듈 문서를 살펴보겠습니다.', 'a short deferred reply is shown verbatim instead of a placeholder');
-  assert.match(classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n' + '먼저 문서를 살펴보겠습니다. '.repeat(60) }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a long deferred reply keeps the placeholder');
-  assert.match(classifyEvidence({ ...asking, text: 'USER:\n수정해줘\n\nASSISTANT (completed answer):\n완료했습니다.' , request: '수정해줘' }, []).actual, /구체적인 내용이 아직 기록에 없어요/u, 'a generic completion claim is not a result to show');
+  assert.equal(classifyEvidence({ ...asking, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n' + '먼저 문서를 살펴보겠습니다. '.repeat(60) }, []).mode, 'analyze', 'a long finished reply is summarized');
+  assert.equal(classifyEvidence({ ...asking, text: 'USER:\n수정해줘\n\nASSISTANT (completed answer):\n완료했습니다.' , request: '수정해줘' }, []).mode, 'analyze', '"완료했습니다" is summarized: the completed result is what the user needs');
+  assert.equal(classifyEvidence({ ...asking, text: 'USER:\n수정해줘\n\nASSISTANT (completed answer):\n완료했습니다.', request: '수정해줘', tools: { items: [{ name: 'Edit', status: 'returned' }] } }, []).mode, 'analyze', 'a work record is always summarized');
+  assert.equal(classifyEvidence({ ...asking, text: 'USER:\n바꿔줘\n\nASSISTANT (completed answer):\n버튼 문구를 변경했습니다.', request: '바꿔줘' }, []).mode, 'analyze', 'a short work claim is summarized, not shown as written');
   {
     // A waiting card published during the turn shows the real reply once it
     // arrives, instead of keeping the placeholder until analysis finishes.
@@ -66,9 +68,9 @@ module.exports = async function policyChecks() {
       assert.equal(entry.result.tasks.find(item => item.taskId === 'r').actual, 'Codex에 보냈고 답을 받았어요', 'a recorded result card is never overwritten');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
-  assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).mode, 'analyze', 'a recorded awaiting-response turn is analyzed');
-  assert.equal(classifyEvidence(relay, [{ ...jobs[0], sentAt: 1 }]).mode, 'defer');
-  assert.equal(classifyEvidence({ ...relay, request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기 그리고 오류 수정해줘' }, jobs).mode, 'defer');
+  assert.equal(classifyEvidence({ ...asking, awaitingResponse: true, text: 'USER:\n한국말로 해서 해줘봐\n\nASSISTANT (completed answer):\n네, 진행하겠습니다. 어느 패키지부터 볼지 말씀해 주세요' }, []).passThrough, true, 'a short question waiting for the user is shown as written');
+  assert.equal(classifyEvidence(relay, [{ ...jobs[0], sentAt: 1 }]).mode, 'analyze');
+  assert.equal(classifyEvidence({ ...relay, request: 'Codex에 ㅎㅇ 입력 후 결과 가져오기 그리고 오류 수정해줘' }, jobs).mode, 'analyze');
   const rename = { request: '파일 "a.txt" 이름을 "b.txt"로 바꿔줘', lifecycle: 'completed', text: 'ASSISTANT: 변경했습니다.' };
   const state = { requestId: 'rename' };
   addCall(state, 'mv', 'exec_command', { cmd: 'mv -- a.txt b.txt' });
@@ -126,10 +128,10 @@ module.exports = async function policyChecks() {
     await submit('changed', '대신 요약만 보여줘');
     await finish(calls[1], '분석란 수정해줘', '오류 안내를 추가했고 테스트를 통과했습니다.');
     assert.equal(service.entries.get('one').result.tasks.find(t => t.request === '분석란 수정해줘' && t.analysisId).lifecycle, 'interrupted');
-    completion = { ...completion, state: 'completed', evidence: 'ASSISTANT: 요약 결과를 바로 보여줍니다.' };
+    completion = { ...completion, state: 'completed', evidence: 'ASSISTANT: 요약만 보여 주도록 변경했습니다.' };
     await capture(); await capture();
     assert.equal(calls.length, 3);
-    await finish(calls[2], '대신 요약만 보여줘', '요약 결과를 바로 보여줍니다.');
+    await finish(calls[2], '대신 요약만 보여줘', '요약만 보여 주도록 변경했습니다.');
     view = await capture();
     assert.equal(view.result.tasks.at(-1).request, '대신 요약만 보여줘');
     assert.equal(view.result.tasks.at(-1).relation, 'changed');
@@ -137,23 +139,25 @@ module.exports = async function policyChecks() {
     await capture({ force: true }); assert.equal(calls.length, 3, 'manual refresh cannot bill identical successful evidence');
     service = new TerminalReview(options);
     await capture(); assert.equal(calls.length, 3, 'restart retains result/digest without another call');
-    await submit('repeat', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약 결과를 바로 보여줍니다.' }); await tick();
+    await submit('repeat', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약만 보여 주도록 변경했습니다.' }); await tick();
     assert.equal(calls.length, 3, 'identical evidence reuses the cached model response');
     assert.ok(service.entries.get('one').result.tasks.some(t => t.taskId.endsWith(':conversation:repeat') && t.analysisCached),
       'identical text submitted separately is still a distinct request');
-    await submit('repeat-changed', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약 결과를 다시 보여줍니다.' });
+    await submit('repeat-changed', '대신 요약만 보여줘', { state: 'completed', evidence: 'ASSISTANT: 요약만 보여 주도록 다시 변경했습니다.' });
     assert.equal(calls.length, 4, 'changed evidence calls the model');
-    calls[3].reject(new Error('fixture failure')); await tick();
+    calls[3].reject(new Error('fixture failure')); await tick(); await tick();
+    assert.equal(calls.length, 5, 'a transient failure is retried once automatically');
+    calls[4].reject(new Error('fixture failure')); await tick();
     for (let i = 0; i < 3; i++) await capture();
-    assert.equal(calls.length, 4, 'failure cannot automatically bill repeated retries');
-    await capture({ force: true }); assert.equal(calls.length, 5);
+    assert.equal(calls.length, 5, 'failure cannot automatically bill repeated retries');
+    await capture({ force: true }); assert.equal(calls.length, 6);
     await capture({ enabled: false });
-    await finish(calls[4], '대신 요약만 보여줘', '요약 결과를 바로 보여줍니다.');
+    await finish(calls[5], '대신 요약만 보여줘', '요약만 보여 주도록 변경했습니다.');
     assert.equal(service.entries.get('one').state, 'paused');
     assert.equal(service.entries.get('one').result.tasks.filter(t => t.analysisId).length, 3, 'disabled analysis cannot publish a late result (two model results plus one cached repeat)');
     // Process identity invalidates an in-flight model response.
     await capture();
-    await submit('new-child-task', '작동 원리 설명해줘', { state: 'completed', evidence: 'ASSISTANT: 입력을 읽고 결과를 표시하는 방식입니다.' });
+    await submit('new-child-task', '작동 원리 설명해줘', { state: 'completed', evidence: 'ASSISTANT: 입력을 읽고 결과를 표시하는 방식입니다. ' + '각 단계는 기록을 읽어 화면에 맞게 정리합니다. '.repeat(24) });
     const oldCall = calls.at(-1);
     session = { ...session, pid: 20 };
     await finish(oldCall, '작동 원리 설명해줘', '입력을 읽고 결과를 표시하는 방식입니다.');
@@ -200,7 +204,7 @@ module.exports = async function policyChecks() {
     // An interrupted app run cannot silently bill the same in-flight evidence again.
     const durable = { ...options, file: path.join(folder, 'inflight.json') };
     service = new TerminalReview(durable); completion = { available: true }; await capture();
-    await submit('inflight', '내용 설명해줘', { state: 'completed', evidence: 'ASSISTANT: 입력값을 결과 화면으로 보내는 구조입니다.' });
+    await submit('inflight', '내용 설명해줘', { state: 'completed', evidence: 'ASSISTANT: 입력값을 결과 화면으로 보내는 구조입니다. ' + '각 값은 검사를 거쳐 화면 상태로 바뀝니다. '.repeat(24) });
     const inflightCount = calls.length;
     service = new TerminalReview(durable);
     view = await capture();

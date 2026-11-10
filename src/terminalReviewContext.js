@@ -29,6 +29,7 @@ function recordAnswer(state, answer) {
     }
   }
   state.answer = answer;
+  state.seq = (state.seq || 0) + 1; state.answerSeq = state.seq; // Orders it against tool calls for live progress.
 }
 
 function reviewContext(state) {

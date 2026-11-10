@@ -59,7 +59,9 @@ function addCall(state, id, name, input) {
   if (!id || !state.requestId || state.complete) return;
   state.tools ||= [];
   if (state.tools.some(item => item.id === id)) return;
-  state.tools.push({ id: short(id, 200), name: short(name, 64) || 'tool', target: target(input), commandHints: commandHints(name, input), status: 'called', excerpt: '', operation: literalOperation(name, input), pendingChange: proposedChange(name, input) });
+  state.seq = (state.seq || 0) + 1;
+  state.tools.push({ id: short(id, 200), name: short(name, 64) || 'tool', target: target(input), commandHints: commandHints(name, input), status: 'called', excerpt: '', operation: literalOperation(name, input), pendingChange: proposedChange(name, input),
+    activity: require('./terminalProgress').toolActivity(name, input), seq: state.seq });
   if (state.tools.length > 32) { state.tools = select(state.tools, 32); state.toolsOmitted = (state.toolsOmitted || 0) + 1; }
 }
 function addResult(state, id, output, error) {

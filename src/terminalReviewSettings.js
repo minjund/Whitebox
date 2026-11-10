@@ -10,6 +10,9 @@ function normalizeReviewSettings(value = {}) {
     provider: ['claude', 'codex'].includes(value?.provider) ? value.provider : 'auto',
     jevEnabled: typeof value?.jevEnabled === 'boolean' ? value.jevEnabled : value?.provider === 'jev',
     models: { claude: model(value?.models?.claude), codex: model(value?.models?.codex) },
+    // Reasoning effort for Summary calls. 'inherit' passes none, so the CLI uses
+    // the user's own interactive setting. Low is fast and was equally valid.
+    effort: ['low', 'medium', 'high', 'inherit'].includes(value?.effort) ? value.effort : 'low',
   };
 }
 

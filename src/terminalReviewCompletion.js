@@ -15,6 +15,7 @@ const { acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
 const { observeClaudeUsage, observeCodexUsage, tokenUsage } = require('./terminalTokenUsage');
 const { isNonTaskRequest, readableRequest } = require('./terminalReviewTurns');
+const { currentProgress } = require('./terminalProgress');
 const { cachedClaudeHomes } = require('./claudeHomes');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
@@ -107,7 +108,8 @@ function project(state, idle = true) {
     request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
     tools: toolEvidence(state), context: reviewContext(state), updates: assistantUpdates(state),
-    usage: tokenUsage(state), partialEvidence: evidence, evidence: completed ? evidence : '' };
+    usage: tokenUsage(state), partialEvidence: evidence, evidence: completed ? evidence : '',
+    progress: idle ? null : currentProgress(state) };
 }
 
 // Read only logs explicitly owned by the already matched child process. Never

@@ -83,7 +83,9 @@ module.exports = async function formatChecks() {
   for (const replacement of ['{"tasks":[]}', '{"tasks":[', JSON.stringify({ tasks: [{ ...task(), evidenceQuote: '원문에 없는 근거' }] })]) {
     const f = fixture(); await settle(); await f.reply(0, '{"tasks":[]}'); await f.reply(1, replacement);
     assert.equal(f.calls.length, 2); assert.equal(f.entry.state, 'error');
-    assert.equal(f.entry.result, f.previous, 'failed repair retains the last usable analysis');
+    assert.equal(f.entry.result.tasks.find(item => item.taskId === 'previous').actual, '이전 정상 분석', 'failed repair retains the last usable analysis');
+    const failedCard = f.entry.result.tasks.find(item => item.taskId === 'current');
+    assert.deepEqual([failedCard.summaryFailure?.kind, failedCard.actual, failedCard.content], ['quality', evidence, undefined], 'a final failure shows the reply as a failed summary card');
     f.service.enqueue(f.session.id, f.entry, { ...f.chunk }); f.service.drain(); await settle();
     assert.equal(f.calls.length, 2, 'unchanged failed evidence does not trigger a retry loop');
   }
@@ -100,13 +102,22 @@ module.exports = async function formatChecks() {
   await badDecision.reply(0, JSON.stringify({ tasks: [overlong] }));
   await badDecision.reply(1, '{"tasks":[]}');
   assert.equal(badDecision.calls.length, 2, 'a malformed quality replacement cannot start another format-repair call');
-  assert.equal(badDecision.entry.state, 'error'); assert.equal(badDecision.entry.result, badDecision.previous);
+  assert.equal(badDecision.entry.state, 'error');
+  assert.equal(badDecision.entry.result.tasks.find(item => item.taskId === 'previous').actual, '이전 정상 분석');
+  assert.equal(badDecision.entry.result.tasks.find(item => item.taskId === 'current').summaryFailure.kind, 'quality');
 
   const unknownUsage = fixture(); await settle(); await unknownUsage.reply(0, '{"tasks":[]}', null); await unknownUsage.reply(1, valid());
   assert.equal(unknownUsage.entry.result.tasks.find(item => item.taskId === 'current').analysisUsage, null);
   const timeout = fixture(); await settle(); timeout.calls[0].reject(Error('timeout')); await settle();
-  assert.equal(timeout.calls.length, 1, 'transport/time-limit failures are not response-format failures');
+  assert.equal(timeout.calls.length, 2, 'a time-limit failure is retried once as a fresh call, not as a format repair');
+  assert.doesNotMatch(timeout.calls[1].prompt, /QUALITY REPAIR/u);
+  timeout.calls[1].reject(Error('timeout')); await settle();
+  assert.equal(timeout.calls.length, 2, 'only one automatic retry');
   assert.equal(timeout.entry.state, 'error');
+  assert.equal(timeout.entry.result.tasks.find(item => item.taskId === 'current').summaryFailure.kind, 'transient');
+  const login = fixture(); await settle(); login.calls[0].reject(Error('Invalid API key · Please run /login')); await settle();
+  assert.equal(login.calls.length, 1, 'a login failure is not retried');
+  assert.equal(login.entry.result.tasks.find(item => item.taskId === 'current').summaryFailure.kind, 'auth');
 
   const retrieved = fixture({ retrieval: true }); await settle();
   await retrieved.reply(0, JSON.stringify({ tasks: [task()], evidenceRequests: ['late'] }));
