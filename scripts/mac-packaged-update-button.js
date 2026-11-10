@@ -55,6 +55,9 @@ function ownedExecutablePids() {
     : {size:119993464,sha256:'0cfbfa66d4ea202a0929b5f7eda1b72c2568d245df30ee5c5d15f642dc99e768'};
   const pins = {
     '1.7.3': originalPinned,
+    '2.0.27': process.arch === 'arm64'
+      ? {size:124690297,sha256:'a947eb797b83a7e856425ba6174d7db5d673395d924360ab1e3046a6f227969a'}
+      : {size:128496912,sha256:'420a7e95a092877ba17c47987f34a9ce7b021f6c409cc297040620ed87809ae5'},
     '2.0.26': process.arch === 'arm64'
       ? {size:122632451,sha256:'3881c454ad5ae336bd4a3e4582d682ae842faab4103e8af52014a0cec8e8b56b'}
       : {size:126438575,sha256:'07a2593cb679573c7bb3bd45d7c4970f037f9e4aaccf8ba9a5075a7d2b231f66'},
