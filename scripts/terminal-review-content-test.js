@@ -146,7 +146,7 @@ async function main() {
   const citeSession = { id: 'citation', creationId: 'one', pid: 1, status: 'running' };
   const citeService = new TerminalReview({ manager: () => ({ get: () => citeSession }), now: () => 2000, quietMs: 0,
     monitor: { scan: () => ({ available: true, processes: [{ provider: 'claude', pid: 2, ancestorPids: [1] }] }) },
-    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: typoRecord }) },
+    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: `${typoRecord}\n${'- 설계 원칙을 프로젝트에 맞게 적용하는 방법을 함께 안내합니다.\n'.repeat(16)}` }) }, // Long enough to be summarized, not shown as written.
     runner: { generateTerminalReview: async ({ prompt }) => { citationCalls++; if (citationCalls === 2) repairPromptText = prompt;
       return { reviewFormat: 'answer-first-v2', handoffRequired: true, text: JSON.stringify({ tasks: [{ requestQuote: citationCalls === 1 ? '설계지식을 담은 스킬을 알려줘봐' : typoRequest, evidenceQuote: '일반 설계 원칙입니다.', alignment: 'aligned', content: brief() }] }) }; } } });
   await citeService.capture({ id: citeSession.id, creationId: citeSession.creationId, text: '', submission: { id: 'r', request: typoRequest, at: 1000 } });
@@ -159,7 +159,7 @@ async function main() {
   citationCalls = 0;
   const stubborn = new TerminalReview({ manager: () => ({ get: () => citeSession }), now: () => 2000, quietMs: 0,
     monitor: { scan: () => ({ available: true, processes: [{ provider: 'claude', pid: 2, ancestorPids: [1] }] }) },
-    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: typoRecord }) },
+    completion: { observe: async () => ({ available: true, state: 'completed', requestAt: 1000, requestId: 'r', request: typoRequest, evidence: `${typoRecord}\n${'- 설계 원칙을 프로젝트에 맞게 적용하는 방법을 함께 안내합니다.\n'.repeat(16)}` }) }, // Long enough to be summarized, not shown as written.
     runner: { generateTerminalReview: async () => ({ reviewFormat: 'answer-first-v2', handoffRequired: true, text: JSON.stringify({ tasks: [{ requestQuote: '설계지식을 담은 스킬을 알려줘봐', evidenceQuote: '일반 설계 원칙입니다.', alignment: 'aligned', content: brief() }] }) }) } });
   await stubborn.capture({ id: citeSession.id, creationId: citeSession.creationId, text: '', submission: { id: 'r', request: typoRequest, at: 1000 } });
   for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));

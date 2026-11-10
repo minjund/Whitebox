@@ -25,6 +25,8 @@ function fixture() {
       await settle();
     },
     async fail(index) { calls[index].reject(Error('fixture analysis unavailable')); await settle(); },
+    // A generic failure is retried once automatically; fail that retry too.
+    async failFinal(index) { await this.fail(index); assert.equal(calls.length, index + 2, 'one automatic retry'); await this.fail(index + 1); },
   };
 }
 module.exports = async function statusChecks() {
@@ -40,7 +42,7 @@ module.exports = async function statusChecks() {
   for (const partial of [false, true]) {
     const f = fixture(); await f.poll(); f.turn('same', { partial }); await f.poll(); await settle(); await f.succeed(0);
     const previous = (await f.poll()).result.tasks[0];
-    f.turn('same', { updated: true }); await f.poll(); await settle(); await f.fail(1);
+    f.turn('same', { updated: true }); await f.poll(); await settle(); await f.failFinal(1);
     const view = await f.poll();
     assert.equal(view.state, 'error', 'a failed newest analysis is not silently approved');
     assert.equal(view.result.tasks[0].analysisId, previous.analysisId, 'the previous article remains available');
@@ -51,10 +53,12 @@ module.exports = async function statusChecks() {
     assert.equal(reviewFailure({ ...view, result: { tasks: [{ ...previous, analysisId: 'foreign' }] } }), null, 'a different article cannot stand in for this failed review');
   }
   const retry = fixture(); await retry.poll(); retry.turn('same'); await retry.poll(); await settle(); await retry.succeed(0);
-  await retry.poll({ reanalyze: true }); await settle(); await retry.fail(1);
+  await retry.poll({ reanalyze: true }); await settle(); await retry.failFinal(1);
   assert.equal(reviewFailure(await retry.poll()).kind, 'reanalysis');
-  const initial = fixture(); await initial.poll(); initial.turn('new'); await initial.poll(); await settle(); await initial.fail(0);
-  assert.equal(reviewFailure(await initial.poll()), null, 'without an earlier analysis the failure remains a hard error');
+  const initial = fixture(); await initial.poll(); initial.turn('new'); await initial.poll(); await settle(); await initial.failFinal(0);
+  const initialView = await initial.poll();
+  assert.equal(reviewFailure(initialView), null, 'without an earlier analysis there is no retained article to warn about');
+  assert.equal(initialView.result.tasks[0].summaryFailure.kind, 'transient', 'the reply is shown as a failed summary card instead');
   console.log('PASS review status: late old failure/new success, updated evidence, partial/final scope, failed reanalysis, preserved articles and foreign/initial rejection');
 };
 if (require.main === module) module.exports().catch(error => { console.error(error); process.exitCode = 1; });

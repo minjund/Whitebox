@@ -24,7 +24,7 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
   // replaced: a first host failure must not start a helper or poison retry.
   const main=fs.readFileSync(require.resolve('../main.js'),'utf8');
   for(const platform of ['win32','darwin']) {
-    let hostCalls=0,helpers=0,quits=0;
+    let hostCalls=0,helpers=0,quits=0;const reviewCalls=[];
     const events=[];
     class Host { async shutdownForUpdate(){if(++hostCalls===1)throw Error('host shutdown failure');} async recoverAfterUpdateFailure(){} }
     const manager={state:{status:'downloaded',downloadedPath:'fixture',asset:{},latestVersion:'1.8.4'},
@@ -36,16 +36,20 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
       canInstallSilently:()=>true,verifyDownloadedInstaller:async()=>{},preflightAutomaticUpdate:async()=>{},
       updateWorkloadImpact:async()=>({agentRuns:[],terminalSessions:[]}),confirmActiveTerminalUpdate:async()=>true,
       runner,TerminalHostClient:Host,terminalManager:new Host(),requireAgentRunnerUpdateShutdown:x=>x,
+      terminalReview:{stopForUpdate(){reviewCalls.push('stop');return {requeued:1};},resumeAfterUpdate(){reviewCalls.push('resume');}},
       launchDownloadedUpdate:async()=>{helpers++;return {mode:'automatic'};},reportRecoverableError(){},
       updateInstallPromise:null,setImmediate:fn=>fn(),app:{quit(){quits++;}},isQuitting:false};
     vm.createContext(lifecycle);
     vm.runInContext(main.slice(main.indexOf('function recordUpdateInstallEvent('),main.indexOf('async function setupAttentionRuntime()')),lifecycle);
     await assert.rejects(lifecycle.installDownloadedUpdate(),/host shutdown failure/);
     assert.equal(helpers,0);assert.equal(quits,0);assert.match(manager.state.error,/host shutdown failure/);
+    assert.deepEqual(reviewCalls,['stop','resume'],'a failed install resumes the Summary analyses it requeued');
     await lifecycle.installDownloadedUpdate();
     assert.equal(helpers,1);assert.equal(quits,1);assert.equal(manager.state.error,'');
     const success=events.filter(e=>e.attemptId===events.at(-1).attemptId).map(e=>e.stage);
     assert(success.indexOf('workload-stopped')<success.indexOf('helper-ready'));
+    assert(success.indexOf('review-requeued')>=0&&success.indexOf('review-requeued')<success.indexOf('workload-stopped'),'analyses are requeued before the runner is disposed');
+    assert.deepEqual(reviewCalls,['stop','resume','stop'],'a successful install leaves the requeued analyses for the restarted app');
     assert(runner.resumeAfterUpdateFailure());
   }
 
@@ -75,13 +79,13 @@ const { preflightAutomaticUpdate } = require('../src/updateInstaller');
       updateWorkloadImpact: async () => ({ agentRuns: scenario === 'active-direct' ? [{ runId: 'live-run' }] : [], terminalSessions: scenario === 'active-terminal' ? [{ id: 'live', status: 'running' }] : [], externalHost: scenario === 'external-host' }),
       externalTerminalHost: async () => true, confirmActiveTerminalUpdate: async () => true,
       confirmForceTerminalUpdate: async () => { prompts += 1; return scenario !== 'cancel'; },
-      runner: null, TerminalHostClient: Host, terminalManager: new Host(),
+      runner: null, terminalReview: null, TerminalHostClient: Host, terminalManager: new Host(),
       launchDownloadedUpdate: async () => { helpers += 1; return { mode: 'automatic' }; }, reportRecoverableError() {},
       updateInstallPromise: null, setImmediate: fn => fn(), app: { quit() { quits += 1; } }, isQuitting: false };
     vm.createContext(lifecycle);
     vm.runInContext(main.slice(main.indexOf('function recordUpdateInstallEvent('), main.indexOf('async function setupAttentionRuntime()')), lifecycle);
     if (scenario === 'external-host') await lifecycle.installDownloadedUpdate();
-    else await assert.rejects(lifecycle.installDownloadedUpdate(), /cleanup failed|digest mismatch|설치를 보류/);
+    else await assert.rejects(lifecycle.installDownloadedUpdate(), scenario === 'active-direct' ? /앱에서 직접 실행한 AI 작업 1개가 진행 중이라 설치를 보류했습니다/ : /cleanup failed|digest mismatch|설치를 보류/);
     assert.equal(helpers, scenario === 'external-host' ? 1 : 0, scenario);
     assert.equal(quits, helpers, scenario);
     assert.equal(prompts, 0, 'Updates must never offer to force-stop work');

@@ -20,8 +20,8 @@ module.exports = async function reanalysisChecks() {
     return { service, session, calls, get gateCalls() { return gateCalls; },
       capture: options => service.capture({ id: session.id, creationId: session.creationId, text: 'frame', ...options }),
       completed() { completion = { available: true, state: 'completed', requestId: 'q1', request: '설명해줘', requestAt: ++now,
-        evidence: 'USER: 설명해줘\nASSISTANT: 결과는 isEmpty로 검사합니다.', tools: { source: 'session', items: [] } }; },
-      working() { completion = { ...completion, state: 'working', requestId: 'q2', request: '다음 작업', requestAt: ++now }; },
+        evidence: 'USER: 설명해줘\nASSISTANT: 결과는 isEmpty로 검사합니다. ' + '빈 값이면 안내 문구를 보여 주고 다음 단계로 넘어가지 않습니다. '.repeat(20), tools: { source: 'session', items: [] } }; }, // A long explanation: summarized, not shown as written.
+      working() { completion = { ...completion, state: 'working', requestId: 'q2', request: '다음 작업', requestAt: ++now, evidence: '' }; }, // No answer yet for the new request.
       greeting() { completion = { available: true, state: 'completed', requestId: 'greeting', request: 'ㅎㅇ', requestAt: ++now,
         evidence: 'USER: ㅎㅇ\nASSISTANT: 안녕하세요' }; },
       setAvailable(value) { available = value; },
@@ -54,12 +54,14 @@ module.exports = async function reanalysisChecks() {
   assert.notEqual(updated[0].analysisId, original.analysisId);
   await f.capture(); assert.equal(f.calls.length, 2, 'new result is cached after the explicit request');
   await f.capture({ reanalyze: true }); await tick();
-  f.calls[2].reject(Error('model unavailable')); await tick();
+  f.calls[2].reject(Error('model unavailable')); for (let i = 0; i < 4; i++) await tick();
+  assert.equal(f.calls.length, 4, 'a transient failure is retried once automatically');
+  f.calls[3].reject(Error('model unavailable')); await tick();
   assert.equal(f.service.entries.get('rerun').result.tasks[0].actual, '분석 2', 'failure retains the last usable result');
-  assert.equal((await f.capture()).state, 'error'); assert.equal(f.calls.length, 3);
-  await f.capture({ force: true }); assert.equal(f.calls.length, 3, 'selection does not retry a failed manual request');
-  await f.capture({ reanalyze: true }); await tick(); assert.equal(f.calls.length, 4);
-  await f.finish(3);
+  assert.equal((await f.capture()).state, 'error'); assert.equal(f.calls.length, 4);
+  await f.capture({ force: true }); assert.equal(f.calls.length, 4, 'selection does not retry a failed manual request');
+  await f.capture({ reanalyze: true }); await tick(); assert.equal(f.calls.length, 5);
+  await f.finish(4);
 
   const off = fixture(); off.completed();
   await off.capture({ enabled: false });
@@ -100,9 +102,9 @@ module.exports = async function reanalysisChecks() {
   } finally { fs.rmSync(folder, { recursive: true, force: true }); }
 
   f.working(); await f.capture({ reanalyze: true }); await tick();
-  assert.equal(f.calls.length, 4, 'manual request never turns an unfinished answer into a completed review');
+  assert.equal(f.calls.length, 5, 'manual request never turns an unfinished answer into a completed review');
   const stale = await f.service.capture({ id: 'rerun', creationId: 'different', reanalyze: true });
-  assert.equal(stale.state, 'unbound'); assert.equal(f.calls.length, 4);
+  assert.equal(stale.state, 'unbound'); assert.equal(f.calls.length, 5);
   console.log('PASS explicit reanalysis: fresh model call, same task/history/usage, click coalescing, errors/retry, auto-off, queue, Jev bypass, unfinished answers and identity guards');
 };
 

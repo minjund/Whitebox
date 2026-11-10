@@ -100,7 +100,7 @@ module.exports = async function decisionChecks() {
   assert.equal(result.task.qualityPasses, 1);
   const missing = await run([undefined, undefined], { requireContent: true });
   assert.equal(missing.calls.length, 2, 'a fresh model cannot silently omit the answer-first contract');
-  assert.equal(missing.task, undefined, 'an invalid new explanation cannot replace the original record');
+  assert.deepEqual([missing.task.summaryFailure?.kind, missing.task.content, missing.task.decision], ['quality', undefined, undefined], 'an invalid new explanation is never shown; the reply appears as a failed summary card');
   assert.match(missing.service.entries.get('decision').message, /실제 답과 근거/u);
   bad = fixture(); bad.conclusion = '긴'.repeat(181);
   result = await run([bad, fixture()]);

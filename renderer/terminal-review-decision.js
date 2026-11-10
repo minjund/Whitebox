@@ -46,6 +46,47 @@
         : partial ? '작업 중 작성된 분석은 보존했습니다. 최종 답변은 다시 검토해 주세요.'
           : '이전 분석은 보존했습니다. 이후 갱신된 기록은 다시 검토해 주세요.' };
   }
+  // Summary claims arrive as one run of sentences; one sentence per line reads
+  // far better, especially in the large answer text. Only a sentence end
+  // followed by a space splits: versions (2.0.26), list numbers ("1. ") and
+  // common abbreviations stay intact. Explicit newlines are kept.
+  const SENTENCE_END = /(?<=(?:[\p{Script=Hangul}\p{Script=Han}A-Za-z)\]"'”’`][.!?]|[。！？]))[ \t]+(?=\S)/gu;
+  const ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|cf|approx|no|mr|ms|dr)\.$/iu;
+  function sentences(text) {
+    const lines = [];
+    for (const line of String(text || '').split('\n')) {
+      let from = 0;
+      for (const match of line.matchAll(SENTENCE_END)) {
+        const head = line.slice(from, match.index), tail = line.slice(match.index + match[0].length);
+        // "e.g. x" and an English period before a lowercase word continue the sentence.
+        if (ABBREVIATION.test(head) || /[A-Za-z]\.$/u.test(head) && /^[a-z]/u.test(tail)) continue;
+        lines.push(head); from = match.index + match[0].length;
+      }
+      lines.push(line.slice(from));
+    }
+    return lines;
+  }
+  const prose = (text, esc) => sentences(text).map(esc).join('<br>');
+  // A pipe table in an output reads as a table, not as raw markdown. Anything
+  // that is not a well-formed table stays the exact original text.
+  function markdownTable(value, esc) {
+    const lines = String(value || '').trim().split('\n');
+    const cells = line => line.trim().replace(/^\||\|$/gu, '').split('|').map(cell => cell.trim());
+    if (lines.length < 3 || lines.length > 60 || !lines.every(line => /^\s*\|.*\|\s*$/u.test(line))
+      || !/^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(lines[1])) return '';
+    const head = cells(lines[0]), rows = lines.slice(2).map(cells);
+    if (head.length < 2 || cells(lines[1]).length !== head.length || rows.some(row => row.length !== head.length)) return '';
+    const strip = cell => cell.replace(/\*\*|`/gu, '');
+    return `<div class="wb-content-table"><table><thead><tr>${head.map(cell => `<th>${esc(strip(cell))}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${esc(strip(cell))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }
+  const validChoices = value => (Array.isArray(value) ? value : []).filter(block => typeof block?.question === 'string'
+    && Array.isArray(block.options) && block.options.length >= 2 && block.options.length <= 8
+    && block.options.every(option => typeof option?.label === 'string' && typeof option.text === 'string')
+    && (block.recommendation == null || typeof block.recommendation.label === 'string' && typeof block.recommendation.text === 'string')).slice(0, 3);
+  // Every option of a question a reply ends with, verbatim from the reply.
+  function renderChoices(value, { t, esc }) {
+    return validChoices(value).map(block => `<div class="wb-task-section wb-content-choices"><h3>${esc(t('답해야 할 질문'))}</h3><p>${esc(block.question)}</p><ol>${block.options.map(option => `<li data-recommended="${block.recommendation?.label === option.label}"><b>${esc(option.label)}</b> ${esc(option.text)}${block.recommendation?.label === option.label ? ` <small>${esc(t('답변의 권장'))}</small>` : ''}</li>`).join('')}</ol>${block.recommendation ? `<p class="wb-content-time">${esc(block.recommendation.text)}</p>` : ''}</div>`).join('');
+  }
   function renderContent(content, { t, esc }, recordedAt) {
     const bases = new Set([content.answer, ...content.details, ...content.deliverables, ...(content.background || []), ...(content.nextAction ? [content.nextAction] : [])].map(item => item.basis));
     const mixed = bases.has('observed') && bases.has('reported');
@@ -57,20 +98,22 @@
       const label = { observed: '도구 출력', inference: '추론', unknown: '확인 안 됨' }[item.basis];
       return show ? `<span class="wb-content-basis">${esc(t(label))}</span>` : '';
     };
-    const claim = item => `<p class="wb-content-claim">${badge(item)}${esc(item.text)}</p>`;
+    const claim = item => `<p class="wb-content-claim">${badge(item)}${prose(item.text, esc)}</p>`;
     // Render in reading order so consecutive provenance labels are coalesced.
     const answer = claim(content.answer);
     const handoff = content.handoff;
     const time = new Date(recordedAt || NaN);
     const recordDate = !Number.isNaN(time.getTime()) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(time) + ' KST' : '';
-    const timeNote = recordDate || handoff?.temporal ? `<div class="wb-content-time">${recordDate ? `<p>${esc(t('기록 시점'))} · ${esc(recordDate)}</p>` : ''}${handoff?.temporal ? `<p>${esc(handoff.temporal.text)}</p>` : ''}</div>` : '';
-    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : '먼저 할 판단'))}</h3><p>${esc(handoff.priority.text)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
+    const timeNote = recordDate || handoff?.temporal ? `<div class="wb-content-time">${recordDate ? `<p>${esc(t('기록 시점'))} · ${esc(recordDate)}</p>` : ''}${handoff?.temporal ? `<p>${prose(handoff.temporal.text, esc)}</p>` : ''}</div>` : '';
+    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : '먼저 할 판단'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
+    // Every option of a question the reply ends with, verbatim from the reply.
+    const choices = renderChoices(content.choices, { t, esc });
     const details = content.details.map(claim).join('');
     const nextAction = content.nextAction ? claim(content.nextAction) : '';
     const outputs = content.deliverables.map(item => {
       const output = item.kind === 'url' && /^https?:\/\//iu.test(item.value)
       ? `<p><a href="${esc(item.value)}" target="_blank" rel="noopener noreferrer">${esc(item.value)}</a></p>`
-      : `<pre>${esc(item.value)}</pre>`;
+      : markdownTable(item.value, esc) || `<pre>${esc(item.value)}</pre>`;
       if (item.kind === 'command' && item.usage === 'historical') return `<div class="wb-task-section wb-content-output wb-content-historical"><p>${esc(t('과거 명령 · 현재 실행 안내 아님'))}</p><p>${esc(item.usageNote.text)}</p><details class="wb-task-details"><summary>${esc(t('당시 명령 보기'))}</summary><h3>${esc(item.label)}</h3>${output}${badge(item)}</details></div>`;
       return `<div class="wb-task-section wb-content-output"><h3>${esc(item.label)}</h3>${item.kind === 'command' ? `<p class="wb-content-time">${esc(t('기록 당시 명령 · 현재 적용 여부는 별도 확인'))}</p>${item.usageNote ? `<p>${esc(item.usageNote.text)}</p>` : ''}` : ''}${output}${badge(item)}</div>`;
     }).join('');
@@ -79,8 +122,9 @@
       ${source ? `<p class="wb-content-source">${esc(t(source))}</p>` : ''}
       <div class="wb-task-section wb-decision-conclusion"><h3>${esc(t('실제 답'))}</h3>${answer}</div>
       ${timeNote}
+      ${choices}
       ${handoffHtml}
-      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t('확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${esc(item.text)}</p>`).join('')}</div>` : ''}
+      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t('확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
       ${content.details.length ? `<div class="wb-task-section"><h3>${esc(t(content.nextAction ? '판단 근거' : '핵심과 작동 방식'))}</h3>${details}</div>` : ''}
       ${nextAction ? `<div class="wb-task-section wb-decision-action"><h3>${esc(t('필요한 다음 행동'))}</h3>${nextAction}</div>` : ''}
       ${outputs}
@@ -108,5 +152,10 @@
       ${alternatives}
     </section>`;
   }
-  return { render, renderContent, applyHistoryContent, displayTitle, reviewFailure, matchesRetainedAnalysis };
+  // A pass-through reply as written: line breaks kept, markdown emphasis and
+  // heading marks dropped, every piece escaped.
+  function plainReply(text, esc) {
+    return String(text || '').split('\n').map(line => esc(line.replace(/^\s{0,3}#{1,6}\s+/u, '').replace(/\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`/gu, (_, a, b, c) => a ?? b ?? c))).join('<br>');
+  }
+  return { render, renderContent, renderChoices, plainReply, applyHistoryContent, displayTitle, reviewFailure, matchesRetainedAnalysis };
 });

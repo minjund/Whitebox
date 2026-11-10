@@ -104,14 +104,16 @@ exports.run = async evaluate => {
     f = make();
     check(!f.root.querySelector('.wb-2048-panel').hidden && !f.root.querySelector('#wbSummaryGame').hidden, '2048 opens by default while idle');
     const before = JSON.stringify(f.chat.serializeGame().cells);
-    f.data.visibility = 'summarizing'; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'summarizing-only hides an idle board');
-    f.member.activity.state = 'working'; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'provider work without summary generation does not reveal summarizing-only game');
-    f.member.activity.state = 'idle';
+    const game = () => f.root.querySelector('#wbSummaryGame'), panel = () => f.root.querySelector('.wb-2048-panel'), opener = () => f.root.querySelector('[data-game-open]');
+    f.data.visibility = 'summarizing'; f.chat.render(); check(!game().hidden, 'the game is never removed, even while idle');
+    f.member.activity.state = 'working'; f.chat.render(); check(!game().hidden && game().dataset.waiting === 'true' && !panel().hidden, 'the AI working is part of the wait: the board is playable');
+    f.member.activity.state = 'waiting'; f.chat.render(); check(!game().hidden && panel().hidden && !opener().hidden, 'a terminal that needs the user folds the board and keeps the open button');
+    opener().click(); f.member.activity.state = 'idle'; f.chat.render(); check(!panel().hidden, 'the user can reopen it any time; nothing re-folds without a new wait ending');
     f.data.review = { state: 'collecting', phase: 'backoff', retryAt: Date.now() + 60000 }; f.chat.render();
-    check(f.root.querySelector('#wbSummaryGame').hidden, 'summarizing-only also hides during retry wait');
-    f.data.review = { state: 'reviewing' }; f.chat.render(); check(!f.root.querySelector('#wbSummaryGame').hidden, 'summarizing-only reveals actual analysis');
-    f.data.review = { state: 'ready' }; f.chat.render(); check(f.root.querySelector('#wbSummaryGame').hidden, 'analysis completion hides summarizing-only game');
-    f.data.visibility = 'always'; f.chat.render();
+    check(!game().hidden && game().dataset.waiting === 'false', 'a retry wait is not playable wait time but never hides the game');
+    f.data.review = { state: 'reviewing' }; f.chat.render(); check(!panel().hidden && game().dataset.waiting === 'true', 'actual analysis is wait time');
+    f.data.review = { state: 'ready' }; f.chat.render(); check(!game().hidden && panel().hidden && !opener().hidden, 'analysis completion folds the board, never hides the game');
+    f.data.visibility = 'always'; f.chat.render(); opener().click();
     check(!f.root.querySelector('#wbSummaryGame').hidden && JSON.stringify(f.chat.serializeGame().cells) === before, 'visibility changes preserve the board');
     f.root.querySelector('[data-game-close]').click(); f.chat.render(); check(f.root.querySelector('.wb-2048-panel').hidden, 'explicit collapse remains respected'); cases.push('game-visibility');
     f = make({ messages: [user('a')], review: { state: 'awaiting-answer' } });
@@ -166,8 +168,8 @@ exports.run = async evaluate => {
     check(f.chat.serialize()[0].messages[0].state === 'interrupted', 'lost immediate acknowledgement is explicit');
     f.member.ready = true; f.chat.observe([]); await tick(); check(f.stats.sends === 1, 'lost immediate delivery is never replayed'); cases.push('send-anyway-unknown');
     f = make({ review: { state: 'error', message: 'analysis failed' } });
-    check(f.stats.reports?.length === 1 && f.stats.reports[0].id === 'states' && f.stats.reports[0].message.includes('요약하지 못했습니다'), 'summary fallback names its own terminal so the notice stays scoped to it');
-    check(f.chat.serialize()[0].mode === 'terminal', 'fallback returns that terminal to terminal mode'); cases.push('fallback-scoped');
+    check(!f.stats.reports && f.chat.serialize()[0].mode === 'summary', 'an analysis error never forces the terminal view; its card explains it');
+    cases.push('error-stays-in-summary');
     f = make();
     const type = async text => { f.root.querySelector('#wbSummaryInput').value = text; f.root.querySelector('#wbSummaryInput').dispatchEvent(new Event('input')); await tick(); await tick(); };
     const key = (k, init = {}) => f.root.querySelector('#wbSummaryInput').dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
@@ -209,8 +211,51 @@ exports.run = async evaluate => {
       check(f.root.querySelector('#wbSummaryTranscript').textContent.includes('분석이 갱신됐습니다.'), 'Summary shows the same, current content as the review panel');
       cases.push('latest-turn-by-time');
     }
+    // While its summary is still being made, a finished reply is not shown raw:
+    // only the status. Once no summary is coming, the reply itself is shown.
+    const rawReply = task('raw', { recordOnly: true, deferred: true, analysisDepth: 'deferred', actual: 'RAW_REPLY_TEXT 원문 그대로' });
+    f = make({ tasks: [rawReply], messages: [user('raw')], review: { state: 'reviewing', analysisTaskId: 'raw', phase: 'model' } });
+    check(!f.text('wbSummaryTranscript').includes('RAW_REPLY_TEXT') && f.state().loading && f.state().thinking === '요약 중…', 'a summary in progress shows status, not the raw reply');
+    f.data.review = { state: 'collecting', analysisTaskId: 'raw', phase: 'queue' }; f.chat.render();
+    check(!f.text('wbSummaryTranscript').includes('RAW_REPLY_TEXT') && f.state().loading && f.state().thinking.endsWith('답변 완료 · 요약 준비 중…'), 'a queued summary also shows status only');
+    f.data.review = { state: 'ready' }; f.chat.render();
+    check(f.text('wbSummaryTranscript').includes('RAW_REPLY_TEXT'), 'a reply that will not be summarized is shown as it is');
+    cases.push('no-raw-while-summarizing');
+    // The live step of a working AI replaces the generic "working" text.
+    f = make({ messages: [user('live')], review: { state: 'awaiting-answer' } });
+    f.member.activity = { state: 'working', progress: { kind: 'test', phase: 'running' } }; f.chat.render();
+    check(f.state().thinking.endsWith('테스트 실행 중…') && f.state().reply === '테스트 실행 중…', 'live step: running tests');
+    f.member.activity = { state: 'working', progress: { kind: 'edit', detail: 'auth.js', phase: 'running' } }; f.chat.render();
+    check(f.state().thinking.endsWith('파일 수정 중 · auth.js…') && f.state().reply === '파일 수정 중 · auth.js…', 'live step: the edited file');
+    f.member.activity = { state: 'working', progress: { kind: 'note', detail: '<b>인증</b> 원인을 찾고 있습니다.', phase: 'note' } }; f.chat.render();
+    check(f.state().thinking.endsWith('<b>인증</b> 원인을 찾고 있습니다.') && !f.root.querySelector('#wbSummaryThinking b'), 'live step: the own progress line of the AI, as inert text');
+    f.member.activity = { state: 'working' }; f.chat.render();
+    check(f.state().thinking.endsWith('AI가 작업 중입니다.') && f.state().reply === '작업 중', 'without a live step the generic text remains');
+    cases.push('live-step');
+    // Each result card says what it is: summary, reply shown as written, or
+    // a failed summary that stays in Summary mode with a reason and a retry.
+    const passCard = task('pass', { recordOnly: true, deferred: true, analysisDepth: 'deferred', passThrough: true,
+      actual: '## 결론\\n**설정 구조**가 핵심입니다.\\n<b>x</b>',
+      choices: [{ question: '어떤 형태인가요?', options: [{ label: 'a', text: '따로 만든다' }, { label: 'b', text: '구성이 다르다' }], recommendation: { label: 'b', text: '(b)라고 봅니다.' } }] });
+    f = make({ tasks: [passCard], messages: [user('pass')], review: { state: 'ready' } });
+    const passArticle = f.root.querySelector('#wbSummaryTranscript [data-result-kind="pass-through"]');
+    check(passArticle && passArticle.textContent.includes('AI 답변 · 짧아서 그대로 보여요') && passArticle.textContent.includes('설정 구조가 핵심입니다.')
+      && !passArticle.textContent.includes('**') && passArticle.textContent.includes('<b>x</b>') && passArticle.querySelector('.wb-content-choices [data-recommended="true"]'),
+      'a pass-through reply is labeled, readable, inert and keeps its question options');
+    check(f.state().title === '답변이 도착했어요' && f.state().review === '요약 필요 없음' && !f.state().loading, 'a pass-through reply needs no summary and ends the wait');
+    const failedCard = task('fail', { recordOnly: true, deferred: true, analysisDepth: 'deferred', actual: 'AI 원문입니다.', summaryFailure: { kind: 'auth' } });
+    f = make({ tasks: [failedCard], messages: [user('fail')], review: { state: 'error', message: 'Invalid API key' } });
+    const failArticle = f.root.querySelector('#wbSummaryTranscript [data-result-kind="failed"]');
+    check(failArticle && failArticle.textContent.includes('요약하지 못했어요 · AI 원문') && failArticle.textContent.includes('로그인되어 있지 않거나')
+      && failArticle.querySelector('[data-summary-retry]') && failArticle.textContent.includes('AI 원문입니다.'), 'a failed summary shows the reply, the reason and a retry');
+    check(f.chat.serialize()[0].mode === 'summary' && !f.stats.reports, 'a failed summary never forces the terminal view');
+    check(f.state().title === '요약하지 못했어요' && f.state().review === '요약 실패' && !f.state().loading, 'a failed summary ends the wait');
+    const recordCard = task('rec', { recordOnly: true, analysisDepth: 'record', actual: '‘a’의 이름을 ‘b’로 변경한 실행 결과가 확인됐어요.' });
+    f = make({ tasks: [recordCard], messages: [user('rec')], review: { state: 'ready' } });
+    check(f.root.querySelector('#wbSummaryTranscript [data-result-kind="summary"]')?.textContent.includes('Whitebox 요약'), 'a result settled by the record alone is a summary');
+    cases.push('result-kinds');
     return cases;
   })()`);
-  assert.equal(result.length, 23);
-  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls and default/settings-aware 2048');
+  assert.equal(result.length, 26);
+  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls, default/settings-aware 2048, no raw reply while summarizing, live AI step, result card kinds');
 };

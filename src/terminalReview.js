@@ -5,13 +5,13 @@ const { randomUUID, createHash } = require('crypto');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { completedTurn, currentTurnEvidence, isNonTaskRequest } = require('./terminalReviewTurns');
-const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement } = require('./terminalReviewPolicy');
+const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement, screenable } = require('./terminalReviewPolicy');
 const { bounded, answerText } = require('./terminalReviewBudget');
 const { screenTools, compactTools } = require('./terminalReviewTools');
 const { compactContext, compactUpdates } = require('./terminalReviewContext');
 const { normalizeReviewSettings } = require('./terminalReviewSettings');
 const { assessDecision, repairPrompt, combinedUsage } = require('./terminalReviewDecision');
-const { contentInstructions, assessContent, historyContent, sourceExcerpt } = require('./terminalReviewContent');
+const { contentInstructions, assessContent, historyContent, sourceExcerpt, pendingChoices } = require('./terminalReviewContent');
 const { artifactText } = require('./terminalReviewArtifacts');
 
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
@@ -20,6 +20,30 @@ const RESPONSE_CACHE_LIMIT = 48;
 const RESPONSE_CACHE_MAX_CHARS = 64 * 1024;
 const RESPONSE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const terminalKey = session => JSON.stringify([session.id, session.creationId, session.pid, session.createdAt]);
+
+// A pass-through reply is shown as written; a question it ends with keeps
+// every listed option, copied from the reply.
+function passThroughFields(reply) {
+  const choices = pendingChoices(reply);
+  return { passThrough: true, ...(choices.length ? { choices } : {}) };
+}
+// Why a summary failed decides whether retrying can help.
+function summaryFailureKind(error) {
+  const message = String(error?.message || '');
+  if (error?.code === 'REVIEW_RATE_LIMITED') return 'rate-limit';
+  if (/not logged in|log ?in|login|authenticat|unauthori[sz]ed|\b401\b|\b403\b|api key|credential|permission denied|로그인|인증|권한/iu.test(message)) return 'auth';
+  if (error?.code === 'REVIEW_INVALID_RESPONSE' || /분석을 생성하지 못했습니다|분석의 근거를|분석 결과에 요청이 없습니다|짧은 분석|시점과 다음 판단/u.test(message)) return 'quality';
+  return 'transient';
+}
+
+// A summary is a bounded evidence transformation, not open-ended coding. Low
+// effort (the default) answered the same review prompt in ~10s instead of ~31s
+// with an equally valid result. The single repair pass gets one level more.
+function reviewEffort(effort) {
+  if (effort === 'inherit') return { first: '', repair: '' };
+  const first = ['low', 'medium', 'high'].includes(effort) ? effort : 'low';
+  return { first, repair: { low: 'medium', medium: 'high', high: 'high' }[first] };
+}
 
 function analysisPolicy(chunk, records, locale) {
   const policy = classifyEvidence(chunk, records, locale);
@@ -184,6 +208,7 @@ function parseReview(raw, source, locale = 'ko', request = '', lifecycle = 'comp
         impact: evidenceQuote ? clip(task.impact) : '',
         content: supported ? content.content : null,
         contentIssues: [...content.issues, ...(task.content !== undefined ? citationIssues : [])],
+        contentAdvisories: content.advisories || [],
         decision: decision.decision,
         decisionIssues: decision.issues,
         nextStep: scopedDecision !== undefined ? decision.decision?.action.request || ''
@@ -641,7 +666,8 @@ class TerminalReview extends EventEmitter {
         const previous = this.task(entry, chunk.taskId);
         if (!previous || previous.recordOnly || previous.deferred) {
           this.publish(id, entry, chunk, { actual: policy.actual, alignment: 'not-reviewed', recordOnly: true,
-            deferred: policy.mode === 'defer', analysisDepth: policy.mode === 'record' ? 'record' : 'deferred' }, zeroUsage());
+            deferred: policy.mode === 'defer', analysisDepth: policy.mode === 'record' ? 'record' : 'deferred',
+            ...(policy.passThrough ? passThroughFields(policy.actual) : {}) }, zeroUsage());
         } else { entry.seen[chunk.taskId] = { digest: chunk.digest }; this.persist(id, entry); }
       } else if (!entry.active && !this.busy) this.drain();
     }
@@ -651,8 +677,35 @@ class TerminalReview extends EventEmitter {
     return this.project(entry);
   }
 
+  // An update restart stops every in-flight analysis on purpose. Return each
+  // one to the front of its queue and persist it, so the restarted app runs it
+  // again instead of reporting an unconfirmed (never auto-retried) call.
+  stopForUpdate() {
+    this.updating = true;
+    clearTimeout(this.retryTimer); this.retryTimer = null;
+    let requeued = 0;
+    for (const [id, entry] of this.entries) {
+      const chunk = entry.active?.chunk;
+      if (!chunk) continue;
+      entry.revision++; // The killed call's late success or failure is discarded.
+      entry.active = null;
+      if (!entry.pending.some(item => item.taskId === chunk.taskId)) entry.pending.unshift(chunk);
+      if (entry.state !== 'paused') entry.state = 'collecting';
+      this.persist(id, entry);
+      requeued++;
+    }
+    this.busy = false;
+    return { requeued };
+  }
+
+  resumeAfterUpdate() {
+    if (!this.updating) return;
+    this.updating = false;
+    queueMicrotask(() => this.drain());
+  }
+
   drain() {
-    if (this.busy) return;
+    if (this.busy || this.updating) return;
     clearTimeout(this.retryTimer); this.retryTimer = null;
     const choices = [...this.entries].filter(([id, entry]) => entry.pending.length && !entry.active && entry.state !== 'paused' && this.scheduling.has(id)
       && analysisPolicy(entry.pending[0], this.records(), entry.locale).mode === 'analyze');
@@ -718,7 +771,7 @@ class TerminalReview extends EventEmitter {
       }
       if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
       active.timings.evidenceReadyAt = this.now();
-      if (settings.jevEnabled && !chunk.reanalyze && !this.scheduling.get(id)?.force) {
+      if (settings.jevEnabled && !chunk.reanalyze && !this.scheduling.get(id)?.force && screenable(chunk)) {
         active.timings.gateStartedAt = this.now();
         const gateContext = { conversation: compactContext(chunk.context), priorChecks: active.relatedEvidence || '' };
         const gateScope = createHash('sha256').update(JSON.stringify([chunk.request, currentSource, gateContext, chunk.lifecycle])).digest('hex');
@@ -742,7 +795,7 @@ class TerminalReview extends EventEmitter {
       // Only original/linked records enter this prompt. Jev scores and routing
       // conclusions are diagnostics, never evidence for an LLM decision.
       active.timings.modelStartedAt = this.now(); active.calls++;
-      let raw = await this.generate({ provider, model: settings.models[provider], prompt }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
+      let raw = await this.generate({ provider, model: settings.models[provider], prompt, effort: reviewEffort(settings.effort).first }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
       active.knownUsage = typeof raw === 'object' ? raw.usage ?? null : null;
       if (this.entries.get(id) !== entry || entry.revision !== active.revision) return raw;
       // Optional, bounded request for a specific omitted record. No filesystem or
@@ -763,7 +816,7 @@ class TerminalReview extends EventEmitter {
             observed += '\n' + recovered.filter(item => item.role === 'tool' && item.status === 'available' && item.requestId === chunk.source.requestId).map(item => item.text || '').join('\n');
             prompt = reviewPrompt(`${modelSource}\nADDITIONAL SCOPED RECORDS (requestId identifies current vs earlier):\n${recoveredText}`, entry.locale, chunk.request, chunk.lifecycle, observed, Boolean(chunk.reanalyze));
             active.calls++;
-            const next = await this.generate({ provider, model: settings.models[provider], prompt }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
+            const next = await this.generate({ provider, model: settings.models[provider], prompt, effort: reviewEffort(settings.effort).first }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
             raw = { ...(typeof next === 'object' ? next : {}), text: typeof next === 'string' ? next : next.text,
               usage: combinedUsage(typeof raw === 'object' ? raw.usage : null, typeof next === 'object' ? next.usage : null) };
             active.knownUsage = raw.usage;
@@ -776,7 +829,9 @@ class TerminalReview extends EventEmitter {
         if (this.entries.get(id) !== entry || entry.revision !== active.revision || !current || terminalKey(current) !== entry.key) return;
         active.timings = { ...active.timings, ...raw?.timings, firstResponseAt: raw?.timings?.firstResponseAt ?? null, resultReceivedAt: this.now() };
         if (raw.screened) {
-          this.publish(id, entry, chunk, { actual: observedFacts(chunk, entry.locale).join('\n'), alignment: 'not-reviewed', recordOnly: true }, zeroUsage(),
+          const reply = bounded(answerText(chunk.text || ''), 4000);
+          this.publish(id, entry, chunk, { actual: reply || observedFacts(chunk, entry.locale).join('\n'), alignment: 'not-reviewed', recordOnly: true,
+            ...(reply ? passThroughFields(reply) : {}) }, zeroUsage(),
             { analysisId: randomUUID(), analysisDepth: 'screened', analysisProvider: provider, analysisGate: active.gate,
               analysisMetrics: { ...active.timings, publishedAt: this.now(), calls: 0, gateCalls: active.gateCalled ? 1 : 0, retrievals: active.retrievals } });
           return;
@@ -796,20 +851,32 @@ class TerminalReview extends EventEmitter {
         if (parsed && requiresHandoff && !parsed.tasks[0]?.content?.handoff) parsed.tasks[0].contentIssues.push('missing time, first decision and next-request handoff');
         let usage = typeof raw === 'object' ? raw.usage ?? null : null;
         let qualityPasses = 1;
-        const repairIssues = formatError?.reviewIssues || [...(!parsed.tasks[0]?.content ? parsed.tasks[0]?.decisionIssues || [] : []), ...(parsed.tasks[0]?.contentIssues || [])];
+        const advisories = !formatError && parsed.tasks[0]?.content && !parsed.tasks[0].contentIssues?.length ? parsed.tasks[0].contentAdvisories || [] : [];
+        const repairIssues = formatError?.reviewIssues || [...(!parsed.tasks[0]?.content ? parsed.tasks[0]?.decisionIssues || [] : []), ...(parsed.tasks[0]?.contentIssues || []), ...advisories];
         // One replacement only, shared by format and decision repair. A scoped
         // evidence retrieval may already have used the second model call; its
         // malformed response still needs a single format-recovery opportunity.
         if (repairIssues?.length && (formatError || active.calls < 2)) {
           active.calls++;
-          const repaired = await this.generate({ provider, model: settings.models[provider],
+          const repaired = await this.generate({ provider, model: settings.models[provider], effort: reviewEffort(settings.effort).repair,
             prompt: repairPrompt(prompt, repairIssues) }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
           const latestSession = await this.manager().get(id, false);
           if (this.entries.get(id) !== entry || entry.revision !== active.revision || !latestSession || terminalKey(latestSession) !== entry.key) return;
           usage = combinedUsage(usage, typeof repaired === 'object' ? repaired.usage ?? null : null);
           active.knownUsage = usage;
           qualityPasses++;
-          parsed = parseReview(typeof repaired === 'string' ? repaired : repaired.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence, observed, authored);
+          const previous = parsed;
+          try {
+            parsed = parseReview(typeof repaired === 'string' ? repaired : repaired.text, currentSource, entry.locale, chunk.request, chunk.lifecycle, active.relatedEvidence, observed, authored);
+          } catch (error) {
+            if (!advisories.length || error.code !== 'REVIEW_INVALID_RESPONSE') throw error;
+            parsed = null;
+          }
+          // An advisory-only rewrite (unexplained labels) never replaces a valid
+          // analysis with a worse one; the original stays when the rewrite fails.
+          const usable = parsed?.tasks[0]?.content && parsed.tasks[0].requestQuote && parsed.tasks[0].evidenceQuote
+            && (!requiresCompact || parsed.tasks[0].content.version === 2) && (!requiresHandoff || parsed.tasks[0].content.handoff);
+          if (advisories.length && !usable) parsed = previous;
           // An invalid brief remains hidden; observed-work details are still usable.
           if (!parsed.tasks[0]?.decision && !parsed.tasks[0]?.content) parsed.tasks.forEach(task => {
             task.nextStep = '';
@@ -823,6 +890,9 @@ class TerminalReview extends EventEmitter {
         if (!task.requestQuote || !task.evidenceQuote) throw new Error('분석의 근거를 현재 요청의 기록과 연결하지 못했어요. 확인된 사실을 먼저 보여드려요.');
         if (requiresContent && !task.content || requiresCompact && task.content?.version !== 2) throw new Error('실제 답과 근거를 갖춘 짧은 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다. 다시 검토해 주세요.');
         if (requiresHandoff && !task.content.handoff) throw new Error('시점과 다음 판단을 갖춘 분석을 생성하지 못했습니다. 원래 기록은 유지했습니다.');
+        // Options the reply asks the user to choose from, copied from the reply.
+        const choices = task.content ? pendingChoices(answerText(chunk.text || '')) : [];
+        if (choices.length) task.content.choices = choices;
         const latest = entry.latest[chunk.taskId];
         // A stopped task is never graded as failure merely because it was stopped.
         if (latest?.lifecycle === 'interrupted' || chunk.lifecycle !== 'completed') task.alignment = 'in-progress';
@@ -854,7 +924,23 @@ class TerminalReview extends EventEmitter {
             entry.failed = null; entry.message = ''; return;
           }
         }
+        // Timeouts and crashed analysis processes are retried once; quality
+        // and login failures are not (a retry cannot fix them). Newer queued
+        // evidence for this terminal supersedes the retry.
+        const kind = summaryFailureKind(error);
+        if (kind === 'transient' && !chunk.transientRetried && !entry.pending.length) {
+          chunk.transientRetried = true;
+          if (!entry.pending.some(item => item.taskId === chunk.taskId)) entry.pending.unshift(chunk);
+          entry.failed = null; entry.message = ''; return;
+        }
         entry.failed = chunk; entry.message = clip(error.message, 500);
+        // With no earlier summary to keep, the reply itself becomes a failed
+        // summary card, so Summary mode never has to leave for the terminal.
+        const previous = this.task(entry, chunk.taskId);
+        if (chunk.lifecycle === 'completed' && (!previous || previous.recordOnly || previous.deferred)) {
+          this.publish(id, entry, chunk, { actual: bounded(answerText(chunk.text || ''), 4000) || previous?.actual || '', alignment: 'not-reviewed',
+            recordOnly: true, deferred: true, analysisDepth: 'deferred', summaryFailure: { kind } }, zeroUsage());
+        }
       }).finally(() => {
         if (entry.active === active) entry.active = null;
         this.busy = false;

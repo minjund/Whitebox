@@ -23,7 +23,8 @@ function utf8PipeSpec(spec) {
 
 // These requests only transform the supplied answer. They never resume the
 // user's conversation or need repository access, tools, hooks, or session files.
-function questionnaireCommand(provider, cwd, model = '', platform = process.platform, terminalReview = false) {
+const REVIEW_EFFORTS = new Set(['low', 'medium', 'high']);
+function questionnaireCommand(provider, cwd, model = '', platform = process.platform, terminalReview = false, effort = '') {
   const systemPrompt = terminalReview ? REVIEW_SYSTEM_PROMPT : SYSTEM_PROMPT;
   let args;
   if (provider === 'codex') {
@@ -57,6 +58,10 @@ function questionnaireCommand(provider, cwd, model = '', platform = process.plat
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
       '--system-prompt', systemPrompt];
     if (model) args.push('--model', model);
+    // Summaries otherwise inherit the user's interactive effort (often high):
+    // measured on the same review prompt, high spent ~3x the time on hidden
+    // reasoning for an equally valid result. Only reviews set it explicitly.
+    if (terminalReview && REVIEW_EFFORTS.has(effort)) args.push('--effort', effort);
   } else {
     throw new Error('이 AI는 아직 백그라운드 질문지 생성을 지원하지 않습니다.');
   }

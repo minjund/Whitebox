@@ -14,7 +14,7 @@ module.exports = async function jevGateChecks({ jev, session }) {
       action: { kind: 'finish', text: 'Accept the change.', why: 'The requested behavior was verified.', request: '' }, alternatives: [] } }] }) };
   let gateCalls = 0, gateInput;
   const transport = jev.fetchImpl;
-  const scenario = async ({ probability = .9, unavailable = false, malformed = false, enabled = true, legacy = false, provider = 'codex', force = false, invalidCitation = false, waiting = false, rateLimited = false } = {}) => {
+  const scenario = async ({ probability = .9, unavailable = false, malformed = false, enabled = true, legacy = false, provider = 'codex', force = false, invalidCitation = false, waiting = false, rateLimited = false, work = false } = {}) => {
     const order = [], calls = [];
     jev.fetchImpl = async (url, options) => {
       order.push('jev'); gateCalls++; gateInput = JSON.parse(options.body);
@@ -31,7 +31,9 @@ module.exports = async function jevGateChecks({ jev, session }) {
         const invalid = JSON.parse(reply.text); invalid.tasks[0].decision.reasons[0].evidenceQuote = 'UNSUPPORTED_JEV_ROUTING_RESULT';
         return { ...reply, text: JSON.stringify(invalid) };
       } } });
-    const chunk = { taskId: 'gate', request, text: 'ASSISTANT: Implemented the requested change.\nTOOL: '+evidence,
+    // Jev screens only long replies without work; a work claim always goes to the reviewer.
+    const answer = work ? 'Implemented the requested change.' : 'The request asks how the output is verified against the change. '.repeat(12);
+    const chunk = { taskId: 'gate', request, text: 'ASSISTANT: ' + answer + '\nTOOL: '+evidence,
       lifecycle: 'completed', submittedAt: 1, observedAt: 1, queuedAt: 1 };
     const entry = { key: JSON.stringify(['gate', session.creationId, session.pid, session.createdAt]), provider: 'codex', pending: [chunk], revision: 0, state: 'collecting', latest: {}, seen: {}, locale: 'en' };
     service.entries.set('gate', entry);
@@ -68,7 +70,8 @@ module.exports = async function jevGateChecks({ jev, session }) {
       assert.deepEqual(order, ['jev']); assert.equal(calls.length, 0);
       assert.equal(task.recordOnly, true); assert.equal(task.analysisDepth, 'screened');
       assert.equal(task.alignment, 'not-reviewed'); assert.equal(task.decision, undefined, 'skipping analysis never claims completion');
-      assert.match(task.actual, /AI's current report/); assert.equal(task.analysisGate.usage.total, 130);
+      assert.equal(task.passThrough, true, 'a screened reply is shown as written'); assert.match(task.actual, /^The request asks how the output is verified/);
+      assert.equal(task.analysisGate.usage.total, 130);
       assert.equal(task.analysisUsage.total, 0); assert.equal(task.analysisMetrics.calls, 0);
     }
     for (const extra of [{ unavailable: true }, { malformed: true }]) {
@@ -77,6 +80,7 @@ module.exports = async function jevGateChecks({ jev, session }) {
       assert(task.decision, 'a broken gate still permits record-grounded review');
     }
     assert.deepEqual((await scenario({ enabled: false })).order, ['llm']);
+    assert.deepEqual((await scenario({ work: true, probability: .1 })).order, ['llm'], 'a work turn is always summarized; Jev is not asked');
     assert.deepEqual((await scenario({ force: true, probability: .1 })).order, ['llm'], 'explicit review requires LLM interpretation');
     await scenario({ legacy: true }); await scenario({ provider: 'claude' }); await scenario({ waiting: true });
     const invalid = await scenario({ invalidCitation: true });

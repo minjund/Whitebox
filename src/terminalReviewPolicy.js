@@ -64,6 +64,22 @@ function mechanicalResult(chunk, records = [], locale = 'ko') {
   return '';
 }
 
+// A work record: the AI changed files or ran a command in this turn.
+const WORK_TOOL = /^(?:Write|Edit|MultiEdit|NotebookEdit|apply_patch|Bash|exec_command|shell_command|shell|local_shell)$/iu;
+const PASS_THROUGH_CHARS = 600;
+// A reply that says work was done ("변경했습니다") is summarized even without a
+// record this turn: the summary shows what is verified and what is only said.
+const workClaim = value => /수정했|변경했|구현했|추가했|삭제했|바꿨|고쳤|작성했|생성했|완료했|완료됐|끝냈|마쳤|적용했|반영했|만들었|옮겼|\b(?:implemented|fixed|changed|added|created|removed|updated|deleted|renamed|finished|completed)\b|已修改|已实现|已添加|已删除|已完成/iu.test(value);
+function hasWorkRecord(chunk) {
+  return Boolean(chunk?.tools?.changes?.length) || (chunk?.tools?.items || []).some(tool => WORK_TOOL.test(tool?.name || ''));
+}
+// Jev may skip the model only for a long reply without work; work and bare
+// completion claims are always summarized.
+function screenable(chunk) {
+  const answer = report(chunk);
+  return !hasWorkRecord(chunk) && !(answer && (generic(answer) || workClaim(answer)));
+}
+
 function classifyEvidence(chunk, records, locale = 'ko') {
   const mechanical = mechanicalResult(chunk, records, locale);
   if (mechanical) return { mode: 'record', actual: mechanical };
@@ -80,14 +96,22 @@ function classifyEvidence(chunk, records, locale = 'ko') {
   const planOnly = /(?:하겠습니다|할게요|예정입니다|살펴보겠습니다|조사하겠습니다|\bI(?:'ll| will)\b)/iu.test(answer) && !resultReport(answer) && !asksUser;
   const mutation = /수정|바꿔|변경|구현|만들어|삭제|rename|implement|fix|modify|delete/iu.test(chunk.request);
   const unsupportedMutation = mutation && !tools.some(tool => tool.excerpt) && answer.length < 80 && !/[“"‘'`]/u.test(answer);
-  if (verification || workResult || (finalContent && !planOnly && !unsupportedMutation)) return { mode: 'analyze' };
-  // A short finished reply has nothing to condense: show the reply itself
-  // instead of a placeholder. A line printed mid-turn is not the answer.
-  if (chunk.lifecycle === 'completed' && answer && !generic(answer) && answer.length <= 600) return { mode: 'defer', actual: answer };
+  const completed = chunk.lifecycle === 'completed';
+  // A finished turn with a work record is always summarized from that record,
+  // however short its reply ("완료했습니다" included).
+  if (completed && hasWorkRecord(chunk)) return { mode: 'analyze' };
+  // "Done." with nothing recorded this turn: summarize from the conversation;
+  // the summary separates what is verified from what is only claimed.
+  if (completed && answer && (generic(answer) || workClaim(answer))) return { mode: 'analyze' };
+  if (verification || workResult) return { mode: 'analyze' };
+  // A short finished reply without work is shown as it is (pass-through).
+  // A line printed mid-turn is not the answer.
+  if (completed && substantive && answer.length <= PASS_THROUGH_CHARS) return { mode: 'defer', actual: answer, passThrough: true };
+  if (completed && substantive || finalContent && !planOnly && !unsupportedMutation) return { mode: 'analyze' };
   return { mode: 'defer', actual: text(locale,
     '요청 결과를 판단할 구체적인 내용이 아직 기록에 없어요. 결과가 수집되면 분석할게요.',
     'No concrete result for this request is recorded yet. Analysis will begin when evidence arrives.',
     '尚未记录此请求的具体结果。收集到证据后将进行分析。') };
 }
 
-module.exports = { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement };
+module.exports = { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement, hasWorkRecord, screenable, PASS_THROUGH_CHARS };

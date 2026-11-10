@@ -63,22 +63,24 @@ async function optimizationChecks() {
   await capture(nextWorking, { submission: next });
   now += 90000; await capture(nextWorking, { submission: next });
   assert.equal(calls.length, 1, 'long work does not receive timed intermediate analysis');
-  const nextComplete = nextWorking + '\n─ Worked for 90s ───\nTask finished.\n› ';
+  const nextComplete = nextWorking + '\n• Fixed the remaining bug.\n─ Worked for 90s ───\nTask finished.\n› ';
   await capture(nextComplete, { submission: next }); now += 1000;
   await capture(nextComplete, { submission: next }); assert.equal(calls.length, 2);
-  calls[1].reject(new Error('test timeout')); await tick();
+  calls[1].reject(new Error('test timeout')); await tick(); await tick();
+  assert.equal(calls.length, 3, 'a timeout is retried once automatically');
+  calls[2].reject(new Error('test timeout')); await tick();
   now += 90000;
   assert.equal((await capture(nextComplete, { submission: next })).message, 'test timeout');
-  assert.equal(calls.length, 2, 'failed unchanged analysis never retries automatically');
+  assert.equal(calls.length, 3, 'failed unchanged analysis never retries again');
   await capture(nextComplete, { submission: next, force: true });
-  assert.equal(calls.length, 3, 'explicit retry retains completed evidence');
-  calls[2].resolve(JSON.stringify({ tasks: [{ requestQuote: next.request, evidenceQuote: 'Task finished.', actual: 'Done', alignment: 'aligned' }] })); await tick();
+  assert.equal(calls.length, 4, 'explicit retry retains completed evidence');
+  calls[3].resolve(JSON.stringify({ tasks: [{ requestQuote: next.request, evidenceQuote: 'Task finished.', actual: 'Done', alignment: 'aligned' }] })); await tick();
   assert.equal(service.entries.get(session.id).result.tasks.length, 2);
-  await capture(nextComplete, { submission: next }); assert.equal(calls.length, 3);
+  await capture(nextComplete, { submission: next }); assert.equal(calls.length, 4);
   const repeated = { id: 'turn-3', request: 'another task' };
   await capture(nextComplete + '\n› another task', { submission: repeated });
   now += 90000; await capture(nextComplete + '\n› another task', { submission: repeated });
-  assert.equal(calls.length, 3, 'repeating the same request cannot reuse an old completion');
+  assert.equal(calls.length, 4, 'repeating the same request cannot reuse an old completion');
   console.log('PASS submitted request → completed answer → single analysis; no idle/stream/tool-pause triggers, manual retry');
 }
 
@@ -196,7 +198,7 @@ async function main() {
   const { codexUsageWindows } = require('../src/providerUsage');
   assert.equal(codexUsageWindows({ primary: { used_percent: 56, window_minutes: 10080 } }).weekly.usedPercent, 56, 'a weekly primary window must not be labeled short-term');
   assert.equal(codexUsageWindows({ primary: { used_percent: 7, window_minutes: 300 }, secondary: { used_percent: 3, window_minutes: 10080 } }).shortWindow.usedPercent, 7);
-  assert.deepEqual(normalizeReviewSettings({ provider: 'invalid', models: { codex: '--help', claude: 'sonnet' } }), { provider: 'auto', jevEnabled: false, models: { codex: '', claude: 'sonnet' } });
+  assert.deepEqual(normalizeReviewSettings({ provider: 'invalid', models: { codex: '--help', claude: 'sonnet' } }), { provider: 'auto', jevEnabled: false, models: { codex: '', claude: 'sonnet' }, effort: 'low' });
   const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
   const modelDir = await fs.mkdtemp(path.join(os.tmpdir(), 'whitebox-review-models-'));
   try {
@@ -211,6 +213,9 @@ async function main() {
   await optimizationChecks();
   require('./terminal-review-history-audit-test')();
   await require('./terminal-review-handoff-test')();
+  await require('./terminal-review-label-test')();
+  await require('./terminal-progress-test')();
+  await require('./summary-result-kinds-test')();
   assert.equal(providerFromPosixProcess({ name: '/usr/local/lib/n', commandLine: '/usr/local/lib/node_modules/@openai/codex/vendor/bin/codex' }), 'codex');
   assert.equal(providerFromPosixProcess({ name: '/usr/local/lib/n', commandLine: '/usr/local/lib/node_modules/@openai/codex/vendor/bin/codex app-server' }), null);
   assert.equal(providerFromPosixProcess({ name: '/bin/echo', commandLine: '/bin/echo /usr/local/bin/codex' }), null);

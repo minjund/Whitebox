@@ -3,6 +3,20 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.27 - 2026-11-10
+
+- Summary cards say what they are: a Whitebox summary, an AI reply shown as written (a short reply without work, shown at once with no summary call), or a failed summary that shows the reply, the reason and a “Summarize again” button. A failed summary no longer switches to the terminal or cancels queued requests.
+- A finished turn that changed files, ran commands or says it is done (“완료했습니다”) is always summarized from what was actually recorded, so “done” replies tell you what was done.
+- A timed-out summary is retried once automatically; a sign-in or permission problem says where to fix it instead of retrying.
+- While the AI works, Summary mode shows what it is doing right now, such as “Running tests…”, “Editing files · auth.js…” or the AI's own progress line, read from its session log without any extra AI call. Command arguments are never shown.
+- While a summary is being made, Summary mode shows only the status instead of the raw reply.
+- A reply that ends with a choice shows the question and every option exactly as written, with the option the reply recommends. Tables render as tables, sentences break onto their own lines, and labels such as F1 or E3~E11 are explained at first use.
+- Summaries arrive about three times faster: analysis runs at low effort by default. Choose low, medium, high or the terminal AI's own setting under Settings › Review.
+- Summary analyses no longer hold back an app update; they run again after the restart. The update notice names what is still running when something else blocks it.
+- The interface uses the bundled Pretendard font, so Korean and Latin text share one size and weight. Choose the system font or Geist under Settings › General.
+- 2048 can be played while the AI works as well as while it summarizes. When the wait ends the board folds, and the game button always stays.
+- Verify official 2.0.26 installers alongside all retained Windows and macOS update cohorts.
+
 ## 2.0.26 - 2026-11-09
 
 - Summary mode shows the same answers and content as the terminal-mode review panel: answers are read from the live review results instead of saved copies, so stale or out-of-order entries and leftover “no concrete result yet” cards no longer appear. Summary keeps only your own sends.
