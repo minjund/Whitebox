@@ -16,7 +16,7 @@ exports.run = async evaluate => {
         activeId: () => 'states', session: () => ({ status: 'running', creationId: 'epoch', pid: 100 }),
         member: () => member, tasks: () => data.tasks, review: () => data.review,
         snapshot: () => ({ text: '' }), label: () => 'states', groupId: () => 'group',
-        gameVisibility: () => data.visibility, gameBehavior: () => data.behavior || 'auto-collapse', save: () => {}, reveal: () => {}, report: (message, id) => { stats.reports = [...(stats.reports || []), { message, id }]; }, submitted: () => {},
+        gameVisibility: () => data.visibility, gameBehavior: () => data.behavior || 'auto-collapse', save: () => {}, reveal: () => {}, focusTerminal: id => { stats.focused = id; }, report: (message, id) => { stats.reports = [...(stats.reports || []), { message, id }]; }, submitted: () => {},
         refresh: async () => {
           stats.lookups.push(chat.pendingJobs());
           chat.observe([...data.jobs, ...(data.archived ? chat.pendingJobs().map(request => data.archived[request.id]).filter(Boolean) : [])]);
@@ -325,8 +325,125 @@ exports.run = async evaluate => {
     cases.push('past-requests');
     f = make({ messages: [user('q', { state: 'queued' })] });
     check(f.root.querySelector('#wbSummaryPastSection').hidden, 'a request that never reached the AI is not a past request'); cases.push('past-requests-empty');
+    // A richer working line: the concrete step, how long and how much, and
+    // waits the AI cannot control, each with its own plain explanation.
+    {
+      const description = () => f.text('wbSummaryWorkingDescription');
+      f = make({ messages: [user('rich')], review: { state: 'awaiting-answer' } });
+      f.member.activity = { state: 'working', progress: { kind: 'agent', detail: 'two', phase: 'running', count: 3 },
+        turn: { since: Date.now() - 125 * 60000, steps: 14, files: 3 }, background: { count: 1, items: [{ id: 'x', kind: 'command', label: '빌드', state: 'running' }] } };
+      f.chat.render();
+      check(f.state().thinking.endsWith('도움 AI 3개 작업 중…') && f.state().reply === '도움 AI 3개 작업 중…', 'parallel helper AIs are counted: ' + f.state().thinking);
+      check(description() === '2시간 5분째 작업 중 · 도구 14번 사용 · 파일 3개 수정 · 백그라운드 1개 실행 중', 'elapsed time and counts: ' + description());
+      check(!f.root.querySelector('#wbSummaryWorking').hidden && f.state().title === 'AI가 작업 중입니다.', 'still a working AI, not a background wait');
+      f.member.activity = { state: 'working', progress: { kind: 'search', detail: 'refreshToken', phase: 'running' }, turn: { since: Date.now() - 1000, steps: 0, files: 0 } }; f.chat.render();
+      check(f.state().thinking.endsWith('코드 검색 중 · refreshToken…') && description() === '방금 시작했어요', 'the searched text and a fresh start: ' + description());
+      const waits = [['compact', undefined, '대화 압축 중…', '대화가 길어져 앞부분을 줄이고 있어요. 끝나면 이어서 작업해요.'],
+        ['retry', '2/10', '오류가 나서 다시 시도하는 중 · 2/10…', 'AI 서비스 응답에 문제가 있어 자동으로 다시 시도하고 있어요.'],
+        ['limit', '6:50pm', '사용 한도가 풀리길 기다리는 중 · 6:50pm…', '한도가 풀리면 AI가 자동으로 이어서 작업해요.'],
+        ['wait', undefined, '백그라운드 결과 기다리는 중…', '방금 시작했어요']];
+      for (const [kind, detail, label, note] of waits) {
+        f.member.activity = { state: 'working', progress: { kind, ...(detail ? { detail } : {}), phase: kind === 'wait' ? 'running' : 'notice' }, turn: { since: Date.now(), steps: 0, files: 0 } }; f.chat.render();
+        check(f.state().thinking.endsWith(label) && description() === note, kind + ' wait: ' + f.state().thinking + ' / ' + description());
+      }
+      cases.push('live-detail');
+    }
+    // The AI's turn ended while its own background work still runs: say so
+    // instead of "done" or the reply-waiting text, and keep the summary.
+    {
+      const jobs = [{ id: 'a', kind: 'command', label: '빌드', state: 'running' }, { id: 'b', kind: 'monitor', label: '모니터', state: 'running' }, { id: 'c', kind: 'agent', label: '도움 AI', state: 'running' }];
+      f = make({ tasks: [task('bg')], messages: [user('bg')] });
+      check(f.root.querySelector('#wbSummaryWorking').hidden && f.state().title === '답변과 요약이 도착했어요', 'a finished summary without background work is done');
+      f.member.provider = 'claude';
+      f.member.activity = { state: 'idle', backgroundWait: true, background: { count: 3, items: jobs } }; f.chat.render();
+      check(!f.root.querySelector('#wbSummaryWorking').hidden && f.state().thinking.endsWith('답변 완료 · 백그라운드 작업 3개 실행 중'), 'background wait is shown: ' + f.state().thinking);
+      check(f.text('wbSummaryWorkingDescription') === '빌드, 이름 없는 모니터 외 1개 · 다음 요청을 지금 보내도 돼요. 작업이 끝나면 AI가 결과를 받아 이어서 작업해요.', 'short job names and what happens next: ' + f.text('wbSummaryWorkingDescription'));
+      check(f.state().title === '답변은 끝났고 백그라운드 작업만 실행 중이에요' && f.state().next && f.text('wbSummaryTranscript').includes('검사를 완료했습니다.'), 'the summary stays while background work runs: ' + JSON.stringify(f.state()));
+      check(f.root.querySelector('#wbSummaryStateTitle').dataset.state === 'done', 'the reply itself is finished');
+      f.member.activity = { state: 'working', backgroundWait: true, background: { count: 2, items: [jobs[2], { ...jobs[2], id: 'd', label: '테스트 조사' }] } }; f.chat.render();
+      check(f.state().thinking.endsWith('답변 완료 · 도움 AI 2개 실행 중') && f.state().reply === '답변 완료 · 도움 AI 2개 실행 중', 'helper AIs still running after the turn: ' + f.state().thinking + ' / ' + f.state().reply);
+      f.member.provider = 'codex';
+      f.member.activity = { state: 'idle', backgroundWait: true, background: { count: 1, items: [jobs[0]] } }; f.chat.render();
+      check(f.state().thinking.endsWith('답변 완료 · 백그라운드 작업 실행 중') && f.text('wbSummaryWorkingDescription') === '빌드 · 다음 요청을 지금 보내도 돼요. 작업은 계속 실행 중이에요.', 'provider-honest wording: ' + f.text('wbSummaryWorkingDescription'));
+      f.member.activity = { state: 'idle', background: { count: 1, items: [jobs[0]] } }; f.chat.render();
+      check(f.root.querySelector('#wbSummaryWorking').hidden && f.state().title === '답변과 요약이 도착했어요', 'background work alone, without the backend wait signal, is not a wait');
+      f = make({ tasks: [task('bg2', { lifecycle: 'interrupted', recordOnly: true })], messages: [user('bg2')] });
+      f.member.activity = { state: 'idle', backgroundWait: true, background: { count: 1, items: [jobs[0]] } }; f.chat.render();
+      check(f.state().title === '요청이 중단됐어요' && f.root.querySelector('#wbSummaryWorking').hidden, 'an interrupted request never claims a background wait');
+      cases.push('background-wait');
+    }
+    // An approval prompt says what it is holding.
+    f = make({ messages: [user('perm')], review: { state: 'awaiting-answer' } });
+    f.member.activity = { state: 'waiting', progress: { kind: 'edit', detail: 'auth.js', phase: 'running' } }; f.chat.render();
+    check(f.text('wbSummaryTranscript').includes('AI가 파일 수정 허락을 기다려요 · auth.js') && f.text('wbSummaryStateDescription') === 'AI가 파일 수정 허락을 기다려요 · auth.js', 'permission detail: ' + f.text('wbSummaryStateDescription'));
+    f.member.activity = { state: 'waiting', progress: { kind: 'ask', phase: 'running' } }; f.chat.render();
+    check(f.text('wbSummaryTranscript').includes('AI가 질문했어요. 터미널에서 답해 주세요.'), 'a question is not a permission');
+    f.member.activity = { state: 'waiting' }; f.chat.render();
+    check(f.text('wbSummaryTranscript').includes('터미널에서 응답이 필요합니다.'), 'unknown prompts keep the generic text');
+    cases.push('permission-detail');
+    // A single tick without the AI process never yanks the composer; only a
+    // lasting absence falls back, and never during a Korean composition.
+    {
+      const realNow = Date.now, at = offset => { Date.now = () => realNow() + offset; };
+      try {
+        f = make({ messages: [user('gone')] }); document.body.append(f.root);
+        const visible = () => !f.root.querySelector('#wbSummary').hidden && f.chat.serialize()[0].mode === 'summary';
+        f.member.providerPid = 0; f.chat.render();
+        check(visible() && !f.stats.reports, 'one missed observation keeps Summary and its composer');
+        f.member.providerPid = 101; f.chat.render(); f.member.providerPid = 0; at(2500); f.chat.render();
+        check(visible(), 'a recovered observation restarts the grace period');
+        at(6000); f.chat.render();
+        check(f.chat.serialize()[0].mode === 'terminal' && f.stats.reports?.length === 1, 'a lasting absence still falls back to the terminal');
+        Date.now = realNow; f.root.remove();
+        f = make({ messages: [user('typing')] }); document.body.append(f.root);
+        const input = f.root.querySelector('#wbSummaryInput'); input.focus();
+        input.dispatchEvent(new CompositionEvent('compositionstart', { data: '한' }));
+        f.member.providerPid = 0; at(60000); f.chat.render();
+        check(visible() && document.activeElement === input && !input.disabled, 'an active Korean composition is never interrupted');
+        input.dispatchEvent(new CompositionEvent('compositionend', { data: '한' })); f.chat.render();
+        check(visible(), 'a focused composer waits longer before falling back');
+        at(120000); f.chat.render();
+        check(f.chat.serialize()[0].mode === 'terminal', 'an ended AI session eventually falls back even while focused');
+        Date.now = realNow; f.root.remove();
+        f = make({ messages: [user('switch')] });
+        f.root.querySelector('[data-workspace-mode="terminal"]').click();
+        check(f.chat.serialize()[0].mode === 'terminal' && f.stats.focused === 'states', 'switching to the terminal focuses its input');
+      } finally { Date.now = realNow; f.root.remove(); }
+      cases.push('missing-provider-grace');
+    }
+    // Gemini and Grok get the same Summary view, named by their own label;
+    // sends carry their identity like Claude and Codex.
+    for (const [provider, name] of [['gemini', 'Gemini'], ['grok', 'Grok']]) {
+      f = make();
+      f.member.provider = provider; f.chat.render();
+      check(f.root.classList.contains('summary-mode') && !f.root.querySelector('[data-workspace-mode=summary]').disabled, provider + ' can use Summary');
+      check(f.text('wbSummaryProvider') === name, provider + ' label: ' + f.text('wbSummaryProvider'));
+      await f.send();
+      check(f.stats.payloads.at(-1)?.targetProvider === provider, provider + ' send identity');
+    }
+    cases.push('gemini-grok-eligible');
+    // Without a step the screen can prove, the line stays neutral: how long the
+    // work has been observed, and no tool or file counts.
+    {
+      f = make({ messages: [user('screen', { targetProvider: 'gemini' })], review: { state: 'awaiting-answer' } });
+      f.member.provider = 'gemini';
+      f.member.activity = { state: 'working', turn: { since: Date.now() - 3 * 60000 - 5000, steps: 0, files: 0, observed: true } }; f.chat.render();
+      check(f.state().thinking.endsWith('AI가 작업 중입니다.') && f.state().reply === '작업 중', 'no invented step: ' + f.state().thinking + ' / ' + f.state().reply);
+      check(f.text('wbSummaryWorkingDescription') === '3분째 작업 중', 'observed elapsed time only: ' + f.text('wbSummaryWorkingDescription'));
+      check(!/Claude|Codex/u.test(f.text('wbSummaryWorking')), 'no provider-specific wording');
+    }
+    cases.push('screen-provider-neutral-line');
+    {
+      f = make({ messages: [user('grok', { targetProvider: 'grok' })], review: { state: 'awaiting-answer' } });
+      f.member.provider = 'grok';
+      f.member.activity = { state: 'working', progress: { kind: 'respond', phase: 'screen' }, turn: { since: Date.now(), steps: 0, files: 0, observed: true } }; f.chat.render();
+      check(f.state().thinking.endsWith('답변 작성 중…'), 'Grok writing its answer: ' + f.state().thinking);
+      f.member.activity = { state: 'waiting', progress: { kind: 'command', phase: 'screen' } }; f.chat.render();
+      check(f.text('wbSummaryTranscript').includes('AI가 명령 실행 허락을 기다려요'), 'an approval dialog names what it holds');
+    }
+    cases.push('grok-screen-steps');
     return cases;
   })()`);
-  assert.equal(result.length, 31);
-  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls, default/settings-aware 2048, no raw reply while summarizing, live AI step, result card kinds, past requests');
+  assert.equal(result.length, 38);
+  console.log('PASS summary state regressions: deferred/reply/backoff/active/old analysis, historical ordering, interruption, archived job lookup, saved trust controls, default/settings-aware 2048, no raw reply while summarizing, live AI step with elapsed time and counts, compaction/retry/usage-limit waits, background waits, approval details, missing-AI grace without yanking the composer, result card kinds, past requests');
 };

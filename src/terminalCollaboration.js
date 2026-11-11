@@ -8,6 +8,9 @@ const { completedTurn, completionStamp, inputReady, isNonTaskRequest } = require
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
+// Summary chat targets: Claude and Codex are confirmed from their own logs,
+// Gemini and Grok from their own input prompt and turn markers on screen.
+const SUMMARY_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
 // Claude records a bracketed paste wrapped in <pasted_content id="…"> tags and
 // the parser bounds request text at 8000 characters. Compare what was typed.
 const typedText = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
@@ -16,16 +19,39 @@ function sameRequest(recorded, sent) {
   return Boolean(a) && (a === b || String(recorded).length >= 8000 && a.length > 40 && b.startsWith(a.slice(0, -40)));
 }
 
+const FINISHED_JOB_STATES = new Set(['completed', 'failed', 'interrupted', 'stopped']);
+// Finished jobs are kept for the panel display (last 80), review relay records
+// and CLI `wait`; older ones are removed from memory and disk.
+const RETAINED_FINISHED_JOBS = 200;
+const FINISHED_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// A job that just finished stays readable for a CLI `wait` (at most 60s) and
+// the next panel sync, whatever the count or age limits say.
+const FINISHED_JOB_GRACE_MS = 10 * 60 * 1000;
+const MAX_SUMMARY_PROMPT_RECEIPTS = 256;
+const jobStamp = job => Math.max(Number(job.finishedAt) || 0, Number(job.sentAt) || 0, Number(job.createdAt) || 0);
+// A delivered job ends on evidence only: its finished turn, a stop, a changed
+// session, or an AI that shows no sign of work. Elapsed time alone never ends
+// a turn that is still working; a long task keeps its job (and the queue
+// behind it) until it finishes.
+const STALLED_JOB_MS = 15 * 60 * 1000;
+// An idle AI whose finished turn never matched this send releases the queue
+// sooner than a stall. Both the session log and the screen must say idle.
+const IDLE_UNMATCHED_JOB_MS = 3 * 60 * 1000;
+// One process scan can miss the AI; only a lasting absence ends the job.
+const MISSING_PROCESS_GRACE_MS = 30 * 1000;
+const STALLED_JOB_ERROR = '15분 동안 상대 AI의 작업 신호를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.';
+const IDLE_UNMATCHED_JOB_ERROR = '상대 AI가 입력을 기다리고 있지만 이 요청의 완료 기록을 찾지 못했습니다. 터미널에서 확인해 주세요. 자동 재전송하지 않습니다.';
+
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, createTerminal = options => manager().create(options), onTerminalClosed = () => {}, monitor = new ProcessMonitor({ scanTtlMs: 750 }), completion = new TerminalReviewCompletion(), activity = null, backgroundSnapshot = () => null, now = Date.now, enableControl = true }) {
+  constructor({ manager, directory, createTerminal = options => manager().create(options), onTerminalClosed = () => {}, monitor = new ProcessMonitor({ scanTtlMs: 1500 }), completion = new TerminalReviewCompletion(), activity = null, backgroundSnapshot = () => null, now = Date.now, enableControl = true }) {
     Object.assign(this, { manager, directory, monitor, completion, now });
     this.createTerminal = createTerminal;
     this.onTerminalClosed = onTerminalClosed;
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now, backgroundSnapshot });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
-    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.summaryPromptReceipts = new Set(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
+    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.summaryPromptReceipts = new Set(); this.settledJobs = new Map(); this.pinnedJobIds = new Set(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.helper = path.join(directory, 'panel-agent.cjs');
     fs.copyFileSync(path.join(__dirname, '../bin/panel-agent.js'), this.helper);
@@ -37,10 +63,33 @@ class TerminalCollaboration {
       try {
         const job = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
         if (!safeId(job.id)) continue;
-        if (!['completed', 'failed', 'interrupted', 'stopped'].includes(job.state)) Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' });
-        this.jobs.set(job.id, job); this.save(job);
+        if (FINISHED_JOB_STATES.has(job.state)) this.settledJobs.set(job.id, Math.min(this.now(), jobStamp(job)));
+        else { Object.assign(job, { state: 'interrupted', error: '앱이 다시 시작되어 전달 상태를 재확인해야 합니다. 자동으로 재전송하지 않았습니다.' }); this.save(job); }
+        this.jobs.set(job.id, job);
       } catch { /* Malformed local records are never executed. */ }
     }
+    this.pruneJobs();
+  }
+  // Removes old finished jobs from memory and disk. The request file goes
+  // first: poll() treats a request without an in-memory job as new, so a job
+  // is forgotten only once its request can no longer be replayed.
+  pruneJobs() {
+    const now = this.now(), finished = [];
+    for (const job of this.jobs.values()) {
+      if (!FINISHED_JOB_STATES.has(job.state)) { this.settledJobs.delete(job.id); continue; }
+      if (!this.settledJobs.has(job.id)) this.settledJobs.set(job.id, now);
+      finished.push(job);
+    }
+    finished.sort((a, b) => jobStamp(b) - jobStamp(a));
+    finished.forEach((job, index) => {
+      if (this.pinnedJobIds.has(job.id) || now - this.settledJobs.get(job.id) < FINISHED_JOB_GRACE_MS) return;
+      if (index < RETAINED_FINISHED_JOBS && now - jobStamp(job) < FINISHED_JOB_MAX_AGE_MS) return;
+      try {
+        fs.rmSync(this.file(job.id, 'request'), { force: true });
+        fs.rmSync(this.file(job.id, 'job'), { force: true });
+      } catch { return; /* Keep the record so its request is never replayed. */ }
+      this.jobs.delete(job.id); this.settledJobs.delete(job.id);
+    });
   }
   file(id, suffix) { if (!safeId(id)) throw new Error('잘못된 연결 ID입니다.'); return path.join(this.directory, `${suffix === 'access' ? Buffer.from(id).toString('base64url') : id}.${suffix}.json`); }
   write(file, value) { const tmp = `${file}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(tmp, file); }
@@ -74,6 +123,14 @@ class TerminalCollaboration {
     }
     for (const frame of frames.slice(0, 256)) {
       const member = currentMembers.get(frame.id);
+      // An unchanged pane sends only its identity. When it still matches the
+      // stored screen exactly, that screen is current again: refresh its time.
+      if (member && frame.unchanged === true && typeof frame.text !== 'string') {
+        const stored = this.frames.get(frame.id);
+        if (stored && stored.creationId === member.creationId && frame.creationId === member.creationId
+          && stored.pid === member.pid && stored.outputSequence === frame.outputSequence) stored.at = this.now();
+        continue;
+      }
       if (member && frame.creationId === member.creationId && typeof frame.text === 'string') this.frames.set(frame.id, {
         ...frame, pid: member.pid, text: frame.text.slice(-24000), readinessText: typeof frame.readinessText === 'string' ? frame.readinessText.slice(-24000) : undefined, at: this.now(),
       });
@@ -107,6 +164,9 @@ class TerminalCollaboration {
     this.updatedAt = this.now();
     await this.control?.start();
     await this.poll();
+    // Summary chat still waits for these replies; keep their jobs.
+    this.pinnedJobIds = new Set((Array.isArray(summaryJobs) ? summaryJobs : []).slice(0, 100).map(request => request?.id).filter(id => typeof id === 'string'));
+    this.pruneJobs();
     const visible = new Set([...this.groups.values()].flatMap(group => group.members.map(member => member.id)));
     const jobs = new Map([...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80).map(job => [job.id, job]));
     // The display window must not hide a delivery needed to archive a reply.
@@ -161,7 +221,7 @@ class TerminalCollaboration {
     const live = await this.manager().get(id, false);
     if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('터미널 실행 세션이 바뀌었습니다.');
     const child = exactProcess(live, await scanProcesses(this.monitor));
-    if (!child) throw new Error('이 터미널에서 Claude 또는 Codex를 먼저 실행해 주세요.');
+    if (!child) throw Object.assign(new Error('이 터미널에서 AI(Claude, Codex, Gemini, Grok)를 먼저 실행해 주세요.'), { code: 'AI_PROCESS_MISSING' });
     const frame = this.frames.get(id);
     if (!frame || frame.creationId !== member.creationId || this.now() - frame.at > 10000 || !immediate && frame.outputSequence !== live.outputSequence) throw Object.assign(new Error('터미널의 최신 입력 상태를 확인한 후 다시 시도해 주세요.'), { code: 'TERMINAL_FRAME_STALE' });
     return { member, live, child, frame };
@@ -187,7 +247,7 @@ class TerminalCollaboration {
       if (!/^[a-f0-9-]{36}$/u.test(id || '') || !safeId(groupId) || !safeId(targetId)
         || typeof message !== 'string' || !message.trim() || message.length > 8000 || /[\x00-\x08\x0b-\x1f\x7f]/u.test(message)
         || typeof targetCreationId !== 'string' || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0
-        || !['claude', 'codex'].includes(targetProvider)) throw new Error('올바른 채팅 요청과 실행 세션이 필요합니다.');
+        || !SUMMARY_PROVIDERS.includes(targetProvider)) throw new Error('올바른 채팅 요청과 실행 세션이 필요합니다.');
       const existing = this.jobs.get(id);
       if (existing) {
         if (existing.operation !== 'summary' || existing.targetId !== targetId || existing.groupId !== groupId
@@ -198,13 +258,16 @@ class TerminalCollaboration {
       const immediate = payload.sendNow === true;
       let target;
       try { target = await this.target(groupId, targetId, immediate); }
-      catch (error) { if (error.code === 'TERMINAL_FRAME_STALE') return { deferred: true }; throw error; }
+      // A deferred send stays queued in the chat; `reason` tells the user what it waits for.
+      // A missed process scan is as transient as a lagging frame.
+      catch (error) { if (['TERMINAL_FRAME_STALE', 'AI_PROCESS_MISSING'].includes(error.code)) return { deferred: true, reason: 'screen' }; throw error; }
       if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('채팅을 작성한 AI 세션이 바뀌었습니다.');
-      if (target.frame.inputDraft || require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)
-        || !immediate && ([...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))
-          || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider))) return { deferred: true };
+      if (target.frame.inputDraft) return { deferred: true, reason: 'draft' };
+      if (require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)) return { deferred: true, reason: 'prompt' };
+      if (!immediate && [...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))) return { deferred: true, reason: 'previous' };
+      if (!immediate && !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) return { deferred: true, reason: 'working' };
       const native = await this.completion.observe(target.child);
-      if (!immediate && native.available && native.state === 'working') return { deferred: true };
+      if (!immediate && native.available && native.state === 'working') return { deferred: true, reason: 'working' };
       // Persist before the first write. A lost acknowledgement is never replayed.
       const job = { id, operation: 'summary', sourceId: targetId, targetId, groupId, request: message,
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
@@ -227,6 +290,7 @@ class TerminalCollaboration {
       const receipt = JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint]);
       if (this.summaryPromptReceipts.has(receipt)) throw new Error('이미 응답한 승인 요청입니다. 터미널을 확인해 주세요.');
       this.summaryPromptReceipts.add(receipt);
+      if (this.summaryPromptReceipts.size > MAX_SUMMARY_PROMPT_RECEIPTS) this.summaryPromptReceipts.delete(this.summaryPromptReceipts.values().next().value);
       const deliveryId = `summary-approval:${require('crypto').createHash('sha256').update(JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint, choiceId])).digest('hex')}`;
       await this.manager().respond(targetId, choice.key, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
       return { ok: true, requiresText: choice.requiresText === true };
@@ -239,7 +303,7 @@ class TerminalCollaboration {
     return this.serialize(async () => {
       const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider } = payload || {};
       if (!safeId(groupId) || !safeId(targetId) || typeof targetCreationId !== 'string'
-        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !['claude', 'codex'].includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
+        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !SUMMARY_PROVIDERS.includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
       const { member } = this.member(groupId, targetId);
       const live = await this.manager().get(targetId, false);
       const child = live && exactProcess(live, await scanProcesses(this.monitor));
@@ -248,7 +312,9 @@ class TerminalCollaboration {
       const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'summary' && ['sending', 'running'].includes(job.state));
       const native = await this.completion.observe(child);
       if (!running.length && !(native.available && native.state === 'working') && member.activity?.state !== 'working') throw new Error('멈출 작업이 없습니다.');
-      await this.manager().respond(targetId, 'Escape', { deliveryId: `summary-stop:${randomUUID()}` });
+      // Grok Build ignores Escape mid-turn; its own cancel is Ctrl+C on an empty prompt.
+      if (targetProvider === 'grok') await this.manager().write(targetId, '\x03', { deliveryId: `summary-stop:${randomUUID()}` });
+      else await this.manager().respond(targetId, 'Escape', { deliveryId: `summary-stop:${randomUUID()}` });
       for (const job of running) { Object.assign(job, { state: 'stopped', error: '', finishedAt: this.now() }); this.save(job); }
       return { ok: true, stopped: running.map(job => job.id) };
     });
@@ -310,16 +376,25 @@ class TerminalCollaboration {
       this.save(job);
     }
     for (const job of this.jobs.values()) if (job.state === 'running') {
+      const now = this.now();
+      if (!Number.isFinite(job.progressAt)) job.progressAt = Number(job.sentAt) || now;
       try {
-        if (this.now() - job.sentAt > 15 * 60 * 1000) throw new Error('15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.');
-        const target = await this.target(job.groupId, job.targetId);
+        // Observing needs identity and a fresh frame, not an unchanged one: a
+        // working AI repaints its spinner, so its frame rarely equals the live
+        // output sequence. A pane moved to another panel is still the target.
+        const groupId = [...this.groups.values()].find(group => group.members.some(member => member.id === job.targetId))?.id || job.groupId;
+        const target = await this.target(groupId, job.targetId, true);
+        delete job.missingSince;
         if (target.child.pid !== job.providerPid || target.live.creationId !== job.creationId) throw new Error('상대의 AI 세션이 바뀌었습니다.');
+        const current = target.frame.outputSequence === target.live.outputSequence;
+        const screenReady = !target.frame.inputDraft && inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider);
         if (isNonTaskRequest(job.request)) {
           // Slash commands never produce a provider turn record. Release the
           // target once its own input prompt is back, so later chat requests
           // are not deferred behind a command that already finished.
-          if (this.now() - job.sentAt >= 2000 && target.frame.at > job.sentAt + 1000 && !target.frame.inputDraft
-            && inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) Object.assign(job, { state: 'completed', answer: '', finishedAt: this.now() });
+          if (now - job.sentAt >= 2000 && target.frame.at > job.sentAt + 1000 && current && screenReady) Object.assign(job, { state: 'completed', answer: '', finishedAt: now });
+          else if (!screenReady) job.progressAt = now;
+          else if (now - job.progressAt > STALLED_JOB_MS) Object.assign(job, { state: 'interrupted', error: STALLED_JOB_ERROR, finishedAt: now });
           this.save(job); continue;
         }
         const native = await this.completion.observe(target.child);
@@ -334,14 +409,30 @@ class TerminalCollaboration {
             // holds every later queued message.
             || native.completedAt >= job.sentAt && (native.absorbed || []).some(item => item.at >= job.sentAt - 2000 && sameRequest(item.text, job.request))) ? native.evidence : ''
           : completedTurn(target.frame.text, job.request, job.provider, job.stamp, { exactRequest: true });
-        if (evidence) Object.assign(job, { state: 'completed', answer: evidence, finishedAt: this.now() });
-        else if (this.now() - job.sentAt > 15 * 60 * 1000) Object.assign(job, { state: 'interrupted', error: '15분 안에 완료를 확인하지 못했습니다. 상대 터미널을 확인하세요. 자동 재전송하지 않습니다.' });
+        // Esc in the terminal ends this exact turn without an answer.
+        const abortedHere = native.available && native.state === 'interrupted' && native.requestId && native.requestId !== job.baseline
+          && native.requestAt >= job.sentAt - 2000 && sameRequest(native.request, job.request);
+        const prompt = require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text);
+        // Work in progress or a question for the user keeps the job alive, however long it runs.
+        const working = native.available && native.state === 'working' || !screenReady || Boolean(prompt);
+        const idle = !working && (!native.available || native.inputWaiting !== false);
+        if (evidence) Object.assign(job, { state: 'completed', answer: evidence, finishedAt: now });
+        else if (abortedHere) Object.assign(job, job.operation === 'summary' ? { state: 'stopped', error: '', finishedAt: now }
+          : { state: 'interrupted', error: '상대 터미널에서 작업이 중단됐습니다. 자동 재전송하지 않습니다.', finishedAt: now });
+        else if (working) { job.progressAt = now; delete job.idleSince; }
+        else if (idle && native.available && now - (job.idleSince ??= now) >= IDLE_UNMATCHED_JOB_MS) Object.assign(job, { state: 'interrupted', error: IDLE_UNMATCHED_JOB_ERROR, finishedAt: now });
+        else if (now - job.progressAt > STALLED_JOB_MS) Object.assign(job, { state: 'interrupted', error: STALLED_JOB_ERROR, finishedAt: now });
       } catch (error) {
-        // A stale frame is transient, a missing member or replaced process isn't.
-        if (!String(error.message).includes('최신 입력 상태')) Object.assign(job, { state: 'interrupted', error: error.message });
+        // A stale frame or one missed process scan is transient; a missing
+        // member or replaced process is not. Without observations the job
+        // ends only after it has shown no work for the stall limit.
+        const transient = error.code === 'TERMINAL_FRAME_STALE'
+          || error.code === 'AI_PROCESS_MISSING' && now - (job.missingSince ??= now) < MISSING_PROCESS_GRACE_MS;
+        if (!transient) Object.assign(job, { state: 'interrupted', error: error.message, finishedAt: now });
+        else if (now - job.progressAt > STALLED_JOB_MS) Object.assign(job, { state: 'interrupted', error: STALLED_JOB_ERROR, finishedAt: now });
       }
       this.save(job);
     }
   }
 }
-module.exports = { TerminalCollaboration };
+module.exports = { TerminalCollaboration, RETAINED_FINISHED_JOBS, FINISHED_JOB_GRACE_MS };

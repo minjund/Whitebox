@@ -45,9 +45,19 @@ function supportedPromptFingerprintVersion(value) {
 // Full-screen AI TUIs redraw spinners and status bars continuously. Rewriting
 // every retained replay (up to 64 MiB total) six times per second stalls the
 // terminal-host event loop and delays input/host responses. Exit transitions
-// and delivery ledgers still use persistNow(); streamed replay is coalesced to
-// at most one durable checkpoint per second.
+// and delivery ledgers still use persistNow(); deferred metadata (raw-input
+// ledger, resize, state) is checkpointed within a second.
 const PERSIST_DELAY_MS = 1_000;
+// Streamed replay alone is only scrollback. With dozens of busy sessions the
+// whole store is tens of MiB, so a 1 s cadence meant a continuous 30-100 MB/s
+// disk write. Replay-only changes wait longer; any metadata change, transition,
+// exit or host shutdown still writes the latest replay along with it.
+const REPLAY_PERSIST_DELAY_MS = 20_000;
+// Finished sessions never receive more output; keep a shorter scrollback for
+// them so a month of exited terminals does not hold 2 MiB each in memory and
+// in every store rewrite.
+const SETTLED_REPLAY_CHARS = 256 * 1024;
+const SETTLED_REPLAY_STATUSES = new Set(['exited', 'failed', 'stopped']);
 // node-pty can deliver hundreds of small chunks during a single full-screen
 // redraw or command burst. Once replay reaches its 2 MiB cap, concatenating
 // and slicing the full string for every chunk creates visible event-loop
@@ -865,7 +875,9 @@ function numericDimension(value, fallback, min, max) {
 }
 
 // A new Whitebox PTY never owns the launching app's terminal/surface identity.
-const FOREIGN_TERMINAL_ENV = Object.freeze(['TMUX', 'TMUX_PANE', 'CMUX_WORKSPACE_ID', 'CMUX_SURFACE_ID', 'CMUX_WINDOW_ID', 'CMUX_TAB_ID', 'CMUX_PANEL_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'WHITEBOX_SURFACE_ID', 'WHITEBOX_PANEL_DIRECTORY']);
+// COLORFGBG describes the colors of the terminal that launched Whitebox (for
+// example a light iTerm2 profile); TUIs read it as this pane's background.
+const FOREIGN_TERMINAL_ENV = Object.freeze(['COLORFGBG', 'TMUX', 'TMUX_PANE', 'CMUX_WORKSPACE_ID', 'CMUX_SURFACE_ID', 'CMUX_WINDOW_ID', 'CMUX_TAB_ID', 'CMUX_PANEL_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'WHITEBOX_SURFACE_ID', 'WHITEBOX_PANEL_DIRECTORY']);
 function terminalEnvironment(extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries({ ...process.env, ...extra })) {
@@ -1749,12 +1761,19 @@ function unicodeSafeReplayTail(value, maxChars = MAX_REPLAY_CHARS) {
   return text.slice(start);
 }
 
+// Every replay mutation must go through here: the store encoding cache keys on
+// replayRevision instead of retaining a second copy of the previous replay.
+function setSessionReplay(session, value) {
+  session.replay = value;
+  session.replayRevision = (Number.isSafeInteger(session.replayRevision) ? session.replayRevision : 0) + 1;
+}
+
 function flushSessionReplay(session) {
   if (!session) return '';
   const chunks = Array.isArray(session.replayPendingChunks) ? session.replayPendingChunks : [];
   if (chunks.length) {
     const pending = chunks.length === 1 ? chunks[0] : chunks.join('');
-    session.replay = unicodeSafeReplayTail(`${String(session.replay || '')}${pending}`);
+    setSessionReplay(session, unicodeSafeReplayTail(`${String(session.replay || '')}${pending}`));
   }
   session.replayPendingChunks = [];
   session.replayPendingChars = 0;
@@ -1766,7 +1785,7 @@ function appendSessionReplay(session, value, { immediate = false } = {}) {
   if (!session || !text) return;
   if (immediate) {
     flushSessionReplay(session);
-    session.replay = unicodeSafeReplayTail(`${String(session.replay || '')}${text}`);
+    setSessionReplay(session, unicodeSafeReplayTail(`${String(session.replay || '')}${text}`));
     return;
   }
   if (!Array.isArray(session.replayPendingChunks)) session.replayPendingChunks = [];
@@ -1781,7 +1800,16 @@ function resetSessionReplay(session) {
   if (!session) return;
   session.replayPendingChunks = [];
   session.replayPendingChars = 0;
-  session.replay = '';
+  setSessionReplay(session, '');
+}
+
+function trimSettledSessionReplay(session) {
+  if (!SETTLED_REPLAY_STATUSES.has(session?.status) || session.process
+    || session.terminationPending || session.retiring) return;
+  const replay = flushSessionReplay(session);
+  if (replay.length > SETTLED_REPLAY_CHARS) {
+    setSessionReplay(session, unicodeSafeReplayTail(replay, SETTLED_REPLAY_CHARS));
+  }
 }
 
 function jsonBudgetedReplayTail(value, maxBytes) {
@@ -2032,6 +2060,12 @@ class TerminalManager extends EventEmitter {
       : MAX_STORE_BYTES;
     this.replayEncoding = new (require('./terminalReplayEncoding').TerminalReplayEncoding)(this.maxStoreBytes);
     this.persistTimer = null;
+    this.persistDueAt = 0;
+    this.persistDelayMs = Math.max(0, Number(options.persistDelayMs ?? PERSIST_DELAY_MS) || 0);
+    this.replayPersistDelayMs = Math.max(
+      this.persistDelayMs,
+      Number(options.replayPersistDelayMs ?? REPLAY_PERSIST_DELAY_MS) || 0,
+    );
     this.storeWriteBlocked = false;
     this.quarantinedStoreFile = '';
     this.sessions = new Map();
@@ -2283,12 +2317,19 @@ class TerminalManager extends EventEmitter {
     }
   }
 
-  schedulePersist() {
-    if (!this.storeFile || this.persistTimer) return;
+  // A pending replay-only checkpoint is pulled forward, never pushed back, when
+  // a metadata change arrives; continuous output cannot starve the deadline.
+  schedulePersist({ replayOnly = false } = {}) {
+    if (!this.storeFile) return;
+    const delay = replayOnly ? this.replayPersistDelayMs : this.persistDelayMs;
+    const dueAt = Date.now() + delay;
+    if (this.persistTimer && this.persistDueAt <= dueAt) return;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistDueAt = dueAt;
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       this.persistNow();
-    }, PERSIST_DELAY_MS);
+    }, delay);
     if (typeof this.persistTimer.unref === 'function') this.persistTimer.unref();
   }
 
@@ -2304,6 +2345,7 @@ class TerminalManager extends EventEmitter {
       const sessions = [...this.sessions.values()]
         .filter(session => !session.options.transient)
         .filter(session => shouldRetainTerminalSession(session, this.retentionDays, this.now()));
+      for (const session of sessions) trimSettledSessionReplay(session);
       const serialized = serializedStorePayload(
         sessions,
         [...this.comprehensionProvenanceLedger.values()],
@@ -2715,7 +2757,7 @@ class TerminalManager extends EventEmitter {
       this.sessions = previousSessions;
       this.comprehensionProvenanceLedger = previousProvenance;
       for (const [session, replay] of previousReplay) {
-        session.replay = replay.replay;
+        setSessionReplay(session, replay.replay);
         session.replayPendingChunks = Array.isArray(replay.replayPendingChunks)
           ? [...replay.replayPendingChunks]
           : replay.replayPendingChunks;
@@ -3848,7 +3890,7 @@ class TerminalManager extends EventEmitter {
         session.outputSequence = (Number.isSafeInteger(session.outputSequence) ? session.outputSequence : 0) + 1;
         session.updatedAt = new Date().toISOString();
         this.emit('data', { id: session.id, data: text, outputSequence: session.outputSequence });
-        this.schedulePersist();
+        this.schedulePersist({ replayOnly: true });
       });
       processHandle.onExit(event => {
         processHandle.__whiteboxExited = true;

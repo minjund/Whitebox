@@ -3,6 +3,21 @@
 const { terminalReviewUsage } = require('./terminalReviewUsage');
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const keys = ['input', 'output', 'cachedInput', 'cacheWrite', 'total'];
+// Claude repeats cumulative usage for one API request on consecutive rows, so
+// only recent request ids need their last counters. Older ids never recur.
+const MAX_TRACKED_CALLS = 512;
+function remember(state, id, usage) {
+  state.tokenCalls.delete(id); state.tokenCalls.set(id, usage);
+  while (state.tokenCalls.size > MAX_TRACKED_CALLS) state.tokenCalls.delete(state.tokenCalls.keys().next().value);
+}
+function rememberMissing(state, id) {
+  state.tokenMissing.add(id);
+  if (state.tokenMissing.size > MAX_TRACKED_CALLS) {
+    // An evicted unresolved call can no longer be confirmed: stay partial.
+    state.tokenMissing.delete(state.tokenMissing.values().next().value);
+    state.tokenMissingEvicted = true;
+  }
+}
 const observedAt = value => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 
 // Process-bound conversation counters only. No screen estimates, account quota,
@@ -16,7 +31,7 @@ function observeClaudeUsage(state, row, sessionId) {
   const optionalValid = ['cache_read_input_tokens', 'cache_creation_input_tokens'].every(key => raw?.[key] === undefined || count(raw[key]));
   const usage = optionalValid ? terminalReviewUsage('claude', raw) : null;
   if (!usage || !keys.every(key => count(usage[key]))) {
-    if (!state.tokenCalls.has(id)) state.tokenMissing.add(id);
+    if (!state.tokenCalls.has(id)) rememberMissing(state, id);
     return;
   }
   state.tokenMissing.delete(id);
@@ -25,7 +40,7 @@ function observeClaudeUsage(state, row, sessionId) {
   const total = { ...(state.tokenTotal || Object.fromEntries(keys.map(key => [key, 0]))) };
   for (const key of keys) total[key] += usage[key] - (previous?.[key] || 0);
   if (!keys.every(key => count(total[key]))) { state.tokenOverflow = true; return; }
-  state.tokenCalls.set(id, usage); state.tokenTotal = total;
+  remember(state, id, usage); state.tokenTotal = total;
   state.tokenObservedAt = observedAt(row.timestamp);
 }
 
@@ -44,7 +59,7 @@ function observeCodexUsage(state, row) {
 function tokenUsage(state) {
   if (Object.hasOwn(state, 'codexTokenUsage')) return state.codexTokenUsage;
   if (!state.tokenCalls?.size || state.tokenOverflow) return null;
-  return { ...state.tokenTotal, partial: Boolean(state.tokenHistoryPartial || state.tokenMissing?.size), observedAt: state.tokenObservedAt };
+  return { ...state.tokenTotal, partial: Boolean(state.tokenHistoryPartial || state.tokenMissing?.size || state.tokenMissingEvicted), observedAt: state.tokenObservedAt };
 }
 
-module.exports = { observeClaudeUsage, observeCodexUsage, tokenUsage };
+module.exports = { observeClaudeUsage, observeCodexUsage, tokenUsage, MAX_TRACKED_CALLS };

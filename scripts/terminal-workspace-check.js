@@ -26,10 +26,18 @@ app.whenReady().then(async () => {
   let livePanelControl, suppressedRemovalId = '';
   let heldReplayId = '', releaseHeldReplay;
   const terminalGetReads = [];
-  const startupPidRace = { enabled:process.argv.includes('--startup-reconnect-only'), id:'', live:null, stale:null, delivered:false, hold:true };
+  const startupPidRace = { enabled:process.argv.includes('--startup-reconnect-only'), id:'', live:null, stale:null, delivered:false, hold:true, preReadyReads:0 };
   let heldPauseReviewId = '', releaseHeldPauseReview;
   let analysisOptions, lastSubmission, clipboardText, collaborationPayload, lastDetail;
   let staleCollaborationFrameOnce = null, staleCollaborationFramesServed = 0;
+  const lastFullFrames = new Map();
+  const resolveFrameMarkers = payload => !Array.isArray(payload?.frames) ? payload : { ...payload, frames: payload.frames.map(frame => {
+    if (typeof frame?.text === 'string') { lastFullFrames.set(frame.id, frame); return frame; }
+    const previous = lastFullFrames.get(frame?.id);
+    assert(frame?.unchanged === true && previous?.creationId === frame.creationId && previous.outputSequence === frame.outputSequence,
+      'a frame without text must be an unchanged marker for the last full frame');
+    return previous;
+  }) };
   let completedActivityId = '';
   const { TerminalCompletionTracker } = require('../src/terminalCompletionBadge');
   const completionTracker = new TerminalCompletionTracker();
@@ -76,11 +84,14 @@ app.whenReady().then(async () => {
       return { ok: true };
     });
     ipcMain.handle('terminals:completion-read', (_event, payload) => completionTracker.read(payload));
-    ipcMain.handle('terminals:collaboration', async (_event, payload) => {
-      if (summaryFixture) return summaryFixture.collaboration(payload);
+    ipcMain.handle('terminals:collaboration', async (_event, rawPayload) => {
+      if (summaryFixture) return summaryFixture.collaboration(rawPayload);
       if (collaborationFailure) throw new Error(collaborationFailure);
+      // The renderer sends an `unchanged` marker instead of repeating screen
+      // text. Main keeps the last full frame; model that retention here.
+      const payload = resolveFrameMarkers(rawPayload);
       collaborationPayload = payload;
-      if (livePanelControl) return livePanelControl.sync(payload);
+      if (livePanelControl) return livePanelControl.sync(rawPayload);
       if (payload.operation === 'sync' && staleCollaborationFrameOnce
         && payload.frames.some(frame => frame.id === staleCollaborationFrameOnce.id)) {
         collaborationPayload = { ...payload, frames: payload.frames.map(frame => frame.id === staleCollaborationFrameOnce.id ? staleCollaborationFrameOnce : frame) };
@@ -136,6 +147,13 @@ app.whenReady().then(async () => {
       const full = includeReplay !== false;
       terminalGetReads.push({ id, full });
       const session = manager.get(id, full);
+      // main.js forwards terminal state only after app:renderer-ready, so the
+      // PID published while the startup pane mounts never reaches the
+      // renderer. Pre-ready metadata reads see only the pending snapshot.
+      if (startupPidRace.enabled && id === startupPidRace.id && !full && !rendererReadyCalls) {
+        startupPidRace.preReadyReads += 1;
+        return startupPidRace.stale;
+      }
       if (startupPidRace.enabled && id === startupPidRace.id && !full && !startupPidRace.delivered) {
         startupPidRace.delivered = true;
         win.webContents.send('terminals:state', { change:'pid-fixture-ready', session:startupPidRace.live, sessions:[startupPidRace.live] });
@@ -1416,6 +1434,7 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32') assert.throws(() => process.kill(lastPid, 0), {code:'ESRCH'}, 'original shell no longer exists');
     assert.throws(()=>process.kill(trashChildPid,0), {code:'ESRCH'}, 'the foreground program also exits');
     assert.equal(await evaluate(`Boolean(document.querySelector('[data-instance="${last}"]'))`), false);
+    assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-screen="${last}"]'))`), false, 'trash frees the emulator and canvas, not only the pane');
     captured.delete(last);
     await evaluate('WhiteboxWorkspace.captureReviews()');
     assert.equal(captured.has(last), false, 'trashed terminals do not start model analysis');
@@ -1471,11 +1490,13 @@ app.whenReady().then(async () => {
     assert.equal(manager.get(last).pid, null, 'restoring records never restarts a program');
     await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'trash restored terminal');
+    assert.equal(await evaluate(`Boolean(document.querySelector('[data-terminal-screen="${last}"]'))`), false, 'trashing a restored record frees its emulator again');
     await evaluateData((id, pid) => { const item=WhiteboxWorkspace.getState().trash.find(item=>item.id===id); delete item.sessionStopped; item.pid=pid; item.review={...item.review,pid}; }, last, lastPid);
     await evaluate('document.querySelector("[data-action=trash]").click()');
     assert.equal(await evaluate(`document.querySelector('[data-restore-instance="${last}"]').disabled`), false, 'legacy archive flags cannot hide a confirmed stopped record');
     await evaluate(`document.querySelector('[data-restore-instance="${last}"]').click()`);
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore legacy archive as read-only');
+    await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'restore without reload rebuilds the released view from replay');
     assert.equal(manager.get(last).pid, null);
     assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'legacy PID migration preserves prior review usage');
     assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'legacy stopped identity preserves the original conversation counters');

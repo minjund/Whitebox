@@ -62,6 +62,8 @@
 
   const handledCollaborations = new Set();
   const collaborationStates = new Map(), collaborationNotices = new Map();
+  // Screen text goes to main only when a pane's frame changed (see sync).
+  const collaborationFrames = window.WhiteboxTerminalFrameDelta?.createFrameTracker() || null;
   let collaborationLoaded = false;
   const reviewRevisions = new Map();
   function acceptReview(id, value) {
@@ -120,7 +122,7 @@
           <div class="wb-summary-conversation">
             <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span><span class="sr-only" id="wbSummaryReplyState"></span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span><span class="sr-only" id="wbSummaryReviewState"></span></li></ol><p class="sr-only" role="status" aria-live="polite"><span id="wbSummaryStateTitle"></span> <span id="wbSummaryStateDescription"></span></p>
             <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p></div></div>
-            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><ul id="wbSummaryCommands" class="wb-summary-commands" role="listbox" aria-label="명령어" hidden></ul><div><span id="wbSummaryComposerHint"></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
+            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><ul id="wbSummaryAttachments" class="wb-summary-attachments" aria-label="첨부한 이미지" hidden></ul><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><ul id="wbSummaryCommands" class="wb-summary-commands" role="listbox" aria-label="명령어" hidden></ul><div><span class="wb-summary-composer-tools"><button id="wbSummaryAttach" class="wb-summary-attach" type="button" title="이미지 첨부 · 붙여넣기나 끌어다 놓기도 돼요">＋ 이미지</button><input id="wbSummaryAttachInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden/><span id="wbSummaryComposerHint"></span></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
             <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
           </div>
           <aside class="wb-summary-rail" aria-label="지난 요청">
@@ -231,7 +233,7 @@
       return [result.preview?.submissionId, result.preview?.latestSubmissionId].includes(job.id) && finished(result.preview)
         || result.result?.tasks?.some(task => task.submissionId === job.id && finished(task));
     },
-    reveal: id => selectInstance(id), report: (message, id) => report(new Error(message), 'summary', id),
+    reveal: id => selectInstance(id), focusTerminal: id => requestAnimationFrame(() => terminal.focusTerminal(id)), report: (message, id) => report(new Error(message), 'summary', id),
     // Mirror a terminal Esc: the review marks the current turn interrupted.
     interrupted: id => { interruptions.set(id, { id: uuid(), at: Date.now() }); captureReviews(); },
     submitted: job => {
@@ -1199,9 +1201,10 @@
           || ['shell', 'unbound'].includes(reviews.get(session.id)?.state)) return;
         const screen = terminal.readTerminal(session.id);
         const { submittedPrompt, completionStamp } = window.WhiteboxTerminalReviewTurns;
-        const request = submittedPrompt(screen);
+        // Gemini and Grok draw their own input prompt; the bound review knows which CLI runs here.
+        const request = submittedPrompt(screen, reviews.get(session.id)?.provider);
         if (!request) return;
-        submissions.set(session.id, { id: uuid(), at: Date.now(), request, stamps: { claude: completionStamp(screen, 'claude'), codex: completionStamp(screen, 'codex') } });
+        submissions.set(session.id, { id: uuid(), at: Date.now(), request, stamps: Object.fromEntries(['claude', 'codex', 'gemini', 'grok'].map(provider => [provider, completionStamp(screen, provider)])) });
         captureReviews();
       },
       fontSize, fontFamily, inputLabel: msg`${session.title} ${session.id.slice(-5)} 터미널 입력`,
@@ -1265,6 +1268,9 @@
   }
   function renderLayout(focus = true) {
     hideForeignTerminalError();
+    // Parking re-parents every pane, and Chromium drops focus from a moved
+    // element (cutting any IME composition). Keep typing in the active pane.
+    const typing = document.activeElement;
     for (const pane of panes.values()) $('#wbParking').append(pane.node);
     $('#wbCanvas').replaceChildren();
     const current = tab();
@@ -1277,6 +1283,8 @@
       if (!layout.ids(view).includes(activeId())) space().activeSurface = layout.ids(view)[0];
       const tree = renderTree(expanded ? { id: activeId() } : view); tree.style.flex = '1';
       $('#wbCanvas').append(tree);
+      if (typing !== document.activeElement && typing?.isConnected && panes.get(activeId())?.node.contains(typing)
+        && $('#wbCanvas').contains(typing)) typing.focus({ preventScroll: true });
       selectPane(activeId());
       if (focus) requestAnimationFrame(activeFocus);
     } else {
@@ -1360,7 +1368,8 @@
     const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove();
     summaryChat.forget(id); summaryMembers.delete(id);
     panes.delete(id); sessions.delete(id); reviews.delete(id); reviewHistory.delete(id); submissions.delete(id); interruptions.delete(id);
-    terminalUsageHistory.delete(id);
+    terminalUsageHistory.delete(id); reviewRevisions.delete(id); acknowledgedCompletions.delete(id); collaborationFrames?.forget(id);
+    terminal.releaseTerminal?.(id);
     trash = trash.filter(item => item.id !== id);
     detachFromLayout(id);
   }
@@ -1438,6 +1447,9 @@
       }
       trash.push(item);
       const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove(); panes.delete(id);
+      // The stopped record stays in the host until permanent delete. Free the
+      // emulator now; restore rebuilds it from the host replay.
+      terminal.releaseTerminal?.(id); collaborationFrames?.forget(id);
       detachFromLayout(id); renderLayout();
       // No model work is requested for a stopped archive.
       Promise.resolve().then(() => api.terminalReview?.({ id, creationId: item.creationId, enabled: false })).catch(report);
@@ -1766,7 +1778,11 @@
       members: layout.ids(panel.layout).map(id => ({ ...sessions.get(id), title: title(id) })).filter(item => item.id && !trashed(item.id)) })));
     const frames = capturedFrames.filter(frame => panes.has(frame.id) && !trashed(frame.id)
       && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
-    const result = await api.terminalCollaboration({ operation: 'sync', groups, frames, summaryJobs: summaryChat.pendingJobs() });
+    // Up to 24 KB of screen text per pane: resend it only when it changed (or
+    // on the tracker's freshness beat); an unchanged pane sends a marker.
+    const delta = collaborationFrames?.prepare(frames, new Map(frames.map(frame => [frame.id, `${sessions.get(frame.id)?.pid ?? ''}`])));
+    const result = await api.terminalCollaboration({ operation: 'sync', groups, frames: delta ? delta.frames : frames, summaryJobs: summaryChat.pendingJobs() });
+    delta?.commit();
     workStates.clear(); summaryMembers.clear();
     let usageChanged = false;
     for (const id of acknowledgedCompletions.keys()) if (!sessions.has(id) || trashed(id)) acknowledgedCompletions.delete(id);
@@ -1788,6 +1804,7 @@
       }
       collaborationStates.set(job.id, job.state);
     }
+    pruneCollaborationRecords();
     collaborationLoaded = true;
     for (const job of collaborationJobs) {
       if (job.terminal && !handledCollaborations.has(`new:${job.id}`)) {
@@ -1814,6 +1831,22 @@
     }
     renderCollaborationStatus();
     if ($('#wbError').dataset.scope === 'collaboration') $('#wbError').hidden = true;
+  }
+  // Job bookkeeping otherwise grows for the app's lifetime. Expired notices
+  // are inert; states and handled ids of jobs main no longer reports are kept
+  // up to a bound (save() already persists only the newest 200 handled ids).
+  const COLLABORATION_RECORD_LIMIT = 200;
+  function pruneCollaborationRecords(now = Date.now()) {
+    const current = new Set(collaborationJobs.map(job => job.id));
+    for (const [id, until] of collaborationNotices) if (until <= now) collaborationNotices.delete(id);
+    for (const id of collaborationStates.keys()) {
+      if (collaborationStates.size <= COLLABORATION_RECORD_LIMIT) break;
+      if (!current.has(id)) collaborationStates.delete(id);
+    }
+    for (const key of handledCollaborations) {
+      if (handledCollaborations.size <= COLLABORATION_RECORD_LIMIT) break;
+      if (!current.has(key.startsWith('new:') ? key.slice(4) : key)) handledCollaborations.delete(key);
+    }
   }
   function renderCollaborationStatus() {
     const related = collaborationJobs.filter(job => job.operation !== 'summary' && (job.sourceId === activeId() || job.targetId === activeId()));
@@ -2155,6 +2188,14 @@
     });
     return initialization;
   }
+  // Re-reads running shells whose PID is still unknown. ConPTY publishes the
+  // PID only with the first output, as a single state event.
+  async function reconcileMissingPids() {
+    await Promise.all([...sessions.values()].filter(session => session.status === 'running' && !session.pid).map(async session => {
+      const current = await api.terminalGet(session.id, false);
+      if (current?.creationId === session.creationId && sessions.get(session.id)?.creationId === session.creationId) rememberSession(current);
+    }));
+  }
   async function init() {
     if (!api) throw new Error(t('Whitebox 앱에서 실행해 주세요.'));
     bootstrap = await window.WhiteboxRendererUtils.bootstrap();
@@ -2178,14 +2219,9 @@
     }
     inventory.filter(item => !item.transient && ['shell', 'powershell', 'cmd'].includes(item.type)).forEach(item => rememberSession(item));
     // A state event can precede the initial inventory response. Reconcile only
-    // unresolved shells after adopting that inventory; subsequent PID events
-    // are already subscribed and cannot be lost during pane mounting.
-    await Promise.all([...sessions.values()].filter(session => session.status === 'running' && !session.pid).map(async session => {
-      let current;
-      try { current = await api.terminalGet(session.id, false); }
-      catch (error) { waitingForStartupHost = true; throw error; }
-      if (current?.creationId === session.creationId && sessions.get(session.id)?.creationId === session.creationId) rememberSession(current);
-    }));
+    // unresolved shells after adopting that inventory.
+    try { await reconcileMissingPids(); }
+    catch (error) { waitingForStartupHost = true; throw error; }
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { /* Recover with the live PTY inventory. */ }
     try { contentHistory = (await api.terminalReview?.({ historyContent: true }))?.entries || []; }
@@ -2302,12 +2338,18 @@
       if (resolution?.ok && resolution.requiresText) openAttentionTerminal(resolution);
     });
     await api.rendererReady();
+    // The main process forwards terminal state only after this ready signal,
+    // so a PID published while startup panes were created was dropped. Every
+    // later PID event is delivered; read the earlier ones once.
+    reconcileMissingPids().then(() => { refreshPaneChrome(); renderInstances(); }).catch(error => report(error, 'terminal-pid'));
     let panelSyncBusy = false;
     setInterval(() => {
-      refreshPaneChrome(); renderInstances();
-      if (panelSyncBusy) return;
+      // A completed sync renders the chrome and sidebar itself; render here
+      // only for time-based state while a slow sync is in flight or failed.
+      const renderTimedState = () => { refreshPaneChrome(); renderInstances(); };
+      if (panelSyncBusy || !api.terminalCollaboration) { renderTimedState(); return; }
       panelSyncBusy = true;
-      syncCollaboration().catch(error => report(error, 'collaboration')).finally(() => { panelSyncBusy = false; });
+      syncCollaboration().catch(error => { renderTimedState(); report(error, 'collaboration'); }).finally(() => { panelSyncBusy = false; });
     }, 1000);
     setInterval(() => captureReviews(), 2500);
     setInterval(() => { if (reviews.get(activeId())?.state === 'reviewing' || reviews.get(activeId())?.retryAt > Date.now()) renderReview(); }, 1000);

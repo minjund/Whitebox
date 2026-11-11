@@ -77,8 +77,10 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   const id = await evaluate('WhiteboxWorkspace.getState().activeId');
   assert(await evaluate('document.querySelector("[data-workspace-mode=summary]").disabled'), 'plain shell has no summary mode');
   await require('./summary-chat-races').run(evaluate);
+  await require('./summary-attachments-ui').run(evaluate);
   await require('./summary-state-regressions').run(evaluate);
   await require('./summary-game').run(evaluate);
+  await require('./summary-composer-ime').run(evaluate, win);
   // Standalone renderer animation checks can span several rendered frames.
   // Observe the real provider only afterwards so its input readiness is fresh.
   await fixture.launch(id, waitFor); await capture();

@@ -476,6 +476,26 @@ test('user dismissal suppresses the same revision while reconcile removal is sil
   manager.dispose();
 });
 
+test('macOS Cmd+W on a popup is the same user dismissal as its × button, never a raw window close', async () => {
+  const { manager, calls } = fixture({ enabled: true });
+  manager.reconcile('agent', [permission('cmd-w'), permission('locked', '', { dismissible: false })]);
+  const entry = manager.windows.get('agent\u0000cmd-w');
+  manager.handleReady(eventFor(entry.window));
+  assert.equal(manager.dismissWindow({ close() { throw new Error('not a popup'); } }), false, 'other windows are left to close()');
+  assert.equal(manager.dismissWindow(entry.window), true);
+  await flush();
+  assert.equal(calls.dismiss.length, 1);
+  assert.deepStrictEqual(calls.dismiss[0].meta, { reason: 'user', decision: null, willRestore: false });
+  assert.equal(calls.errors.length, 0, 'a shortcut dismissal is not reported as a popup failure');
+  assert.equal(entry.window.closed, true);
+  const locked = manager.windows.get('agent\u0000locked');
+  assert.equal(manager.dismissWindow(locked.window), true, 'a popup that cannot be dismissed swallows Cmd+W');
+  await flush();
+  assert.equal(locked.window.closed, false);
+  assert.equal(calls.dismiss.length, 1);
+  manager.dispose();
+});
+
 test('async decide, dismiss, and open-main completions cannot close a newer revision of the same request', async () => {
   const runRace = async ({ action, invoke, options }) => {
     let finish;

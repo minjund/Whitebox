@@ -4,7 +4,12 @@
 // Never store raw shell commands, custom patches or hidden reasoning.
 const { bounded } = require('./terminalReviewBudget');
 const { proposedChange, acknowledgeChange } = require('./terminalReviewArtifacts');
-const short = (value, size = 220) => String(value || '').replace(/\s+/gu, ' ').trim().slice(0, size);
+const { detach } = require('./detachedString');
+// Detach a shortened copy so stored metadata never pins a large source string.
+const short = (value, size = 220) => {
+  const source = String(value || ''), text = source.replace(/\s+/gu, ' ').trim().slice(0, size);
+  return text.length < source.length ? detach(text) : text;
+};
 function commandHints(name, input) {
   if (!/^(?:Bash|exec_command|shell_command|shell)$/iu.test(name)) return [];
   try { if (typeof input === 'string') input = JSON.parse(input); } catch { return []; }
@@ -62,6 +67,7 @@ function addCall(state, id, name, input) {
   state.seq = (state.seq || 0) + 1;
   state.tools.push({ id: short(id, 200), name: short(name, 64) || 'tool', target: target(input), commandHints: commandHints(name, input), status: 'called', excerpt: '', operation: literalOperation(name, input), pendingChange: proposedChange(name, input),
     activity: require('./terminalProgress').toolActivity(name, input), seq: state.seq });
+  require('./terminalProgress').recordStep(state, state.tools.at(-1).activity);
   if (state.tools.length > 32) { state.tools = select(state.tools, 32); state.toolsOmitted = (state.toolsOmitted || 0) + 1; }
 }
 function addResult(state, id, output, error) {

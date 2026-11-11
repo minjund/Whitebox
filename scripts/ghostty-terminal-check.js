@@ -135,6 +135,54 @@ app.whenReady().then(async () => {
     assert.match(vt.responses, /\x1b\[\d+;\d+R/);
     console.log('PASS: Unicode, ANSI, theme changes, alternate screen and terminal replies');
 
+    // Claude Code's "auto" theme writes OSC 11 ? then DA1 in one chunk and
+    // treats the DA1 reply as "no color answer". Without an answer it falls
+    // back to an inherited COLORFGBG and can pick its light theme.
+    const colorQueries = await evaluate(async () => {
+      const ask = async (...chunks) => {
+        writes.length = 0;
+        for (const chunk of chunks) await write(chunk);
+        await delay();
+        return writes.join('');
+      };
+      term.reset();
+      term.options.theme = { background: '#0c0c0c', foreground: '#d0d0d0', cursor: '#dddddd', red: '#ff7b91' };
+      const claude = await ask('\x1b]11;?\x07\x1b[c');
+      const split = await ask('\x1b]1', '1;?\x1b', '\\');
+      const bytes = await ask(new TextEncoder().encode('\x1b]10;?;?\x07'));
+      const palette = await ask('\x1b]4;1;?;196;?;300;?\x1b\\');
+      const scheme = await ask('\x1b[?996n');
+      const notSet = await ask('\x1b]11;#f9f9f7\x07\x1b]111\x07');
+      await write('\x1b[?2031h'); writes.length = 0;
+      term.options.theme = { background: '#f3f0ea', foreground: '#26221f', cursor: '#6254d9' };
+      await delay();
+      const pushed = writes.join('');
+      const light = await ask('\x1b]11;?\x1b\\');
+      await write('\x1b[?2031l');
+      term.suppressResponses = true;
+      const replay = await ask('\x1b]11;?\x07');
+      term.suppressResponses = false;
+      term.options.disableStdin = true;
+      const readOnly = await ask('\x1b]11;?\x07');
+      term.options.disableStdin = false;
+      return { claude, split, bytes, palette, scheme, notSet, pushed, light, replay, readOnly };
+    });
+    assert.equal(colorQueries.claude, '\x1b]11;rgb:0c0c/0c0c/0c0c\x07\x1b[?62;22c', 'OSC 11 is answered once, before the DA1 sentinel');
+    assert.equal(colorQueries.split, '\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\', 'a query split across PTY chunks keeps its ST terminator');
+    assert.equal(colorQueries.bytes, '\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]11;rgb:0c0c/0c0c/0c0c\x07');
+    assert.equal(colorQueries.palette, '\x1b]4;1;rgb:ffff/7b7b/9191\x1b\\\x1b]4;196;rgb:ffff/0000/0000\x1b\\');
+    assert.equal(colorQueries.scheme, '\x1b[?997;1n');
+    assert.equal(colorQueries.notSet, '');
+    assert.equal(colorQueries.pushed, '\x1b[?997;2n', 'subscribed apps hear a dark-to-light terminal change');
+    assert.equal(colorQueries.light, '\x1b]11;rgb:f3f3/f0f0/eaea\x1b\\');
+    assert.deepEqual([colorQueries.replay, colorQueries.readOnly], ['', '']);
+    const { terminalEnvironment } = require(path.join(root, 'src/terminalManager'));
+    const launchingTerminalColors = process.env.COLORFGBG;
+    process.env.COLORFGBG = '0;15';
+    try { assert.equal(terminalEnvironment().COLORFGBG, undefined, 'a light launching terminal does not describe Whitebox panes'); }
+    finally { if (launchingTerminalColors === undefined) delete process.env.COLORFGBG; else process.env.COLORFGBG = launchingTerminalColors; }
+    console.log('PASS: OSC 10/11/4 and color-scheme queries report the painted colors before DA1; COLORFGBG is not inherited');
+
     const scroll = await evaluate(async () => {
       term.reset();
       await write(Array.from({ length: 100 }, (_, i) => `line-${i}`).join('\r\n'));

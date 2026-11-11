@@ -16,19 +16,22 @@ const workingScreen = live => idleScreen.replace(`\n\n${RULE}`, `\n❯ second\n�
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-summary-absorbed-'));
   const session = { id: 'terminal:ai', creationId: 'ai-epoch', pid: 200, status: 'running', outputSequence: 1, title: 'claude' };
-  const state = { now: Date.now(), native: { available: false }, writes: [], screen: idleScreen };
+  const state = { now: Date.now(), native: { available: false }, writes: [], screen: idleScreen, inputDraft: '', scanMissing: false };
   const manager = { get: async id => (id === session.id ? session : null), rawWriteDeliverySupported: () => true,
     write: async (id, data, options) => { state.writes.push({ id, data, options }); } };
-  const monitor = { scan: () => ({ available: true, processes: [{ pid: 1200, ancestorPids: [200], provider: 'claude' }] }) };
+  const monitor = { scan: () => ({ available: true, processes: state.scanMissing ? [] : [{ pid: 1200, ancestorPids: [200], provider: 'claude' }] }) };
   const collaboration = new TerminalCollaboration({ enableControl: false, directory, manager: () => manager, monitor,
     completion: { observe: async () => state.native }, now: () => state.now });
-  const sync = () => collaboration.sync({ groups: [{ id: 'group', cwd: directory, members: [session] }],
-    frames: [{ id: session.id, creationId: session.creationId, outputSequence: session.outputSequence, text: state.screen, inputDraft: '' }] });
-  const send = message => collaboration.summarySend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
-    targetCreationId: session.creationId, targetProviderPid: 1200, targetProvider: 'claude' });
+  // `frames: false` models a renderer that stopped reporting the pane.
+  const sync = ({ frames = true } = {}) => collaboration.sync({ groups: [{ id: 'group', cwd: directory, members: [session] }],
+    frames: frames ? [{ id: session.id, creationId: session.creationId, outputSequence: session.outputSequence, text: state.screen, inputDraft: state.inputDraft }] : [] });
+  const send = (message, extra = {}) => collaboration.summarySend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
+    targetCreationId: session.creationId, targetProviderPid: 1200, targetProvider: 'claude', ...extra });
+  const job = id => collaboration.jobs.get(id);
   const cleanup = () => fs.rmSync(directory, { recursive: true, force: true });
-  return { state, collaboration, sync, send, cleanup };
+  return { state, collaboration, sync, send, job, cleanup };
 }
+const MINUTE = 60_000;
 
 const tests = [
   {
@@ -137,6 +140,140 @@ const tests = [
           absorbed: [{ text: '다른 요청', at: job.sentAt + 10 }, { text: '세 번째 요청', at: job.sentAt - 60_000 }] };
         await f.sync();
         assert.equal(f.collaboration.jobs.get(job.id).state, 'running');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    // Real job 3a41cbda (v2.0.27): an immediate Summary send right after
+    // "✻ Baked for 12m 5s · done 9:54 AM"; the Claude turn it started ran past
+    // 15 minutes and the job was marked "15분 안에 완료를 확인하지 못했습니다".
+    name: 'A Summary turn still working after 15 minutes keeps its job, holds later sends as queued, then completes',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.screen = idleScreen.replace('Churned for 10s · done 3:06 PM', 'Baked for 12m 5s · done 9:54 AM');
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: '7d841627-prev', request: 'first',
+          requestAt: f.state.now - 13 * MINUTE, completedAt: f.state.now - MINUTE, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        const request = '전체 내용 전부 수정해줘야해 그리고 요약모드에서 ai가 작업중입니다 내용도 더 풍부하게 적어주면 좋겠어.';
+        const { job } = await f.send(request, { sendNow: true });
+        assert.equal(job.state, 'running');
+        f.state.screen = workingScreen('✻ Baking… (41m 3s · ↓ 120k tokens)');
+        for (let minute = 1; minute <= 45; minute += 1) {
+          f.state.now += MINUTE;
+          f.state.native = { available: true, state: 'working', inputWaiting: false, requestId: 'r-long', request,
+            requestAt: job.sentAt + 500, completedAt: job.sentAt - MINUTE, absorbed: [] };
+          await f.sync();
+          assert.equal(f.job(job.id).state, 'running', `still working at minute ${minute}`);
+        }
+        assert.deepEqual(await f.send('다음 요청'), { deferred: true, reason: 'previous' }, 'a later send waits as queued, never fails');
+        assert.equal(f.state.writes.length, 1);
+        f.state.now += MINUTE;
+        f.state.screen = idleScreen;
+        f.state.native = { ...f.state.native, state: 'completed', inputWaiting: true, completedAt: f.state.now, evidence: 'LONG DONE' };
+        await f.sync();
+        assert.equal(f.job(job.id).state, 'completed');
+        assert.equal(f.job(job.id).answer, 'LONG DONE');
+        const next = await f.send('다음 요청');
+        assert.equal(next.job.state, 'running', 'the queued request goes out once the long turn ends');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    name: 'An idle AI whose finished turn never matches the send releases the queue after 3 minutes, with a reason',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first',
+          requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        const { job } = await f.send('짝이 맞지 않는 요청');
+        f.state.native = { ...f.state.native, requestId: 'other', request: '터미널에서 직접 친 다른 요청', requestAt: job.sentAt + 1000, completedAt: job.sentAt + 2000, evidence: 'OTHER' };
+        for (let minute = 1; minute <= 3; minute += 1) { f.state.now += MINUTE; await f.sync(); }
+        assert.equal(f.job(job.id).state, 'running', 'a short idle gap is not a failure');
+        f.state.now += MINUTE; await f.sync();
+        assert.equal(f.job(job.id).state, 'interrupted');
+        assert.match(f.job(job.id).error, /완료 기록을 찾지 못했습니다/u);
+        assert.equal(f.job(job.id).answer, undefined, 'another turn is never attributed to this send');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    name: 'Without any work signal a Summary job ends 15 minutes after the last one, not 15 minutes after sending',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first', requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        const { job } = await f.send('긴 작업');
+        f.state.screen = workingScreen('✶ Pondering… (20m 1s · ↑ 1.2k tokens)');
+        f.state.native = { available: true, state: 'working', inputWaiting: false, requestId: 'r2', request: '긴 작업', requestAt: job.sentAt + 100, absorbed: [] };
+        for (let minute = 1; minute <= 20; minute += 1) { f.state.now += MINUTE; await f.sync(); }
+        // The renderer stops reporting the pane: no observation, no work signal.
+        f.state.now += 14 * MINUTE; await f.sync({ frames: false });
+        assert.equal(f.job(job.id).state, 'running');
+        f.state.now += 2 * MINUTE; await f.sync({ frames: false });
+        assert.equal(f.job(job.id).state, 'interrupted');
+        assert.match(f.job(job.id).error, /15분 동안 상대 AI의 작업 신호/u);
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    name: 'Esc in the terminal stops the Summary job at once instead of holding the queue for 15 minutes',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first', requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        const old = await f.send('first');
+        assert.equal(old.job.state, 'running');
+        f.state.now += 5_000;
+        // An older aborted turn is not this send.
+        f.state.native = { ...f.state.native, state: 'interrupted', inputWaiting: true };
+        await f.sync();
+        assert.equal(f.job(old.job.id).state, 'running', 'an earlier abort never ends a newer send');
+        f.state.native = { available: true, state: 'interrupted', inputWaiting: true, requestId: 'r2', request: 'first', requestAt: old.job.sentAt + 300, absorbed: [] };
+        f.state.now += 5_000; await f.sync();
+        assert.equal(f.job(old.job.id).state, 'stopped');
+        assert.deepEqual((await f.send('next')).job.state, 'running', 'the next send is not blocked');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    name: 'One missed process scan neither fails a queued send nor interrupts a running job; a lasting absence does',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first', requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        f.state.scanMissing = true; await f.sync();
+        assert.deepEqual(await f.send('스캔이 놓친 순간의 요청'), { deferred: true, reason: 'screen' }, 'stays queued');
+        f.state.scanMissing = false; await f.sync();
+        const { job } = await f.send('스캔이 놓친 순간의 요청');
+        assert.equal(job.state, 'running');
+        f.state.native = { available: true, state: 'working', inputWaiting: false, requestId: 'r2', request: '스캔이 놓친 순간의 요청', requestAt: job.sentAt + 100, absorbed: [] };
+        f.state.scanMissing = true; f.state.now += 5_000; await f.sync();
+        assert.equal(f.job(job.id).state, 'running', 'one missed scan is transient');
+        f.state.scanMissing = false; f.state.now += 5_000; await f.sync();
+        f.state.scanMissing = true; f.state.now += 5_000; await f.sync();
+        f.state.now += 31_000; await f.sync();
+        assert.equal(f.job(job.id).state, 'interrupted', 'an AI gone for 30 seconds ends the job');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
+    name: 'A deferred Summary send names what it waits for',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first', requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        f.state.inputDraft = '터미널에 쓰던 글'; await f.sync();
+        assert.deepEqual(await f.send('a'), { deferred: true, reason: 'draft' });
+        f.state.inputDraft = ''; f.state.screen = workingScreen('✻ Thinking…'); await f.sync();
+        assert.deepEqual(await f.send('a'), { deferred: true, reason: 'working' });
+        f.state.screen = idleScreen; f.state.native = { ...f.state.native, state: 'working', inputWaiting: false }; await f.sync();
+        assert.deepEqual(await f.send('a'), { deferred: true, reason: 'working' });
+        assert.equal(f.state.writes.length, 0);
       } finally { f.cleanup(); }
     },
   },

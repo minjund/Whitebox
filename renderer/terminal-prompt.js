@@ -104,11 +104,23 @@
     return removed;
   }
 
+  function pruneMissingPromptTargets(promptDismissals, liveTargetIds) {
+    if (!(promptDismissals instanceof Map) || !(liveTargetIds instanceof Set)) return 0;
+    let removed = 0;
+    for (const targetId of [...promptDismissals.keys()]) {
+      if (liveTargetIds.has(targetId)) continue;
+      promptDismissals.delete(targetId);
+      removed += 1;
+    }
+    return removed;
+  }
+
   return {
     applyPromptResolution,
     detectCodexEditApproval,
     detectPendingPrompt,
     normalizePromptResolution,
+    pruneMissingPromptTargets,
     reconcilePromptDismissals,
     stripTerminalControls,
   };

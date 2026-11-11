@@ -653,7 +653,22 @@ class AttentionPopupManager {
   }
 
   async handleDismiss(event) {
-    const entry = this.requireSender(event);
+    return this.dismissEntry(this.requireSender(event));
+  }
+
+  // macOS Cmd+W on a focused popup: the same user dismissal as its × button.
+  // Returns whether the window is a popup, so the caller never closes it raw
+  // (a raw close is reported as a popup failure).
+  dismissWindow(win) {
+    const entry = [...this.windows.values()].find(item => item.window === win && this.isAlive(item));
+    if (!entry) return false;
+    if (entry.record.request.dismissible && !entry.busy) {
+      this.dismissEntry(entry).catch(error => this.report(error, 'dismiss-shortcut', entry.record));
+    }
+    return true;
+  }
+
+  async dismissEntry(entry) {
     const record = entry.record;
     if (!record.request.dismissible) {
       return this.actionFailure(entry, popupError('ATTENTION_POPUP_NOT_DISMISSIBLE', 'This request cannot be dismissed.'), 'dismiss');

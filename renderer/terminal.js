@@ -15,7 +15,7 @@
     promptRefreshQueued: false, promptLastRefreshAt: 0,
     platform: { id: 'win32' },
   };
-  const { fitEntry, ensureSessionTerminal, refreshSessions, readTerminalSession } = window.WhiteboxTerminalWorkbench({
+  const { fitEntry, ensureSessionTerminal, refreshSessions, readTerminalSession, releaseTerminal } = window.WhiteboxTerminalWorkbench({
     $, state, notice, xtermOptions, errorMessage,
   });
 
@@ -191,6 +191,12 @@
         state.promptDismissals,
         result.observedTargets,
       );
+      // Closed terminals are never observed again; drop their per-target state.
+      const liveIds = new Set(state.sessions.map(session => String(session?.id || '')));
+      window.WhiteboxTerminalPrompts?.pruneMissingPromptTargets?.(state.promptDismissals, liveIds);
+      for (const id of [...state.promptReplayCache.keys()]) {
+        if (!liveIds.has(id)) state.promptReplayCache.delete(id);
+      }
       for (const [sessionId, prompt] of prompts) {
         if (state.promptDismissals.get(prompt.target?.id) === prompt.fingerprint) prompts.delete(sessionId);
       }
@@ -355,6 +361,10 @@
     resolveAttentionPrompt,
     refreshPendingPrompts: () => schedulePendingPromptRefresh(true),
     scrollTerminalToLine,
+    releaseTerminal: id => {
+      state.promptReplayCache.delete(String(id || ''));
+      return releaseTerminal(id);
+    },
     readTerminal: id => {
       const entry = state.terminals.get(id);
       if (!entry || entry.terminal.disposed || entry.outputHydrating) return '';

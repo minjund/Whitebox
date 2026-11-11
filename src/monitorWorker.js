@@ -19,6 +19,7 @@ const { SourcePluginMonitorHost } = require('./sourcePlugins/monitorHost');
 const { comprehensionState, validateComprehensionPacket } = require('./comprehensionPacket');
 const { createSnapshotPublicationCoordinator } = require('./monitorPublicationCoordinator');
 const { createMonitorScanScheduler } = require('./monitorScanScheduler');
+const { detachedPrefix } = require('./detachedString');
 
 const tmuxMonitor = new TmuxMonitor();
 tmuxMonitor.scan();
@@ -57,6 +58,16 @@ function scheduleScan(delayMs = 80) {
   scanScheduler.request(delayMs);
 }
 
+// Live transcripts are written many times per second and every scan re-reads
+// changed tails. File events coalesce to one scan at most every
+// WATCH_SCAN_MIN_INTERVAL_MS after the previous scan ended (interval scans
+// included); explicit refresh requests keep scheduleScan(0).
+const WATCH_SCAN_MIN_INTERVAL_MS = 500;
+function scheduleWatchScan() {
+  const sinceLastScan = Date.now() - Number(monitor.lastScanEndedAt || 0);
+  scheduleScan(Math.max(80, WATCH_SCAN_MIN_INTERVAL_MS - Math.max(0, sinceLastScan)));
+}
+
 const resolvedWatchPaths = new Map();
 
 function resolveWatchPath(file) {
@@ -83,13 +94,13 @@ for (const root of [
     const watcher = fs.watch(root, { recursive: process.platform === 'win32' || process.platform === 'darwin' }, (eventType, filename) => {
       if (eventType === 'rename') {
         monitor.invalidateFiles(root);
-        scheduleScan();
+        scheduleWatchScan();
         return;
       }
       const changed = filename ? path.resolve(root, String(filename)) : '';
       const known = changed && [...monitor.listCache.values()].some(entry => (entry.paths || []).some(file => resolveWatchPath(file) === changed));
       if (!known) monitor.invalidateFiles(root);
-      scheduleScan();
+      scheduleWatchScan();
     });
     discoveryWatchers.push(watcher);
   } catch (error) {
@@ -99,7 +110,8 @@ for (const root of [
 
 function clip(value, limit) {
   const text = String(value == null ? '' : value).replace(/\u0000/g, '').trim();
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  // Published cards are retained between scans; never pin the source text.
+  return detachedPrefix(text, limit, '…');
 }
 
 /** Creates the compact renderer projection of a provider-neutral session message. */

@@ -21,6 +21,75 @@
     return initialization;
   }
 
+  const ANSI_NAMES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'brightBlack',
+    'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
+  const COLOR_QUERY = /\x1b\](\d+);([^\x07\x1b]*)(\x07|\x1b\\)|\x1b\[\?996n/g;
+  function parseColor(value) {
+    const text = String(value || '').trim();
+    let match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text);
+    if (match) {
+      const hex = match[1].length === 3 ? match[1].replace(/./g, c => c + c) : match[1];
+      return [0, 2, 4].map(offset => Number.parseInt(hex.slice(offset, offset + 2), 16));
+    }
+    match = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(text);
+    return match ? match.slice(1, 4).map(Number) : [0, 0, 0];
+  }
+  function xtermRgb(rgb) {
+    return `rgb:${rgb.map(value => (Math.max(0, Math.min(255, value)) * 257).toString(16).padStart(4, '0')).join('/')}`;
+  }
+  function paletteColor(theme, index) {
+    if (index < 16) return theme[ANSI_NAMES[index]];
+    if (index < 232) {
+      const levels = [0, 95, 135, 175, 215, 255], value = index - 16;
+      return `rgb(${levels[Math.floor(value / 36)]}, ${levels[Math.floor(value / 6) % 6]}, ${levels[value % 6]})`;
+    }
+    const gray = 8 + (index - 232) * 10;
+    return `rgb(${gray}, ${gray}, ${gray})`;
+  }
+  // Returns { end, reply } per answerable query, where end is the offset in
+  // this chunk just after the query. A query split across PTY chunks is
+  // completed from a short carried tail of the previous chunk.
+  function colorQueries(terminal, data) {
+    if (typeof data !== 'string' && !(data instanceof Uint8Array)) return [];
+    const carry = terminal.colorQueryCarry || '';
+    if (!carry && !data.includes(typeof data === 'string' ? '\x1b' : 0x1b)) return [];
+    // One character per byte keeps match offsets equal to byte offsets.
+    const chunk = typeof data === 'string' ? data : new TextDecoder('latin1').decode(data);
+    const text = carry + chunk;
+    let tail = text.lastIndexOf('\x1b');
+    // A chunk can end between an OSC body and the ESC of its ST terminator.
+    if (tail > 0 && tail === text.length - 1) {
+      const previous = text.lastIndexOf('\x1b', tail - 1);
+      if (previous >= 0 && text[previous + 1] === ']' && !text.slice(previous, tail).includes('\x07')) tail = previous;
+    }
+    const pending = tail >= 0 && text.length - tail <= 256 && /^\x1b(?:$|\[(?:\?(?:9(?:9(?:6)?)?)?)?$|\](?:[^\x07\x1b]*)(?:\x1b)?$)/.test(text.slice(tail));
+    terminal.colorQueryCarry = pending ? text.slice(tail) : '';
+    const replies = [];
+    COLOR_QUERY.lastIndex = 0;
+    for (let match; (match = COLOR_QUERY.exec(text));) {
+      const end = COLOR_QUERY.lastIndex - carry.length;
+      if (end <= 0) continue;
+      if (!match[1]) { replies.push({ end, reply: `\x1b[?997;${terminal.colorScheme() === 'dark' ? 1 : 2}n` }); continue; }
+      const code = Number(match[1]), fields = match[2].split(';'), terminator = match[3];
+      let reply = '';
+      if (code === 4) {
+        for (let i = 0; i + 1 < fields.length; i += 2) {
+          const index = Number(fields[i]);
+          if (fields[i + 1] === '?' && Number.isInteger(index) && index >= 0 && index <= 255) {
+            reply += `\x1b]4;${index};${terminal.colorReport(4, index)}${terminator}`;
+          }
+        }
+      } else if (code >= 10 && code <= 12) {
+        // xterm lets one OSC 10 query 10, 11 and 12 in order: OSC 10;?;? .
+        fields.forEach((field, offset) => {
+          if (field === '?' && code + offset <= 12) reply += `\x1b]${code + offset};${terminal.colorReport(code + offset)}${terminator}`;
+        });
+      }
+      if (reply) replies.push({ end, reply });
+    }
+    return replies;
+  }
+
   class Terminal {
     constructor(options = {}) {
       this.backend = new ghosttyWeb.Terminal({ ...options, ghostty, focusOnOpen: false,
@@ -63,9 +132,12 @@
         set: (target, key, value) => {
           target[key] = value;
           if (['fontSize', 'fontFamily', 'theme'].includes(key)) this.refresh();
+          if (key === 'theme') this.reportColorSchemeChange();
           return true;
         },
       });
+      this.reportedColorScheme = this.colorScheme();
+      this.colorQueryCarry = '';
       this.backend.onScroll(() => {
         if (!this.writing) this.emitScroll();
       });
@@ -338,7 +410,7 @@
       this.writing = true;
       try {
         // The pinned WASM allocator does not accept a zero-byte allocation.
-        if (data.length) this.backend.write(data);
+        if (data.length) this.writeAnsweringColorQueries(data);
         if (!following && this.buffer.active.type === 'normal') this.scrollToLine(anchor);
       } finally { this.writing = false; }
       this.emitScroll();
@@ -353,6 +425,42 @@
         }, 0);
         this.callbacks.add(timer);
       }
+    }
+    // The pinned WASM answers DA/DSR but not color queries. TUIs such as
+    // Claude Code's "auto" theme ask OSC 11 for the background and fall back
+    // to an inherited COLORFGBG (often another terminal's light profile) when
+    // nothing answers. Answer with the colors this canvas actually paints.
+    // Each reply is sent right after its query is parsed, before any later
+    // DA1 in the same chunk, because apps use DA1 as "no more answers".
+    writeAnsweringColorQueries(data) {
+      const answering = !this.options.disableStdin && this.backend.options.emitTerminalResponses && !this.suppressResponses;
+      const queries = answering ? colorQueries(this, data) : [];
+      if (!answering) this.colorQueryCarry = '';
+      let start = 0;
+      for (const { end, reply } of queries) {
+        if (end > start) this.backend.write(data.slice(start, end));
+        start = Math.max(start, end);
+        this.backend.dataEmitter.fire(reply);
+      }
+      if (start < data.length) this.backend.write(start ? data.slice(start) : data);
+    }
+    colorReport(code, index) {
+      const theme = this.backend.renderer?.theme || this.backend.currentTheme || {};
+      const value = code === 10 ? theme.foreground : code === 11 ? theme.background
+        : code === 12 ? theme.cursor || theme.foreground : paletteColor(theme, index);
+      return xtermRgb(parseColor(value));
+    }
+    colorScheme() {
+      const theme = this.backend.renderer?.theme || this.backend.currentTheme || {};
+      const [r, g, b] = parseColor(theme.background);
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5 ? 'light' : 'dark';
+    }
+    reportColorSchemeChange() {
+      const scheme = this.colorScheme();
+      if (scheme === this.reportedColorScheme) return;
+      this.reportedColorScheme = scheme;
+      if (this.options.disableStdin || this.suppressResponses || !this.wasmTerm?.getMode(2031, false)) return;
+      this.backend.dataEmitter.fire(`\x1b[?997;${scheme === 'dark' ? 1 : 2}n`);
     }
     writeln(data, callback) { this.write(`${data}\r\n`, callback); }
     resize(cols, rows) {

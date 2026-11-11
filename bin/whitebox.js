@@ -362,6 +362,7 @@ function run(argv = process.argv.slice(2)) {
     process.stdin.removeListener('data', sendInput);
     process.stdout.removeListener('resize', sendResize);
     process.removeListener('SIGTERM', sendTerminate);
+    process.removeListener('SIGHUP', sendTerminate);
     process.stdin.pause();
   };
   const finish = code => {
@@ -446,6 +447,8 @@ function run(argv = process.argv.slice(2)) {
   });
   socket.on('close', () => finish(exitCode));
   process.on('SIGTERM', sendTerminate);
+  // Closing the terminal window sends SIGHUP; end the remote agent too.
+  process.on('SIGHUP', sendTerminate);
 }
 
 if (require.main === module) {

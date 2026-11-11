@@ -117,7 +117,9 @@ function exactProcess(session, snapshot) {
   if (!snapshot.available || !session?.pid || session.status !== 'running') return null;
   const matches = snapshot.processes.filter(item => item.pid === session.pid
     || item.ancestorPids?.includes(session.pid));
-  if (matches.length !== 1 || !['claude', 'codex'].includes(matches[0].provider)) return null;
+  // Gemini and Grok have no process-owned log here; their turns are read from
+  // the screen with each CLI's own prompt, spinner and finish markers.
+  if (matches.length !== 1 || !['claude', 'codex', 'gemini', 'grok'].includes(matches[0].provider)) return null;
   return matches[0];
 }
 
@@ -261,7 +263,7 @@ class TerminalReview extends EventEmitter {
           }
           while (this.responses.size > RESPONSE_CACHE_LIMIT) this.responses.delete(this.responses.keys().next().value);
           for (const [provider, until] of Object.entries(data.cooldowns || {})) {
-            if (['codex', 'claude', 'jev'].includes(provider) && Number.isFinite(until) && until > now() && until <= now() + 86400000) this.cooldowns.set(provider, until);
+            if (['codex', 'claude', 'gemini', 'grok', 'jev'].includes(provider) && Number.isFinite(until) && until > now() && until <= now() + 86400000) this.cooldowns.set(provider, until);
           }
         }
       }
@@ -662,7 +664,7 @@ class TerminalReview extends EventEmitter {
         const completed = completedTurn(frame, turn.response || turn.request, process.provider, turn.baselineStamp);
         if (completed !== turn.candidate) { turn.candidate = completed; turn.candidateAt = this.now(); }
         if (completed && this.now() - turn.candidateAt >= this.quietMs) { evidence = completed; lifecycle = 'completed'; }
-        else evidence = completed ? '' : currentTurnEvidence(frame, turn.response || turn.request);
+        else evidence = completed ? '' : currentTurnEvidence(frame, turn.response || turn.request, process.provider);
       }
       // Joined requests Claude absorbed into this reply are answered by it; the
       // summary sees them and the chat shows this answer after them.

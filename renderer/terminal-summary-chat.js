@@ -5,6 +5,10 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   const { root, api, t, esc } = context;
   const ui = window.WhiteboxWorkspaceUI;
   const $ = selector => root.querySelector(selector);
+  // Every AI CLI the app recognizes in a terminal. Claude and Codex steps come
+  // from their own logs; Gemini and Grok from their own screen markers.
+  const SUMMARY_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
+  const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok' };
   const records = new Map();
   let flushing = false, selected = '', lastMarkup = '', approvalBusy = false, retryBusy = false, stopBusy = false, modeKey = '', sendKey = '', stopKey = '', thinkingLabel = '';
   let lastPastMarkup = '', pastSelected = '', flashTimer = 0;
@@ -34,6 +38,16 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     else sharedGame.best = Math.max(sharedGame.best, restored.best);
   };
   const identity = member => ({ targetCreationId: member.creationId, targetProviderPid: member.providerPid, targetProvider: member.provider });
+  // What a queued request is waiting for, shown under it until it is sent.
+  const WAIT = {
+    ready: 'AI가 입력을 받을 수 있게 되면 자동으로 보내요.',
+    working: 'AI 작업이 끝나면 자동으로 보내요.',
+    previous: '앞의 요청이 끝나면 자동으로 보내요.',
+    prompt: 'AI가 터미널에서 응답을 기다려요. 응답하면 이어서 보내요.',
+    draft: '터미널 입력창에 쓰던 글이 있어요. 비우면 자동으로 보내요.',
+    screen: '터미널 화면을 확인하면 자동으로 보내요.',
+    connection: 'AI 연결을 확인하면 자동으로 보내요.',
+  };
   function control(label, attributes, disabled = false, variant = 'ghost', translate = true) {
     return `<span data-summary-control data-variant="${variant}"><button type="button" ${attributes} ${disabled ? 'disabled' : ''}>${esc(translate ? t(label) : label)}</button></span>`;
   }
@@ -66,18 +80,27 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       button.title = button.disabled ? t('이 터미널에서 AI를 먼저 실행해 주세요.') : button.textContent;
     }
   }
-  const eligible = id => {
+  // The AI process this terminal last reported, however old the observation.
+  const known = id => {
     const session = context.session(id), member = context.member(id);
-    return Boolean(session?.status === 'running' && member && Date.now() - member.observedAt < 5000
-      && member.creationId === session.creationId && member.pid === session.pid
-      && member.providerPid > 0 && ['claude', 'codex'].includes(member.provider));
+    return Boolean(session?.status === 'running' && member && member.creationId === session.creationId && member.pid === session.pid
+      && member.providerPid > 0 && SUMMARY_PROVIDERS.includes(member.provider));
   };
+  const eligible = id => known(id) && Date.now() - context.member(id).observedAt < 5000;
+  // A queued request ends only when its AI session is really gone or replaced.
+  // A slow or missed observation keeps it queued until the AI is seen again.
+  function sessionChanged(id, message) {
+    const session = context.session(id), member = context.member(id);
+    if (!session || session.status !== 'running' || session.creationId !== message.targetCreationId) return true;
+    return Boolean(member && member.creationId === session.creationId && member.pid === session.pid && member.providerPid > 0
+      && (member.providerPid !== message.targetProviderPid || member.provider !== message.targetProvider));
+  }
   function record(id) {
     const session = context.session(id);
     if (!session) return null;
     let value = records.get(id);
     if (!value || value.creationId !== session.creationId) {
-      value = { id, creationId: session.creationId, mode: 'terminal', draft: '', messages: [] };
+      value = { id, creationId: session.creationId, mode: 'terminal', draft: '', attachments: [], messages: [] };
       records.set(id, value);
     }
     return value;
@@ -103,7 +126,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         // A review event can arrive before the send acknowledgement; link the
         // turn once the outgoing request becomes `sent`.
         mine = own.find(message => message.state === 'sent' && !message.answerKey && (task.submissionId ? task.submissionId === message.id
-          : message.text.trim() === String(task.request || '').trim() && !message.baseline?.includes(key)));
+          : String(message.delivered || message.text).trim() === String(task.request || '').trim() && !message.baseline?.includes(key)));
         if (mine) mine.answerKey = key;
       }
       // A message sent while the AI worked can be absorbed into this turn; the
@@ -162,6 +185,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const opening = value.mode !== 'summary' && mode === 'summary';
     value.mode = mode;
     context.save(); render();
+    // Typing continues where the user switched to.
+    if (mode === 'terminal') context.focusTerminal?.(id);
     if (mode === 'summary') {
       input.focus({ preventScroll: true });
       // Choosing summary is explicit intent to summarize the existing reply.
@@ -255,20 +280,141 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       event.preventDefault(); form.requestSubmit();
     }
   });
+  // Screenshots for the next request: picked, pasted or dropped. Each is saved
+  // by the main process at once (type and size checked there); the request
+  // carries only the saved IDs, and the AI receives each copy's path.
+  const MAX_IMAGES = 5, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PATH_RESERVE = 300;
+  const attachList = root.querySelector('#wbSummaryAttachments');
+  const attachInput = root.querySelector('#wbSummaryAttachInput');
+  const saving = new Map();
+  let lastAttachmentMarkup = '';
+  const ipcMessage = error => String(error?.message || error).replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/u, '');
+  const cleanAttachments = items => (Array.isArray(items) ? items : []).filter(item => item && typeof item.id === 'string'
+    && /^[a-f0-9-]{36}\.(png|jpg|gif|webp)$/u.test(item.id)).slice(0, MAX_IMAGES)
+    .map(item => ({ id: item.id, thumb: typeof item.thumb === 'string' && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/u.test(item.thumb) && item.thumb.length < 40000 ? item.thumb : '' }));
+  const imageCount = count => t('이미지 {count}장').replace('{count}', count);
+  // The images a request carried: their previews and how many.
+  const userImages = message => {
+    const items = message.attachments || [];
+    if (!items.length) return '';
+    const thumbs = items.filter(item => item.thumb).map((item, index) => `<img src="${esc(item.thumb)}" alt="${esc(t('첨부 이미지 {index}').replace('{index}', index + 1))}">`).join('');
+    return `${thumbs ? `<div class="wb-summary-user-images">${thumbs}</div>` : ''}<span class="wb-summary-image-count">${esc(imageCount(items.length))}</span>`;
+  };
+  // A small JPEG preview kept with the request; the full image stays on disk.
+  async function thumbnail(file) {
+    try {
+      if (typeof createImageBitmap !== 'function') return '';
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 128 / Math.max(bitmap.width, bitmap.height, 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close?.();
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch { return ''; }
+  }
+  function renderAttachments(value) {
+    const items = value?.attachments || [], pending = saving.get(value?.id) || 0;
+    const markup = items.map((item, index) => `<li data-state="ready">${item.thumb ? `<img src="${esc(item.thumb)}" alt="${esc(t('첨부 이미지 {index}').replace('{index}', index + 1))}">` : `<span class="sr-only">${esc(t('첨부 이미지 {index}').replace('{index}', index + 1))}</span>`}<button type="button" data-summary-attachment-remove="${esc(item.id)}" aria-label="${esc(t('이미지 빼기'))}" title="${esc(t('이미지 빼기'))}">×</button></li>`).join('')
+      + Array.from({ length: pending }, () => `<li data-state="saving" aria-label="${esc(t('이미지 저장 중…'))}"></li>`).join('');
+    if (markup !== lastAttachmentMarkup) { attachList.innerHTML = markup; lastAttachmentMarkup = markup; }
+    attachList.hidden = !markup;
+    root.querySelector('#wbSummaryAttach').disabled = items.length + pending >= MAX_IMAGES;
+  }
+  async function addImages(files) {
+    const id = context.activeId(), value = record(id);
+    if (!value) return;
+    const images = [...files].filter(file => file && /^image\//u.test(String(file.type || '')));
+    if (!images.length) { if (files.length) notice.textContent = t('PNG, JPG, GIF, WebP 이미지만 첨부할 수 있어요.'); return; }
+    const room = MAX_IMAGES - value.attachments.length - (saving.get(id) || 0);
+    if (images.length > room) notice.textContent = t('이미지는 한 번에 5장까지 보낼 수 있어요.');
+    for (const file of images.slice(0, Math.max(0, room))) {
+      if (file.size > MAX_IMAGE_BYTES) { notice.textContent = t('이미지는 한 장에 10MB까지 첨부할 수 있어요.'); continue; }
+      saving.set(id, (saving.get(id) || 0) + 1); renderAttachments(value);
+      try {
+        const [saved, thumb] = await Promise.all([
+          Promise.resolve(file.arrayBuffer()).then(buffer => api.summaryAttachmentSave({ type: file.type, data: new Uint8Array(buffer) })),
+          thumbnail(file),
+        ]);
+        if (records.get(id) !== value) { api.summaryAttachmentRemove?.([saved.id]).catch(() => {}); continue; }
+        value.attachments.push(...cleanAttachments([{ id: saved.id, thumb }]));
+        context.save();
+      } catch (error) { notice.textContent = t(ipcMessage(error)); }
+      finally {
+        saving.set(id, Math.max(0, (saving.get(id) || 0) - 1));
+        if (context.activeId() === id) renderAttachments(value);
+      }
+    }
+  }
+  function discardAttachments(items) {
+    const ids = (items || []).map(item => item.id);
+    if (ids.length) Promise.resolve(api.summaryAttachmentRemove?.(ids)).catch(() => {});
+  }
+  root.querySelector('#wbSummaryAttach').addEventListener('click', () => attachInput.click());
+  attachInput.addEventListener('change', () => {
+    const files = [...(attachInput.files || [])];
+    attachInput.value = '';
+    addImages(files).catch(error => { notice.textContent = t(ipcMessage(error)); });
+  });
+  attachList.addEventListener('click', event => {
+    const button = event.target.closest('[data-summary-attachment-remove]');
+    const value = record(context.activeId());
+    if (!button || !value) return;
+    const removed = value.attachments.filter(item => item.id === button.dataset.summaryAttachmentRemove);
+    value.attachments = value.attachments.filter(item => !removed.includes(item));
+    discardAttachments(removed);
+    context.save(); renderAttachments(value);
+    input.focus({ preventScroll: true });
+  });
+  input.addEventListener('paste', event => {
+    const items = [...(event.clipboardData?.items || [])];
+    const files = items.filter(item => item.kind === 'file' && /^image\//u.test(item.type)).map(item => item.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    // A copied image may also carry text (its name or address); keep that
+    // paste only when the user copied text on purpose.
+    if (!event.clipboardData.getData('text/plain')) event.preventDefault();
+    addImages(files).catch(error => { notice.textContent = t(ipcMessage(error)); });
+  });
+  const draggingFiles = event => [...(event.dataTransfer?.types || [])].includes('Files');
+  form.addEventListener('dragover', event => {
+    if (!draggingFiles(event)) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; form.dataset.drop = 'true';
+  });
+  form.addEventListener('dragleave', event => { if (!form.contains(event.relatedTarget)) delete form.dataset.drop; });
+  form.addEventListener('drop', event => {
+    delete form.dataset.drop;
+    if (!draggingFiles(event)) return;
+    event.preventDefault();
+    addImages(event.dataTransfer.files).catch(error => { notice.textContent = t(ipcMessage(error)); });
+  });
   form.addEventListener('submit', event => {
     event.preventDefault();
-    const id = context.activeId(), value = record(id), member = context.member(id), text = input.value.trim();
-    if (!value || !text || text.length > 8000 || !eligible(id) || /[\x00-\x08\x0b-\x1f\x7f]/u.test(text)) return;
-    if (value.messages.filter(message => message.state === 'queued').length >= 20) return;
+    // Invisible control characters (from a copied terminal line) are dropped;
+    // the guarded write would otherwise refuse the whole request.
+    const id = context.activeId(), value = record(id), member = context.member(id);
+    const attachments = value?.attachments || [];
+    let text = input.value.replace(/[\x00-\x08\x0b-\x1f\x7f]/gu, '').trim();
+    if (!value || !text && !attachments.length) return;
+    // Images alone still make a request the AI can act on.
+    if (!text) text = t('첨부한 이미지를 확인해 주세요.');
+    // Every refusal says why and keeps the text and images in the composer.
+    const refusal = saving.get(id) ? t('이미지를 저장하는 중이에요. 잠시 후 보내 주세요.')
+      : text.length + attachments.length * PATH_RESERVE > 8000 ? t('요청이 너무 길어요. 8000자 이하로 줄여서 보내 주세요.')
+      : !known(id) ? t('AI 연결을 확인하는 중이에요. 잠시 후 다시 보내 주세요.')
+        : value.messages.filter(message => message.state === 'queued').length >= 20 ? t('전송 대기 중인 요청이 너무 많아요. 앞의 요청이 전송된 뒤 보내 주세요.') : '';
+    if (refusal) { notice.textContent = refusal; return; }
+    notice.textContent = '';
     value.messages.push({ id: crypto.randomUUID(), role: 'user', text, state: 'queued', ...identity(member),
+      ...(attachments.length ? { attachments: attachments.map(item => ({ ...item })) } : {}),
       baseline: tasksFor(id).map(taskKey), at: Date.now() });
-    value.draft = ''; input.value = ''; input.style.height = 'auto';
-    context.save(); render();
+    value.draft = ''; value.attachments = []; input.value = ''; input.style.height = 'auto';
+    context.save(); render(); renderAttachments(value);
     context.refresh().then(flush).catch(error => { notice.textContent = String(error.message || error); });
   });
   root.querySelector('#wbSummary').addEventListener('click', event => {
-    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-send-now], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry]');
+    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-send-now], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry], [data-summary-resend]');
     if (!button) return;
+    if (button.dataset.summaryResend) { resend(button.dataset.summaryResend); return; }
     if (button.hasAttribute('data-summary-retry')) {
       if (retryBusy || !context.startSummary) return;
       retryBusy = true; render();
@@ -292,11 +438,33 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       return;
     }
     if (button.dataset.summaryEdit) {
-      if (value.draft) return;
+      if (value.draft || value.attachments.length) return;
       value.draft = message.text; input.value = value.draft; input.focus();
+      // Its images go back to the composer with the text.
+      value.attachments = cleanAttachments(message.attachments);
+      delete message.attachments;
+      renderAttachments(value);
+    } else {
+      // A cancelled request will never be sent: its saved images are removed.
+      discardAttachments(message.attachments);
+      delete message.attachments;
     }
     message.state = 'cancelled'; context.save(); render();
   });
+  // The user's explicit retry of a request that did not reach the AI (or whose
+  // delivery is unknown). It queues again under a new ID for the current AI
+  // session, so the old delivery record is never replayed by itself.
+  function resend(messageId) {
+    const id = context.activeId(), value = record(id), member = context.member(id);
+    const message = value?.messages.find(item => item.id === messageId);
+    if (!message || message.state !== 'interrupted' || message.answerKey) return;
+    if (!known(id)) { notice.textContent = t('AI 연결을 확인하는 중이에요. 잠시 후 다시 보내 주세요.'); return; }
+    Object.assign(message, { id: crypto.randomUUID(), state: 'queued', ...identity(member), baseline: tasksFor(id).map(taskKey), at: Date.now() });
+    for (const key of ['error', 'sentAt', 'wait', 'replyCaptured', 'delivered']) delete message[key];
+    notice.textContent = '';
+    context.save(); render();
+    context.refresh().then(flush).catch(error => { notice.textContent = String(error.message || error); });
+  }
   async function stop() {
     const id = context.activeId(), value = record(id), member = context.member(id);
     if (stopBusy || !value || !eligible(id)) return;
@@ -339,12 +507,15 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   async function deliver(value, message, sendNow = false) {
     const result = await api.terminalCollaboration({ operation: 'summary-send', id: message.id, groupId: context.groupId(value.id),
       targetId: value.id, message: message.text, targetCreationId: message.targetCreationId,
-      targetProviderPid: message.targetProviderPid, targetProvider: message.targetProvider, sendNow });
+      targetProviderPid: message.targetProviderPid, targetProvider: message.targetProvider, sendNow,
+      ...(message.attachments?.length ? { attachments: message.attachments.map(item => item.id) } : {}) });
     if (result?.deferred) {
-      message.state = 'queued';
+      message.state = 'queued'; message.wait = Object.hasOwn(WAIT, result.reason) ? result.reason : 'ready';
       if (sendNow) notice.textContent = t('터미널의 입력 상태를 확인한 뒤 다시 전송해 주세요.');
     } else if (result?.ok && ['running', 'completed'].includes(result.job?.state)) {
       message.state = 'sent'; message.sentAt = result.job.sentAt; context.submitted(result.job);
+      // The exact text the AI received (with image paths) links its turn back.
+      if (message.attachments?.length && typeof result.job.request === 'string') message.delivered = result.job.request;
     } else { message.state = 'interrupted'; message.error = result?.job?.error || t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'); }
   }
   async function sendNow(value, message) {
@@ -353,10 +524,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     message.state = 'sending'; context.save(); render();
     try {
       await context.refresh();
-      const member = context.member(value.id);
-      if (!eligible(value.id) || member.creationId !== message.targetCreationId
-        || member.providerPid !== message.targetProviderPid || member.provider !== message.targetProvider) {
-        throw new Error(t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'));
+      if (sessionChanged(value.id, message)) throw new Error(t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'));
+      // Not observed just now: the request stays queued and says so.
+      if (!eligible(value.id)) {
+        message.state = 'queued'; message.wait = 'connection';
+        notice.textContent = t('AI 연결을 확인하는 중이에요. 잠시 후 다시 보내 주세요.');
+        return;
       }
       await deliver(value, message, true);
     } catch (error) {
@@ -366,20 +539,24 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   async function flush() {
     if (flushing) return;
     flushing = true;
+    let waitChanged = false;
+    // A queued request shows what it waits for; it drains on its own.
+    const hold = (message, reason) => { if (message.wait !== reason) { message.wait = reason; waitChanged = true; } };
     try {
       for (const value of records.values()) {
         const message = value.messages.find(item => item.state === 'queued');
         if (!message) continue;
         const member = context.member(value.id);
-        if (!eligible(value.id)) {
-          if (member) { message.state = 'interrupted'; message.error = t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'); context.save(); }
-          continue;
+        if (sessionChanged(value.id, message)) {
+          message.state = 'interrupted'; message.error = t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'); context.save(); waitChanged = true; continue;
         }
-        if (message.targetCreationId !== member.creationId || message.targetProviderPid !== member.providerPid || message.targetProvider !== member.provider) {
-          message.state = 'interrupted'; message.error = t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'); context.save(); continue;
-        }
+        if (!eligible(value.id)) { hold(message, 'connection'); continue; }
         mergeAnswers(value);
-        if (!member.ready || detectedPrompt(value.id)) continue;
+        if (detectedPrompt(value.id)) { hold(message, 'prompt'); continue; }
+        if (!member.ready) {
+          const previous = value.messages.some(item => item.state === 'sent' && item.targetCreationId && !item.replyCaptured && jobsById.get(item.id)?.state !== 'completed');
+          hold(message, previous ? 'previous' : 'ready'); continue;
+        }
         // Archive each completed reply in the reviewer before replacing the
         // observed turn. Model analysis may finish later or be deferred; it
         // must not hold the user's next request indefinitely.
@@ -387,16 +564,16 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         for (const sent of value.messages.filter(item => item.state === 'sent' && item.targetCreationId && !item.replyCaptured)) {
           const job = jobsById.get(sent.id);
           if (job?.state !== 'completed') { waiting = true; break; }
+          // The backend already confirmed this exact reply finished. Archiving
+          // it is best effort and must not hold the next request forever.
+          const settled = Number(job.finishedAt) > 0 && Date.now() - job.finishedAt > CAPTURE_GRACE_MS;
           try {
-            // The backend already confirmed this exact reply finished. Archiving
-            // it is best effort and must not hold the next request forever.
-            const settled = Number(job.finishedAt) > 0 && Date.now() - job.finishedAt > CAPTURE_GRACE_MS;
             if (!await context.captureReply(job) && !settled) { waiting = true; break; }
-            sent.replyCaptured = true;
-            context.save();
-          } catch (error) { notice.textContent = String(error.message || error); waiting = true; break; }
+          } catch (error) { notice.textContent = String(error.message || error); if (!settled) { waiting = true; break; } }
+          sent.replyCaptured = true;
+          context.save();
         }
-        if (waiting) continue;
+        if (waiting) { hold(message, 'previous'); continue; }
         // Capturing evidence is asynchronous: recheck the process and frame
         // before asking the guarded backend to send.
         if (!eligible(value.id) || !context.member(value.id)?.ready || message.state !== 'queued') continue;
@@ -408,18 +585,33 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           message.state = 'interrupted'; message.error = String(error.message || error);
         } finally { context.save(); render(); }
       }
-    } finally { flushing = false; }
+    } finally {
+      flushing = false;
+      if (waitChanged) render();
+    }
   }
-  // The live step of a working AI, from its session log (no model call). Shell
-  // commands arrive as a kind or program name only, never their arguments.
+  // The live step of a working AI, from its session log or its own status
+  // line (no model call). Shell commands arrive as a kind or program name
+  // only, never their arguments.
   const PROGRESS = {
     test: ['테스트 실행 중', '테스트 결과 확인 중'], build: ['빌드 중', '빌드 결과 확인 중'], install: ['패키지 설치 중', '설치 결과 확인 중'],
     git: ['git 실행 중', 'git 결과 확인 중'], read: ['파일 읽는 중', '읽은 내용 정리 중'], search: ['코드 검색 중', '검색 결과 확인 중'],
-    edit: ['파일 수정 중', '수정 내용 확인 중'], web: ['웹에서 확인 중', '웹 결과 정리 중'], agent: ['보조 에이전트 작업 중', '보조 에이전트 결과 확인 중'],
+    edit: ['파일 수정 중', '수정 내용 확인 중'], web: ['웹에서 확인 중', '웹 결과 정리 중'], agent: ['도움 AI가 작업하는 중', '도움 AI 결과 확인 중'],
     plan: ['작업 계획 정리 중', '작업 계획 정리 중'], ask: ['질문 준비 중', '질문 준비 중'], skill: ['스킬 실행 중', '스킬 결과 확인 중'],
     mcp: ['연결 도구 사용 중', '도구 결과 확인 중'], command: ['명령 실행 중', '명령 결과 확인 중'], tool: ['도구 사용 중', '도구 결과 확인 중'],
-    thinking: ['생각 중', '생각 중'],
+    thinking: ['생각 중', '생각 중'], respond: ['답변 작성 중', '답변 작성 중'], wait: ['백그라운드 결과 기다리는 중', '백그라운드 결과 확인 중'], monitor: ['모니터 켜는 중', '모니터 결과 확인 중'],
+    compact: ['대화 압축 중', '대화 압축 중'], retry: ['오류가 나서 다시 시도하는 중', '오류가 나서 다시 시도하는 중'], limit: ['사용 한도가 풀리길 기다리는 중', '사용 한도가 풀리길 기다리는 중'],
   };
+  // Waits outside the AI's own steps explain themselves on the second line.
+  const PROGRESS_NOTE = {
+    compact: '대화가 길어져 앞부분을 줄이고 있어요. 끝나면 이어서 작업해요.',
+    retry: 'AI 서비스 응답에 문제가 있어 자동으로 다시 시도하고 있어요.',
+    limit: '한도가 풀리면 AI가 자동으로 이어서 작업해요.',
+  };
+  // What an approval prompt is holding, for the "response needed" card.
+  const RUN = 'AI가 명령 실행 허락을 기다려요';
+  const PERMISSION = { edit: 'AI가 파일 수정 허락을 기다려요', web: 'AI가 웹 접속 허락을 기다려요', mcp: 'AI가 연결 도구 사용 허락을 기다려요',
+    agent: 'AI가 도움 AI 실행 허락을 기다려요', skill: 'AI가 스킬 실행 허락을 기다려요', test: RUN, build: RUN, install: RUN, git: RUN, command: RUN, read: RUN };
   // A finished reply whose summary is still being made: Summary mode shows
   // only the status, never the raw reply in place of the summary.
   // Why a summary failed, in the words the user acts on.
@@ -435,9 +627,47 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   function progressText(progress) {
     if (!progress || typeof progress.kind !== 'string') return '';
     if (progress.kind === 'note') return String(progress.detail || '').slice(0, 90);
+    if (progress.kind === 'agent' && progress.count > 1 && progress.phase === 'running') return `${t('도움 AI {count}개 작업 중').replace('{count}', progress.count)}…`;
     const labels = PROGRESS[progress.kind] || PROGRESS.tool;
     const detail = typeof progress.detail === 'string' && progress.detail && progress.kind !== 'thinking' ? ` · ${progress.detail.slice(0, 60)}` : '';
     return `${t(labels[progress.phase === 'after' ? 1 : 0])}${detail}…`;
+  }
+  // Unnamed jobs carry the backend's generic Korean label; name them plainly.
+  const BACKGROUND_DEFAULT = { 명령창: '이름 없는 명령', 모니터: '이름 없는 모니터', '도움 AI': '이름 없는 도움 AI' };
+  // Work the AI started and left running: background commands, monitors and
+  // helper AIs, as observed for this exact AI process.
+  function backgroundJobs(activity) {
+    const items = Array.isArray(activity?.background?.items) ? activity.background.items : [];
+    return items.filter(item => item && typeof item.label === 'string' && ['running', 'waiting'].includes(item.state));
+  }
+  function backgroundNames(items) {
+    const names = items.slice(0, 2).map(item => Object.hasOwn(BACKGROUND_DEFAULT, item.label) ? t(BACKGROUND_DEFAULT[item.label]) : item.label.slice(0, 40));
+    return items.length > 2 ? `${names.join(', ')} ${t('외 {count}개').replace('{count}', items.length - 2)}` : names.join(', ');
+  }
+  function backgroundLabel(items) {
+    const agents = items.every(item => item.kind === 'agent');
+    if (items.length === 1) return t(agents ? '답변 완료 · 도움 AI 실행 중' : '답변 완료 · 백그라운드 작업 실행 중');
+    return t(agents ? '답변 완료 · 도움 AI {count}개 실행 중' : '답변 완료 · 백그라운드 작업 {count}개 실행 중').replace('{count}', items.length);
+  }
+  // How long this request has run and how much the AI has done, from counts
+  // the session log already holds. Minutes only, so the line stays calm.
+  function turnText(turn, items, now = Date.now()) {
+    const parts = [];
+    const minutes = Number.isFinite(turn?.since) && now >= turn.since ? Math.floor((now - turn.since) / 60000) : -1;
+    if (minutes === 0) parts.push(t('방금 시작했어요'));
+    else if (minutes > 0 && minutes < 60) parts.push(t('{minutes}분째 작업 중').replace('{minutes}', minutes));
+    else if (minutes >= 60) parts.push(t('{hours}시간 {minutes}분째 작업 중').replace('{hours}', Math.floor(minutes / 60)).replace('{minutes}', minutes % 60));
+    if (turn?.steps > 0) parts.push(t('도구 {count}번 사용').replace('{count}', turn.steps));
+    if (turn?.files > 0) parts.push(t('파일 {count}개 수정').replace('{count}', turn.files));
+    if (items.length) parts.push(t('백그라운드 {count}개 실행 중').replace('{count}', items.length));
+    return parts.join(' · ');
+  }
+  function permissionText(progress) {
+    if (progress?.kind === 'ask') return t('AI가 질문했어요. 터미널에서 답해 주세요.');
+    const action = progress?.kind && PERMISSION[progress.kind];
+    if (!action) return t('터미널에서 응답이 필요합니다.');
+    const detail = typeof progress.detail === 'string' && progress.detail ? ` · ${progress.detail.slice(0, 60)}` : '';
+    return `${t(action)}${detail}`;
   }
   function renderProgress(value, member, review, prompt) {
     const failure = window.WhiteboxReviewDecision.reviewFailure(review);
@@ -477,30 +707,41 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       && !needsResponse && (!task.lifecycle || finished(task)));
     const summaryQueued = !needsResponse && !interrupted && !failure && !analyzing && summaryPending(task, review);
     const loading = !needsResponse && !interrupted && (analyzing || working || awaiting || summaryQueued);
-    const liveStep = working && !analyzing ? progressText(member.activity?.progress) : '';
+    // The AI's own turn ended while work it started still runs: it is waiting
+    // on that work, not finished and not waiting on the user.
+    const jobs = backgroundJobs(member.activity);
+    const backgroundWait = Boolean(member.activity?.backgroundWait && jobs.length && !needsResponse && !interrupted);
+    const progress = member.activity?.progress;
+    const liveStep = analyzing ? '' : backgroundWait ? backgroundLabel(jobs) : working ? progressText(progress) : '';
     const label = analyzing ? t('요약 중…') : summaryQueued ? t('답변 완료 · 요약 준비 중…') : liveStep || t(working ? 'AI가 작업 중입니다.' : 'AI 답변을 기다리고 있어요');
-    $('#wbSummaryWorking').hidden = !loading;
-    if (loading) {
+    const backgroundNote = backgroundWait ? `${backgroundNames(jobs)} · ${t(member.provider === 'claude' ? '다음 요청을 지금 보내도 돼요. 작업이 끝나면 AI가 결과를 받아 이어서 작업해요.' : '다음 요청을 지금 보내도 돼요. 작업은 계속 실행 중이에요.')}` : '';
+    $('#wbSummaryWorking').hidden = !(loading || backgroundWait);
+    if (loading || backgroundWait) {
       if (label !== thinkingLabel) {
         if (ui?.thinking) ui.thinking($('#wbSummaryThinking'), label);
         else $('#wbSummaryThinking').textContent = label;
         thinkingLabel = label;
       }
-      $('#wbSummaryWorkingDescription').textContent = t(analyzing && replyDone
-        ? 'AI 답변은 도착했어요. 요청과 결과를 비교해 요약으로 정리하고 있어요.'
-        : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
+      const detail = analyzing && replyDone ? t('AI 답변은 도착했어요. 요청과 결과를 비교해 요약으로 정리하고 있어요.')
+        : backgroundWait && !analyzing && !summaryQueued ? backgroundNote
+          : working && PROGRESS_NOTE[progress?.kind] ? t(PROGRESS_NOTE[progress.kind])
+            : working ? turnText(member.activity?.turn, jobs) : '';
+      $('#wbSummaryWorkingDescription').textContent = detail || t('작업 중 보낸 요청은 전송 대기로 보관합니다.');
     } else if (thinkingLabel) { ui?.clear?.($('#wbSummaryThinking')); thinkingLabel = ''; }
     let title = '다음 요청을 입력하세요.', description = '같은 AI 세션에서 대화를 이어갑니다.';
     // A pass-through reply needs no summary; a failed summary is final.
     const passThroughDone = Boolean(replyDone && !working && task?.passThrough && !task.content);
     const summaryFailed = Boolean(!failure && !working && task?.summaryFailure && !task.content);
-    if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; }
+    // Live text is already translated and may hold AI-written details.
+    let liveDescription = '';
+    if (needsResponse) { title = '응답이 필요합니다'; description = '터미널에서 응답이 필요합니다.'; liveDescription = prompt ? '' : permissionText(progress); }
     else if (summaryFailed) { title = '요약하지 못했어요'; description = '아래 카드에서 AI 원문과 이유를 확인하고 다시 요약할 수 있어요.'; }
     else if (passThroughDone) { title = '답변이 도착했어요'; description = '짧은 답이라 요약 없이 그대로 보여 드려요.'; }
     else if (failure) { title = failure.title; description = failure.description; }
     else if (stopped) { title = '요청을 멈췄어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
     else if (interrupted) { title = '요청이 중단됐어요'; description = '터미널에서 수행 기록을 확인한 뒤 다음 요청을 이어가세요.'; }
-    else if (working) { title = 'AI가 작업 중입니다.'; description = '작업 중 보낸 요청은 전송 대기로 보관합니다.'; }
+    else if (backgroundWait) { title = '답변은 끝났고 백그라운드 작업만 실행 중이에요'; liveDescription = backgroundNote; }
+    else if (working) { title = 'AI가 작업 중입니다.'; description = '작업 중 보낸 요청은 전송 대기로 보관합니다.'; liveDescription = liveStep; }
     else if (summaryDone) { title = '답변과 요약이 도착했어요'; description = '다음 요청을 바로 이어갈 수 있어요.'; }
     else if (backoff) { title = '분석 재시도 대기'; description = '사용 한도가 풀리면 분석을 다시 시도합니다.'; }
     else if (analyzing) { title = replyDone ? '답변은 완료, 요약은 정리 중' : '작업 내용을 분석 중입니다.'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
@@ -508,7 +749,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     else if (replyDone || collecting) { title = replyDone ? '답변 완료 · 분석 대기' : '분석 대기'; description = '새로운 결과가 도착하면 요약을 이어서 정리합니다.'; }
     else if (awaiting) { title = 'AI 답변을 기다리고 있어요'; description = '같은 AI 세션에서 대화를 이어갑니다.'; }
     $('#wbSummaryStateTitle').textContent = t(title);
-    $('#wbSummaryStateDescription').textContent = t(description);
+    $('#wbSummaryStateDescription').textContent = liveDescription || t(description);
     $('#wbSummaryStateTitle').dataset.state = failure || interrupted || summaryFailed ? 'warning' : needsResponse ? 'waiting' : summaryDone || passThroughDone ? 'done' : 'working';
     const replyState = needsResponse ? '응답 필요' : stopped ? '멈춤' : interrupted ? '중단됨' : replyDone ? '완료' : working ? '작업 중' : sent || awaiting ? '대기 중' : '—';
     // Same live reviewer wording as terminal mode, so analysis never looks stalled.
@@ -517,6 +758,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const reviewState = summaryFailed ? '요약 실패' : passThroughDone ? '요약 필요 없음' : failure ? summaryDone ? '기존 검토 완료' : '추가 검토 필요'
       : interrupted ? '중단됨' : summaryDone ? '완료' : backoff ? '분석 재시도 대기' : analyzing && replyDone ? '정리 중' : live
         || (deferred || collecting || replyDone ? '분석 대기' : '대기 중');
+    // A finished reply reads as finished even while its background work runs.
     $('#wbSummaryReplyState').textContent = replyState === '작업 중' && liveStep ? liveStep : t(replyState);
     $('#wbSummaryReplyState').dataset.state = interrupted ? 'warning' : needsResponse ? 'waiting' : replyDone ? 'done' : 'working';
     $('#wbSummaryReviewState').textContent = t(reviewState);
@@ -542,7 +784,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const gameWait = !needsResponse && !interrupted && (loading || collecting && !backoff || pendingSummary);
     game.render({ waiting: gameWait, completed: summaryDone, replyKey: summaryDone ? sent?.id || task?.taskId || preview?.taskId : null });
     // The request still in progress, for the past-request list.
-    return { liveId: !interrupted && (loading || pendingSummary) ? sent?.id || '' : '', replyDone };
+    return { liveId: !interrupted && (loading || pendingSummary) ? sent?.id || '' : '', replyDone, step: liveStep };
   }
   // Past requests: every request of this conversation, newest first, each
   // with the summary's actual answer as written (no extra model call).
@@ -557,7 +799,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (message.state === 'interrupted' || task?.lifecycle === 'interrupted') return { text: t('요청이 중단됐어요.'), state: 'muted' };
     if (task?.summaryFailure) return { text: t('요약하지 못했어요 · 누르면 AI 원문을 볼 수 있어요'), state: 'muted' };
     if (task?.explanation || task?.summary) return { text: task.explanation || task.summary };
-    if (live) return { text: t(live.replyDone ? '요약 중…' : 'AI가 작업 중 · 요약은 답이 끝나면 붙어요'), state: 'live' };
+    if (live) return { text: live.replyDone ? t('요약 중…') : live.step || t('AI가 작업 중 · 요약은 답이 끝나면 붙어요'), state: 'live' };
     if (task?.lifecycle === 'completed' && !task.content && !task.deferred && task.analysisDepth !== 'deferred') return { text: t('요약 중…'), state: 'live' };
     return { text: t('요약이 없어요.'), state: 'muted' };
   }
@@ -576,7 +818,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     items.reverse();
     const markup = items.map(({ message, task, live, judgement }) => {
       const answer = answerLine(message, task, live);
-      return `<li><button type="button" data-summary-past="${esc(message.id)}" data-state="${live ? 'live' : 'done'}"${pastSelected === message.id ? ' aria-current="true"' : ''}><span class="wb-summary-past-request">${judgement ? `<em>${esc(t('판단'))}</em>` : ''}<span>${esc(oneLine(message.text))}</span><time>${esc(clock(message.sentAt || message.at))}</time></span><span class="wb-summary-past-answer" data-state="${answer.state || 'summary'}">${esc(oneLine(answer.text))}</span></button></li>`;
+      return `<li><button type="button" data-summary-past="${esc(message.id)}" data-state="${live ? 'live' : 'done'}"${pastSelected === message.id ? ' aria-current="true"' : ''}><span class="wb-summary-past-request">${judgement ? `<em>${esc(t('판단'))}</em>` : ''}<span>${esc(oneLine(message.text))}</span>${message.attachments?.length ? `<em class="wb-summary-past-images">${esc(imageCount(message.attachments.length))}</em>` : ''}<time>${esc(clock(message.sentAt || message.at))}</time></span><span class="wb-summary-past-answer" data-state="${answer.state || 'summary'}">${esc(oneLine(answer.text))}</span></button></li>`;
     }).join('');
     $('#wbSummaryPastSection').hidden = !items.length;
     $('#wbSummaryPastCount').textContent = items.length ? `${t('{count}개').replace('{count}', items.length)} · ${t('최신순')}` : '';
@@ -597,10 +839,30 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const button = event.target.closest('[data-summary-past]');
     if (button) showPast(button.dataset.summaryPast);
   });
+  // One observation tick can miss the AI process (a slow or skipped scan).
+  // Leaving Summary then hides the composer mid-typing and ends a Korean
+  // composition, so the view only gives up after the AI has stayed missing.
+  const MISSING_GRACE_MS = 3000, FOCUSED_GRACE_MS = 30000;
+  let missing = null, composing = false;
+  input.addEventListener('compositionstart', () => { composing = true; });
+  input.addEventListener('compositionend', () => { composing = false; });
+  input.addEventListener('blur', () => { composing = false; });
+  function holdSummary(id, value) {
+    if (value?.mode !== 'summary' || root.querySelector('#wbSummary').hidden || !selected.startsWith(`${id}:`)) { missing = null; return false; }
+    const key = `${id}:${value.creationId}`, now = Date.now();
+    if (missing?.key !== key) missing = { key, since: now };
+    const typing = document.activeElement === input;
+    // Never pull the composer away during a composition; a focused composer
+    // waits longer, and an ended AI session still falls back after that.
+    return composing && typing || now - missing.since < (typing ? FOCUSED_GRACE_MS : MISSING_GRACE_MS);
+  }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
-    const stillRunning = member && member.providerPid > 0 && ['claude', 'codex'].includes(member.provider)
+    const stillRunning = member && member.providerPid > 0 && SUMMARY_PROVIDERS.includes(member.provider)
       && member.creationId === context.session(id)?.creationId && member.pid === context.session(id)?.pid;
+    if (stillRunning) missing = null;
+    // Keep the current Summary view untouched while the AI is briefly unobserved.
+    else if (holdSummary(id, value)) return;
     const summary = value?.mode === 'summary' && stillRunning;
     root.classList.toggle('summary-mode', summary);
     root.querySelector('#wbSummary').hidden = !summary;
@@ -619,7 +881,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     mergeAnswers(value);
     root.querySelector('#wbSummaryTarget').textContent = context.title?.(id) || context.label(id);
     root.querySelector('#wbSummaryTarget').title = context.label(id);
-    root.querySelector('#wbSummaryProvider').textContent = member.provider === 'claude' ? 'Claude' : 'Codex';
+    root.querySelector('#wbSummaryProvider').textContent = PROVIDER_NAMES[member.provider] || '';
     $('#wbSummaryConnection').dataset.connected = String(available);
     $('#wbSummaryConnectionState').textContent = t(available ? '같은 대화에 연결됨' : '연결 확인 중');
     // The model and effort of the AI's latest reply, read from its own log.
@@ -635,6 +897,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (selected !== `${id}:${value.creationId}`) {
       selected = `${id}:${value.creationId}`; input.value = value.draft; notice.textContent = ''; lastMarkup = ''; lastPastMarkup = ''; pastSelected = ''; closeCommands();
     }
+    renderAttachments(value);
     const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
     let markup = value.messages.map(message => {
       if (message.role === 'answer') {
@@ -651,7 +914,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         return `<article class="wb-summary-answer" data-result-kind="${kind}"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t(heading))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${body}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
       }
       const timestamp = clock(message.sentAt || message.at);
-      return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
+      return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${userImages(message)}${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${message.state === 'interrupted' && !message.answerKey ? control('다시 보내기', `data-summary-resend="${esc(message.id)}"`, false, 'secondary') : ''}${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' && WAIT[message.wait] ? `<p class="wb-summary-queue-note" data-summary-wait="${esc(message.wait)}">${esc(t(WAIT[message.wait]))}</p>` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft || value.attachments?.length))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
     }).join('');
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;
     const prompt = detectedPrompt(id);
@@ -659,7 +922,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       const raw = context.snapshot(id).text || '';
       markup += `<article class="wb-summary-prompt" role="group" aria-label="${esc(t('응답이 필요합니다'))}"><h2>${esc(prompt.question)}</h2><pre>${esc(raw.slice(-8000))}</pre><div>${prompt.choices.map(choice => control(choice.label, `data-summary-choice="${esc(choice.id)}"`, approvalBusy, 'secondary', false)).join('')}</div></article>`;
     } else if (member.activity?.state === 'waiting') {
-      markup += `<article class="wb-summary-prompt"><p>${esc(t('터미널에서 응답이 필요합니다.'))}</p>${control('터미널에서 확인', 'data-summary-terminal')}</article>`;
+      markup += `<article class="wb-summary-prompt"><p>${esc(permissionText(member.activity.progress))}</p>${control('터미널에서 확인', 'data-summary-terminal')}</article>`;
     }
     if (markup !== lastMarkup) {
       const nearBottom = list.scrollHeight - list.clientHeight - list.scrollTop < 80;
@@ -671,13 +934,17 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       if (nearBottom) list.scrollTop = list.scrollHeight;
     }
     renderPast(value, renderProgress(value, member, review, prompt));
-    input.disabled = !available;
+    // Keep the composer editable: `available` also drops for a slow or briefly
+    // missing observation, and disabling the focused textarea ends a Korean
+    // composition and drops keys. Sending stays gated by the button and submit.
+    input.disabled = false;
     const nextSendKey = JSON.stringify([t('전송'), available]);
     if (ui?.actionButton && $('#wbSummarySendHost') && nextSendKey !== sendKey) {
       ui.actionButton($('#wbSummarySendHost'), { label: `${t('전송')} ↑`, type: 'submit', variant: 'primary' });
       $('#wbSummarySendHost button').id = 'wbSummarySend'; sendKey = nextSendKey;
     }
-    root.querySelector('#wbSummarySend').disabled = !available;
+    // A briefly unobserved AI still takes the request; it waits in the queue.
+    root.querySelector('#wbSummarySend').disabled = !known(id);
     root.querySelector('#wbSummaryComposerHint').textContent = t(member.ready ? 'Enter 전송 · Shift+Enter 줄바꿈' : '작업 중 보낸 요청은 전송 대기로 보관합니다.');
   }
   function observe(jobs = []) {
@@ -723,8 +990,13 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
         for (const message of messages) if (['queued', 'sending'].includes(message.state)) {
           message.state = 'interrupted'; message.error = t('앱이 다시 시작되었습니다. 전송 상태를 확인해 주세요.');
         }
+        for (const message of messages) {
+          const images = cleanAttachments(message.attachments);
+          if (images.length) message.attachments = images; else delete message.attachments;
+          if (typeof message.delivered !== 'string' || message.delivered.length > 8000) delete message.delivered;
+        }
         records.set(item.id, { id: item.id, creationId: item.creationId, mode: item.mode === 'summary' ? 'summary' : 'terminal',
-          draft: String(item.draft || '').slice(0, 8000), messages });
+          draft: String(item.draft || '').slice(0, 8000), attachments: cleanAttachments(item.attachments), messages });
       }
     },
     forget(id) { records.delete(id); },

@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { EventEmitter } = require('events');
 const { cachedClaudeHomes } = require('./claudeHomes');
+const { detachedPrefix } = require('./detachedString');
 const {
   providerList,
   modelContextWindow,
@@ -92,7 +93,9 @@ function asText(value) {
 
 function compactText(value, limit = 4000) {
   const text = asText(value).replace(/\u0000/g, '').trim();
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  // Parsed sessions stay cached for hours: a truncated copy must not keep the
+  // full provider payload (often megabytes of tool output) alive.
+  return detachedPrefix(text, limit, '…');
 }
 
 function timestamp(value, fallback = null) {
@@ -620,6 +623,7 @@ class AgentMonitor extends EventEmitter {
     this.startupRecoveredFiles = new Map();
     this.timer = null;
     this.scanning = false;
+    this.lastScanEndedAt = 0;
     this.lastSnapshot = { generatedAt: new Date().toISOString(), sessions: [], summary: buildSummary([], {}) };
     this.setHistoryHomes(options.historyHomes || []);
   }
@@ -1125,6 +1129,7 @@ class AgentMonitor extends EventEmitter {
       return this.lastSnapshot;
     } finally {
       this.scanning = false;
+      this.lastScanEndedAt = Date.now();
     }
   }
 
@@ -1143,6 +1148,7 @@ class AgentMonitor extends EventEmitter {
 
 module.exports = {
   AgentMonitor,
+  compactText,
   parseClaude,
   parseCodex,
   parseGeneric,

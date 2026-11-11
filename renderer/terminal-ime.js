@@ -38,6 +38,8 @@ window.WhiteboxTerminalIme = {
         let measuredText = null;
         let measuredCells = 0;
         let tailSignature = null;
+        let lastKeyEscape = false;
+        let bracketedPaste = null;
         const listeners = [];
         const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
         const listen = (type, listener) => {
@@ -197,11 +199,33 @@ window.WhiteboxTerminalIme = {
         };
         const anchorObserver = new MutationObserver(recoverInputAnchor);
         anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] });
+        let replacementBefore = null;
         listen('beforeinput', event => {
           // Bypass upstream's container handler, which prevents all edits.
           event.stopImmediatePropagation();
           recoverInputAnchor();
+          // A replacement (spelling, text substitution) rewrites text already
+          // sent to the line editor. Remember the line to know what it removed.
+          replacementBefore = event.inputType === 'insertReplacementText'
+            ? { value: textarea.value, caret: textarea.selectionStart } : null;
         });
+        // Erase replaced text behind the caret before typing its replacement;
+        // sending only the new text would leave the old characters in place.
+        const replacementInput = (before, after, fallback) => {
+          if (!before) return fallback;
+          // Anchor the difference at the caret, where the line editor's cursor
+          // is: " " → ". " replaces the space rather than inserting "." before it.
+          let prefix = 0;
+          while (prefix < before.caret && prefix < after.length && before.value[prefix] === after[prefix]) prefix++;
+          let suffix = 0;
+          while (before.value.length - 1 - suffix >= Math.max(prefix, before.caret) && suffix < after.length - prefix
+            && before.value[before.value.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+          const removed = before.value.slice(prefix, before.value.length - suffix);
+          const inserted = after.slice(prefix, after.length - suffix);
+          if (!removed) return inserted || fallback;
+          if (prefix + removed.length !== before.caret) return fallback;
+          return '\x7f'.repeat([...segmenter.segment(removed)].length) + inserted;
+        };
         listen('compositionstart', event => {
           event.stopPropagation();
           recoverInputAnchor();
@@ -231,10 +255,13 @@ window.WhiteboxTerminalIme = {
           event.stopPropagation();
           if (composing || event.isComposing) return;
           if (pending) { flush(); return; }
+          const before = replacementBefore;
+          replacementBefore = null;
           if (['insertText', 'insertReplacementText', 'insertFromComposition'].includes(event.inputType) && event.data) {
             const duplicate = reconciliation && textarea.value === reconciliation.value;
             clearReconciliation();
-            if (!duplicate) terminal.input(event.data, true);
+            const data = event.inputType === 'insertReplacementText' ? replacementInput(before, textarea.value, event.data) : event.data;
+            if (!duplicate && data) terminal.input(data, true);
           } else if (['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)) {
             terminal.input(event.inputType === 'deleteContentBackward' ? '\x7f' : '\x1b[3~', true);
           }
@@ -262,25 +289,50 @@ window.WhiteboxTerminalIme = {
           }
           flush();
           clearReconciliation();
-          if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-            // Ghostty consumes navigation keys. Move the browser's shadow
-            // caret as well, so a following native IME edit replaces/inserts
-            // at the intended selection without splitting surrogate pairs.
+          const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+          const doubleEscape = plain && event.key === 'Escape' && lastKeyEscape;
+          lastKeyEscape = plain && event.key === 'Escape' && !doubleEscape;
+          const control = event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
+            ? ({ KeyA: 'a', KeyC: 'c', KeyD: 'd', KeyE: 'e', KeyK: 'k', KeyU: 'u', KeyW: 'w' })[event.code] || '' : '';
+          if (plain || control) {
+            // Ghostty consumes navigation and editing keys. Mirror them in the
+            // browser's shadow line: a following native IME edit then lands at
+            // the intended caret without splitting surrogate pairs, and the
+            // value reported as the terminal input draft (which holds Summary
+            // sends) is cleared with the line instead of lingering until Enter.
             const value = textarea.value;
             const start = textarea.selectionStart;
             const end = textarea.selectionEnd;
-            const boundaries = ['ArrowLeft', 'ArrowRight'].includes(event.key)
-              ? [...segmenter.segment(value)].map(segment => segment.index).concat(value.length) : [];
+            const boundaries = [...segmenter.segment(value)].map(segment => segment.index).concat(value.length);
+            const previous = [...boundaries].reverse().find(index => index < start) ?? 0;
+            const next = boundaries.find(index => index > end) ?? value.length;
+            const word = value.slice(0, start).search(/\S+\s*$/u);
             let caretPosition = null;
-            if (event.key === 'ArrowLeft') caretPosition = start !== end ? start : [...boundaries].reverse().find(index => index < start) ?? 0;
-            if (event.key === 'ArrowRight') caretPosition = start !== end ? end : boundaries.find(index => index > end) ?? value.length;
-            if (event.key === 'Home') caretPosition = 0;
-            if (event.key === 'End') caretPosition = value.length;
+            let edit = null;
+            if (plain && event.key === 'ArrowLeft') caretPosition = start !== end ? start : previous;
+            if (plain && event.key === 'ArrowRight') caretPosition = start !== end ? end : next;
+            if ((plain && event.key === 'Home') || control === 'a') caretPosition = 0;
+            if ((plain && event.key === 'End') || control === 'e') caretPosition = value.length;
+            if (plain && event.key === 'Backspace') edit = start !== end ? [start, end] : [previous, start];
+            if ((plain && event.key === 'Delete') || control === 'd') edit = start !== end ? [start, end] : [start, next];
+            if (control === 'k') edit = [start, value.length];
+            if (control === 'w') edit = [word < 0 ? start : word, end];
+            // Submit, interrupt, kill-line and Esc Esc (an AI CLI clearing its
+            // prompt) leave no draft in the terminal line.
+            if ((plain && event.key === 'Enter') || doubleEscape || control === 'c' || control === 'u') edit = [0, value.length];
+            if (edit) {
+              textarea.value = value.slice(0, edit[0]) + value.slice(edit[1]);
+              caretPosition = edit[0];
+            }
             if (caretPosition !== null) textarea.setSelectionRange(caretPosition, caretPosition);
-            if (event.key === 'Enter') textarea.value = '';
           }
         });
         listen('blur', () => {
+          // A normal blur finishes composition first. Removing or re-parenting
+          // the focused textarea (a workspace layout re-render) blurs it with
+          // no compositionend while the syllable stays in the value: commit
+          // that text instead of silently dropping the user's Korean input.
+          if (composing && !pending) pending = { start: startOffset, suffix: suffixLength, timer: null };
           flush();
           clearReconciliation();
           composing = false;
@@ -289,7 +341,45 @@ window.WhiteboxTerminalIme = {
           scheduleRender();
         });
         listen('focus', render);
-        const subscriptions = [terminal.onRender(scheduleRender), terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
+        // The textarea value is also the terminal's reported input draft. A new
+        // line editor (shell prompt after an AI CLI exits, or a restarted CLI)
+        // and a terminal reset start with an empty line, whatever was typed.
+        const clearDraft = () => {
+          if (disposed || composing || pending) return;
+          clearReconciliation();
+          textarea.value = '';
+          textarea.setSelectionRange(0, 0);
+        };
+        // Line editors (zsh/bash, Claude Code, Codex) enable bracketed paste
+        // while they read a line and disable it when they hand the terminal
+        // over or exit. Catch an off→on cycle even inside one output batch.
+        let lineEditorEnded = false;
+        const observeLineEditor = () => {
+          const enabled = Boolean(terminal.wasmTerm?.hasBracketedPaste?.());
+          if (enabled && (bracketedPaste === false || lineEditorEnded)) { lineEditorEnded = false; clearDraft(); }
+          bracketedPaste = enabled;
+        };
+        const patch = (name, wrap) => {
+          const own = Object.prototype.hasOwnProperty.call(terminal, name), original = terminal[name];
+          if (typeof original !== 'function') return () => {};
+          const wrapped = wrap(original);
+          terminal[name] = wrapped;
+          return () => {
+            if (terminal[name] !== wrapped) return;
+            if (own) terminal[name] = original;
+            else delete terminal[name];
+          };
+        };
+        const restoreReset = patch('reset', original => function (...args) {
+          clearDraft();
+          return original.apply(this, args);
+        });
+        const restoreWrite = patch('write', original => function (data, ...args) {
+          if (typeof data === 'string' && data.includes('\x1b[?2004l')) lineEditorEnded = true;
+          return original.call(this, data, ...args);
+        });
+        const subscriptions = [terminal.onRender(scheduleRender), terminal.onRender(observeLineEditor),
+          terminal.onResize(scheduleRender), terminal.onScroll(scheduleRender)];
         cleanup = () => {
           disposed = true;
           anchorObserver.disconnect();
@@ -298,6 +388,8 @@ window.WhiteboxTerminalIme = {
           clearReconciliation();
           if (frame) cancelAnimationFrame(frame);
           for (const [type, listener] of listeners) textarea.removeEventListener(type, listener, true);
+          restoreReset();
+          restoreWrite();
           if (terminal.preparePaste === preparePaste) {
             if (previousPreparePaste === undefined) delete terminal.preparePaste;
             else terminal.preparePaste = previousPreparePaste;
