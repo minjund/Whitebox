@@ -57,7 +57,10 @@ app.whenReady().then(async () => {
   let updateCheckCalls = 0, updateInstallCalls = 0, releasePageCalls = 0, updateCheckFailure = '', finishUpdateInstall;
   let updateCheckResponse = { status: 'current', currentVersion: '2.0.0', latestVersion: '2.0.0' };
   let delayCreation = false, releaseCreation, rejectCreation = false;
-  const deadline = setTimeout(() => { console.error('Workspace E2E timed out'); app.exit(1); }, 90000);
+  // A whole-run backstop only: every step has its own bounded wait. The full
+  // run takes about 70s on a macOS Intel runner and up to 1.5x that on a slow
+  // one, so a 90s backstop failed healthy runs.
+  const deadline = setTimeout(() => { console.error('Workspace E2E timed out'); app.exit(1); }, 300000);
   try {
     ipcMain.handle('app:bootstrap', event => { if (bootstrapPush) event.sender.send('app:update-state', bootstrapPush); return ({ update: bootstrapUpdate, versions: { app: '2.0.0' }, platform: { id: process.platform, localShell: process.platform === 'win32' ? 'powershell' : 'shell' }, workspaces, terminalWorkspace: { defaultCwd: profile } }); });
     ipcMain.handle('app:update-check', event => { updateCheckCalls++; if (updateCheckFailure) throw new Error(updateCheckFailure); event.sender.send('app:update-state', updateCheckResponse); return updateCheckResponse; });
@@ -656,8 +659,11 @@ app.whenReady().then(async () => {
     await evaluate(`document.documentElement.dataset.theme='dark';document.querySelector('#terminalWorkspace').style.removeProperty('grid-template-columns')`);
     await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
     fs.writeFileSync(path.join(root,'artifacts/terminal-background-badge.png'),(await win.webContents.capturePage()).toPNG());
-    await evaluate(`document.querySelector('#wbBackgroundPopover button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
-    assert.equal(await evaluate(`document.querySelector('#wbBackgroundPopover').hidden&&document.activeElement===document.querySelector('${backgroundSelector}')`),true,'Escape closes and restores badge focus');
+    // Press Escape and read the result in the same task: a periodic sidebar
+    // refresh between two evaluations replaces the badge node and made this
+    // check fail on slow runners without any change in the Escape handling.
+    const escaped = await evaluate(`(() => {const popover=document.querySelector('#wbBackgroundPopover'),open=!popover.hidden;popover.querySelector('button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));return {open,closed:popover.hidden,focused:document.activeElement===document.querySelector('${backgroundSelector}'),active:document.activeElement?.outerHTML.slice(0,120)}})()`);
+    assert.equal(escaped.open&&escaped.closed&&escaped.focused,true,'Escape closes and restores badge focus: '+JSON.stringify(escaped));
     await evaluate(`document.querySelector('${backgroundSelector}').click();document.querySelector('#wbCanvas').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
     assert.equal(await evaluate('document.querySelector("#wbBackgroundPopover").hidden'),true,'outside click closes task details');
     activityOverrides.set(first.id, { background: { ...observedBackground, count:120 } });
