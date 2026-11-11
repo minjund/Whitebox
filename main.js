@@ -62,6 +62,7 @@ const { acquireInterimProfileGuard } = require('./src/interimProfileGuard');
 const { AttentionNotifier } = require('./src/attentionNotifier');
 const { ProviderVisibilityStore } = require('./src/providerVisibilityStore');
 const { AttentionPopupManager } = require('./src/attentionPopupManager');
+const { TrayPopover } = require('./src/trayPopover');
 const { attentionProject } = require('./src/attentionProject');
 const { AttentionPopupPreferenceStore } = require('./src/attentionPopupPreferenceStore');
 const { AttentionHookServer } = require('./src/attentionHookServer');
@@ -151,6 +152,7 @@ let questionnairePreferenceStore = null;
 let terminalManager = null;
 let bridgeLauncher = null;
 let backgroundTray = null;
+let trayPopover = null;
 let updateManager = null;
 let startupUpdateRetryTimer = null;
 let brandRendererStateRecovered = false;
@@ -203,6 +205,23 @@ const MAIN_COPY = {
     trayOpen: 'Whitebox 열기',
     traySessions: '작업 {count}개가 뒤에서 실행 중',
     trayQuit: '프로그램 끝내기 · 명령창은 유지, 직접 실행은 중지',
+    trayPopoverTerminals: '명령창',
+    trayPopoverTerminalsNote: '끝내도 계속 실행',
+    trayPopoverRuns: '직접 실행',
+    trayPopoverRunsNote: '끝내면 중지',
+    trayPopoverUnit: '개',
+    trayPopoverRecent: '최근 활동',
+    trayPopoverRecentCount: '{count}개',
+    trayPopoverMore: '외 {count}개 더 보기 →',
+    trayPopoverQuit: '프로그램 끝내기',
+    trayPopoverQuitHintRuns: '직접 실행 {count}개 중지',
+    trayPopoverQuitHintKeep: '명령창은 계속 실행',
+    trayPopoverConfirmTitle: 'Whitebox를 끝낼까요?',
+    trayPopoverConfirmKeep: '명령창 {count}개는 그대로 유지돼요',
+    trayPopoverConfirmStop: '직접 실행 {count}개는 중지돼요',
+    trayPopoverCancel: '취소',
+    trayPopoverConfirmQuit: '끝내기',
+    trayPopoverRunTitle: '{provider} 직접 실행 {count}개',
     addWorkspaces: '추가할 프로젝트 폴더 선택',
     pickWorkspace: '작업 폴더 선택',
     attentionTitle: '확인 필요',
@@ -231,6 +250,23 @@ const MAIN_COPY = {
     trayOpen: 'Open Whitebox',
     traySessions: '{count} background tasks active',
     trayQuit: 'Quit · Keep terminals, stop direct runs',
+    trayPopoverTerminals: 'Terminals',
+    trayPopoverTerminalsNote: 'Keep running after quit',
+    trayPopoverRuns: 'Direct runs',
+    trayPopoverRunsNote: 'Stop when you quit',
+    trayPopoverUnit: '',
+    trayPopoverRecent: 'Recent activity',
+    trayPopoverRecentCount: '{count}',
+    trayPopoverMore: '{count} more →',
+    trayPopoverQuit: 'Quit Whitebox',
+    trayPopoverQuitHintRuns: 'Stops {count} direct runs',
+    trayPopoverQuitHintKeep: 'Terminals keep running',
+    trayPopoverConfirmTitle: 'Quit Whitebox?',
+    trayPopoverConfirmKeep: '{count} terminals keep running',
+    trayPopoverConfirmStop: '{count} direct runs will stop',
+    trayPopoverCancel: 'Cancel',
+    trayPopoverConfirmQuit: 'Quit',
+    trayPopoverRunTitle: '{provider} direct runs · {count}',
     addWorkspaces: 'Choose a project folder to add',
     pickWorkspace: 'Choose workspace',
     attentionTitle: 'Confirmation needed',
@@ -259,6 +295,23 @@ const MAIN_COPY = {
     trayOpen: '打开 Whitebox',
     traySessions: '正在保持 {count} 个后台任务',
     trayQuit: '退出 · 保留终端并停止直接运行',
+    trayPopoverTerminals: '终端',
+    trayPopoverTerminalsNote: '退出后继续运行',
+    trayPopoverRuns: '直接运行',
+    trayPopoverRunsNote: '退出时停止',
+    trayPopoverUnit: '个',
+    trayPopoverRecent: '最近活动',
+    trayPopoverRecentCount: '{count} 个',
+    trayPopoverMore: '还有 {count} 个 →',
+    trayPopoverQuit: '退出 Whitebox',
+    trayPopoverQuitHintRuns: '停止 {count} 个直接运行',
+    trayPopoverQuitHintKeep: '终端继续运行',
+    trayPopoverConfirmTitle: '要退出 Whitebox 吗？',
+    trayPopoverConfirmKeep: '{count} 个终端将继续运行',
+    trayPopoverConfirmStop: '{count} 个直接运行将停止',
+    trayPopoverCancel: '取消',
+    trayPopoverConfirmQuit: '退出',
+    trayPopoverRunTitle: '{provider} 直接运行 {count} 个',
     addWorkspaces: '选择要添加的项目文件夹',
     pickWorkspace: '选择工作文件夹',
     attentionTitle: '需要你的确认',
@@ -651,6 +704,7 @@ function createWindow() {
   mainWindow.on('closed', () => {
     clearTimeout(showFallback);
     mainWindow = null;
+    trayPopover?.release();
   });
 }
 
@@ -682,16 +736,137 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+function quitFromTray() {
+  isQuitting = true;
+  app.quit();
+}
+
+function backgroundTrayMenu() {
+  const count = backgroundWorkloadCount();
+  return Menu.buildFromTemplate([
+    { label: mainText('trayOpen'), click: showMainWindow },
+    { label: mainText('traySessions', { count }), enabled: false },
+    { type: 'separator' },
+    { label: mainText('trayQuit'), click: quitFromTray },
+  ]);
+}
+
+// Linux tray hosts often deliver no click events, so the native menu stays the
+// tray's entry point there; macOS and Windows open the popover instead.
+function trayUsesPopover() {
+  return process.platform === 'darwin' || process.platform === 'win32';
+}
+
+const TRAY_POPOVER_ITEM_LIMIT = 3;
+
+function trayProviderName(provider) {
+  const value = String(provider || '').toLowerCase();
+  if (value === 'claude') return 'Claude';
+  if (value === 'codex') return 'Codex';
+  return value ? value[0].toUpperCase() + value.slice(1) : '';
+}
+
+function trayPopoverState() {
+  const terminals = backgroundTerminalSessions();
+  const runs = backgroundAgentRuns();
+  const total = terminals.length + runs.length;
+  // Direct runs carry no title of their own, so they collapse into one row per
+  // provider instead of repeating the same label.
+  const runsByProvider = new Map();
+  for (const run of runs) {
+    const provider = String(run.provider || '');
+    runsByProvider.set(provider, (runsByProvider.get(provider) || 0) + 1);
+  }
+  const runItems = [...runsByProvider].map(([provider, count]) => ({
+    id: `runs:${provider}`,
+    kind: 'run',
+    provider,
+    count,
+    title: mainText('trayPopoverRunTitle', { provider: trayProviderName(provider), count }).trim(),
+    meta: '',
+    updatedAt: '',
+  }));
+  const terminalItems = terminals
+    .slice()
+    .sort((left, right) => (Date.parse(right.updatedAt || '') || 0) - (Date.parse(left.updatedAt || '') || 0))
+    .map(session => ({
+      id: `terminal:${session.id}`,
+      kind: 'terminal',
+      provider: String(session.provider || ''),
+      count: 1,
+      title: String(session.title || '').trim() || path.basename(String(session.cwd || '')) || 'Terminal',
+      meta: session.cwd ? path.basename(String(session.cwd)) : '',
+      updatedAt: String(session.updatedAt || ''),
+    }));
+  // Direct runs come first: they are what quitting would stop.
+  const items = [...runItems, ...terminalItems].slice(0, TRAY_POPOVER_ITEM_LIMIT);
+  const more = Math.max(0, total - items.reduce((sum, item) => sum + item.count, 0));
+  return {
+    locale: appLocale,
+    theme: readAppearanceTheme(),
+    terminals: terminals.length,
+    runs: runs.length,
+    items,
+    more,
+    copy: {
+      summary: mainText('traySessions', { count: total }),
+      terminalsLabel: mainText('trayPopoverTerminals'),
+      terminalsNote: mainText('trayPopoverTerminalsNote'),
+      runsLabel: mainText('trayPopoverRuns'),
+      runsNote: mainText('trayPopoverRunsNote'),
+      unit: mainText('trayPopoverUnit'),
+      recent: mainText('trayPopoverRecent'),
+      recentCount: mainText('trayPopoverRecentCount', { count: total }),
+      more: mainText('trayPopoverMore', { count: more }),
+      open: mainText('trayOpen'),
+      quit: mainText('trayPopoverQuit'),
+      quitHint: runs.length
+        ? mainText('trayPopoverQuitHintRuns', { count: runs.length })
+        : mainText('trayPopoverQuitHintKeep'),
+      confirmTitle: mainText('trayPopoverConfirmTitle'),
+      confirmKeep: mainText('trayPopoverConfirmKeep', { count: terminals.length }),
+      confirmStop: mainText('trayPopoverConfirmStop', { count: runs.length }),
+      cancel: mainText('trayPopoverCancel'),
+      confirmQuit: mainText('trayPopoverConfirmQuit'),
+      tagTerminal: mainText('trayPopoverTerminals'),
+      tagRun: mainText('trayPopoverRuns'),
+    },
+  };
+}
+
+function ensureTrayPopover() {
+  if (trayPopover) return trayPopover;
+  trayPopover = new TrayPopover({
+    BrowserWindow,
+    screen,
+    preloadPath: path.join(__dirname, 'src', 'trayPopoverPreload.js'),
+    htmlPath: path.join(__dirname, 'renderer', 'tray-popover.html'),
+    getState: trayPopoverState,
+    onOpenMain: showMainWindow,
+    onQuit: quitFromTray,
+    onError: (error, detail) => reportRecoverableError(`tray-popover:${detail?.phase || 'runtime'}`, error),
+  });
+  return trayPopover;
+}
+
+function toggleTrayPopover(bounds, position) {
+  if (!backgroundTray || isQuitting) return;
+  let shown = false;
+  try {
+    shown = ensureTrayPopover().toggle({ trayBounds: bounds || backgroundTray.getBounds(), point: position || null });
+  } catch (error) {
+    reportRecoverableError('tray-popover', error);
+  }
+  // The native menu still offers open and quit when the popover cannot open.
+  if (!shown && backgroundTray) backgroundTray.popUpContextMenu(backgroundTrayMenu());
+}
+
 function updateBackgroundTrayMenu() {
   if (!backgroundTray) return;
   const count = backgroundWorkloadCount();
   backgroundTray.setToolTip(mainText('trayTooltip', { count }));
-  backgroundTray.setContextMenu(Menu.buildFromTemplate([
-    { label: mainText('trayOpen'), click: showMainWindow },
-    { label: mainText('traySessions', { count }), enabled: false },
-    { type: 'separator' },
-    { label: mainText('trayQuit'), click: () => { isQuitting = true; app.quit(); } },
-  ]));
+  if (trayUsesPopover()) trayPopover?.refresh();
+  else backgroundTray.setContextMenu(backgroundTrayMenu());
 }
 
 async function ensureBackgroundTray() {
@@ -701,8 +876,17 @@ async function ensureBackgroundTray() {
     if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: 'small' });
     if (isQuitting || backgroundTray) return backgroundTray;
     backgroundTray = new Tray(icon);
-    backgroundTray.on('click', showMainWindow);
-    backgroundTray.on('double-click', showMainWindow);
+    if (trayUsesPopover()) {
+      backgroundTray.on('click', (_event, bounds, position) => toggleTrayPopover(bounds, position));
+      backgroundTray.on('right-click', (_event, bounds) => toggleTrayPopover(bounds, null));
+      backgroundTray.on('double-click', () => {
+        trayPopover?.hide();
+        showMainWindow();
+      });
+    } else {
+      backgroundTray.on('click', showMainWindow);
+      backgroundTray.on('double-click', showMainWindow);
+    }
     updateBackgroundTrayMenu();
   } catch (error) {
     reportRecoverableError('background-tray', error);
@@ -2566,6 +2750,15 @@ function registerIpcHandlers() {
   ipcMain.handle('attention-popup:decide', (event, payload) => popupManager().handleDecide(event, payload));
   ipcMain.handle('attention-popup:dismiss', event => popupManager().handleDismiss(event));
   ipcMain.handle('attention-popup:open-main', event => popupManager().handleOpenMain(event));
+  const requireTrayPopover = () => {
+    if (!trayPopover) throw new Error('트레이 메뉴가 아직 준비되지 않았습니다.');
+    return trayPopover;
+  };
+  ipcMain.handle('tray-popover:ready', event => requireTrayPopover().handleReady(event));
+  ipcMain.handle('tray-popover:resize', (event, payload) => requireTrayPopover().handleResize(event, payload));
+  ipcMain.handle('tray-popover:open-main', event => requireTrayPopover().handleOpenMain(event));
+  ipcMain.handle('tray-popover:quit', event => requireTrayPopover().handleQuit(event));
+  ipcMain.handle('tray-popover:dismiss', event => requireTrayPopover().handleDismiss(event));
 }
 
 registerIpcHandlers();
@@ -2687,6 +2880,8 @@ app.on('before-quit', event => {
 });
 
 app.on('will-quit', () => {
+  trayPopover?.dispose();
+  trayPopover = null;
   if (backgroundTray) backgroundTray.destroy();
   backgroundTray = null;
 });
