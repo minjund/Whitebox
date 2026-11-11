@@ -32,7 +32,7 @@ function registerCloseWindowShortcutTests({ test, root }) {
     }
     const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
     assert.match(main, /applicationMenuTemplate\(\{ platform: process\.platform/u);
-    assert.match(main, /app\.whenReady\(\)\.then\(async \(\) => \{\n  installApplicationMenu\(\);/u);
+    assert.match(main, /app\.whenReady\(\)\.then\(async \(\) => \{\r?\n  installApplicationMenu\(\);/u);
   });
 
   test('Cmd+W runs the window close path: popups dismiss themselves, other windows close as with their close button', () => {
