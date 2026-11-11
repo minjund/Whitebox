@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ inputs.plan_artifact }}
           path: artifacts/windows-update-plan
@@ -76,11 +76,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ inputs.candidate_artifact }}
           path: release
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ inputs.plan_artifact }}
           path: artifacts/windows-update-plan
@@ -200,7 +200,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ inputs.plan_artifact }}
           path: artifacts/windows-update-plan
@@ -214,7 +214,7 @@ jobs:
           git fetch --no-tags origin "$VALIDATION_SOURCE_SHA"
           git show "$VALIDATION_SOURCE_SHA:scripts/windows-update-shards.js" > scripts/windows-update-shards.js
           node -e 'const fs=require("node:fs"),c=require("node:crypto");console.log("Reviewed CI verifier "+process.env.VALIDATION_SOURCE_SHA+"; SHA-256 "+c.createHash("sha256").update(fs.readFileSync("scripts/windows-update-shards.js")).digest("hex"))'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: Windows-update-results-${{ github.run_attempt }}-*
           path: artifacts/windows-update-results
