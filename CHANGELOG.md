@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.30 - 2026-11-11
+
+- The tray icon in the macOS menu bar is drawn at menu-bar size instead of as a large, cropped app icon.
+
 ## 2.0.29 - 2026-11-11
 
 - Whitebox uses far less memory over long sessions. Trimmed transcript excerpts no longer keep whole transcripts alive, process scans reuse one worker instead of starting one every second, and finished collaboration jobs, token records and notifications are pruned. The terminal host saves streamed output every 20 seconds instead of every second, and a terminal moved to the trash releases its screen.
