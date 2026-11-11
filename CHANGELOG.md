@@ -3,6 +3,19 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.29 - 2026-11-11
+
+- Whitebox uses far less memory over long sessions. Trimmed transcript excerpts no longer keep whole transcripts alive, process scans reuse one worker instead of starting one every second, and finished collaboration jobs, token records and notifications are pruned. The terminal host saves streamed output every 20 seconds instead of every second, and a terminal moved to the trash releases its screen.
+- An external `whitebox claude`/`whitebox codex` session closes when its terminal window closes, and leftover test-profile terminal hosts exit on their own.
+- Summary mode shows what the AI is doing: the file it is editing, the command or search it is running, helper AIs, elapsed time, tool and file counts, compaction, retries, usage-limit waits and approvals. A reply that finished while background work still runs reads as done and you can send right away.
+- Summary mode works with Codex 0.160 sessions and with Gemini and Grok terminals.
+- Queued Summary requests are sent as soon as the AI is idle; they no longer stay stuck behind “Send anyway”. Long tasks are not cut off after 15 minutes while the AI is still working, a queued request says what it is waiting for, and an interrupted one can be resent.
+- Attach screenshots to a Summary request by picking a file, pasting or dragging an image (#170).
+- Cmd+W closes the window on macOS, including while a terminal has focus (#169).
+- Korean typed quickly no longer turns into “.”, and a syllable being composed is kept when panes rearrange or the Summary composer is briefly unavailable.
+- Claude starts in its dark theme because Whitebox now answers terminal color queries.
+- The tray icon opens a small panel with running terminals, direct runs, recent activity and a quit confirmation.
+
 ## 2.0.28 - 2026-11-10
 
 - The right side of Summary mode now lists Past requests: every request in this conversation, including ones typed in the terminal, newest first, each with the summary's actual answer on one line. A request sent right after the AI asked you something is tagged “Decision”, and the request in progress is highlighted. Clicking one scrolls the conversation to that request and highlights it without leaving Summary mode. The old status block is gone; progress shows in the steps at the top and the line above the input.
