@@ -53,6 +53,7 @@ require('./tests/attention-project').registerAttentionProjectTests(context);
 require('./tests/attention-popup-manager').registerAttentionPopupManagerTests(context);
 require('./tests/close-window-shortcut').registerCloseWindowShortcutTests(context);
 require('./tests/summary-attachments').registerSummaryAttachmentTests(context);
+require('./tests/tray-popover').registerTrayPopoverTests(context);
 require('./tests/summary-absorbed-completion').registerSummaryAbsorbedCompletionTests(context);
 require('./tests/summary-providers').registerSummaryProviderTests(context);
 registerAutomationMonitorTests(context);

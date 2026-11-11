@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>Whitebox</title>
+  <link rel="stylesheet" href="tray-popover.css">
+</head>
+<body>
+  <main id="card" class="card" aria-live="polite">
+    <header class="head">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="2.5" width="11" height="11" rx="3"/><path d="M5.5 7l2 1.5-2 1.5M8.5 10.5h2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="head-text">
+        <div class="name">Whitebox</div>
+        <div class="sub"><span class="dot" aria-hidden="true"></span><span id="summary"></span></div>
+      </div>
+    </header>
+
+    <section class="panel stats">
+      <div class="stat">
+        <div class="label" id="terminalsLabel"></div>
+        <div class="value"><span id="terminalsCount">0</span><small id="terminalsUnit"></small></div>
+        <div class="note" id="terminalsNote"></div>
+      </div>
+      <div class="stat">
+        <div class="label" id="runsLabel"></div>
+        <div class="value"><span id="runsCount">0</span><small id="runsUnit"></small></div>
+        <div class="note" id="runsNote"></div>
+      </div>
+    </section>
+
+    <section id="recent" class="recent" hidden>
+      <div class="section-label"><span id="recentLabel"></span><span id="recentCount"></span></div>
+      <div class="panel list" id="list"></div>
+    </section>
+
+    <div class="actions" id="actions">
+      <button type="button" class="btn btn-primary" id="openMain"></button>
+      <button type="button" class="btn btn-ghost" id="quit"><span id="quitLabel"></span><span class="hint" id="quitHint"></span></button>
+    </div>
+
+    <section class="panel confirm" id="confirm" hidden>
+      <h2 id="confirmTitle"></h2>
+      <ul>
+        <li><span class="mark keep" aria-hidden="true"></span><span id="confirmKeep"></span></li>
+        <li id="confirmStopRow"><span class="mark stop" aria-hidden="true"></span><span id="confirmStop"></span></li>
+      </ul>
+      <div class="two">
+        <button type="button" class="btn btn-secondary" id="cancelQuit"></button>
+        <button type="button" class="btn btn-danger" id="confirmQuit"></button>
+      </div>
+    </section>
+  </main>
+  <script src="tray-popover.js"></script>
+</body>
+</html>
