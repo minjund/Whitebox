@@ -199,11 +199,33 @@ window.WhiteboxTerminalIme = {
         };
         const anchorObserver = new MutationObserver(recoverInputAnchor);
         anchorObserver.observe(textarea, { attributes: true, attributeFilter: ['style'] });
+        let replacementBefore = null;
         listen('beforeinput', event => {
           // Bypass upstream's container handler, which prevents all edits.
           event.stopImmediatePropagation();
           recoverInputAnchor();
+          // A replacement (spelling, text substitution) rewrites text already
+          // sent to the line editor. Remember the line to know what it removed.
+          replacementBefore = event.inputType === 'insertReplacementText'
+            ? { value: textarea.value, caret: textarea.selectionStart } : null;
         });
+        // Erase replaced text behind the caret before typing its replacement;
+        // sending only the new text would leave the old characters in place.
+        const replacementInput = (before, after, fallback) => {
+          if (!before) return fallback;
+          // Anchor the difference at the caret, where the line editor's cursor
+          // is: " " → ". " replaces the space rather than inserting "." before it.
+          let prefix = 0;
+          while (prefix < before.caret && prefix < after.length && before.value[prefix] === after[prefix]) prefix++;
+          let suffix = 0;
+          while (before.value.length - 1 - suffix >= Math.max(prefix, before.caret) && suffix < after.length - prefix
+            && before.value[before.value.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+          const removed = before.value.slice(prefix, before.value.length - suffix);
+          const inserted = after.slice(prefix, after.length - suffix);
+          if (!removed) return inserted || fallback;
+          if (prefix + removed.length !== before.caret) return fallback;
+          return '\x7f'.repeat([...segmenter.segment(removed)].length) + inserted;
+        };
         listen('compositionstart', event => {
           event.stopPropagation();
           recoverInputAnchor();
@@ -233,10 +255,13 @@ window.WhiteboxTerminalIme = {
           event.stopPropagation();
           if (composing || event.isComposing) return;
           if (pending) { flush(); return; }
+          const before = replacementBefore;
+          replacementBefore = null;
           if (['insertText', 'insertReplacementText', 'insertFromComposition'].includes(event.inputType) && event.data) {
             const duplicate = reconciliation && textarea.value === reconciliation.value;
             clearReconciliation();
-            if (!duplicate) terminal.input(event.data, true);
+            const data = event.inputType === 'insertReplacementText' ? replacementInput(before, textarea.value, event.data) : event.data;
+            if (!duplicate && data) terminal.input(data, true);
           } else if (['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)) {
             terminal.input(event.inputType === 'deleteContentBackward' ? '\x7f' : '\x1b[3~', true);
           }

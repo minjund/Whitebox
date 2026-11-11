@@ -49,6 +49,20 @@ module.exports = async function checkImeMacOrder(evaluate, debug) {
       await commit('있'); await jamo('ㄷ', 'KeyE', 'ㄷ'); await jamo('ㅏ', 'KeyK', '다'); await key('rawKeyDown', ' ', 'Space', 229); await commit('다 ');
       await key('keyDown', '.', 'Period', 190, { text: '.', unmodifiedText: '.' });
     } },
+    // A text substitution (double-space period, spelling) arrives as an
+    // insertReplacementText that rewrites text already sent. The line editor
+    // must lose the replaced text, not keep it beside the replacement.
+    replacementErasesFirst: { expected: '안녕 \x7f. ', run: async () => {
+      await jamo('ㅇ', 'KeyD', 'ㅇ'); await jamo('ㅏ', 'KeyK', '아'); await jamo('ㄴ', 'KeyS', '안'); await commit('안');
+      await jamo('ㄴ', 'KeyS', 'ㄴ'); await jamo('ㅕ', 'KeyU', '녀'); await jamo('ㅇ', 'KeyD', '녕'); await commit('녕');
+      await commit(' ');
+      await evaluate(() => {
+        const area = term.textarea, value = area.value;
+        area.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertReplacementText', data: '. ', bubbles: true, cancelable: true }));
+        area.value = value.slice(0, -1) + '. '; area.setSelectionRange(area.value.length, area.value.length);
+        area.dispatchEvent(new InputEvent('input', { inputType: 'insertReplacementText', data: '. ', bubbles: true }));
+      });
+    } },
   };
   const results = {};
   for (const [name, { expected, run }] of Object.entries(scenarios)) {

@@ -35,6 +35,7 @@ require('./tests/update-workload-scope').registerUpdateWorkloadScopeTests(contex
 require('./tests/pty-recovery').registerPtyRecoveryTests(context);
 require('./tests/terminal-persist-orphan').registerTerminalPersistOrphanTests(context);
 require('./tests/host-output-sequence').registerHostOutputSequenceTests(context);
+require('./tests/mac-text-substitution').registerMacTextSubstitutionTests(context);
 require('./tests/terminal-host-runtime').registerTerminalHostRuntimeTests(context);
 require('./tests/terminal-host-timeout').registerTerminalHostTimeoutTests(context);
 require('./tests/window-focus-policy').registerWindowFocusPolicyTests(context);

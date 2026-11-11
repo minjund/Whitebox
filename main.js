@@ -1,6 +1,7 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, net, Notification, screen, nativeImage, session, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, net, Notification, screen, nativeImage, session, safeStorage, systemPreferences } = require('electron');
+const { disableMacTextSubstitutions } = require('./src/macTextSubstitution');
 if (process.env.WHITEBOX_INTERIM_PROFILE_GUARD === '1') {
   require('./src/interimProfileGuardProcess');
 } else {
@@ -2803,6 +2804,8 @@ registerIpcHandlers();
 
 app.whenReady().then(async () => {
   installApplicationMenu();
+  // Before any window exists, so every text input starts without substitutions.
+  disableMacTextSubstitutions({ systemPreferences });
   if (process.platform === 'darwin' && app.dock) {
     const dockIcon = nativeImage.createFromPath(BRAND_ICON_PATH);
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
