@@ -17,11 +17,21 @@ module.exports = function storeEncodingChecks() {
     const payload = { version: 2, sessions: records, ...(provenance.length ? { comprehensionProvenance: provenance } : {}) };
     assert(encodedStore(records, sessions, provenance, 2, cache).equals(Buffer.from(JSON.stringify(payload))), 'exact existing JSON bytes, field order and escaping');
   }
+  // A replay seen once (still streaming) keeps no encoded bytes after the write.
+  assert.equal(cache.records.get(sessions[1]).encoded, null, 'changing replay is not cached');
+  assert(Object.values(cache.records.get(sessions[1])).every(value => typeof value !== 'string'), 'no retained replay copy');
+  cache.full(sessions[1], samples[1], () => { throw Error('unchanged replay was rescanned'); });
   const original = cache.encode(sessions[1], samples[1]);
   cache.full(sessions[1], samples[1], () => { throw Error('unchanged replay was rescanned'); });
-  assert.equal(cache.encode(sessions[1], samples[1]), original);
+  assert.equal(cache.encode(sessions[1], samples[1]), original, 'stable replay encoding is reused');
+  sessions[1].replayRevision = 1;
   cache.full(sessions[1], '새 출력', value => value);
   assert.notEqual(cache.encode(sessions[1], '새 출력'), original);
+  sessions[1].replayRevision = 2;
+  let rescanned = false;
+  cache.full(sessions[1], '헌 출력', value => { rescanned = true; return value; });
+  assert(rescanned, 'same-length replay of a new revision is re-encoded');
+  assert.equal(cache.encode(sessions[1], '헌 출력').toString(), JSON.stringify('헌 출력'));
   for (let i = 0; i < 20; i++) cache.full({}, 'x'.repeat(1000) + i, value => value);
   assert(cache.bytes <= 2048, 'strict cache memory bound');
   cache.prune([]); assert.equal(cache.bytes, 0); assert.equal(cache.records.size, 0);

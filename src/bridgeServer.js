@@ -7,7 +7,7 @@ const net = require('net');
 const crypto = require('crypto');
 const { StringDecoder } = require('string_decoder');
 const { AGENT_PROVIDERS } = require('./terminalManager');
-const { runBestEffort } = require('./diagnostics');
+const { reportRecoverableError, runBestEffort } = require('./diagnostics');
 
 const PROTOCOL_VERSION = 1;
 const MAX_FRAME_CHARS = 1024 * 1024;
@@ -179,8 +179,8 @@ class BridgeServer {
     this.clients.set(socket, client);
     socket.on('data', chunk => this.consume(client, chunk));
     socket.on('drain', client.onDrain);
-    socket.on('error', () => this.detach(client));
-    socket.on('close', () => this.detach(client));
+    socket.on('error', () => this.detach(client, { closeSession: true }));
+    socket.on('close', () => this.detach(client, { closeSession: true }));
   }
 
   consume(client, chunk) {
@@ -366,9 +366,26 @@ class BridgeServer {
     this.flushOutbound(client);
   }
 
-  detach(client) {
+  detach(client, { closeSession = false } = {}) {
     if (!client || client.detached) return;
     client.detached = true;
+    // A bridge PTY belongs to exactly one external CLI connection and nothing
+    // can reattach to it. If the CLI vanishes without a 'close' frame (window
+    // closed, SIGHUP, crash), close the session too; otherwise the provider
+    // process keeps running unseen for as long as the host lives.
+    if (closeSession && client.authenticated && client.terminalId) {
+      const terminalId = client.terminalId;
+      runBestEffort('bridge-orphan-session-close', () => {
+        // Only a still-live PTY is orphaned; a session that already ended
+        // keeps its record like any other finished terminal.
+        const session = typeof this.terminalManager.get === 'function' ? this.terminalManager.get(terminalId, false) : null;
+        if (session && !['starting', 'running'].includes(session.status)) return;
+        const closing = this.terminalManager.close(terminalId);
+        if (closing && typeof closing.then === 'function') {
+          Promise.resolve(closing).catch(error => reportRecoverableError('bridge-orphan-session-close', error));
+        }
+      });
+    }
     if (client.authTimer) clearTimeout(client.authTimer);
     client.authTimer = null;
     if (client.onDrain) client.socket.removeListener?.('drain', client.onDrain);

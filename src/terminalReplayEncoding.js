@@ -2,40 +2,71 @@
 
 // Cache only immutable encoding work, never successful writes or transaction
 // acknowledgements. Each caller must still atomically persist every ledger.
+//
+// Records are keyed by the session's replayRevision (bumped on every replay
+// mutation) plus length, so the cache never retains a stale copy of an older
+// multi-MiB replay string. Encoded bytes are kept only for replays that were
+// unchanged since the previous store write: a streaming session would miss on
+// every write anyway, so caching it only doubles its memory.
+function replayRevision(session) {
+  return Number.isSafeInteger(session?.replayRevision) ? session.replayRevision : 0;
+}
+
 class TerminalReplayEncoding {
   constructor(maxBytes) { this.maxBytes = maxBytes; this.records = new Map(); this.bytes = 0; }
   prune(sessions) {
     const live = new Set(sessions);
     for (const [session, record] of this.records) if (!live.has(session)) {
-      this.bytes -= record.encoded?.length || 0; this.records.delete(session);
+      this.release(record); this.records.delete(session);
     }
   }
-  remember(session, record, replay, encoded) {
+  release(record) {
     this.bytes -= record.encoded?.length || 0;
-    record.encodedReplay = replay; record.encoded = encoded;
+    record.encoded = null; record.encodedLength = -1;
+  }
+  hold(session, record, encoded, length) {
+    this.release(record);
+    record.encoded = encoded; record.encodedLength = length;
     this.records.delete(session); this.records.set(session, record);
     this.bytes += encoded.length;
     for (const item of this.records.values()) {
       if (this.bytes <= this.maxBytes) break;
-      this.bytes -= item.encoded?.length || 0; item.encoded = null; item.encodedReplay = null;
+      if (item !== record) this.release(item);
     }
-    return encoded;
+    if (this.bytes > this.maxBytes) this.release(record);
+  }
+  matches(session, record, source) {
+    return Boolean(record) && record.revision === replayRevision(session) && record.length === source.length;
   }
   full(session, source, tail) {
     let record = this.records.get(session);
-    if (record?.source === source) return { replay: record.fullReplay, bytes: record.fullBytes };
-    if (record) this.bytes -= record.encoded?.length || 0;
+    if (this.matches(session, record, source)) {
+      record.stable = true;
+      return { replay: record.trimmed ? tail(source) : source, bytes: record.fullBytes };
+    }
+    if (record) this.release(record);
     const replay = tail(source), encoded = Buffer.from(JSON.stringify(replay), 'utf8');
-    record = { source, fullReplay: replay, fullBytes: encoded.length - 2, encoded: null };
-    this.records.delete(session); this.records.set(session, record);
-    this.remember(session, record, replay, encoded);
+    record = {
+      revision: replayRevision(session), length: source.length, trimmed: replay !== source,
+      fullBytes: encoded.length - 2, stable: false, encoded: null, encodedLength: -1,
+    };
+    // Hand this write's encoding to encode() so it is not computed twice.
+    this.hold(session, record, encoded, replay.length);
     return { replay, bytes: record.fullBytes };
   }
   encode(session, replay) {
     const record = this.records.get(session);
-    if (record?.encoded && record.encodedReplay === replay) return record.encoded;
+    const current = record && record.revision === replayRevision(session);
+    // Within one revision, a suffix of the replay is identified by its length.
+    if (current && record.encoded && record.encodedLength === replay.length) {
+      const encoded = record.encoded;
+      if (!record.stable) this.release(record);
+      return encoded;
+    }
     const encoded = Buffer.from(JSON.stringify(replay), 'utf8');
-    return record ? this.remember(session, record, replay, encoded) : encoded;
+    if (current && record.stable) this.hold(session, record, encoded, replay.length);
+    else if (record) this.release(record);
+    return encoded;
   }
 }
 

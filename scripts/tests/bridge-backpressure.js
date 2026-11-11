@@ -393,6 +393,40 @@ function registerBridgeBackpressureTests(context) {
     endDeadline();
     assert.equal(endSocket.destroyed, false, 'cleanup 뒤 늦은 deadline callback은 정상 종료 소켓을 끊으면 안 됩니다.');
   });
+
+  test('외부 CLI 연결이 close 없이 끊기면 그 브리지 PTY도 닫고, host 종료나 미인증 연결은 닫지 않는다', () => {
+    const manager = new FakeBridgeManager();
+    const closed = [];
+    manager.close = id => { closed.push(id); };
+    const server = new BridgeServer({
+      terminalManager: manager,
+      discoveryFile: path.join(temp, 'bridge-orphan-close.json'),
+      token: 'bridge-orphan-close-token',
+    });
+    const socket = new FakeBridgeSocket();
+    const client = authenticate(server, socket);
+    socket.destroy();
+    assert.deepStrictEqual(closed, [client.terminalId], '끊긴 CLI의 provider PTY가 아무도 못 보는 채로 남으면 안 됩니다.');
+    socket.emit('close');
+    assert.equal(closed.length, 1, '같은 연결의 중복 close 이벤트로 두 번 닫으면 안 됩니다.');
+
+    const unauthSocket = new FakeBridgeSocket();
+    server.accept(unauthSocket);
+    unauthSocket.destroy();
+    assert.equal(closed.length, 1, '인증 전 연결에는 닫을 PTY가 없습니다.');
+
+    manager.get = id => ({ id, status: 'exited' });
+    const finishedSocket = new FakeBridgeSocket();
+    authenticate(server, finishedSocket);
+    finishedSocket.destroy();
+    assert.equal(closed.length, 1, '이미 끝난 세션의 기록은 연결이 끊겨도 지우지 않습니다.');
+    delete manager.get;
+
+    const keptSocket = new FakeBridgeSocket();
+    authenticate(server, keptSocket);
+    server.dispose();
+    assert.equal(closed.length, 1, 'host 종료(dispose)는 세션 보존 규칙을 따르므로 브리지가 따로 닫으면 안 됩니다.');
+  });
 }
 
 module.exports = { registerBridgeBackpressureTests };

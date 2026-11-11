@@ -12,6 +12,8 @@ const { pathToFileURL } = require('node:url');
 const checkImeOwnership = require('./tests/terminal-ime-ownership');
 const checkImePerformance = require('./tests/terminal-ime-performance');
 const checkPasteRecovery = require('./tests/terminal-paste-recovery');
+const checkImeDraft = require('./tests/terminal-ime-draft');
+const checkImeMacOrder = require('./tests/terminal-ime-macos');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-ime-'));
 const output = path.join(root, 'artifacts', 'terminal-ime');
@@ -372,6 +374,35 @@ app.whenReady().then(async () => {
     checks.push('native/context-menu paste restores a usable input anchor before browser-generated Korean composition');
     checks.push('delayed context-menu cleanup recovers before Korean keydown or keyless native edits, with synchronous refocus and no background focus theft');
 
+    // Workspace layout re-renders park and re-attach panes. Chromium blurs the
+    // moved textarea without compositionend; the composed syllable stays in
+    // its value and must reach the PTY once, and typing must resume after it.
+    win.webContents.debugger.attach('1.3');
+    await evaluate(async () => { await reset(term); writes.length = 0; term.focus(); });
+    await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '한', selectionStart: 1, selectionEnd: 1 });
+    const moved = await evaluate(async () => {
+      const host = term.element.parentElement, parent = host.parentElement, next = host.nextSibling;
+      document.body.append(host); parent.insertBefore(host, next);
+      await delay();
+      const result = { writes: writes.join(''), focused: document.activeElement === term.textarea, visible: snapshot().visible };
+      term.focus();
+      return result;
+    });
+    await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '글', selectionStart: 1, selectionEnd: 1 });
+    await win.webContents.debugger.sendCommand('Input.insertText', { text: '글' });
+    const movedCommit = await evaluate(async () => { await delay(); return writes.join(''); });
+    win.webContents.debugger.detach();
+    assert.deepEqual(moved, { writes: '한', focused: false, visible: false });
+    assert.equal(movedCommit, '한글');
+    checks.push('re-parenting the focused input mid-composition commits the syllable once and the next composition still commits');
+
+    win.webContents.debugger.attach('1.3');
+    const macOrder = await checkImeMacOrder(evaluate, win.webContents.debugger).finally(() => win.webContents.debugger.detach());
+    checks.push('macOS-order Korean (229 keydowns, syllable+period commits, physical-keyCode jamo, Shift/Space) reaches the PTY exactly, never as \'.\'');
+
+    await checkImeDraft(evaluate);
+    checks.push('reported input draft clears on Enter, Ctrl+C/U, Esc Esc, a new line editor and reset, and follows Backspace/Delete/Ctrl+W/K edits');
+
     const ownership = await checkImeOwnership(evaluate);
     checks.push('IME native input owns commits once, preserves midline edits, modifiers and composing Backspace, and uses terminal cell widths');
 
@@ -444,7 +475,7 @@ app.whenReady().then(async () => {
     assert.equal(lifecycle.overlays, 0);
     assert.deepEqual(lifecycle.errors, []);
     checks.push('blur hides preedit; disposal removes overlay, subscriptions and pending refresh');
-    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, outputBurst, ownership, performance, pasteRecovery, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, midline, edge, commits, burst, transitions, midlineBurst, cdp, cdpMidline, macOrder, outputBurst, ownership, performance, pasteRecovery, nativeWindowsImeTested: false, nativeMacImeTested: false }, null, 2));
     checks.forEach(check => process.stdout.write(`PASS: ${check}\n`));
   } catch (error) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG());

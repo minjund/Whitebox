@@ -10,6 +10,7 @@ const STARTUP_RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // seconds later. Hold the toast long enough to observe that next turn instead
 // of announcing an intermediate turn as the end of the whole assignment.
 const COMPLETION_STABILITY_MS = 8_000;
+const MAX_RETAINED_NOTIFICATIONS = 32;
 
 function timestamp(value) {
   const parsed = Date.parse(value || '');
@@ -361,9 +362,16 @@ class AttentionNotifier {
         body: String(copy.body || session.title || 'AI 작업 상태가 변경되었습니다.'),
         silent: false,
       });
+      // The set keeps a shown notification (and its session closure) from
+      // being garbage-collected before the user acts on it. macOS may never
+      // emit 'close' for a clicked or auto-dismissed banner, so release on
+      // click/failed too and keep only the most recent ones.
       this.notifications.add(notification);
-      notification.once('click', () => this.onOpen(session, event));
-      notification.once('close', () => this.notifications.delete(notification));
+      const release = () => this.notifications.delete(notification);
+      notification.once('click', () => { release(); this.onOpen(session, event); });
+      notification.once('close', release);
+      notification.once('failed', release);
+      while (this.notifications.size > MAX_RETAINED_NOTIFICATIONS) this.notifications.delete(this.notifications.values().next().value);
       notification.show();
       return notification;
     } catch (_notificationFailure) {
@@ -387,6 +395,7 @@ class AttentionNotifier {
 
 module.exports = {
   AttentionNotifier,
+  MAX_RETAINED_NOTIFICATIONS,
   completionNotificationSummary,
   explicitAttentionFingerprint,
   observedCompletionAt,

@@ -56,6 +56,34 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   p.frames[1].text='› ㅎㅇ\n• 답\nWorked for 2s • 3:40 PM\n› 다른 요청\n• 다른 답\nWorked for 3s • 3:41 PM\n› Ask Codex to do anything';
   await c.sync(p); assert.equal(c.jobs.get(job.id).state,'running','later screen turn cannot be attributed');
   now+=16*60*1000; await c.sync({groups:payload().groups,frames:[]}); assert.equal(c.jobs.get(job.id).state,'interrupted','stale screen cannot wait forever');
+  // Real ask cohort (2026-11-10, one Claude target): epic steps ran 30-60 minutes,
+  // each was cut at 15 minutes, and the next ask then failed with
+  // "상대 AI가 아직 작업 중입니다." A target that keeps working keeps its job.
+  {
+    const working = payload(); working.frames[1].text = '› 에픽 3단계 구현\n• Working (41m 3s • esc to interrupt)';
+    native = { available: true, state: 'completed', inputWaiting: true, requestId: 'prior', requestAt: now - 60_000, request: 'prior', completedAt: now - 30_000, evidence: 'prior' };
+    await c.sync(payload()); const long = await ask('에픽 3단계 구현'); await c.sync(payload());
+    assert.equal(c.jobs.get(long.id).state, 'running');
+    for (let minute = 1; minute <= 60; minute += 1) {
+      now += 60_000;
+      native = { available: true, state: 'working', inputWaiting: false, requestId: 'long', requestAt: c.jobs.get(long.id).sentAt + 100, request: '에픽 3단계 구현' };
+      await c.sync(working);
+    }
+    assert.equal(c.jobs.get(long.id).state, 'running', 'a target still working after 60 minutes keeps its job');
+    const blocked = await ask('다음 단계'); await c.sync(working);
+    assert.equal(c.jobs.get(blocked.id).error, '상대에게 전달한 작업이 아직 진행 중입니다.', 'a later ask names the running job, not a timeout');
+    now += 60_000; native = { ...native, state: 'completed', inputWaiting: true, completedAt: now, evidence: 'USER: 에픽 3단계 구현\nASSISTANT: 3단계 완료' };
+    await c.sync(payload());
+    assert.equal(c.jobs.get(long.id).state, 'completed', 'the long turn completes with its own answer');
+    assert.match((await cli(['terminal:source', 'wait', long.id, '0'], directory)).answer, /3단계 완료/u);
+    // Without any sign of work the job still ends: 15 minutes after the last one.
+    const silent = await ask('조용한 요청'); await c.sync(payload());
+    native = { available: false };
+    now += 14 * 60 * 1000; await c.sync({ groups: payload().groups, frames: [] });
+    assert.equal(c.jobs.get(silent.id).state, 'running');
+    now += 2 * 60 * 1000; await c.sync({ groups: payload().groups, frames: [] });
+    assert.match(c.jobs.get(silent.id).error, /15분 동안 상대 AI의 작업 신호/u, 'no work signal for 15 minutes ends the job');
+  }
   await c.sync(payload()); job=await ask(); await c.sync(payload());
   const restart=new TerminalCollaboration(options); assert.equal(restart.jobs.get(job.id).state,'interrupted');
   const count=writes.length; await restart.sync(payload()); assert.equal(writes.length,count,'restart does not replay');

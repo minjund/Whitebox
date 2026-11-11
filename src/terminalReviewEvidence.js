@@ -4,6 +4,9 @@ const fs = require('fs/promises');
 const { createHash } = require('crypto');
 const { bounded } = require('./terminalReviewBudget');
 const { isNonTaskRequest } = require('./terminalReviewTurns');
+// Per transcript. Scoped reads use at most 256 records of one request, and
+// linked context covers the last few requests, so older index rows are unused.
+const MAX_RECORDS_PER_SOURCE = 2048;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const important = /삭제|제거|되돌|복구|실패|금지|하지\s*마|유지|대체|검사|검증|확인|사용처|변경|usage|dependency|rollback|revert|remov|delet|fail|recover|constraint|must|never|test|scope/iu;
 
@@ -61,10 +64,12 @@ class ReviewEvidenceIndex {
       if (this.sources.size > 64) this.sources.delete(this.sources.keys().next().value);
     }
     // Offsets and hashes refer to immutable bytes already consumed by logState.
+    // Text is recovered from those verified bytes on demand (retrieve/readScoped);
+    // the index keeps no copy, so an idle app does not hold transcript text.
     const id = `e${++this.serial}`;
     source.records.push({ id, requestId, provider, sessionId, role: record.role, start, length: bytes.length,
-      digest: hash(bytes), signalDigest: hash(record.role + ':' + record.text.replace(/\s+/gu, ' ').trim()), critical: important.test(record.text), excerpt: evidenceExcerpt(record.text, important.test(record.text) ? 1600 : 500) });
-    if (source.records.length > 4096) { source.records.shift(); source.omitted++; }
+      digest: hash(bytes), signalDigest: hash(record.role + ':' + record.text.replace(/\s+/gu, ' ').trim()), critical: important.test(record.text) });
+    if (source.records.length > MAX_RECORDS_PER_SOURCE) { source.records.shift(); source.omitted++; }
   }
   manifest(file, requestId) {
     const source = this.sources.get(file);

@@ -62,6 +62,8 @@ const { acquireInterimProfileGuard } = require('./src/interimProfileGuard');
 const { AttentionNotifier } = require('./src/attentionNotifier');
 const { ProviderVisibilityStore } = require('./src/providerVisibilityStore');
 const { AttentionPopupManager } = require('./src/attentionPopupManager');
+const { applicationMenuTemplate, closeFocusedWindow } = require('./src/appMenu');
+const { SummaryAttachments, payloadWithAttachments } = require('./src/summaryAttachments');
 const { attentionProject } = require('./src/attentionProject');
 const { AttentionPopupPreferenceStore } = require('./src/attentionPopupPreferenceStore');
 const { AttentionHookServer } = require('./src/attentionHookServer');
@@ -203,6 +205,8 @@ const MAIN_COPY = {
     trayOpen: 'Whitebox 열기',
     traySessions: '작업 {count}개가 뒤에서 실행 중',
     trayQuit: '프로그램 끝내기 · 명령창은 유지, 직접 실행은 중지',
+    closeWindow: '창 닫기',
+    summaryAttachmentLine: '첨부 이미지',
     addWorkspaces: '추가할 프로젝트 폴더 선택',
     pickWorkspace: '작업 폴더 선택',
     attentionTitle: '확인 필요',
@@ -231,6 +235,8 @@ const MAIN_COPY = {
     trayOpen: 'Open Whitebox',
     traySessions: '{count} background tasks active',
     trayQuit: 'Quit · Keep terminals, stop direct runs',
+    closeWindow: 'Close Window',
+    summaryAttachmentLine: 'Attached image',
     addWorkspaces: 'Choose a project folder to add',
     pickWorkspace: 'Choose workspace',
     attentionTitle: 'Confirmation needed',
@@ -259,6 +265,8 @@ const MAIN_COPY = {
     trayOpen: '打开 Whitebox',
     traySessions: '正在保持 {count} 个后台任务',
     trayQuit: '退出 · 保留终端并停止直接运行',
+    closeWindow: '关闭窗口',
+    summaryAttachmentLine: '附加图片',
     addWorkspaces: '选择要添加的项目文件夹',
     pickWorkspace: '选择工作文件夹',
     attentionTitle: '需要你的确认',
@@ -694,6 +702,14 @@ function updateBackgroundTrayMenu() {
   ]));
 }
 
+function installApplicationMenu() {
+  const template = applicationMenuTemplate({ platform: process.platform, closeLabel: mainText('closeWindow'),
+    closeWindow: win => closeFocusedWindow(win || BrowserWindow.getFocusedWindow(), {
+      dismissPopup: target => Boolean(attentionPopupManager?.dismissWindow(target)),
+    }) });
+  if (template) Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 async function ensureBackgroundTray() {
   if (backgroundTray || isQuitting) return backgroundTray;
   try {
@@ -725,6 +741,19 @@ function trustedSender(event) {
 
 function requireTrustedSender(event) {
   if (!trustedSender(event)) throw new Error('안전을 위해 이 명령창 요청을 차단했습니다.');
+}
+
+let summaryAttachmentStore = null;
+function summaryAttachments() {
+  if (!summaryAttachmentStore) summaryAttachmentStore = new SummaryAttachments({ directory: userFile('summary-attachments') });
+  return summaryAttachmentStore;
+}
+
+// Attached images reach the AI as absolute paths at the end of the request.
+// IDs are resolved here, so the renderer can never name another file.
+function summaryPayloadWithAttachments(payload) {
+  return payloadWithAttachments(payload, { store: summaryAttachments(), label: mainText('summaryAttachmentLine'),
+    shell: async id => (terminalManager && typeof id === 'string' ? (await terminalManager.get(id, false))?.shell : '') || '' });
 }
 
 function handleTrusted(channel, handler) {
@@ -869,6 +898,9 @@ function startMonitorWorker() {
   if (isQuitting || demoCapture || !monitorWorkerConfig) return null;
   const worker = new Worker(path.join(__dirname, 'src', 'monitorWorker.js'), {
     workerData: { ...monitorWorkerConfig, bridges: bridgePresence(), cmuxSessions: cmuxObservedSessions() },
+    // A runaway monitor heap ends in ERR_WORKER_OUT_OF_MEMORY; the error/exit
+    // handlers below report it and restart the worker with backoff.
+    resourceLimits: { maxOldGenerationSizeMb: 1024 },
   });
   monitorWorker = worker;
   worker.on('message', message => {
@@ -2356,6 +2388,7 @@ function registerIpcHandlers() {
     setLocale: locale => {
       appLocale = ['ko', 'en', 'zh-CN'].includes(locale) ? locale : DEFAULT_LOCALE;
       updateBackgroundTrayMenu();
+      installApplicationMenu();
       reconcileAttentionActivations();
       return { locale: appLocale };
     },
@@ -2454,6 +2487,9 @@ function registerIpcHandlers() {
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
     if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, directory: userFile('terminal-collaboration'),
+      // One process snapshot cache and one transcript index for review and
+      // collaboration; separate instances re-read the same logs twice.
+      monitor: terminalReview.monitor, completion: terminalReview.completion,
       backgroundSnapshot: () => lastSnapshot,
       createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),
       onTerminalClosed: terminal => {
@@ -2462,11 +2498,13 @@ function registerIpcHandlers() {
       } });
     if (payload?.operation === 'sync') return terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
-    if (payload?.operation === 'summary-send') return terminalCollaboration.summarySend(payload);
+    if (payload?.operation === 'summary-send') return terminalCollaboration.summarySend(await summaryPayloadWithAttachments(payload));
     if (payload?.operation === 'summary-respond') return terminalCollaboration.summaryRespond(payload);
     if (payload?.operation === 'summary-stop') return terminalCollaboration.summaryStop(payload);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });
+  handleTrusted('summary-attachments:save', payload => summaryAttachments().save(payload));
+  handleTrusted('summary-attachments:remove', ids => summaryAttachments().remove(ids));
   handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
   handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
@@ -2571,6 +2609,7 @@ function registerIpcHandlers() {
 registerIpcHandlers();
 
 app.whenReady().then(async () => {
+  installApplicationMenu();
   if (process.platform === 'darwin' && app.dock) {
     const dockIcon = nativeImage.createFromPath(BRAND_ICON_PATH);
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
@@ -2603,6 +2642,9 @@ app.whenReady().then(async () => {
   }
   const runtimeSetup = setupRuntime();
   createWindow();
+  setImmediate(() => {
+    try { summaryAttachments().prune(); } catch (error) { reportRecoverableError('summary-attachments-prune', error); }
+  });
   brandProfileRecoveryInProgress = false;
   await runtimeSetup;
   app.on('activate', showMainWindow);
@@ -2665,6 +2707,7 @@ async function cleanupBeforeQuit() {
       monitorWorker = null;
       return stopMonitorWorkerGracefully(worker);
     }),
+    quitCleanupTask('process-scan-worker', () => require('./src/processMonitor').disposeProcessScanWorkers()),
     quitCleanupTask('monitor-restart-timer', () => {
       if (monitorWorkerRestartTimer) clearTimeout(monitorWorkerRestartTimer);
       monitorWorkerRestartTimer = null;

@@ -83,6 +83,13 @@ contextBridge.exposeInMainWorld('whitebox', {
   terminalCompletionRead: payload => ipcRenderer.invoke('terminals:completion-read', payload),
   terminalCollaboration: payload => ipcRenderer.invoke('terminals:collaboration', payload),
   slashCommands: payload => ipcRenderer.invoke('terminals:slash-commands', payload),
+  // Only image bytes and the declared type cross; the main process checks the
+  // file signature and size and chooses the saved name.
+  summaryAttachmentSave: payload => ipcRenderer.invoke('summary-attachments:save', {
+    type: String(payload?.type || '').slice(0, 100),
+    data: ArrayBuffer.isView(payload?.data) ? new Uint8Array(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength) : null,
+  }),
+  summaryAttachmentRemove: ids => ipcRenderer.invoke('summary-attachments:remove', Array.isArray(ids) ? ids.map(String).slice(0, 50) : []),
   terminalReview: payload => ipcRenderer.invoke('terminals:review', payload),
   terminalCreate: options => ipcRenderer.invoke('terminals:create', options),
   terminalWrite,

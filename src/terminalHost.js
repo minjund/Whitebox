@@ -742,6 +742,10 @@ class TerminalHostServer {
     this.shutdownTimer = null;
   }
 
+  connectedClientCount() {
+    return [...this.clients].filter(entry => entry.authenticated && !entry.socket.destroyed).length;
+  }
+
   scheduleShutdownIfIdle() {
     const active = () => this.updateOnlyShutdown
       ? this.manager.list().filter(requiresUpdateShutdown) : activeSessions(this.manager);
@@ -1142,6 +1146,7 @@ class TerminalHostClient extends EventEmitter {
           pending.reject(error);
         }
       } else if (message.type === 'event' && message.event === 'data') {
+        this.noteOutputSequence(message.payload);
         this.emit('data', message.payload);
       } else if (message.type === 'event' && message.event === 'state') {
         if (Array.isArray(message.payload?.sessions)) {
@@ -1241,6 +1246,17 @@ class TerminalHostClient extends EventEmitter {
 
   requestForUpdate(operation, ...args) {
     return this.requestWithToken(UPDATE_REQUEST_TOKEN, operation, args);
+  }
+
+  // State events refresh the cached registry, but output alone does not.
+  // Summary readiness compares this cache with the renderer's latest output
+  // sequence, so a final redraw after the last state event would otherwise
+  // leave an idle AI looking busy and its queued requests waiting forever.
+  noteOutputSequence(payload) {
+    const sequence = Number(payload?.outputSequence);
+    if (!Number.isSafeInteger(sequence) || sequence < 0) return;
+    const session = this.sessions.find(item => item?.id === payload.id);
+    if (session && !(Number(session.outputSequence) >= sequence)) session.outputSequence = sequence;
   }
 
   list() { return this.sessions.map(session => ({ ...session })); }

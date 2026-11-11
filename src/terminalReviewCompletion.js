@@ -13,9 +13,10 @@ const { addCall, addResult, toolEvidence } = require('./terminalReviewTools');
 const { archiveRequest, recordAnswer, reviewContext, assistantUpdates } = require('./terminalReviewContext');
 const { acknowledgement } = require('./terminalReviewPolicy');
 const { bounded } = require('./terminalReviewBudget');
+const { detachedPrefix } = require('./detachedString');
 const { observeClaudeUsage, observeCodexUsage, tokenUsage } = require('./terminalTokenUsage');
 const { isNonTaskRequest, readableRequest } = require('./terminalReviewTurns');
-const { currentProgress } = require('./terminalProgress');
+const { currentProgress, turnStats, observeNotice } = require('./terminalProgress');
 const { cachedClaudeHomes } = require('./claudeHomes');
 const uuid = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(value || '');
 const textContent = value => typeof value === 'string' ? value : Array.isArray(value)
@@ -31,6 +32,7 @@ function applyClaudeRow(state, row, sessionId) {
   observeClaudeUsage(state, row, sessionId);
   if (row.sessionId !== sessionId || row.isSidechain || row.isMeta || row.isCompactSummary === true) return;
   if (row.type === 'assistant') observeRunSettings(state, row.message?.model, row.effort);
+  if (row.type === 'system' || row.type === 'api-request') observeNotice(state, row);
   const at = Date.parse(row.timestamp);
   if (row.type === 'user' && row.message?.role === 'user') {
     const results = Array.isArray(row.message.content) ? row.message.content.filter(item => item?.type === 'tool_result') : [];
@@ -56,7 +58,7 @@ function applyClaudeRow(state, row, sessionId) {
     const item = row.attachment;
     const text = typeof item.prompt === 'string' ? item.prompt : '';
     if (text && Number.isFinite(at) && at >= state.requestAt && (!item.origin?.kind || item.origin.kind === 'human')) {
-      state.absorbed = [...(state.absorbed || []), { text: text.slice(0, 8000), at }].slice(-8);
+      state.absorbed = [...(state.absorbed || []), { text: detachedPrefix(text, 8000), at }].slice(-8);
     }
   } else if (row.type === 'api-request') {
     state.aborted = false;
@@ -107,7 +109,10 @@ function applyCodexRow(state, row) {
     state.complete = false;
     state.aborted = true;
   } else if (row.type === 'response_item' && state.requestId && at >= state.requestAt && (!event.turn_id || event.turn_id === state.turnId)) {
-    if (event.type === 'message' && event.role === 'assistant' && ['commentary', 'final'].includes(event.channel)) recordAnswer(state, textContent(event.content));
+    // Older Codex labels a visible reply by `channel`; current Codex by
+    // `phase` (commentary, final_answer). Hidden reasoning has neither.
+    if (event.type === 'message' && event.role === 'assistant' && (['commentary', 'final'].includes(event.channel)
+      || !event.channel && ['commentary', 'final_answer'].includes(event.phase))) recordAnswer(state, textContent(event.content));
     else if (['function_call', 'custom_tool_call'].includes(event.type)) addCall(state, event.call_id, event.name, event.arguments || event.input);
     else if (['function_call_output', 'custom_tool_call_output'].includes(event.type)) addResult(state, event.call_id, event.output, undefined);
     else if (event.type === 'web_search_call') {
@@ -119,15 +124,16 @@ function applyCodexRow(state, row) {
 
 function project(state, idle = true) {
   const completed = state.complete && idle;
-  const evidence = state.requestId && state.answer ? `USER:\n${String(state.request).slice(0, 8000)}\n\nASSISTANT (${completed ? 'completed answer' : 'current report'}):\n${bounded(state.answer, 16000)}` : '';
+  const request = detachedPrefix(state.request || '', 8000);
+  const evidence = state.requestId && state.answer ? `USER:\n${request}\n\nASSISTANT (${completed ? 'completed answer' : 'current report'}):\n${bounded(state.answer, 16000)}` : '';
   return { available: true, inputWaiting: idle, state: state.aborted ? 'interrupted' : completed ? 'completed' : idle ? 'unconfirmed' : 'working',
-    request: String(state.request || '').slice(0, 8000), requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
+    request, requestId: state.requestId, rootRequestId: state.rootRequestId || state.requestId,
     requestAt: state.requestAt, completedAt: state.completedAt, awaitingResponse: Boolean(state.awaitingResponse),
     absorbed: (state.absorbed || []).map(item => ({ text: item.text, at: item.at })),
     model: state.model || '', effort: state.effort || '',
     tools: toolEvidence(state), context: reviewContext(state), updates: assistantUpdates(state),
     usage: tokenUsage(state), partialEvidence: evidence, evidence: completed ? evidence : '',
-    progress: idle ? null : currentProgress(state) };
+    progress: idle ? null : currentProgress(state), turn: idle ? null : turnStats(state) };
 }
 
 // Read only logs explicitly owned by the already matched child process. Never

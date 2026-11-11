@@ -2,6 +2,7 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const run = promisify(execFile);
+const { detach } = require('./detachedString');
 
 function bounded(text, limit) {
   text = String(text || '').trim();
@@ -9,7 +10,8 @@ function bounded(text, limit) {
   const marker = '\n[omitted: evidence exceeds budget; do not assume omitted content is safe]\n';
   if (limit <= marker.length) return marker.trim().slice(0, Math.max(0, limit));
   const head = Math.floor((limit - marker.length) / 4);
-  return text.slice(0, head) + marker + text.slice(-(limit - marker.length - head));
+  // Detach: stored excerpts must not keep the full source text alive.
+  return detach(text.slice(0, head) + marker + text.slice(-(limit - marker.length - head)));
 }
 function answerText(source) {
   const native = String(source).match(/ASSISTANT(?: \((?:completed answer|current report)\))?:\s*\n?([\s\S]*)/u);

@@ -5089,6 +5089,8 @@ function registerTerminalLifecycleTests(context) {
     const options = {
       storeFile,
       fileSystem: countedFileSystem,
+      // Replay-only checkpoints default to 20 s; shorten it to keep the test fast.
+      replayPersistDelayMs: 400,
       killTree: () => {},
       ptyModule: { spawn: () => {
         const processHandle = new FakePty(16_000 + processes.length);
@@ -5111,7 +5113,7 @@ function registerTerminalLifecycleTests(context) {
     assert.equal(
       await waitUntil(() => storeWrites === writesAfterCreate + 1, 1_500),
       true,
-      '연속 출력도 1초 내에 한 번은 안전하게 저장해야 합니다.',
+      '연속 출력도 재생 기록 저장 간격 안에 한 번은 안전하게 저장해야 합니다.',
     );
     assert.equal(storeWrites, writesAfterCreate + 1);
 

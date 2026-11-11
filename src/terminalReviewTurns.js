@@ -5,15 +5,36 @@
 // followed by its input prompt. Silence, elapsed time and tool pauses are never
 // completion signals. Unknown UI formats remain waiting instead of guessing.
 const promptPattern = /^\s*[❯›]\s?(.*)$/u;
+// Gemini CLI (google-gemini/gemini-cli): the input row is " > " (YOLO "* ",
+// shell mode "! ") and a sent request is echoed as "> request". Model replies
+// are indented under "✦ ", so a quoted "> " inside a reply never starts a row.
+// Grok Build (xai-org/grok-build): "❯ " inside the boxed composer
+// "│ ❯ draft │", or bare in minimal mode.
+const promptPatterns = {
+  gemini: /^ ?[>*!] (.*)$/u,
+  grok: /^\s*(?:│\s?)?[❯›]\s?(.*?)(?:\s*│)?\s*$/u,
+};
+const promptFor = provider => promptPatterns[provider] || promptPattern;
+// An empty input box shows the provider's own placeholder, not a draft.
+const placeholderPattern = /^(?:Ask Codex to do anything|Try ".*"|Summarize recent commits|Find and fix a bug in @filename|Type your message or @path\/to\/file|Build anything)[.…]*$/u;
 // Claude's live status line is a spinner glyph, a verb ending in an ellipsis
 // and the elapsed time: "✢ Nucleating… (1m 1s · ↓ 4.0k tokens · thought for 3s)".
 // Current Claude Code shows no "esc to interrupt" while it works.
-const busyPattern = /esc to (?:interrupt|cancel)|ctrl\+c to interrupt|press (?:enter|return) to (?:continue|confirm)|do you want to proceed|allow this|waiting for (?:approval|permission)|enter to confirm|is this a project you created or one you trust|(?:^|\n)\s*[✻✽✶✢✳✺✼*·]\s+[^\n]*…\s*(?:\(\d|$|\n)/iu;
+const busyPattern = /esc to (?:interrupt|cancel)|ctrl\+c to interrupt|press (?:enter|return) to (?:continue|confirm)|do you want to proceed|allow this|waiting for (?:approval|permission)|enter to confirm|is this a project you created or one you trust|(?:^|\n)\s*[✻✽✶✢✳✺✼*·]\s+[^\n]*…\s*(?:\(\d|$|\n)|(?:^|\n)\s*[\u2801-\u28ff] [^\n]*\S|waiting on answers for|(?:^|\n)\s*(?:│\s*)?(?:allow [^\n?│]{1,80}\?|apply this change\?)[ \t]*(?:│[ \t]*)?(?=\n|$)/iu;
+// Gemini and Grok draw a braille spinner row while a turn runs ("⠋ Thinking...
+// (esc to cancel, 4s)", "⠧ Run npm test 0.2s"), and ask in a dialog titled
+// "Allow …?" / "Apply this change?"; Grok's "◆ Waiting on answers for …" is an
+// open question. Each holds automatic delivery like Claude's spinner does.
 const finishedPattern = {
   // "✻ Churned for 8m 18s · done 2:57 PM". The live line above can also say
   // "thought for 3s", so a line with the spinner's ellipsis is never a finish.
   claude: /^\s*[✻✽✶✢✳✺✼*]\s+(?![^\n]*…).+(?:\bfor\s+\d|\bdone\s+\d)/iu,
   codex: /^\s*(?:[─━-]+\s*(?:Worked|Working time|Completed|Finished)\b|Worked for \d+(?:[smh]|\s+(?:seconds?|minutes?|hours?))\b.*[•·]\s*\d{1,2}:\d{2})/iu,
+  // Grok Build's turn footer: "Worked for 2m5s", or "Turn completed." without a clock.
+  grok: /^\s*(?:Worked for \d[\d.hms]*|Turn completed\.)\s*$/u,
+  // Gemini CLI prints no turn footer. Its reply rows start with "✦ "; the last
+  // one followed by the input row, with no spinner row in between, ends the turn.
+  gemini: /^ ?✦ \S/u,
 };
 
 function isStartupRequest(request) {
@@ -68,13 +89,14 @@ function isContinuationSummary(request) {
 }
 function isNonTaskRequest(request) { return isStartupRequest(request) || isContinuationSummary(request); }
 
-function submittedPrompt(screen) {
+function submittedPrompt(screen, provider) {
+  const promptPattern = promptFor(provider);
   const lines = String(screen || '').split('\n');
   let index = -1;
   for (let i = 0; i < lines.length; i++) if (promptPattern.test(lines[i])) index = i;
   if (index < 0 || busyPattern.test(lines.slice(-12).join('\n'))) return '';
   const first = lines[index].match(promptPattern)[1].trim();
-  if (!first) return '';
+  if (!first || placeholderPattern.test(first)) return '';
   const draft = [first];
   for (let i = index + 1; i < lines.length; i++) {
     const line = lines[i];
@@ -95,6 +117,7 @@ function completionStamp(screen, provider) {
 
 function completedTurn(screen, request, provider, baselineStamp, options = {}) {
   if (!request || !finishedPattern[provider]) return '';
+  const promptPattern = promptFor(provider);
   const lines = String(screen || '').split('\n');
   const first = request.split('\n')[0];
   let start = -1;
@@ -119,12 +142,25 @@ function completedTurn(screen, request, provider, baselineStamp, options = {}) {
       if (match?.[1].trim()) { start = i; request = match[1].trim(); break; }
     }
   }
+  // Gemini and Grok can echo a long paste as a chip ("[Pasted Text: 12 lines]")
+  // instead of its text. Without a log, the chip of the turn that just finished,
+  // with no later request, is that paste.
+  if (start < 0 && options.exactRequest && hasNewCompletion && ['gemini', 'grok'].includes(provider)) {
+    let lastFinish = -1;
+    for (let i = 0; i < lines.length; i++) if (finishedPattern[provider].test(lines[i])) lastFinish = i;
+    for (let i = lastFinish - 1; i >= 0; i--) {
+      const text = lines[i].match(promptPattern)?.[1].trim();
+      if (!text) continue;
+      if (/^\[Pasted (?:text|content)\b[^\]]{0,80}\]$/iu.test(text)) { start = i; request = text; }
+      break;
+    }
+  }
   if (start < 0 || (options.exactRequest && !hasNewCompletion)) return '';
   if (options.exactRequest) {
     const actual = lines.slice(start, start + request.split('\n').length).map((line, index) => index ? line.trim() : line.replace(promptPattern, '$1').trim()).join('\n');
     if (actual !== request.trim()) return '';
     // A later submitted prompt belongs to another request.
-    if (lines.slice(start + 1).some(line => { const match = line.match(promptPattern); return match?.[1].trim() && !/^(?:Ask Codex to do anything|Try ".*")$/u.test(match[1].trim()); })) return '';
+    if (lines.slice(start + 1).some(line => { const match = line.match(promptPattern); return match?.[1].trim() && !placeholderPattern.test(match[1].trim()); })) return '';
   }
   let finished = -1, ready = -1;
   for (let i = start + 1; i < lines.length; i++) {
@@ -139,8 +175,9 @@ function completedTurn(screen, request, provider, baselineStamp, options = {}) {
   return answer.length ? evidence : '';
 }
 
-function currentTurnEvidence(screen, request) {
+function currentTurnEvidence(screen, request, provider) {
   if (!request) return '';
+  const promptPattern = promptFor(provider);
   const lines = String(screen || '').split('\n');
   const first = request.split('\n')[0];
   let start = -1;
@@ -159,6 +196,7 @@ function currentTurnEvidence(screen, request) {
 
 function inputReady(screen, provider) {
   if (!finishedPattern[provider]) return false;
+  const promptPattern = promptFor(provider);
   const lines = String(screen || '').split('\n');
   let index = -1;
   for (let i = 0; i < lines.length; i++) if (promptPattern.test(lines[i])) index = i;
@@ -169,7 +207,20 @@ function inputReady(screen, provider) {
   // indicator after that explicit finish belongs to the current input state.
   if (busyPattern.test(lines.slice(finished >= 0 ? finished + 1 : -15).join('\n'))) return false;
   const draft = lines[index].match(promptPattern)[1].trim();
-  if (draft && !/^(?:Ask Codex to do anything|Try ".*"|Summarize recent commits|Find and fix a bug in @filename)$/u.test(draft)) return false;
+  if (draft && !placeholderPattern.test(draft)) return false;
+  // Gemini wraps a draft under its "> " prefix (3 columns in); the bordered
+  // or background box and the footer follow.
+  if (provider === 'gemini') {
+    const end = lines.findIndex((line, row) => row > index && (!line.trim() || /^\s*[─━╰╭]/u.test(line)));
+    return !lines.slice(index + 1, end < 0 ? undefined : end).some(line => /^ {3}\S/u.test(line));
+  }
+  // Grok's boxed composer: text on any row before its bottom border is a draft.
+  // Minimal mode has no box; wrapped rows sit under the 2-column arrow.
+  if (provider === 'grok') {
+    const boxed = /^\s*│/u.test(lines[index]);
+    const end = lines.findIndex((line, row) => row > index && (boxed ? /^\s*╰/u.test(line) : !line.trim()));
+    return !lines.slice(index + 1, end < 0 ? undefined : end).some(line => boxed ? /^\s*│\s*[^\s│]/u.test(line) : /^ {2}\S/u.test(line));
+  }
   // Claude puts its custom multi-line status bar below the input's closing
   // rule. Only text inside that bounded input area can be a wrapped draft.
   const closingRule = lines.findIndex((line, row) => row > index && /^\s*[─━]{8,}\s*$/u.test(line));

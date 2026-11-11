@@ -296,6 +296,11 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     });
     if (typeof terminal.attachCustomKeyEventHandler === 'function') {
       terminal.attachCustomKeyEventHandler(event => {
+        // macOS Cmd+W belongs to the app menu (close this window), never the
+        // PTY. Leave the event unprevented so the menu accelerator still runs.
+        // Ctrl+W stays a terminal key on every platform.
+        if (state.platform?.id === 'darwin' && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+          && (event.code === 'KeyW' || String(event.key || '').toLowerCase() === 'w')) return false;
         const clipboardKey = ({ KeyC: 'c', KeyV: 'v', Insert: 'insert' })[event.code] || String(event.key || '').toLowerCase();
         const commandKey = (event.ctrlKey || event.metaKey) && !event.altKey;
         const copy = commandKey && clipboardKey === 'c' && terminal.hasSelection?.();
@@ -487,16 +492,20 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const raw = String(replay || '');
     const text = entry.comprehensionOutputFilter?.consume(raw) ?? raw;
     const chunkChars = 32 * 1024;
-    for (let offset = 0; offset < text.length;) {
-      let end = Math.min(text.length, offset + chunkChars);
-      const lastCode = text.charCodeAt(end - 1);
-      const nextCode = text.charCodeAt(end);
-      if (end < text.length && lastCode >= 0xd800 && lastCode <= 0xdbff
-        && nextCode >= 0xdc00 && nextCode <= 0xdfff) end -= 1;
-      const chunk = text.slice(offset, end);
-      await new Promise(resolve => entry.terminal.write(chunk, resolve));
-      offset = end;
-    }
+    // Old color queries in retained output were answered when they ran.
+    entry.terminal.suppressResponses = true;
+    try {
+      for (let offset = 0; offset < text.length;) {
+        let end = Math.min(text.length, offset + chunkChars);
+        const lastCode = text.charCodeAt(end - 1);
+        const nextCode = text.charCodeAt(end);
+        if (end < text.length && lastCode >= 0xd800 && lastCode <= 0xdbff
+          && nextCode >= 0xdc00 && nextCode <= 0xdfff) end -= 1;
+        const chunk = text.slice(offset, end);
+        await new Promise(resolve => entry.terminal.write(chunk, resolve));
+        offset = end;
+      }
+    } finally { entry.terminal.suppressResponses = false; }
   }
 
   async function ensureSessionTerminal(session) {
@@ -576,6 +585,21 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
 
 
 
+
+  // Free one view's emulator, canvas and queued input while its PTY record
+  // stays in the host (trash keeps a stopped record until permanent delete).
+  // A later mount rebuilds the view from the host replay.
+  function releaseTerminal(id) {
+    const key = String(id || '');
+    const entry = state.terminals.get(key);
+    if (!entry) return false;
+    state.terminals.delete(key);
+    closeRawInputEntry(entry);
+    entry.outputHydrationBuffer = [];
+    entry.terminal.dispose();
+    entry.host.remove();
+    return true;
+  }
 
   function isAiTerminalSession(session) {
     return Boolean(session && (session.type === 'agent' || linkedAgentSession(session)));
@@ -665,5 +689,5 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
 
 
 
-  return { fitEntry, ensureSessionTerminal, refreshSessions, readTerminalSession };
+  return { fitEntry, ensureSessionTerminal, refreshSessions, readTerminalSession, releaseTerminal };
 };

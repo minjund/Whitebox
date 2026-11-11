@@ -1113,19 +1113,21 @@ class ProcessMonitor {
         const finish = snapshot => {
           if (settled) return;
           settled = true; clearTimeout(timer);
+          if (cache.request === request) cache.request = null;
           cache.snapshot = snapshot; cache.at = Date.now();
           resolve(snapshot);
         };
         const failed = error => finish({ generatedAt: new Date().toISOString(), available: false, processes: [], error: String(error?.message || error) });
+        const request = { finish, failed };
         try {
-          worker = this.workerFactory(__filename, { workerData: { whiteboxProcessScan: true, platform: this.platform } });
-          worker.once('message', finish);
-          worker.once('error', failed);
-          worker.once('exit', code => { if (!settled) failed(new Error('Process scan worker exited before reporting: ' + code)); });
+          worker = this.scanWorker(cache);
+          cache.request = request;
           timer = setTimeout(() => {
             failed(new Error('Process scan worker timed out'));
-            Promise.resolve(worker.terminate()).catch(() => {});
+            // A stuck worker is replaced; its late answer can never be reused.
+            retireScanWorker(cache, worker);
           }, 20000);
+          worker.postMessage({ type: 'scan' });
         } catch (error) { failed(error); }
       }).finally(() => { cache.pending = null; });
     }
@@ -1134,6 +1136,30 @@ class ProcessMonitor {
       return snapshot;
     });
   }
+
+  // One long-lived scan worker per platform cache. Spawning a worker isolate
+  // for every snapshot (about once per second while panels sync) cost CPU and
+  // memory churn for the whole session. Only one scan is in flight at a time.
+  scanWorker(cache) {
+    if (cache.worker) return cache.worker;
+    const worker = this.workerFactory(__filename, { workerData: { whiteboxProcessScan: true, persistent: true, platform: this.platform } });
+    cache.worker = worker;
+    worker.on('message', snapshot => { if (cache.worker === worker) cache.request?.finish(snapshot); });
+    worker.on('error', error => {
+      if (cache.worker !== worker) return;
+      cache.worker = null; cache.request?.failed(error);
+    });
+    worker.on('exit', code => {
+      if (cache.worker !== worker) return;
+      cache.worker = null; cache.request?.failed(new Error('Process scan worker exited before reporting: ' + code));
+    });
+    // An idle scan worker must not keep a Node process (tests, CLIs) alive.
+    // Unref after attaching listeners, which would otherwise ref it again.
+    worker.unref?.();
+    return worker;
+  }
+
+  dispose() { retireScanWorker(this.asyncScan, this.asyncScan.worker); }
 
   scan(force = false) {
     if (!force && Date.now() - this.lastScanAt < this.scanTtlMs) return this.lastSnapshot;
@@ -1155,6 +1181,17 @@ class ProcessMonitor {
   }
 }
 
+function retireScanWorker(cache, worker) {
+  if (!worker) return;
+  if (cache.worker === worker) cache.worker = null;
+  try { Promise.resolve(worker.terminate?.()).catch(() => {}); } catch {}
+}
+
+// Terminates every shared production scan worker (app quit).
+function disposeProcessScanWorkers() {
+  for (const cache of asyncScans.values()) retireScanWorker(cache, cache.worker);
+}
+
 // Test monitors may provide a synchronous in-memory snapshot. Production callers
 // always use the worker path and keep parsing/OS waits off Electron's main loop.
 async function scanProcesses(monitor, force = false) {
@@ -1164,6 +1201,7 @@ async function scanProcesses(monitor, force = false) {
 module.exports = {
   scanProcesses,
   ProcessMonitor,
+  disposeProcessScanWorkers,
   parseCsvRows,
   processRows,
   powershellProcessRows,
@@ -1186,19 +1224,20 @@ module.exports = {
   applyRuntimePresence,
 };
 
-// A worker performs one bounded read, reports once, and exits naturally.
+// A scan worker performs one bounded read per request. A persistent worker
+// stays alive between requests; a one-shot worker reports once and exits.
+function workerSnapshot(platform) {
+  try {
+    if (platform === 'win32') return new ProcessMonitor({ platform }).scan(true);
+    const output = execFileSync('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,tpgid=,stat=,etime=,comm=,args='], { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024 });
+    const rows = require('./terminalActivity').processTable(output);
+    return { generatedAt: new Date().toISOString(), available: rows.length > 0,
+      processes: selectAgentProcesses(rows, { providerResolver: row => row.provider, environment: platform === 'darwin' ? 'macos' : 'linux' }),
+      activityRows: rows, error: '' };
+  } catch (error) { return { generatedAt: new Date().toISOString(), available: false, processes: [], error: String(error.message || error) }; }
+}
 if (!isMainThread && workerData?.whiteboxProcessScan) {
   const platform = workerData.platform;
-  let snapshot;
-  try {
-    if (platform === 'win32') snapshot = new ProcessMonitor({ platform }).scan(true);
-    else {
-      const output = execFileSync('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,tpgid=,stat=,etime=,comm=,args='], { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024 });
-      const rows = require('./terminalActivity').processTable(output);
-      snapshot = { generatedAt: new Date().toISOString(), available: rows.length > 0,
-        processes: selectAgentProcesses(rows, { providerResolver: row => row.provider, environment: platform === 'darwin' ? 'macos' : 'linux' }),
-        activityRows: rows, error: '' };
-    }
-  } catch (error) { snapshot = { generatedAt: new Date().toISOString(), available: false, processes: [], error: String(error.message || error) }; }
-  parentPort.postMessage(snapshot);
+  if (workerData.persistent) parentPort.on('message', message => { if (message?.type === 'scan') parentPort.postMessage(workerSnapshot(platform)); });
+  else parentPort.postMessage(workerSnapshot(platform));
 }

@@ -130,6 +130,22 @@
 #wbSummaryStopHost { margin-left:auto; }
 #wbSummaryStopHost[hidden] { display:none; }
 #terminalWorkspace #wbSummaryComposerHint { color:var(--wb-muted); font-size:10px; }
+/* Screenshots waiting to be sent: small previews above the text, each with its own remove control. */
+.wb-summary-composer-tools { display:flex; align-items:center; gap:10px; min-width:0; }
+#terminalWorkspace .wb-summary-attach { flex:none; padding:3px 8px; border:1px solid var(--wb-line); border-radius:6px; background:transparent; color:var(--wb-muted); font:inherit; font-size:11px; cursor:pointer; }
+#terminalWorkspace .wb-summary-attach:hover, #terminalWorkspace .wb-summary-attach:focus-visible { color:var(--wb-text); border-color:var(--wb-accent); }
+#terminalWorkspace .wb-summary-attach:disabled { opacity:.5; cursor:default; }
+#terminalWorkspace .wb-summary-attachments { display:flex; flex-wrap:wrap; gap:8px; list-style:none; margin:0 0 10px; padding:0; }
+#terminalWorkspace .wb-summary-attachments[hidden] { display:none; }
+#terminalWorkspace .wb-summary-attachments li { position:relative; width:64px; height:64px; border:1px solid var(--wb-line); border-radius:8px; overflow:hidden; background:var(--wb-wash, rgba(127,127,127,.12)); }
+#terminalWorkspace .wb-summary-attachments li[data-state="saving"] { opacity:.55; }
+#terminalWorkspace .wb-summary-attachments img { display:block; width:100%; height:100%; object-fit:cover; }
+#terminalWorkspace .wb-summary-attachments button { position:absolute; top:2px; right:2px; width:20px; height:20px; padding:0; border:0; border-radius:50%; background:rgba(0,0,0,.65); color:#fff; font-size:13px; line-height:20px; cursor:pointer; }
+#terminalWorkspace .wb-summary-composer[data-drop="true"] { border-color:var(--wb-accent); border-style:dashed; }
+#terminalWorkspace .wb-summary-user-images { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+#terminalWorkspace .wb-summary-user-images img { width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid var(--wb-line); }
+#terminalWorkspace .wb-summary-image-count { display:inline-block; margin-top:6px; color:var(--wb-muted); font-size:11px; }
+#terminalWorkspace .wb-summary-past-request .wb-summary-past-images { flex:none; font-style:normal; color:var(--wb-muted); font-size:10px; }
 #terminalWorkspace #wbSummaryNotice { margin-top:6px; color:var(--wb-muted); font-size:12px; }
 /* The command list floats above the composer, like the CLI's own picker, so the input never moves. */
 #terminalWorkspace .wb-summary-commands { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:20; list-style:none; margin:0; padding:4px 0; max-height:min(280px, 50vh); overflow:auto; border:1px solid var(--wb-line); border-radius:10px; background:var(--wb-panel); box-shadow:0 8px 24px rgba(0,0,0,.18); }
@@ -154,9 +170,9 @@
 #terminalWorkspace .wb-summary-prompt h2 { font-size:16px; }
 .wb-summary-prompt > div { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 #terminalWorkspace .wb-summary-working { margin:24px 0; padding:10px 0; }
-#terminalWorkspace .wb-summary-working > p { color:var(--wb-muted); font-size:12px; line-height:1.9; margin-top:14px; }
+#terminalWorkspace .wb-summary-working > p { color:var(--wb-muted); font-size:12px; line-height:1.9; margin-top:14px; overflow-wrap:anywhere; }
 #wbSummaryThinking .ui-tlc { --ui-tlc-accent:var(--wb-accent); --ui-tlc-ink:var(--wb-text); --ui-tlc-text:var(--wb-muted); }
-.wb-summary-delivery-error { color:var(--wb-muted); font-size:12px; }
+.wb-summary-delivery-error, .wb-summary-queue-note { color:var(--wb-muted); font-size:12px; }
 .wb-summary-retained-notice { padding:14px 16px; margin-bottom:20px; border:1px solid var(--wb-line); border-left:2px solid var(--wb-accent); border-radius:6px; background:var(--wb-panel); font-size:12px; }
 #terminalWorkspace .wb-summary-retained-notice p { margin:8px 0; color:var(--wb-muted); line-height:1.8; }
 .wb-summary-retained-notice details { margin:10px 0; }

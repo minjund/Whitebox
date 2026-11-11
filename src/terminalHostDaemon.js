@@ -102,6 +102,58 @@ async function recoverPersistedSessionsWithCodexAppServer(
   return manager.recoverPersistedSessions();
 }
 
+// Test runs and preview builds launch hosts against temporary profiles that are
+// later deleted. Such a host has no app that can ever reconnect, yet its live
+// PTYs keep it running for weeks. Only a missing profile directory with no
+// connected client counts as orphaned: live sessions in an existing profile are
+// never shut down here. Two consecutive misses ignore a transient rename.
+const PROFILE_ORPHAN_CHECK_MS = 60_000;
+const PROFILE_ORPHAN_CONFIRMATIONS = 2;
+
+function profileDirectoryMissing(directory, fileSystem = fs) {
+  try {
+    return !fileSystem.statSync(directory).isDirectory();
+  } catch (error) {
+    return error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
+  }
+}
+
+function startProfileOrphanWatch({
+  profileDirectory,
+  host,
+  onOrphaned,
+  fileSystem = fs,
+  intervalMs = PROFILE_ORPHAN_CHECK_MS,
+  confirmations = PROFILE_ORPHAN_CONFIRMATIONS,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
+} = {}) {
+  let misses = 0;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearIntervalFn(timer);
+  };
+  const check = () => {
+    if (stopped) return;
+    const clients = typeof host?.connectedClientCount === 'function' ? host.connectedClientCount() : 0;
+    if (clients === 0 && profileDirectoryMissing(profileDirectory, fileSystem)) {
+      misses += 1;
+      if (misses < confirmations) return;
+      stop();
+      onOrphaned();
+      return;
+    }
+    misses = 0;
+    // Backstop for the event-driven idle shutdown (no clients, no live PTYs).
+    if (typeof host?.scheduleShutdownIfIdle === 'function') host.scheduleShutdownIfIdle();
+  };
+  const timer = setIntervalFn(check, intervalMs);
+  if (typeof timer?.unref === 'function') timer.unref();
+  return { stop, check };
+}
+
 function parseConfig(argv = process.argv.slice(2)) {
   const index = argv.indexOf('--config');
   if (index < 0 || !argv[index + 1]) throw new Error('명령창 연결 설정이 없습니다.');
@@ -128,6 +180,7 @@ async function run(config = parseConfig()) {
   let host = null;
   let bridge = null;
   let codexAppServer = null;
+  let orphanWatch = null;
   const logFailure = (label, error) => {
     const logFile = path.join(path.dirname(config.discoveryFile), 'terminal-host.log');
     try {
@@ -137,6 +190,7 @@ async function run(config = parseConfig()) {
   const stop = ({ updateOnly = false } = {}) => {
     if (stopping) return stopPromise;
     stopping = true;
+    orphanWatch?.stop();
     if (bridge) bridge.dispose();
     if (host) host.dispose();
     stopPromise = (async () => {
@@ -208,6 +262,16 @@ async function run(config = parseConfig()) {
     codexAppServer.on('exit', refreshCodexDiscovery);
     await host.start();
     if (stopping) return { manager, host, bridge, stop, processLock };
+    orphanWatch = startProfileOrphanWatch({
+      profileDirectory: path.dirname(config.discoveryFile),
+      host,
+      onOrphaned: () => {
+        // The profile is gone: persisting would only recreate the deleted
+        // directory. PTYs are still terminated through the normal shutdown.
+        if (manager) manager.storeFile = '';
+        stop();
+      },
+    });
     try { await bridge.start(); } catch (error) {
       logFailure('bridge', error);
     }
@@ -269,6 +333,8 @@ module.exports = {
   codexLaunchBackend,
   isNativeCodexLaunch,
   parseConfig,
+  profileDirectoryMissing,
+  startProfileOrphanWatch,
   prepareCodexOperation,
   recoverPersistedSessionsWithCodexAppServer,
   run,

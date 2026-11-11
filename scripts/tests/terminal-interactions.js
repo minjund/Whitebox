@@ -1083,4 +1083,4 @@ function registerTerminalInteractionTests(context) {
 
 }
 
-module.exports = { registerTerminalInteractionTests };
+module.exports = { registerTerminalInteractionTests, createWorkbench };

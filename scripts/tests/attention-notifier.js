@@ -192,7 +192,10 @@ function registerAttentionNotifierTests(context) {
     multipleInputs.dispose();
 
     notifier.dispose();
-    assert.equal(FakeNotification.created.every(item => item.closed), true);
+    // A clicked notification is already dismissed by the OS and released on
+    // click (macOS may never emit 'close'); every other one is closed.
+    assert.equal(FakeNotification.created.every((item, index) => item.closed || index === 0), true);
+    assert.equal(notifier.notifications.size, 0);
 
     FakeNotification.created = [];
     const startup = new AttentionNotifier({

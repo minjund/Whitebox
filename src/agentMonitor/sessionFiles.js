@@ -30,6 +30,23 @@ function readRange(fileDescriptor, start, length) {
   return offset === length ? buffer : buffer.subarray(0, offset);
 }
 
+// Transcript tails are re-read on every change. Reuse one read buffer per
+// thread (the decoded string is a copy) instead of allocating megabytes per read.
+const MAX_SCRATCH_BYTES = 4 * 1024 * 1024;
+let scratch = null;
+
+function readTailRange(fileDescriptor, start, length) {
+  if (length > MAX_SCRATCH_BYTES) return readRange(fileDescriptor, start, length);
+  if (!scratch || scratch.length < length) scratch = Buffer.allocUnsafe(Math.max(length, Math.min(MAX_SCRATCH_BYTES, 256 * 1024)));
+  let offset = 0;
+  while (offset < length) {
+    const read = fs.readSync(fileDescriptor, scratch, offset, length - offset, start + offset);
+    if (!read) break;
+    offset += read;
+  }
+  return scratch.subarray(0, offset);
+}
+
 function readJson(file, fallback = null, maxBytes = MAX_JSON_BYTES) {
   const stat = safeStat(file);
   const limit = boundedBytes(maxBytes, MAX_JSON_BYTES, MAX_JSON_BYTES);
@@ -114,7 +131,7 @@ function readJsonLines(file, maxBytes = MAX_JSONL_BYTES, { fromStart = false } =
   let headerLine = '';
   let firstTimestamp = null;
   try {
-    buffer = readRange(fd, start, length);
+    buffer = readTailRange(fd, start, length);
     if (start > 0) {
       ({ headerLine, firstTimestamp } = readJsonLinesHead(fd, stat.size));
     }
