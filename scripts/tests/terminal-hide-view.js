@@ -38,6 +38,9 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   // Chromium blurs a moved textarea without compositionend: keep the Korean
   // syllable being composed and keyboard focus in the pane being typed in.
   const typed = [], write = manager.write;
+  // A shell with focus reporting on (PowerShell on Windows) also receives the
+  // re-parent's focus-out/in reports; only the typed text is compared.
+  const typedText = () => typed.join('').replace(/\x1b\[[IO]/gu, '');
   manager.write = function (id, value, ...rest) { if (id === second) typed.push(String(value)); return write.call(this, id, value, ...rest); };
   const input = `document.querySelector('#wbCanvas [data-terminal-id="${second}"] .ghostty-input')`;
   await evaluate(`${input}.focus()`);
@@ -50,10 +53,10 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
     await win.webContents.debugger.sendCommand('Input.imeSetComposition', { text: '글', selectionStart: 1, selectionEnd: 1 });
     await win.webContents.debugger.sendCommand('Input.insertText', { text: '글' });
     const deadline = Date.now() + 3000;
-    while (typed.join('') !== '한글' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    while (typedText() !== '한글' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
   } finally { win.webContents.debugger.detach(); manager.write = write; }
   assert.equal(typingFocus, true, 'hiding another pane keeps keyboard focus in the pane being typed in');
-  assert.equal(typed.join(''), '한글', 'the composing syllable survives the layout re-render exactly once');
+  assert.equal(typedText(), '한글', 'the composing syllable survives the layout re-render exactly once');
   await evaluate(`${input}.dispatchEvent(new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', keyCode: 85, ctrlKey: true, bubbles: true, cancelable: true }))`);
   assert.deepEqual(await visible(), [second]);
   assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second);
