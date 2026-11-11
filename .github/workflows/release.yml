@@ -193,9 +193,35 @@ jobs:
           set -euo pipefail
           git restore --source=HEAD -- scripts/terminal-workspace-check.js scripts/tests/terminal-hide-view.js scripts/workspace-attention-check.js scripts/tests/core-update-workspace.js scripts/tests/packaged-update-driver.js scripts/windows-v173-update-integration.js
           git diff --exit-code
-      - run: ${{ matrix.command }}
+      - if: runner.os == 'Windows'
+        run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # hdiutil on hosted macOS runners can fail to eject the DMG it just built
+      # ("Resource busy") while Spotlight or XProtect still holds the volume.
+      # Only that exact error repackages, from a clean release folder; every
+      # other failure stops the release, and the result is verified below.
+      - name: Package macOS (repackage only after a busy DMG eject)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -uo pipefail
+          sudo mdutil -a -i off >/dev/null 2>&1 || true
+          for attempt in 1 2 3; do
+            ${{ matrix.command }} 2>&1 | tee "$RUNNER_TEMP/package-mac.log"
+            status=${PIPESTATUS[0]}
+            [ "$status" -eq 0 ] && exit 0
+            grep -Eq "Unable to detach device cleanly|couldn't eject .* - Resource busy" "$RUNNER_TEMP/package-mac.log" || exit "$status"
+            [ "$attempt" -lt 3 ] || break
+            echo "::warning::DMG eject was busy on packaging attempt $attempt; repackaging from a clean release folder."
+            for device in $(hdiutil info | awk '/\/Volumes\/Whitebox/ {print $1}'); do hdiutil detach "$device" -force || true; done
+            rm -rf release
+            sleep 15
+          done
+          echo "DMG eject stayed busy after 3 packaging attempts."
+          exit 1
       - if: runner.os == 'Windows'
         run: npm run test:artifacts:win
         env:
