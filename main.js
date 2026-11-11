@@ -886,10 +886,22 @@ function installApplicationMenu() {
   if (template) Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// The brand PNG is 1024px. A tray draws images at their own point size, so the
+// macOS menu bar showed a huge, cropped icon. Shrink it to the bar size and add
+// a 2x copy for Retina screens.
+function trayIconImage(source) {
+  if (!source || source.isEmpty()) return source;
+  const size = process.platform === 'darwin' ? 18 : 16;
+  const icon = source.resize({ width: size, height: size, quality: 'best' });
+  const retina = source.resize({ width: size * 2, height: size * 2, quality: 'best' });
+  icon.addRepresentation({ scaleFactor: 2, width: size * 2, height: size * 2, buffer: retina.toPNG() });
+  return icon;
+}
+
 async function ensureBackgroundTray() {
   if (backgroundTray || isQuitting) return backgroundTray;
   try {
-    let icon = nativeImage.createFromPath(BRAND_ICON_PATH);
+    let icon = trayIconImage(nativeImage.createFromPath(BRAND_ICON_PATH));
     if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: 'small' });
     if (isQuitting || backgroundTray) return backgroundTray;
     backgroundTray = new Tray(icon);
