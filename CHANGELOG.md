@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.31 - 2026-11-12
+
+- The sidebar shows Claude as working again with Claude Code 2.1, whose status row no longer says “esc to interrupt”, including while Claude waits for its background agents.
+
 ## 2.0.30 - 2026-11-11
 
 - The tray icon in the macOS menu bar is drawn at menu-bar size instead of as a large, cropped app icon.

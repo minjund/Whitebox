@@ -22,6 +22,18 @@ const { TerminalActivity, providerActivity } = require('../src/terminalActivity'
   assert.equal(providerActivity({ text: '• Working (20s • esc to interrupt)\n› ', native: completed }), 'idle', 'exact native completion overrides old busy lines');
   assert.equal(providerActivity({ text: '• Working (20s • esc to interrupt)\n❯ ', native: { available: true, state: 'unconfirmed', inputWaiting: true } }), 'idle', 'native input waiting is distinct from successful task completion');
   assert.equal(providerActivity({ text: '❯ \n◯ general-purpose  Reading tests  9m 42s', native: completed }), 'working', 'active background agent still counts as work');
+  // Claude Code 2.1 screens captured from a real session: its live row has no
+  // "esc to interrupt" and stays while background agents run after the log
+  // already records the turn as finished.
+  const claudeBox = '\n─────────\n❯ \n─────────\n  [Opus 5.5 ◔ medium] │ Whitebox git:(main)\n  ⏵⏵ auto mode on (shift+tab to cycle)';
+  const tip = "\n  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current\n     work\n";
+  assert.equal(providerActivity({ text: `⏺ Calling whitebox_panel 3 times…\n\n· Unraveling… (1m 46s · ↓ 7.3k tokens)${tip}${claudeBox}`, native: working }), 'working');
+  assert.equal(providerActivity({ text: `⏺ 테스터 7개를 병렬로 띄웁니다.\n\n✢ Wrangling… (4m 4s · ↓ 11.6k tokens)${tip}${claudeBox}`, native: completed }), 'working', 'Claude waiting on its background agents is still working');
+  assert.equal(providerActivity({ text: `✢ Wrangling… (4m 4s · ↓ 11.6k tokens)${tip}${claudeBox}` }), 'working', 'the live row alone means work without a session log');
+  assert.equal(providerActivity({ text: `✻ Pondering… (12s · ↓ 300 tokens · thought for 3s)${claudeBox}`, native: completed }), 'working', '"thought for 3s" on the live row is not a finish');
+  assert.equal(providerActivity({ text: `⏺ 끝났습니다.\n\n✻ Churned for 47m 36s · done 11:02 AM${claudeBox}`, native: completed }), 'idle', 'the finished row is not a live row');
+  assert.equal(providerActivity({ text: `✢ Wrangling… (4m 4s · ↓ 11.6k tokens)\n⏺ 끝났습니다.\n✻ Worked for 4m 10s${claudeBox}`, native: completed }), 'idle', 'a live row above the finish line is old');
+  assert.equal(providerActivity({ text: `⏺ 목록:\n  • 정리… 끝\n${claudeBox}`, native: completed }), 'idle', 'an answer line with an ellipsis is not a live row');
   assert.equal(providerActivity({ text: 'Would you like to make the following edits?\n› 1. Yes, proceed (y)\n  2. No (esc)', native: working }), 'waiting');
   assert.equal(providerActivity({ text: 'unrecognized interface' }), 'unknown');
   // Gemini CLI and Grok Build: their own prompt, braille running row, turn

@@ -18,6 +18,11 @@ const PROMPT_ROW = { gemini: /^ ?[>*!] /u, grok: /^\s*(?:│\s?)?[❯›]/u };
 // Approval dialogs: Gemini "Allow execution of [Shell]?" / "Apply this change?"
 // with "● 1. Allow once"; Grok "Allow command?" with "Yes, proceed".
 // Gemini draws the dialog inside its bordered tool box ("│ … │").
+// Claude Code 2.1's live status row: "· Unraveling… (1m 46s · ↓ 7.3k tokens)".
+// It no longer says "esc to interrupt", and it stays while the AI waits for
+// its background agents even after its log records the turn as finished.
+// Claude replaces it with "✻ Worked for 3m" when the work is done.
+const CLAUDE_LIVE_ROW = /^\s*[·•✢✳✶✻✽✺✼*]\s+[^\n…()]{1,60}…\s*\(\s*(?:\d+[hms]\b|esc\b)/u;
 const DIALOG_TITLE = /(?:^|\n)\s*(?:│\s*)?(?:allow [^\n?│]{1,80}\?|apply this change\?|do you want to proceed\?)[ \t]*(?:│[ \t]*)?(?=\n|$)/iu;
 function providerActivity({ text = '', native = {}, provider = '' } = {}) {
   const lines = String(text).trimEnd().split('\n');
@@ -32,16 +37,18 @@ function providerActivity({ text = '', native = {}, provider = '' } = {}) {
     || DIALOG_TITLE.test(screen) && tail.some(line => /^\s*(?:│\s*)?(?:[❯›●>]\s*)?(?:\d+[.)]\s*)?(?:Yes, proceed|Allow once)\b/iu.test(line))
     // Grok Build's open question to the user ("◆ Waiting on answers for …").
     || tail.slice(-6).some(line => /^\s*\S?\s*Waiting on answers for\b/u.test(line))) return 'waiting';
-  let busy = -1, finished = -1, prompt = -1;
+  let busy = -1, finished = -1, prompt = -1, live = -1;
   for (let index = 0; index < tail.length; index++) {
     const line = tail[index];
     if (promptRow.test(line)) prompt = index;
-    if (/^\s*(?:[─━-]+\s*(?:Worked|Working time|Completed|Finished)\b|Worked for \d|Turn (?:completed|cancelled|failed|blocked)\b|[✻✽✶✢✳✺✼*]\s+.+\b(?:for\s+\d|done\s+\d))/iu.test(line)) finished = index;
+    if (CLAUDE_LIVE_ROW.test(line)) live = busy = index;
+    if (/^\s*(?:[─━-]+\s*(?:Worked|Working time|Completed|Finished)\b|Worked for \d|Turn (?:completed|cancelled|failed|blocked)\b|[✻✽✶✢✳✺✼*]\s+(?![^\n]*…).+\b(?:for\s+\d|done\s+\d))/iu.test(line)) finished = index;
     // Gemini and Grok draw a braille spinner row while a turn runs; Grok's
     // "◎ waiting · send a message to interrupt" is a turn parked mid-run. Its
     // idle "◎ 2 commands still running" cue follows a finished turn instead.
     if (/^\s*(?:[•●✻✽✶✢✳✺✼*]\s+.*(?:esc to (?:interrupt|cancel)|ctrl\+c to interrupt|waiting for \d+ background agents? to finish)|[◯○](?![^\n]*still running\s*$)\s+\S|[\u2801-\u28ff]\s+\S|[○◎◉]\s+waiting\b)/iu.test(line)) busy = index;
   }
+  if (live > finished) return 'working';
   if (native.available && (native.inputWaiting || ['completed', 'interrupted'].includes(native.state)) && busy <= prompt) return 'idle';
   if (busy > finished) return 'working';
   if (native.available) {
