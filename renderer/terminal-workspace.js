@@ -1760,6 +1760,15 @@
     } catch (error) { $('#wbFollowupStatus').textContent = t('복사하지 못했어요. 내용을 선택해 직접 복사해 주세요.'); }
   });
   let collaborationSync = null;
+  // The screen text each pane had at the latest sync. A review that runs right
+  // after that sync uses it instead of extracting up to 400 rows again.
+  const syncedScreens = new Map();
+  const SYNCED_SCREEN_MS = 400;
+  function reviewScreen(id, session) {
+    const synced = syncedScreens.get(id);
+    return synced && synced.creationId === session.creationId && performance.now() - synced.at < SYNCED_SCREEN_MS
+      ? synced.text : terminal.readTerminal(id);
+  }
   function syncCollaboration() {
     if (collaborationSync) return collaborationSync;
     collaborationSync = syncCollaborationNow().finally(() => { collaborationSync = null; });
@@ -1786,6 +1795,8 @@
       members: layout.ids(panel.layout).map(id => ({ ...sessions.get(id), title: title(id) })).filter(item => item.id && !trashed(item.id)) })));
     const frames = capturedFrames.filter(frame => panes.has(frame.id) && !trashed(frame.id)
       && sessions.has(frame.id) && sessions.get(frame.id).creationId === frame.creationId);
+    for (const frame of frames) syncedScreens.set(frame.id, { creationId: frame.creationId, text: frame.text, at: performance.now() });
+    for (const id of syncedScreens.keys()) if (!panes.has(id)) syncedScreens.delete(id);
     // Up to 24 KB of screen text per pane: resend it only when it changed (or
     // on the tracker's freshness beat); an unchanged pane sends a marker.
     const delta = collaborationFrames?.prepare(frames, new Map(frames.map(frame => [frame.id, `${sessions.get(frame.id)?.pid ?? ''}`])));
@@ -1904,7 +1915,7 @@
         }
         const summaryEnabled = summaryChat.needsReview(id);
         let result;
-        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget || summaryEnabled ? terminal.readTerminal(id) : '', enabled: autoReview || Boolean(manualTarget) || summaryEnabled, force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget || summaryEnabled ? (manualTarget ? terminal.readTerminal(id) : reviewScreen(id, session)) : '', enabled: autoReview || Boolean(manualTarget) || summaryEnabled, force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
         } catch (error) {
           if (sessions.get(id)?.creationId === session.creationId) reviews.set(id, { ...reviews.get(id), state: 'error', message: String(error.message || error) });
           continue;

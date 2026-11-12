@@ -22,7 +22,30 @@ function timestamp(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// The monitor re-enriches every session on each scan, but a transcript that
+// did not change keeps the same parsed arrays (the parser caches by mtime and
+// size). Results derived only from those arrays are reused until one of their
+// inputs is replaced. Keys are the arrays themselves, so nothing is retained
+// once the parser drops a generation.
+const derivedCache = new WeakMap();
+function derived(session, name, inputs, compute) {
+  const key = Array.isArray(session.messages) ? session.messages : null;
+  if (!key) return compute();
+  let entry = derivedCache.get(key);
+  if (!entry) { entry = {}; derivedCache.set(key, entry); }
+  const hit = entry[name];
+  if (hit && hit.inputs.length === inputs.length && hit.inputs.every((value, index) => value === inputs[index])) return hit.value;
+  const value = compute();
+  entry[name] = { inputs, value };
+  return value;
+}
+
 function latestActivity(session) {
+  return derived(session, 'latestActivity', [session.updatedAt, session.startedAt, session.lifecycle, session.executions],
+    () => computeLatestActivity(session));
+}
+
+function computeLatestActivity(session) {
   const values = [session.updatedAt, session.startedAt];
   for (const row of session.messages || []) values.push(row && row.timestamp);
   for (const row of session.lifecycle || []) values.push(row && (row.completedAt || row.timestamp));
@@ -183,6 +206,12 @@ function progressFor(session, attention) {
 }
 
 function extractArtifacts(session) {
+  // Callers own their copy: the cached list is never handed out directly.
+  return derived(session, 'artifacts', [session.result, session.lifecycle, session.artifacts, session.outcome?.artifacts],
+    () => computeArtifacts(session)).map(artifact => ({ ...artifact }));
+}
+
+function computeArtifacts(session) {
   const artifacts = [];
   const seen = new Set();
   const add = (kind, value, verified = false) => {

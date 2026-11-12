@@ -57,6 +57,7 @@ require('./tests/summary-attachments').registerSummaryAttachmentTests(context);
 require('./tests/tray-popover').registerTrayPopoverTests(context);
 require('./tests/summary-absorbed-completion').registerSummaryAbsorbedCompletionTests(context);
 require('./tests/summary-shape-content').registerSummaryShapeContentTests(context);
+require('./tests/monitor-scan-cost').registerMonitorScanCostTests(context);
 require('./tests/summary-providers').registerSummaryProviderTests(context);
 registerAutomationMonitorTests(context);
 registerSessionIntelligenceTests(context);

@@ -205,6 +205,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (mode === 'terminal') context.focusTerminal?.(id);
     if (mode === 'summary') {
       input.focus({ preventScroll: true });
+      if (opening) game.open();
       // Choosing summary is explicit intent to summarize the existing reply.
       // Passive observation still leaves completed historical turns untouched.
       if (opening && !tasksFor(id).length && context.member(id)?.ready) {
