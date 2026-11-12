@@ -418,6 +418,19 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     return draftTexts.get(key);
   }
+  // A written draft's full text is read once from disk (never sent to a
+  // model) so its card can show its length and items per section.
+  const draftLoads = new Set();
+  function draftCache(id, task) {
+    if (task?.content?.shape !== 'draft' || typeof task.draft?.path !== 'string') return undefined;
+    const key = `${id}:${task.taskId}`;
+    if (draftTexts.has(key) || draftLoads.has(key) || typeof api?.summaryDraft !== 'function') return draftTexts.get(key);
+    draftLoads.add(key);
+    Promise.resolve(api.summaryDraft({ id, taskId: task.taskId })).then(result => {
+      draftTexts.set(key, String(result?.text || '')); lastMarkup = ''; render();
+    }).catch(() => {});
+    return undefined;
+  }
   function fillDrafts() {
     const id = context.activeId();
     for (const node of transcript.querySelectorAll('details[data-draft-source="file"]')) {
@@ -993,22 +1006,30 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     renderAttachments(value);
     const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
+    let askedBefore = null;
     const parts = value.messages.map(message => ({ time: messageTime(message), user: message.role === 'user', html: (() => {
+      const asked = askedBefore;
+      if (message.role === 'answer') askedBefore = message.task;
       if (message.role === 'answer') {
         const task = message.task;
         const retained = window.WhiteboxReviewDecision.matchesRetainedAnalysis(task, retainedFailure);
         if (!retained && summaryPending(task, review)) return '';
-        const decision = window.WhiteboxReviewDecision, analyzed = decision.render(task, { t, esc, taskKey: message.key, draftActions: true });
+        const decision = window.WhiteboxReviewDecision, analyzed = decision.render(task, { t, esc, taskKey: message.key, draftActions: true, chip: false, draftText: draftCache(id, task) });
         const failed = !analyzed && task.summaryFailure ? task.summaryFailure : null, passThrough = !analyzed && !failed && task.passThrough;
         const kind = failed ? 'failed' : passThrough ? 'pass-through' : 'summary';
         const heading = { failed: '요약하지 못했어요 · AI 원문', 'pass-through': 'AI 답변 · 짧아서 그대로 보여요', summary: 'Whitebox 요약' }[kind];
         const body = analyzed || (failed || passThrough
           ? `${failed ? `<div class="wb-summary-failure" data-summary-failure><p>${esc(t(FAILURE_REASON[failed.kind] || FAILURE_REASON.transient))}</p>${control('다시 요약', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<p class="wb-summary-reply">${decision.plainReply(task.actual || '', esc)}</p>${passThrough ? decision.renderChoices(task.choices, { t, esc }) : ''}`
           : `<p class="wb-summary-answer-fallback">${esc(task.actual || task.explanation || task.summary || '')}</p>`);
-        return `<article class="wb-summary-answer" data-result-kind="${kind}"><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">✳</span><span>${esc(t(heading))}</span></div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${body}</div><footer class="wb-summary-answer-actions">${control('복사', 'data-summary-copy')}${control('원래 답변 보기', 'data-summary-terminal')}</footer></article>`;
+        const shape = analyzed && decision.SHAPES[task.content?.shape] ? task.content.shape : '';
+        const chooser = shape ? task.analysisGate?.shape === shape ? 'Jev가 모양을 골랐어요' : '요약 모델이 모양을 골랐어요' : '';
+        return `<article class="wb-summary-answer" data-result-kind="${kind}"${shape ? ` data-shape="${esc(shape)}"` : ''}><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">W</span><b>${esc(t(heading))}</b>${shape ? `<span class="wb-content-shape" data-shape="${esc(shape)}">${esc(t(decision.SHAPES[shape]))}</span>` : ''}${chooser ? `<small>${esc(t(chooser))}</small>` : ''}</div>${retained ? `<div class="wb-summary-retained-notice" data-retained-analysis><strong>${esc(t(retainedFailure.title))}</strong><p>${esc(t(retainedFailure.description))}</p>${review.message ? `<details><summary>${esc(t('실패 상세'))}</summary><p>${esc(review.message)}</p></details>` : ''}${control('다시 검토', 'data-summary-retry', retryBusy, 'secondary')}</div>` : ''}<div class="wb-summary-answer-body">${body}</div><footer class="wb-summary-answer-actions">${control('원래 답변 보기', 'data-summary-terminal')}${control('복사', 'data-summary-copy')}</footer></article>`;
       }
       const timestamp = clock(message.sentAt || message.at);
-      return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${userImages(message)}${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${message.state === 'interrupted' && !message.answerKey ? control('다시 보내기', `data-summary-resend="${esc(message.id)}"`, false, 'secondary') : ''}${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' && WAIT[message.wait] ? `<p class="wb-summary-queue-note" data-summary-wait="${esc(message.wait)}">${esc(t(WAIT[message.wait]))}</p>` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft || value.attachments?.length))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
+      // The user's own words sit in a bubble on the right; when and how it was
+      // sent, and whether it answered the AI's question, read under it.
+      const judgement = message.role === 'user' && asksUser(asked);
+      return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-bubble"><p>${esc(message.text)}</p>${userImages(message)}</div><div class="wb-summary-label">${judgement ? `<em data-summary-judgement>${esc(t('판단'))}</em>` : ''}<span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div>${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${message.state === 'interrupted' && !message.answerKey ? control('다시 보내기', `data-summary-resend="${esc(message.id)}"`, false, 'secondary') : ''}${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' && WAIT[message.wait] ? `<p class="wb-summary-queue-note" data-summary-wait="${esc(message.wait)}">${esc(t(WAIT[message.wait]))}</p>` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft || value.attachments?.length))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
     })() })).filter(part => part.html);
     let markup = withMarks(value, parts);
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;

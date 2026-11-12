@@ -70,8 +70,9 @@ exports.run = async evaluate => {
       details: [{ text: '27건을 넷으로 나눠 답했어요.', basis: 'reported', quote: 'x' }], limitations: [], deliverables: [],
       handoff: { kind: 'decide', temporal: null, priority: { text: '약속 두 곳을 그대로 둘지 정해야 해요.', basis: 'inference', quote: 'x' }, prompt: { text: '낮춰서 반영해줘', basis: 'inference', quote: 'x' } } };
     f = make({ tasks: [task('d', 1000, { content, draft: { path: '/Users/me/Desktop/answer.md', outline: ['# API 변경 요청 답변', '## 먼저: 기준 스펙', '## ① 이미 있음'], opening: '# API 변경 요청 답변\\n요청서의 operationId는 Pylon 공통 명세의 이름입니다.' } })], messages: [user('d', 1000)] });
-    check(f.q('.wb-draft [data-shape=draft]') && f.q('.wb-draft-lead').textContent.includes('기준 스펙'), 'the draft card leads with what the draft says');
-    check(f.qa('.wb-draft-outline li').length === 3 && f.q('.wb-draft-opening').textContent.startsWith('요청서의'), 'outline and opening come from the draft itself');
+    check(f.q('.wb-summary-answer-heading .wb-content-shape[data-shape=draft]') && f.q('.wb-draft-lead').textContent.includes('기준 스펙'), 'the draft card leads with what the draft says, its shape named in the header');
+    check(f.q('.wb-summary-answer-heading small').textContent === '요약 모델이 모양을 골랐어요', 'the header says who chose the shape');
+    check(f.q('.wb-draft-head b').textContent === 'API 변경 요청 답변' && f.qa('.wb-draft-outline li').length === 2 && f.q('.wb-draft-opening').textContent.startsWith('요청서의'), 'title, outline and opening come from the draft itself');
     check(f.q('.wb-draft-tools code').textContent === '~/Desktop/answer.md', 'the file path is shown');
     check(f.q('.wb-draft-check').textContent.includes('보내기 전에 정할 것'), 'open decisions are asked before sending');
     f.q('[data-summary-draft-copy=d]').click();
@@ -83,15 +84,29 @@ exports.run = async evaluate => {
     check(past.includes('초안') && past.includes('기준 스펙'), 'the past request names the draft and its message');
     cases.push('draft-file');
 
-    f = make({ tasks: [task('r', 1000, { content, draft: { text: '안녕하세요.\\n다음 주 배포를 안내드립니다.' } })], messages: [user('r', 1000)] });
-    check(f.q('.wb-draft-text').textContent.includes('다음 주 배포') && !f.q('[data-summary-draft-open]'), 'a draft written in the reply carries its own text');
+    const body = '# 안내\\n## 이미 있음\\n| 번호 | 답 |\\n|---|---|\\n| AR-6 | 있음 |\\n| AR-8 | 있음 |\\n## 더할 것\\n- AR-1\\n- AR-2\\n- AR-3';
+    f = make({ tasks: [task('r', 1000, { content, analysisGate: { shape: 'draft' }, draft: { text: body } })], messages: [user('r', 1000)] });
+    check(f.q('.wb-draft-text').textContent.includes('AR-3') && !f.q('[data-summary-draft-open]'), 'a draft written in the reply carries its own text');
+    check(f.qa('.wb-draft-bar i').length === 2 && f.qa('.wb-draft-breakdown li b').map(node => node.textContent).join() === '2건,3건', 'items per section are counted from the draft');
+    check(f.q('.wb-draft-head small').textContent.includes('항목 5개'), 'the draft header shows its length and item count');
+    check(f.q('.wb-summary-answer-heading small').textContent === 'Jev가 모양을 골랐어요', 'a shape Jev fixed says so');
     cases.push('draft-reply');
 
-    f = make({ tasks: [task('c', 1000, { content: { ...content, shape: 'change' } })], messages: [user('c', 1000)] });
+    const claims = [{ text: '목록에서 뺐어요', basis: 'observed', quote: 'x' }, { text: '구분선을 넣었어요', basis: 'reported', quote: 'x' }];
+    f = make({ tasks: [task('c', 1000, { content: { ...content, shape: 'change', details: claims, limitations: [{ text: 'Codex 확인', quote: '' }] } })], messages: [user('c', 1000)] });
     check(f.q('.wb-content-shape[data-shape=change]') && !f.q('.wb-draft'), 'other shapes keep the summary layout with their chip');
+    check(f.qa('.wb-change-rows .wb-row-state').map(node => node.textContent).join() === '기록으로 확인,AI 보고' && f.q('[data-shape-left] h3').textContent === '남은 일', 'a change lists each edit with how it is known, then what is left');
+    f = make({ tasks: [task('v', 1000, { content: { ...content, shape: 'review', details: [{ ...claims[0], severity: 'high' }, claims[1]] } })], messages: [user('v', 1000)] });
+    check(f.qa('.wb-finding-rank').map(node => node.textContent).join() === '높음,2', 'findings carry their severity, or their rank');
     cases.push('shape-chip');
+
+    // The user's words are a bubble; a reply to the AI's question is tagged.
+    f = make({ tasks: [task('q', 1000, { awaitingResponse: true }), task('z', 3000)], messages: [user('q', 1000), user('z', 3000, '1번')] });
+    check(f.q('[data-summary-message=q] .wb-summary-bubble p').textContent === '검사해줘' && !f.q('[data-summary-message=q] [data-summary-judgement]'), 'a request sits in a bubble');
+    check(f.q('[data-summary-message=z] [data-summary-judgement]'), 'the answer to a question is tagged 판단');
+    cases.push('bubbles');
     return cases;
   })()`);
-  assert.deepEqual(result, ['clear-fold', 'compact', 'clear-send', 'draft-file', 'draft-reply', 'shape-chip']);
-  console.log('PASS summary shapes: clear folds earlier summaries, compact divides, /clear delivered without a wait, draft card from file and reply, shape chips');
+  assert.deepEqual(result, ['clear-fold', 'compact', 'clear-send', 'draft-file', 'draft-reply', 'shape-chip', 'bubbles']);
+  console.log('PASS summary shapes: clear folds earlier summaries, compact divides, /clear delivered without a wait, draft card with title, items per section and file, change rows, ranked findings, chooser, bubbles and 판단 tags');
 };
