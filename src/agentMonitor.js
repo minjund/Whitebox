@@ -30,6 +30,12 @@ const {
 const MAX_MESSAGES = 180;
 const MAX_LIFECYCLE = 220;
 const ACTIVE_THRESHOLD_MS = 18_000;
+// A live transcript changes many times per second and each change re-reads
+// up to CARD_JSONL_BYTES of it. Re-parse one changed file at most this often;
+// in between its last parse stands (cards lag at most this long). Only a
+// parse that itself took EXPENSIVE_PARSE_MS or more is held back.
+const CHANGED_REPARSE_MIN_MS = 3_000;
+const EXPENSIVE_PARSE_MS = 25;
 const STALE_TURN_THRESHOLD_MS = 5 * 60_000;
 const LIST_CACHE_MS = 60_000;
 const PINNED_FILE_CACHE_MS = 60_000;
@@ -603,6 +609,7 @@ class AgentMonitor extends EventEmitter {
     this.home = options.home || os.homedir();
     this.runsDir = options.runsDir;
     this.intervalMs = options.intervalMs || 1200;
+    this.changedReparseMinMs = options.changedReparseMinMs ?? CHANGED_REPARSE_MIN_MS;
     this.cardJsonlBytes = Math.max(256 * 1024, Math.min(
       12 * 1024 * 1024,
       Number(options.cardJsonlBytes) || CARD_JSONL_BYTES,
@@ -839,10 +846,17 @@ class AgentMonitor extends EventEmitter {
       this.parseCache.set(key, cachedEntry);
       return cached;
     }
+    // Still growing and parsed moments ago: keep that generation for now. A
+    // shrunk or replaced file is never served from the old parse.
+    if (!cached && cachedEntry?.value && cachedEntry.parseMs >= EXPENSIVE_PARSE_MS && info.size >= cachedEntry.size && info.mtimeMs >= cachedEntry.mtimeMs
+      && Date.now() - parsedAt < this.changedReparseMinMs) {
+      return cachedEntry.value;
+    }
     this.parseCache.delete(key);
+    const parseStarted = Date.now();
     const value = parser(info);
     if (value) this.parseCache.set(key, {
-      value, parsedAt: Date.now(), mtimeMs: info.mtimeMs, size: info.size,
+      value, parsedAt: Date.now(), parseMs: Date.now() - parseStarted, mtimeMs: info.mtimeMs, size: info.size,
       fullHistory: variant === 'full-history',
     });
     // Full transcripts have a separate small budget; keep the current card

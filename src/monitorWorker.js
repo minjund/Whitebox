@@ -62,7 +62,7 @@ function scheduleScan(delayMs = 80) {
 // changed tails. File events coalesce to one scan at most every
 // WATCH_SCAN_MIN_INTERVAL_MS after the previous scan ended (interval scans
 // included); explicit refresh requests keep scheduleScan(0).
-const WATCH_SCAN_MIN_INTERVAL_MS = 500;
+const WATCH_SCAN_MIN_INTERVAL_MS = 1_500;
 function scheduleWatchScan() {
   const sinceLastScan = Date.now() - Number(monitor.lastScanEndedAt || 0);
   scheduleScan(Math.max(80, WATCH_SCAN_MIN_INTERVAL_MS - Math.max(0, sinceLastScan)));
@@ -410,15 +410,10 @@ function forkPublicationFingerprintState(forkBindingGuardSessionIds = [], bridge
   return [guardedSessionIds, provisionalForkBridges];
 }
 
-function fingerprint(
-  snapshot,
-  tmux,
-  automations,
-  sourcePlugins = [],
-  forkBindingGuardSessionIds = [],
-  bridges = [],
-) {
-  const sessions = snapshot.sessions.map(session => [
+// What a published card shows of one session. A card whose row and source
+// arrays are unchanged within the same minute is reused instead of rebuilt.
+function sessionFingerprintRow(session) {
+  return [
     session.id,
     session.updatedAt,
     session.status,
@@ -450,7 +445,19 @@ function fingerprint(
     session.provenance && `${session.provenance.source?.id || ''}:${session.provenance.provider?.id || ''}:${session.provenance.environment?.kind || ''}:${session.provenance.runtime?.kind || ''}`,
     (session.resources?.browserTabs || []).map(tab => `${tab.id || ''}:${tab.title || ''}:${tab.url || ''}:${tab.status || ''}`).join(','),
     (session.runtimePresence || []).map(item => `${item.id}:${item.pid}:${item.terminalId || ''}`).join(','),
-  ]);
+  ];
+}
+
+function fingerprint(
+  snapshot,
+  tmux,
+  automations,
+  sourcePlugins = [],
+  forkBindingGuardSessionIds = [],
+  bridges = [],
+  rows = null,
+) {
+  const sessions = rows || snapshot.sessions.map(sessionFingerprintRow);
   const tmuxState = (tmux.distros || []).flatMap(distro => (distro.sessions || []).flatMap(tmuxSession => (tmuxSession.windows || []).flatMap(window => (window.panes || []).map(pane => [
     distro.name,
     tmuxSession.id,
@@ -486,6 +493,29 @@ function snapshotNeedsPublication(previousFingerprint, nextFingerprint, bridgeBi
   return nextFingerprint !== previousFingerprint || (bridgeBindings || []).length > 0;
 }
 
+const arrayIds = new WeakMap();
+let nextArrayId = 1;
+const arrayId = value => {
+  if (!Array.isArray(value)) return 0;
+  if (!arrayIds.has(value)) arrayIds.set(value, nextArrayId++);
+  return arrayIds.get(value);
+};
+let cardCache = new Map();
+function publishedCards(sessions, rows) {
+  const minute = Math.floor(Date.now() / 60_000);
+  const next = new Map();
+  const cards = sessions.map((session, index) => {
+    const key = JSON.stringify([minute, rows[index], session.title, session.conversationTitle, session.statusDetail,
+      arrayId(session.messages), arrayId(session.lifecycle), arrayId(session.executions)]);
+    const cached = cardCache.get(session.id);
+    const card = cached && cached.key === key ? cached.card : cardSession(session);
+    next.set(session.id, { key, card });
+    return card;
+  });
+  cardCache = next;
+  return cards;
+}
+
 async function publishSnapshot(snapshot, sourceSnapshot) {
   if (stopping) return;
   const combinedSessions = [...snapshot.sessions, ...sourceSnapshot.sessions];
@@ -510,6 +540,7 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
   };
   const bridgeBindings = inferredBridgeBindings(observedSessions);
   const forkBindingGuardSessionIds = forkBridgeBindingGuardSessionIds(observedSessions, currentBridges);
+  const rows = sessions.map(sessionFingerprintRow);
   const nextFingerprint = fingerprint(
     runtimeSnapshot,
     tmux,
@@ -517,6 +548,7 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
     sourceSnapshot.statuses,
     forkBindingGuardSessionIds,
     currentBridges,
+    rows,
   );
   // A transient host/persistence failure must not leave a proven fork child
   // permanently hidden after one delivery. Retry exact 1:1 proof bindings;
@@ -538,7 +570,7 @@ async function publishSnapshot(snapshot, sourceSnapshot) {
     snapshot: {
       sequence: publishedSequence,
       generatedAt: snapshot.generatedAt,
-      sessions: sessions.map(cardSession),
+      sessions: publishedCards(sessions, rows),
       automations,
       summary: runtimeSnapshot.summary,
       sourcePlugins: sourceSnapshot.statuses,

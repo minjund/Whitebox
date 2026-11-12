@@ -7,6 +7,7 @@ const { processSessionExternalId } = require('./processMonitor');
 
 const FIELD_SEPARATOR = '|~|';
 const DEFAULT_SCAN_TTL_MS = 5_000;
+const QUIET_SCAN_TTL_MS = 30_000;
 const DEFAULT_DISCOVERY_TTL_MS = 60_000;
 
 function decodeCommandOutput(value) {
@@ -552,7 +553,11 @@ class TmuxMonitor {
   }
 
   scan(force = false) {
-    if (!force && Date.now() - this.lastScanAt < this.scanTtlMs) return this.lastSnapshot;
+    // Each probe runs a login shell. Without any tmux session there is nothing
+    // to link, so look again less often; a running session keeps the 5s pace.
+    const quiet = this.lastSnapshot && !(this.lastSnapshot.distros || []).some(distro => distro.sessions?.length);
+    const ttl = quiet && this.scanTtlMs >= DEFAULT_SCAN_TTL_MS ? QUIET_SCAN_TTL_MS : this.scanTtlMs;
+    if (!force && Date.now() - this.lastScanAt < ttl) return this.lastSnapshot;
     this.lastScanAt = Date.now();
     const distros = this.discoverDistros(force);
     const results = [];

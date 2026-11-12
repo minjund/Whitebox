@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.33 - 2026-11-12
+
+- Whitebox uses much less CPU with many AI terminals open. The background session monitor no longer re-analyzes every past conversation each scan, reuses unchanged cards, re-reads a large live transcript at most every 3 seconds, and waits at least 1.5 seconds between file-triggered scans; with six live AI sessions its CPU dropped from about 52% to 22% of a core. The tmux probe runs every 30 seconds instead of 5 when no tmux session exists, and the terminal review reuses the screen text read a moment earlier instead of reading every terminal again. Background cards may update up to 3 seconds later; terminal status and Summary mode are unaffected.
+
 ## 2.0.32 - 2026-11-12
 
 - Summary mode reads like a chat: your request sits in a bubble on the right with its time and state below (a reply to the AI's question is tagged “Decision”), and each summary flows on the left under a “W · Whitebox summary” header that names its shape and whether Jev or the summary model chose it. Copy and “View original reply” are quiet text buttons, and the working state shows as a summary in progress.
