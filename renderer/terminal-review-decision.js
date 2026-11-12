@@ -85,17 +85,20 @@
     && (block.recommendation == null || typeof block.recommendation.label === 'string' && typeof block.recommendation.text === 'string')).slice(0, 3);
   // Every option of a question a reply ends with, verbatim from the reply.
   function renderChoices(value, { t, esc }) {
-    return validChoices(value).map(block => `<div class="wb-task-section wb-content-choices"><h3>${esc(t('답해야 할 질문'))}</h3><p>${esc(block.question)}</p><ol>${block.options.map(option => `<li data-recommended="${block.recommendation?.label === option.label}"><b>${esc(option.label)}</b> ${esc(option.text)}${block.recommendation?.label === option.label ? ` <small>${esc(t('답변의 권장'))}</small>` : ''}</li>`).join('')}</ol>${block.recommendation ? `<p class="wb-content-time">${esc(block.recommendation.text)}</p>` : ''}</div>`).join('');
+    return validChoices(value).map(block => `<div class="wb-task-section wb-content-choices"><h3>${esc(t('답해야 할 질문'))}</h3><p class="wb-choice-question">${esc(block.question)}</p><ol>${block.options.map(option => `<li data-recommended="${block.recommendation?.label === option.label}"><b>${esc(option.label)}</b><span>${esc(option.text)}</span>${block.recommendation?.label === option.label ? `<small>${esc(t('답변의 권장'))}</small>` : ''}</li>`).join('')}</ol>${block.recommendation ? `<p class="wb-content-time">${esc(block.recommendation.text)}</p>` : ''}</div>`).join('');
   }
   // The summary's shape follows what the user wanted from the turn.
   const SHAPES = { draft: '초안', change: '코드 변경', answer: '설명 · 답', review: '조사 · 리뷰', decision: '판단 요청' };
   const shapeChip = (shape, { t, esc }) => SHAPES[shape] ? `<p class="wb-content-shape" data-shape="${esc(shape)}">${esc(t(SHAPES[shape]))}</p>` : '';
   const HEADINGS = {
-    change: { details: '바꾼 것', limitations: '확인하지 못한 것' },
+    change: { details: '바꾼 것', limitations: '남은 일' },
     review: { details: '찾은 것 · 심각한 순', limitations: '살펴보지 못한 범위' },
     answer: { details: '근거와 설명', limitations: '확인한 범위와 남은 점' },
     decision: { handoff: '정할 것' },
   };
+  // How each change is known: the tool record shows it, or the AI only said so.
+  const CHANGE_STATE = { observed: ['✓', '기록으로 확인'], reported: ['·', 'AI 보고'], inference: ['?', '추론'], unknown: ['!', '확인 안 됨'] };
+  const SEVERITY = { high: '높음', medium: '중간', low: '낮음' };
   // The headings of a draft, in order, as its outline.
   const outlineOf = text => (String(text || '').match(/^#{1,4}[ \t]+[^\n]+/gmu) || []).slice(0, 20);
   const headingText = line => String(line).replace(/^#{1,6}[ \t]+/u, '').replace(/\*\*|`/gu, '').trim().slice(0, 60);
@@ -105,27 +108,74 @@
       .map(line => line.replace(/\*\*|__|`/gu, '').trim()).join(' ');
     return body.length > 260 ? `${body.slice(0, 260)}…` : body;
   }
-  function renderDraft(task, { t, esc, actions = false }) {
+  // Items per "##" section of a full draft (table rows and list items), for
+  // its breakdown bar. Counted from the text itself; nothing is inferred.
+  function draftSections(text) {
+    const sections = [];
+    let current = null;
+    for (const line of String(text || '').split('\n')) {
+      const heading = line.match(/^##[ \t]+(.+)$/u);
+      if (heading) { current = { title: headingText(heading[1]), count: 0, header: false }; sections.push(current); continue; }
+      if (!current) continue;
+      if (/^\s*\|.*\|\s*$/u.test(line)) {
+        if (/^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(line)) continue;
+        if (!current.header) { current.header = true; continue; }
+        current.count++;
+      } else {
+        current.header = false;
+        if (/^\s*(?:[-*]|\d+[.)])\s+\S/u.test(line)) current.count++;
+      }
+    }
+    return sections.filter(item => item.count > 0).map(({ title, count }) => ({ title, count }));
+  }
+  const clockText = value => {
+    const time = new Date(value || NaN);
+    return Number.isNaN(time.getTime()) ? '' : time.toLocaleTimeString(typeof window !== 'undefined' ? window.WhiteboxI18n?.getLocaleTag?.() : undefined, { hour: '2-digit', minute: '2-digit' });
+  };
+  function renderDraft(task, { t, esc, actions = false, chip = true, fullText }) {
     const content = task.content, draft = task.draft || {}, file = typeof draft.path === 'string' ? draft.path : '';
-    const source = typeof draft.text === 'string' ? draft.text : typeof draft.opening === 'string' ? draft.opening : '';
+    const full = typeof draft.text === 'string' ? draft.text : typeof fullText === 'string' ? fullText : '';
+    const source = full || (typeof draft.opening === 'string' ? draft.opening : '');
     const outline = (Array.isArray(draft.outline) && draft.outline.length ? draft.outline : outlineOf(source)).map(headingText).filter(Boolean);
+    const title = outline[0] && /^#\s/u.test(draft.outline?.[0] || outlineOf(source)[0] || '') ? outline[0] : '';
+    const flow = title ? outline.slice(1) : outline;
+    const sections = full ? draftSections(full) : [];
+    const total = sections.reduce((sum, item) => sum + item.count, 0);
+    const meta = [full ? t('본문 {count}자').replace('{count}', full.length.toLocaleString()) : '', total && sections.length > 1 ? t('항목 {count}개').replace('{count}', total) : ''].filter(Boolean).join(' · ');
     const handoff = content.handoff && content.handoff.kind !== 'finish' ? content.handoff : null;
     const key = esc(task.taskId || '');
+    const saved = clockText(task.observedAt);
     return `<section class="wb-decision wb-answer-content wb-draft" data-shape="draft" aria-label="${esc(t('초안 요약'))}">
-      ${shapeChip('draft', { t, esc })}
-      <div class="wb-draft-card">
+      ${chip ? shapeChip('draft', { t, esc }) : ''}
+      <div class="wb-shape-tray"><div class="wb-shape-card wb-draft-card">
+        ${title || meta ? `<div class="wb-draft-head">${title ? `<b>${esc(title)}</b>` : ''}${meta ? `<small>${esc(meta)}</small>` : ''}</div>` : ''}
         <p class="wb-draft-lead">${prose(content.answer.text, esc)}</p>
         ${content.details.length ? `<ul class="wb-draft-points">${content.details.map(item => `<li>${prose(item.text, esc)}</li>`).join('')}</ul>` : ''}
-        ${outline.length > 1 ? `<ol class="wb-draft-outline" aria-label="${esc(t('초안 구성'))}">${outline.map(line => `<li>${esc(line)}</li>`).join('')}</ol>` : ''}
+        ${sections.length > 1 ? `<div class="wb-draft-breakdown" aria-label="${esc(t('초안 구성별 항목 수'))}"><div class="wb-draft-bar">${sections.map((item, index) => `<i data-tone="${index % 5}" style="flex:${item.count}"></i>`).join('')}</div><ul>${sections.slice(0, 6).map((item, index) => `<li><b>${esc(t('{count}건').replace('{count}', item.count))}</b><span data-tone="${index % 5}"></span>${esc(item.title.split(/\s*[:：]\s*/u)[0])}</li>`).join('')}</ul></div>` : ''}
+        ${flow.length > 1 && sections.length < 2 ? `<ol class="wb-draft-outline" aria-label="${esc(t('초안 구성'))}">${flow.map(line => `<li>${esc(line)}</li>`).join('')}</ol>` : ''}
       </div>
       ${opening(source) ? `<blockquote class="wb-draft-opening">${esc(opening(source))}</blockquote>` : ''}
-      <details class="wb-draft-full" data-summary-draft="${key}" data-draft-source="${file ? 'file' : 'reply'}"><summary>${esc(t('초안 전체 보기'))}</summary><pre class="wb-draft-text">${file ? '' : esc(source)}</pre></details>
+      <details class="wb-draft-full" data-summary-draft="${key}" data-draft-source="${file ? 'file' : 'reply'}"><summary>${esc(t('초안 전체 보기'))}</summary><pre class="wb-draft-text">${esc(full)}</pre></details>
       ${actions || file ? `<div class="wb-draft-tools">${file ? `<code title="${esc(file)}">${esc(file.replace(/^\/Users\/[^/]+/u, '~'))}</code>` : ''}${actions ? `<span>${file ? `<button type="button" data-summary-draft-open="${key}">${esc(t('파일 열기'))}</button>` : ''}<button type="button" data-summary-draft-copy="${key}">${esc(t('초안 복사'))}</button></span>` : ''}</div>` : ''}
-      ${handoff ? `<div class="wb-task-section wb-draft-check"><h3>${esc(t('보내기 전에 정할 것'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : ''}
+      </div>
+      ${handoff ? `<div class="wb-task-section wb-draft-check"><h3>⚠ ${esc(t('보내기 전에 정할 것'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : ''}
       ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t('초안에 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
+      ${file && saved ? `<p class="wb-draft-saved">✓ ${esc(t('{time} 저장 · 본문은 저장한 파일에서 읽어요').replace('{time}', saved))}</p>` : ''}
     </section>`;
   }
-  function renderContent(content, { t, esc }, recordedAt) {
+  // Shape-specific layouts of the details: change rows, ranked findings.
+  function shapeDetails(content, { t, esc }, claim) {
+    if (content.shape === 'change') return `<div class="wb-shape-tray"><ul class="wb-shape-card wb-change-rows">${content.details.map(item => {
+      const [icon, label] = CHANGE_STATE[item.basis] || CHANGE_STATE.unknown;
+      return `<li><span class="wb-row-icon" data-basis="${esc(item.basis)}" aria-hidden="true">${icon}</span><p>${prose(item.text, esc)}</p><span class="wb-row-state" data-basis="${esc(item.basis)}">${esc(t(label))}</span></li>`;
+    }).join('')}</ul></div>`;
+    if (content.shape === 'review') return `<div class="wb-shape-tray"><ol class="wb-shape-card wb-findings">${content.details.map((item, index) => {
+      const severity = SEVERITY[item.severity];
+      return `<li><span class="wb-finding-rank" data-severity="${esc(item.severity || 'none')}">${esc(severity ? t(severity) : String(index + 1))}</span><p>${prose(item.text, esc)}</p></li>`;
+    }).join('')}</ol></div>`;
+    return content.details.map(claim).join('');
+  }
+  function renderContent(content, { t, esc, chip = true }, recordedAt) {
     const heading = HEADINGS[content.shape] || {};
     const bases = new Set([content.answer, ...content.details, ...content.deliverables, ...(content.background || []), ...(content.nextAction ? [content.nextAction] : [])].map(item => item.basis));
     const mixed = bases.has('observed') && bases.has('reported');
@@ -144,10 +194,10 @@
     const time = new Date(recordedAt || NaN);
     const recordDate = !Number.isNaN(time.getTime()) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(time) + ' KST' : '';
     const timeNote = recordDate || handoff?.temporal ? `<div class="wb-content-time">${recordDate ? `<p>${esc(t('기록 시점'))} · ${esc(recordDate)}</p>` : ''}${handoff?.temporal ? `<p>${prose(handoff.temporal.text, esc)}</p>` : ''}</div>` : '';
-    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : heading.handoff || '먼저 할 판단'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
+    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"${content.shape === 'decision' ? ' data-shape-decision' : ''}><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : heading.handoff || '먼저 할 판단'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
     // Every option of a question the reply ends with, verbatim from the reply.
     const choices = renderChoices(content.choices, { t, esc });
-    const details = content.details.map(claim).join('');
+    const details = shapeDetails(content, { t, esc }, claim);
     const nextAction = content.nextAction ? claim(content.nextAction) : '';
     const outputs = content.deliverables.map(item => {
       const output = item.kind === 'url' && /^https?:\/\//iu.test(item.value)
@@ -157,23 +207,27 @@
       return `<div class="wb-task-section wb-content-output"><h3>${esc(item.label)}</h3>${item.kind === 'command' ? `<p class="wb-content-time">${esc(t('기록 당시 명령 · 현재 적용 여부는 별도 확인'))}</p>${item.usageNote ? `<p>${esc(item.usageNote.text)}</p>` : ''}` : ''}${output}${badge(item)}</div>`;
     }).join('');
     const background = (content.background || []).map(claim).join('');
-    return `<section class="wb-decision wb-answer-content" aria-label="${esc(t('답과 핵심 설명'))}">
-      ${shapeChip(content.shape, { t, esc })}
+    const structured = ['change', 'review'].includes(content.shape);
+    const limits = content.limitations.length ? `<div class="wb-task-section wb-decision-caution"${content.shape === 'change' ? ' data-shape-left' : ''}><h3>${esc(t(heading.limitations || '확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : '';
+    const detailHtml = content.details.length ? `<div class="wb-task-section"${content.shape === 'review' ? ' data-findings' : ''}><h3>${esc(t(heading.details || (content.nextAction ? '판단 근거' : '핵심과 작동 방식')))}</h3>${details}</div>` : '';
+    return `<section class="wb-decision wb-answer-content" data-shape="${esc(content.shape || 'general')}" aria-label="${esc(t('답과 핵심 설명'))}">
+      ${chip ? shapeChip(content.shape, { t, esc }) : ''}
       ${source ? `<p class="wb-content-source">${esc(t(source))}</p>` : ''}
       <div class="wb-task-section wb-decision-conclusion"><h3>${esc(t('실제 답'))}</h3>${answer}</div>
+      ${content.shape === 'answer' && source ? `<p class="wb-content-basis-row"><span>${esc(t(source))}</span></p>` : ''}
+      ${structured ? detailHtml + limits : ''}
       ${timeNote}
       ${choices}
       ${handoffHtml}
-      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t(heading.limitations || '확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
-      ${content.details.length ? `<div class="wb-task-section"${content.shape === 'review' ? ' data-findings' : ''}><h3>${esc(t(heading.details || (content.nextAction ? '판단 근거' : '핵심과 작동 방식')))}</h3>${details}</div>` : ''}
+      ${structured ? '' : limits + detailHtml}
       ${nextAction ? `<div class="wb-task-section wb-decision-action"><h3>${esc(t('필요한 다음 행동'))}</h3>${nextAction}</div>` : ''}
       ${outputs}
       ${background ? `<details class="wb-task-details"><summary>${esc(t('상세 설명'))}</summary>${background}</details>` : ''}
     </section>`;
   }
-  function render(task, { t, esc, taskKey, draftActions = false }) {
-    if (validContent(task.content) && task.content.shape === 'draft') return renderDraft(task, { t, esc, actions: draftActions });
-    if (validContent(task.content)) return `${task.contentGeneratedAt ? `<p class="wb-record-label">${esc(t('기존 기록 재설명'))} · ${esc(Number.isSafeInteger(task.contentUsage?.total) ? task.contentUsage.total.toLocaleString() + ' ' + t('토큰') : t('토큰 미제공'))}</p>` : ''}${renderContent(task.content, { t, esc }, task.recordedAt || task.observedAt)}`;
+  function render(task, { t, esc, taskKey, draftActions = false, chip = true, draftText }) {
+    if (validContent(task.content) && task.content.shape === 'draft') return renderDraft(task, { t, esc, actions: draftActions, chip, fullText: draftText });
+    if (validContent(task.content)) return `${task.contentGeneratedAt ? `<p class="wb-record-label">${esc(t('기존 기록 재설명'))} · ${esc(Number.isSafeInteger(task.contentUsage?.total) ? task.contentUsage.total.toLocaleString() + ' ' + t('토큰') : t('토큰 미제공'))}</p>` : ''}${renderContent(task.content, { t, esc, chip }, task.recordedAt || task.observedAt)}`;
     const decision = task.decision;
     if (!decision) return '';
     const section = (label, value, className = '') => `<div class="wb-task-section ${className}"><h3>${esc(t(label))}</h3><p>${esc(value)}</p></div>`;

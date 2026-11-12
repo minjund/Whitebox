@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.32 - 2026-11-12
+
+- Summary mode reads like a chat: your request sits in a bubble on the right with its time and state below (a reply to the AI's question is tagged “Decision”), and each summary flows on the left under a “W · Whitebox summary” header that names its shape and whether Jev or the summary model chose it. Copy and “View original reply” are quiet text buttons, and the working state shows as a summary in progress.
+- Each shape has its own layout. A code change lists every edit with how it is known (seen in the record, reported by the AI, inferred) and a “Still to do” box; a review ranks findings by severity; a decision shows its options as cards with the recommended one highlighted.
+- A draft card shows the draft's title, length and item count, and a bar with the number of items in each section, counted from the draft itself; a saved draft says when it was saved.
+
 ## 2.0.31 - 2026-11-12
 
 - Summaries take the shape of what you asked for: a draft, a code change, an answer, a review or a decision. A draft shows what the draft itself says, its outline and opening, with “Show the full draft”, copy and open-file buttons, and asks what to settle before sending; a review lists findings most severe first. With Jev connected, Jev picks the shape when one is clearly right, and a draft is summarized even when Jev would pass the reply through.
