@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.34 - 2026-11-12
+
+- A Summary request sent while the AI works now goes out on its own once the reply is finished. Claude's input box was misread as holding a draft whenever its status line had no brackets (for example “Opus 5.5 │ project”), so queued requests waited until “Send anyway”; anything below the input box's closing rule is now ignored. A finished Codex reply also ends its request right away instead of after 15 minutes: Codex closes its session log between turns, and Whitebox now keeps reading the log it saw that process write.
+- Summary mode no longer shows the “Request sent · AI reply · Understanding · Review” step strip above the conversation.
+
 ## 2.0.33 - 2026-11-12
 
 - Whitebox uses much less CPU with many AI terminals open. The background session monitor no longer re-analyzes every past conversation each scan, reuses unchanged cards, re-reads a large live transcript at most every 3 seconds, and waits at least 1.5 seconds between file-triggered scans; with six live AI sessions its CPU dropped from about 52% to 22% of a core. The tmux probe runs every 30 seconds instead of 5 when no tmux session exists, and the terminal review reuses the screen text read a moment earlier instead of reading every terminal again. Background cards may update up to 3 seconds later; terminal status and Summary mode are unaffected.

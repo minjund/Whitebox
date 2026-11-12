@@ -90,7 +90,8 @@
 .wb-usage-note { margin:auto 4px 0; color:var(--wb-muted); font-size:10px; line-height:1.5; }
 .wb-summary-body { display:grid; grid-template-columns:minmax(0,1fr) 298px; min-width:0; min-height:0; flex:1; border-top:1px solid var(--wb-line); }
 .wb-summary-conversation { display:flex; flex-direction:column; min-height:0; min-width:0; }
-.wb-summary-flow { display:flex; flex:none; align-items:center; gap:9px; list-style:none; margin:0; padding:16px 40px; border-bottom:1px solid var(--wb-line); font-size:11px; color:var(--wb-muted); }
+/* The step strip is not shown; it still records each step's state. */
+.wb-summary-flow { display:none; flex:none; align-items:center; gap:9px; list-style:none; margin:0; padding:16px 40px; border-bottom:1px solid var(--wb-line); font-size:11px; color:var(--wb-muted); }
 .wb-summary-flow li { display:flex; align-items:center; gap:6px; min-width:0; }
 .wb-summary-flow li + li:before { content:''; width:12px; height:1px; margin-right:3px; background:var(--wb-line); }
 .wb-summary-flow b { display:inline-grid; place-items:center; flex:none; width:16px; height:16px; background:var(--wb-soft); border-radius:50%; font-size:10px; font-weight:500; }

@@ -241,11 +241,12 @@ function inputReady(screen, provider) {
     const end = lines.findIndex((line, row) => row > index && (boxed ? /^\s*╰/u.test(line) : !line.trim()));
     return !lines.slice(index + 1, end < 0 ? undefined : end).some(line => boxed ? /^\s*│\s*[^\s│]/u.test(line) : /^ {2}\S/u.test(line));
   }
-  // Claude puts its custom multi-line status bar below the input's closing
-  // rule. Only text inside that bounded input area can be a wrapped draft.
+  // Claude draws its input box between two rules and puts the status line
+  // (whatever its format: "[Opus 5.5] │ dir", "Opus 5.5 │ dir", a custom
+  // script) and the mode footer below the closing rule. Only text inside the
+  // bounded input area can be a wrapped draft.
   const closingRule = lines.findIndex((line, row) => row > index && /^\s*[─━]{8,}\s*$/u.test(line));
-  if (provider === 'claude' && closingRule > index
-    && lines.slice(closingRule + 1).some(line => /^\s*\[(?:Fable|Opus|Sonnet|Haiku)/u.test(line))) {
+  if (provider === 'claude' && closingRule > index) {
     return lines.slice(index + 1, closingRule).every(line => !line.trim());
   }
   // Wrapped input is also a draft. Status/footer rows have known delimiters.

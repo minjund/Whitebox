@@ -90,6 +90,55 @@ const tests = [
     },
   },
   {
+    name: 'An idle Codex that closed its rollout keeps the log it was seen owning',
+    async run() {
+      const { TerminalReviewCompletion } = require('../../src/terminalReviewCompletion');
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-codex-owned-'));
+      try {
+        const file = path.join(home, 'sessions', '2026', '11', '12', 'rollout-2026-11-12T21-19-00-test.jsonl');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const at = second => `2026-11-12T12:19:${String(second).padStart(2, '0')}.000Z`;
+        fs.writeFileSync(file, [
+          { timestamp: at(42), type: 'event_msg', payload: { type: 'task_started', turn_id: 't1' } },
+          { timestamp: at(42), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '이미지 평가해줘\n\n첨부 이미지: /tmp/a.png' }] } },
+          { timestamp: at(55), type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1', last_agent_message: '평가 결과' } },
+        ].map(row => JSON.stringify(row)).join('\n') + '\n');
+        let open = [file];
+        const lsof = { calls: 0 };
+        const completion = new TerminalReviewCompletion({ claudeHomes: () => [], codexHome: home, platform: 'darwin',
+          execute: async () => { lsof.calls += 1; return { stdout: `p300\n${open.map(item => `n${item}`).join('\n')}\n` }; } });
+        const child = { pid: 300, provider: 'codex', startedAt: '2026-11-12T12:00:00Z' };
+        assert.equal((await completion.observe(child)).state, 'completed');
+        // The turn ended and Codex closed the file: the same process keeps its log.
+        open = [];
+        for (const owned of completion.paths.values()) owned.checkedAt = 0;
+        const idle = await completion.observe(child);
+        assert.equal(lsof.calls, 2, 'ownership was rechecked');
+        assert.equal(idle.available, true); assert.equal(idle.state, 'completed');
+        // A process never seen owning a log stays unavailable; two open logs are ambiguous.
+        assert.equal((await completion.observe({ ...child, pid: 301 })).available, false);
+        open = [file, file.replace('test', 'other')];
+        for (const owned of completion.paths.values()) owned.checkedAt = 0;
+        assert.equal((await completion.observe(child)).available, false);
+      } finally { fs.rmSync(home, { recursive: true, force: true }); }
+    },
+  },
+  {
+    name: 'Claude status lines in any format below the input box do not count as a draft',
+    run() {
+      // Captured from Claude Code v2.1.322: a bracketless status line and the mode footer.
+      const footer = '  ⏵⏵ auto mode on (shift+tab to cycle)';
+      for (const status of ['  Opus 5.5 │ Whitebox', '  ~/project · main · $0.42', STATUS]) {
+        const screen = `❯ first\n⏺ answer\n✻ Churned for 10s · done 3:06 PM\n\n${RULE}\n❯ \n${RULE}\n${status}\n${footer}`;
+        assert.equal(inputReady(screen, 'claude'), true, `${status.trim()} is a status line`);
+        assert.equal(inputReady(screen.replace('❯ \n', '❯ 쓰던 글\n'), 'claude'), false, 'a draft is not ready');
+        assert.equal(inputReady(screen.replace('❯ \n', '❯ 첫 줄\n  둘째 줄\n'), 'claude'), false, 'a wrapped draft is not ready');
+      }
+      // A fresh session shows a placeholder suggestion in the empty box.
+      assert.equal(inputReady(`${RULE}\n❯ Try "write a test for app.js"\n${RULE}\n  Opus 5.5 │ Whitebox\n${footer}`, 'claude'), true);
+    },
+  },
+  {
     name: 'Summary chat does not send while Claude shows a live status line',
     async run() {
       const f = fixture();
