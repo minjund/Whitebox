@@ -267,8 +267,13 @@ class TerminalReviewCompletion {
           const root = path.resolve(this.codexHome) + path.sep;
           const files = [...new Set(stdout.split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1))
             .filter(file => file.startsWith(root) && /[\\/]sessions[\\/].*[\\/]rollout-.*\.jsonl$/u.test(file)))];
-          if (files.length !== 1) return { available: false };
-          owned = { file: files[0], checkedAt: Date.now() }; this.paths.set(key, owned);
+          // Codex closes its rollout between writes, so an idle process often
+          // holds none open. A log this exact process (pid + start time) was
+          // seen owning stays its log until it is seen holding a different one.
+          if (files.length === 0 && owned) owned.checkedAt = Date.now();
+          else if (files.length !== 1) return { available: false };
+          else owned = { file: files[0], checkedAt: Date.now() };
+          this.paths.set(key, owned);
           if (this.paths.size > 64) this.paths.delete(this.paths.keys().next().value);
         }
         const state = await this.logState(owned.file, 'codex');
