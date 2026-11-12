@@ -10,7 +10,7 @@ function proposedChange(name, input) {
   if (!/^(?:Write|Edit)$/u.test(name)) return null;
   try { if (typeof input === 'string') input = JSON.parse(input); } catch { return null; }
   const file = input?.file_path;
-  if (typeof file !== 'string' || file.length > 800 || !/\.(?:md|mdx|java|js|ts|tsx|jsx|py|go|rs)$/iu.test(file)
+  if (typeof file !== 'string' || file.length > 800 || !/\.(?:md|mdx|txt|java|js|ts|tsx|jsx|py|go|rs)$/iu.test(file)
     || /(?:^|[/\\])(?:\.ssh|\.aws|\.env|secrets?|credentials?)(?:[/\\.]|$)/iu.test(file)) return null;
   let after = name === 'Write' ? input.content : input.new_string;
   let before = name === 'Edit' ? input.old_string : '';
@@ -42,11 +42,14 @@ function proposedChange(name, input) {
     };
     before = changedLines(before); after = changedLines(after);
   }
+  // A written document is a possible draft: keep its opening (about 1,500
+  // tokens at most) so its summary reads the draft, not only its headings.
+  const room = name === 'Write' && /\.(?:md|mdx|txt)$/iu.test(file) ? 2400 : 1000;
   return { path: file, kind: name === 'Edit' ? 'edit' : 'write',
-    before: bounded(before, 500), after: bounded(after, 1000),
+    before: bounded(before, 500), after: bounded(after, room),
     outline: (after.match(/^#{1,4}[ \t]+[^\n]+/gmu) || []).slice(0, 20).map(line => line.slice(0, 160)),
     ...(example ? { example } : {}), ...(sections.length ? { sections } : {}),
-    partial: before.length > 500 || after.length > 1000 };
+    partial: before.length > 500 || after.length > room };
 }
 
 function acknowledgeChange(proposal, output, error) {

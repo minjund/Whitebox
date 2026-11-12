@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.31 - 2026-11-12
+
+- Summaries take the shape of what you asked for: a draft, a code change, an answer, a review or a decision. A draft shows what the draft itself says, its outline and opening, with “Show the full draft”, copy and open-file buttons, and asks what to settle before sending; a review lists findings most severe first. With Jev connected, Jev picks the shape when one is clearly right, and a draft is summarized even when Jev would pass the reply through.
+- `/clear` (and `/new`, `/reset`, `/resume`) clears Summary mode, whether typed in Summary or in the terminal: earlier summaries fold away behind a divider, Past requests keep every request with a “Conversation cleared here” line, and choosing an older one opens it again. `/compact` adds a divider and keeps every summary.
+- A skill sent from Summary with words after it (`/grill-with-docs …`) completes normally instead of failing with “couldn't find this request's completion record” after three minutes.
+
 ## 2.0.30 - 2026-11-11
 
 - The tray icon in the macOS menu bar is drawn at menu-bar size instead of as a large, cropped app icon.

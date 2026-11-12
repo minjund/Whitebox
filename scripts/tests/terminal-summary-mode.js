@@ -79,6 +79,7 @@ async function run({ evaluate, waitFor, manager, win, fixture, profile, clipboar
   await require('./summary-chat-races').run(evaluate);
   await require('./summary-attachments-ui').run(evaluate);
   await require('./summary-state-regressions').run(evaluate);
+  await require('./summary-shapes').run(evaluate);
   await require('./summary-game').run(evaluate);
   await require('./summary-composer-ime').run(evaluate, win);
   // Standalone renderer animation checks can span several rendered frames.

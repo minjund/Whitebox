@@ -1196,6 +1196,14 @@
           captureReviews();
           return;
         }
+        // A /clear or /compact typed in the terminal empties or folds the
+        // Summary view the same way as one sent from Summary.
+        if (['\r', '\n'].includes(data) && !trashed(session.id) && summaryMembers.get(session.id)) {
+          const turns = window.WhiteboxTerminalReviewTurns;
+          const typed = turns.submittedPrompt(terminal.readTerminal(session.id), summaryMembers.get(session.id).provider);
+          const reset = typed && turns.conversationReset(typed);
+          if (reset) summaryChat.markReset(session.id, reset);
+        }
         if (!autoReview || !['\r', '\n'].includes(data) || trashed(session.id)
           // A stale 'paused' projection right after re-enabling must not drop the request.
           || ['shell', 'unbound'].includes(reviews.get(session.id)?.state)) return;

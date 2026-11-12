@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { exactProcess } = require('./terminalReview');
-const { completedTurn, completionStamp, inputReady, isNonTaskRequest } = require('./terminalReviewTurns');
+const { completedTurn, completionStamp, inputReady, isNonTaskRequest, sameSlashCommand } = require('./terminalReviewTurns');
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
@@ -16,7 +16,9 @@ const SUMMARY_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
 const typedText = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
 function sameRequest(recorded, sent) {
   const a = typedText(recorded), b = typedText(sent);
-  return Boolean(a) && (a === b || String(recorded).length >= 8000 && a.length > 40 && b.startsWith(a.slice(0, -40)));
+  // A skill sent as `/skill args` is logged as `/plugin:skill` in tags.
+  return Boolean(a) && (a === b || String(recorded).length >= 8000 && a.length > 40 && b.startsWith(a.slice(0, -40))
+    || sameSlashCommand(recorded, sent));
 }
 
 const FINISHED_JOB_STATES = new Set(['completed', 'failed', 'interrupted', 'stopped']);

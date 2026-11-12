@@ -2702,6 +2702,21 @@ function registerIpcHandlers() {
   });
   handleTrusted('summary-attachments:save', payload => summaryAttachments().save(payload));
   handleTrusted('summary-attachments:remove', ids => summaryAttachments().remove(ids));
+  // A summarized draft's own file: read for "초안 전체 보기"/copy, or opened.
+  // Only the document the summarized turn itself wrote is reachable.
+  handleTrusted('terminals:summary-draft', async ({ id, taskId, action } = {}) => {
+    const file = terminalReview.draftFile(String(id || ''), String(taskId || ''));
+    if (!file) throw new Error('초안 파일을 찾지 못했어요.');
+    const stat = await fs.promises.stat(file).catch(() => null);
+    if (!stat?.isFile()) throw new Error('초안 파일이 옮겨졌거나 지워졌어요.');
+    if (action === 'open') {
+      const error = await shell.openPath(file);
+      if (error) throw new Error(error);
+      return { ok: true };
+    }
+    if (stat.size > 512 * 1024) throw new Error('초안이 너무 커서 여기서 보여 줄 수 없어요. 파일로 열어 주세요.');
+    return { path: file, text: await fs.promises.readFile(file, 'utf8') };
+  });
   handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
   handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));

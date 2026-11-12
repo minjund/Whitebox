@@ -6,12 +6,23 @@ const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const { completedTurn, currentTurnEvidence, isNonTaskRequest } = require('./terminalReviewTurns');
 const { classifyEvidence, evidenceDigest, observedFacts, changedRequest, acknowledgement, screenable } = require('./terminalReviewPolicy');
+const path = require('path');
 const { bounded, answerText } = require('./terminalReviewBudget');
 const { screenTools, compactTools } = require('./terminalReviewTools');
 const { compactContext, compactUpdates } = require('./terminalReviewContext');
 const { normalizeReviewSettings } = require('./terminalReviewSettings');
 const { assessDecision, repairPrompt, combinedUsage } = require('./terminalReviewDecision');
-const { contentInstructions, assessContent, historyContent, sourceExcerpt, pendingChoices } = require('./terminalReviewContent');
+const { SHAPES, contentInstructions, assessContent, historyContent, sourceExcerpt, pendingChoices } = require('./terminalReviewContent');
+// Where a draft's full text lives: the last document this turn wrote, or the
+// reply itself. The file is read only when the user opens it.
+const DRAFT_FILE = /\.(?:md|mdx|txt)$/iu;
+function draftSource(chunk) {
+  const file = (chunk.tools?.changes || []).filter(change => change?.kind === 'write' && typeof change.path === 'string'
+    && typeof change.acknowledgement === 'string' && DRAFT_FILE.test(change.path)).at(-1);
+  if (file) return { path: file.path, outline: (file.outline || []).filter(line => typeof line === 'string').slice(0, 20), opening: bounded(file.after || '', 2400) };
+  const reply = answerText(chunk.text || '');
+  return reply ? { text: bounded(reply, 20000) } : null;
+}
 const { artifactText } = require('./terminalReviewArtifacts');
 
 const clip = (value, limit = 1200) => String(value || '').trim().slice(0, limit);
@@ -335,6 +346,12 @@ class TerminalReview extends EventEmitter {
 
   task(entry, taskId) { return entry.result?.tasks.find(item => item.taskId === taskId); }
 
+  // The document a summarized draft turn wrote, for reading or opening it.
+  draftFile(id, taskId) {
+    const task = this.entries.get(id)?.result?.tasks?.find(item => item.taskId === taskId);
+    const file = task?.content?.shape === 'draft' ? task.draft?.path : '';
+    return typeof file === 'string' && path.isAbsolute(file) && DRAFT_FILE.test(file) ? file : '';
+  }
   pruneNonTasks(id, entry) {
     const removed = new Set();
     let changed = false;
@@ -841,7 +858,11 @@ class TerminalReview extends EventEmitter {
         }
         active.timings.gateCompletedAt = this.now();
         if (entry.revision !== active.revision) throw new Error('분석 대상이 변경되었습니다.');
-        if (active.gate.needsAnalysis === false && active.gate.outcome === 'not-required') return { screened: true };
+        // A draft is summarized even when Jev sees nothing to interpret: the
+        // user wants to read what it says, not the whole text.
+        const draft = active.gate.shapeScores?.draft >= .7;
+        if (active.gate.needsAnalysis === false && active.gate.outcome === 'not-required' && !draft) return { screened: true };
+        if (active.gate.shape) prompt += `\nFIXED SHAPE: ${active.gate.shape} (chosen by the router; fill this shape).`;
       }
       // Only original/linked records enter this prompt. Jev scores and routing
       // conclusions are diagnostics, never evidence for an LLM decision.
@@ -866,6 +887,7 @@ class TerminalReview extends EventEmitter {
             active.relatedEvidence += '\n' + recovered.filter(item => item.requestId && item.requestId !== chunk.source.requestId).map(item => item.text || '').join('\n');
             observed += '\n' + recovered.filter(item => item.role === 'tool' && item.status === 'available' && item.requestId === chunk.source.requestId).map(item => item.text || '').join('\n');
             prompt = reviewPrompt(`${modelSource}\nADDITIONAL SCOPED RECORDS (requestId identifies current vs earlier):\n${recoveredText}`, entry.locale, chunk.request, chunk.lifecycle, observed, Boolean(chunk.reanalyze));
+            if (active.gate?.shape) prompt += `\nFIXED SHAPE: ${active.gate.shape} (chosen by the router; fill this shape).`;
             active.calls++;
             const next = await this.generate({ provider, model: settings.models[provider], prompt, effort: reviewEffort(settings.effort).first }, { fresh: Boolean(chunk.reanalyze), keys: active.cacheKeys });
             raw = { ...(typeof next === 'object' ? next : {}), text: typeof next === 'string' ? next : next.text,
@@ -948,6 +970,8 @@ class TerminalReview extends EventEmitter {
         // Options the reply asks the user to choose from, copied from the reply.
         const choices = task.content ? pendingChoices(answerText(chunk.text || '')) : [];
         if (choices.length) task.content.choices = choices;
+        if (task.content?.version === 2 && SHAPES.includes(active.gate?.shape)) task.content.shape = active.gate.shape;
+        if (task.content?.shape === 'draft') task.draft = draftSource(chunk);
         const latest = entry.latest[chunk.taskId];
         // A stopped task is never graded as failure merely because it was stopped.
         if (latest?.lifecycle === 'interrupted' || chunk.lifecycle !== 'completed') task.alignment = 'in-progress';
@@ -1033,4 +1057,4 @@ class TerminalReview extends EventEmitter {
 
 function zeroUsage() { return { input: 0, output: 0, cachedInput: 0, cacheWrite: 0, total: 0 }; }
 
-module.exports = { TerminalReview, exactProcess, parseReview, reviewPrompt, mergeTasks, screenDelta, stableScreen };
+module.exports = { TerminalReview, draftSource, exactProcess, parseReview, reviewPrompt, mergeTasks, screenDelta, stableScreen };
