@@ -864,7 +864,7 @@
   ['추가 검토 필요', 'Further review needed', '需要补充审查'],
   ['실패 상세', 'Error details', '错误详情'],
   ['다시 검토', 'Review again', '重新审查'],
-  ['잠깐 놀기 · 2048', 'Play a little · 2048', '玩一会儿 · 2048'],
+  ['머리 식히기 · 2048', 'Take a breather · 2048', '放松一下 · 2048'],
   ['접기', 'Collapse', '收起'],
   ['새 게임', 'New game', '新游戏'],
   ['점수', 'Score', '分数'],

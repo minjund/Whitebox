@@ -105,8 +105,19 @@ exports.run = async evaluate => {
     check(f.q('[data-summary-message=q] .wb-summary-bubble p').textContent === '검사해줘' && !f.q('[data-summary-message=q] [data-summary-judgement]'), 'a request sits in a bubble');
     check(f.q('[data-summary-message=z] [data-summary-judgement]'), 'the answer to a question is tagged 판단');
     cases.push('bubbles');
+
+    // Opening Summary shows the board at once; the summary that follows still folds it.
+    f = make({ messages: [user('g', 1000)] });
+    const panel = () => f.q('.wb-2048-panel');
+    f.q('[data-game-close]').click(); f.chat.render();
+    check(panel().hidden && f.q('[data-game-open]').textContent === '머리 식히기 · 2048', 'a folded board offers 머리 식히기');
+    f.chat.setMode('terminal'); f.chat.setMode('summary'); f.chat.render();
+    check(!panel().hidden, 'choosing the Summary tab opens the board');
+    f.data.tasks = [task('g', 1000)]; f.chat.render();
+    check(panel().hidden, 'the arriving summary folds it again');
+    cases.push('game-on-summary');
     return cases;
   })()`);
-  assert.deepEqual(result, ['clear-fold', 'compact', 'clear-send', 'draft-file', 'draft-reply', 'shape-chip', 'bubbles']);
-  console.log('PASS summary shapes: clear folds earlier summaries, compact divides, /clear delivered without a wait, draft card with title, items per section and file, change rows, ranked findings, chooser, bubbles and 판단 tags');
+  assert.deepEqual(result, ['clear-fold', 'compact', 'clear-send', 'draft-file', 'draft-reply', 'shape-chip', 'bubbles', 'game-on-summary']);
+  console.log('PASS summary shapes: clear folds earlier summaries, compact divides, /clear delivered without a wait, draft card with title, items per section and file, change rows, ranked findings, chooser, bubbles and 판단 tags, board opens with the Summary tab and folds on the summary');
 };

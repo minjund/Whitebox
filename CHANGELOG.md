@@ -6,6 +6,7 @@ GitHub release notes remain the authoritative version history.
 ## 2.0.33 - 2026-11-12
 
 - Whitebox uses much less CPU with many AI terminals open. The background session monitor no longer re-analyzes every past conversation each scan, reuses unchanged cards, re-reads a large live transcript at most every 3 seconds, and waits at least 1.5 seconds between file-triggered scans; with six live AI sessions its CPU dropped from about 52% to 22% of a core. The tmux probe runs every 30 seconds instead of 5 when no tmux session exists, and the terminal review reuses the screen text read a moment earlier instead of reading every terminal again. Background cards may update up to 3 seconds later; terminal status and Summary mode are unaffected.
+- Choosing the Summary tab opens the 2048 board right away; it still folds when the summary arrives. Its button is now “머리 식히기 · 2048” (Take a breather).
 
 ## 2.0.32 - 2026-11-12
 

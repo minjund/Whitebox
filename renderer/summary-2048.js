@@ -127,7 +127,7 @@
       root.hidden = !value;
       if (animationOwner && (animationOwner !== value || animationGame !== game || root.hidden || !game?.open)) clearAnimation();
       $('[data-game-open]').hidden = Boolean(game?.open);
-      $('[data-game-open]').textContent = t('잠깐 놀기 · 2048');
+      $('[data-game-open]').textContent = t('머리 식히기 · 2048');
       $('.wb-2048-panel').hidden = !game?.open;
       if (restoreFocus && !root.hidden) $('[data-game-open]').focus({ preventScroll: true });
       if (!game?.open) return;
@@ -178,7 +178,15 @@
       play(Math.abs(dx) > Math.abs(dy) ? dx > 0 ? 'right' : 'left' : dy > 0 ? 'down' : 'up');
     });
     board.addEventListener('pointercancel', () => { swipe = null; });
-    return { render };
+    // Opening Summary shows the board right away. A summary that arrives later
+    // still folds it under the "auto-collapse" setting.
+    function open() {
+      const value = read(); if (!value) return;
+      if (!store.get(value)) store.set(value, start());
+      if (store.get(value).open) return;
+      store.get(value).open = true; save(); render();
+    }
+    return { render, open };
   }
   const api = { start, move, step, over, restore, createView };
   if (typeof module !== 'undefined') module.exports = api;
