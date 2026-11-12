@@ -2,6 +2,7 @@
 const assert = require('node:assert/strict');
 const { TerminalReview } = require('../src/terminalReview');
 const { normalizeReviewSettings } = require('../src/terminalReviewSettings');
+const { pickShape } = require('../src/jevAnalysis');
 
 module.exports = async function jevGateChecks({ jev, session }) {
   const wait = async check => { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); } throw Error('Gate fixture timeout'); };
@@ -14,13 +15,13 @@ module.exports = async function jevGateChecks({ jev, session }) {
       action: { kind: 'finish', text: 'Accept the change.', why: 'The requested behavior was verified.', request: '' }, alternatives: [] } }] }) };
   let gateCalls = 0, gateInput;
   const transport = jev.fetchImpl;
-  const scenario = async ({ probability = .9, unavailable = false, malformed = false, enabled = true, legacy = false, provider = 'codex', force = false, invalidCitation = false, waiting = false, rateLimited = false, work = false } = {}) => {
+  const scenario = async ({ probability = .9, unavailable = false, malformed = false, enabled = true, legacy = false, provider = 'codex', force = false, invalidCitation = false, waiting = false, rateLimited = false, work = false, shapes = {} } = {}) => {
     const order = [], calls = [];
     jev.fetchImpl = async (url, options) => {
       order.push('jev'); gateCalls++; gateInput = JSON.parse(options.body);
       if (unavailable) throw Error('fixture offline');
       return { ok: true, text: async () => JSON.stringify({ model: 'jev-routing-only-sentinel',
-        answers: malformed ? {} : { needsAnalysis: { type: 'noul', noul: probability } }, usage: { input_tokens: 120, output_tokens: 10 } }) };
+        answers: malformed ? {} : { needsAnalysis: { type: 'noul', noul: probability }, ...Object.fromEntries(Object.entries(shapes).map(([name, noul]) => [`shape_${name}`, { type: 'noul', noul }])) }, usage: { input_tokens: 120, output_tokens: 10 } }) };
     };
     let capacity = !waiting, clock = 1000;
     const service = new TerminalReview({ jev, now: () => clock, manager: () => ({ get: id => ({ ...session, id }) }), completion: {},
@@ -63,7 +64,17 @@ module.exports = async function jevGateChecks({ jev, session }) {
       assert.equal(task.analysisGate.usage.total, 130); assert.equal(task.analysisUsage.total, 40, 'LLM and Jev billing remain separate');
       assert.equal(task.analysisMetrics.calls, 1); assert.equal(task.analysisMetrics.gateCalls, 1);
     }
-    assert.deepEqual(Object.keys(gateInput.questions), ['needsAnalysis']);
+    assert.deepEqual(Object.keys(gateInput.questions), ['needsAnalysis', 'shape_draft', 'shape_change', 'shape_answer', 'shape_review', 'shape_decision']);
+    // One clear shape is fixed for the reviewer; a draft is summarized even when no interpretation is needed.
+    const drafted = await scenario({ probability: .1, shapes: { draft: .9, change: .1, answer: .2, review: 0, decision: .1 } });
+    assert.deepEqual(drafted.order, ['jev', 'llm'], 'a draft is summarized, not passed through');
+    assert.match(drafted.calls[0].prompt, /FIXED SHAPE: draft/);
+    assert.doesNotMatch(drafted.calls[0].prompt, /shape_draft|0\.9/, 'the reviewer gets the shape, never the scores');
+    const unclear = await scenario({ probability: .9, shapes: { draft: .8, answer: .75 } });
+    assert.doesNotMatch(unclear.calls[0].prompt, /FIXED SHAPE: /, 'two likely shapes leave the choice to the reviewer');
+    assert.equal(pickShape({ shape_review: { type: 'noul', noul: .7 }, shape_change: { type: 'noul', noul: .3 } }).shape, 'review');
+    assert.equal(pickShape({ shape_review: { type: 'noul', noul: .7 }, shape_change: { type: 'noul', noul: .31 } }).shape, '');
+    assert.equal(pickShape({}).shape, '');
     assert.match(gateInput.state.evidence, /all 12 checks passed/);
     for (const probability of [0, .3]) {
       const { task, calls, order } = await scenario({ probability });

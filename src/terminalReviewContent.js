@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { artifactText, continuationCommands, spacingExamples } = require('./terminalReviewArtifacts');
 
-const contentInstructions = `Return content:{"version":2,"answer":{"text":"actual answer","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"},"details":[{"text":"essential mechanism or reason","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"}],"limitations":[{"text":"material uncertainty","quote":"exact evidence substring or empty"}],"nextAction":null,"deliverables":[{"label":"output name","kind":"command|text|path|url","value":"exact output","basis":"observed|reported","quote":"exact evidence containing value"}],"background":[],"handoff":{"kind":"verify|decide|continue|finish|reply","temporal":{"text":"time or later change","basis":"reported","quote":"exact evidence"},"priority":{"text":"first need and why","basis":"inference","quote":"exact evidence"},"prompt":{"text":"suggested next request","basis":"inference","quote":"exact evidence"}}}.
+const contentInstructions = `Return content:{"version":2,"shape":"draft|change|answer|review|decision|general","answer":{"text":"actual answer","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"},"details":[{"text":"essential mechanism or reason","basis":"observed|reported|inference|unknown","quote":"exact evidence substring"}],"limitations":[{"text":"material uncertainty","quote":"exact evidence substring or empty"}],"nextAction":null,"deliverables":[{"label":"output name","kind":"command|text|path|url","value":"exact output","basis":"observed|reported","quote":"exact evidence containing value"}],"background":[],"handoff":{"kind":"verify|decide|continue|finish|reply","temporal":{"text":"time or later change","basis":"reported","quote":"exact evidence"},"priority":{"text":"first need and why","basis":"inference","quote":"exact evidence"},"prompt":{"text":"suggested next request","basis":"inference","quote":"exact evidence"}}}.
+SHAPE (what the user wanted): draft=prose for others to read/send; answer states the draft's own message to its reader, never that it was written/saved; details=2 more key points; limitations=open promises/placeholders in it. change=code/config edits. answer=explanation. review=findings: details up to 4, most severe first, with location. decision=asks the user to choose (handoff decide). general=else. FIXED SHAPE overrides.
 PYRAMID: Judgment → decisive reasons → necessary action. Failed required tests mean incomplete work. Explain the actual result or system behavior, never merely that the assistant finished explaining.
 STANDALONE: No conversation/project knowledge assumed. Name target and purpose; explain jargon, commands, labels like F1 and referents from source-backed context. Name missing facts.
 LIMIT FIRST: In answer itself, pair the result with the loss, exception or verification boundary that changes the user's judgment. Possible lost edits outrank 'autosave added / tests passed'. An explained workflow with an untried central stage must say upfront that this stage is unverified in use. Narrow checks do not prove complete real-world operation. Details/limitations add specifics, never a buried reversal of the opening.
@@ -16,6 +17,8 @@ OUTPUTS: Status/path/test totals are not content. Summarize actual added rules w
 PROVENANCE: Each non-unknown claim needs an exact quote supporting ALL its facts; expand the excerpt or split the claim. observed requires a quote in OBSERVED TOOL EXCERPTS; it means output was recorded, not all assertions are verified. Assistant explanations/code/claimed tests are reported. Mixed observed+reported facts use reported. Unsupported reasoning, including suggested diagnostics, is inference with explicit conditions; unknown has an empty quote. Keep failures and uncertainty visible. Page metadata proves no body; process exit proves no window closure. Shortened excerpts prove no full-source absence. Separate errors from claims. Omit unrelated warnings.
 SELF-CHECK: Can a new reader understand the answer, its limit and next decision without the transcript? Resolve contradictions from original records. Optional subject:{text,basis,quote}, <=100 chars, names the task goal when the title is raw markup or vague. For commands superseded by supplied later evidence set usage:"historical" and usageNote:{text,basis,quote}, <=140, citing why. Never relabel old commands as current or silently rewrite their bytes. Other commands are recorded-time instructions, not proof of present applicability.`;
 
+
+const SHAPES = ['draft', 'change', 'answer', 'review', 'decision', 'general'];
 
 function evidenceFor(task) {
   const { changes, ...metadata } = task.toolEvidence || {};
@@ -65,10 +68,13 @@ function assessContent(value, { source = '', observed = '', authored = '', reque
     if (!Array.isArray(input) || input.length > max) issues.push(name);
     return Array.isArray(input) ? input.slice(0, max) : [];
   };
+  // An unknown shape is the default summary, never a reason to retry.
+  const shape = compact && SHAPES.includes(value.shape) ? value.shape : 'general';
+  const findings = shape === 'review';
   const answer = claim(value.answer, 'answer', compact ? 220 : 1000);
   const subject = compact && value.subject != null ? claim(value.subject, 'subject', 100) : null;
   if (/^(?:질문(?:에|에는)\s*(?:직접\s*)?답(?:했|변했)|(?:설명|안내|요청한 작업)(?:은|는|이)?\s*(?:완료|끝)|(?:설명 대신.*)?요청을 충족|the (?:assistant|answer) (?:answered|fulfilled))/iu.test(answer.text)) issues.push('answer is only a verdict');
-  const details = list(value.details, 'details', compact ? 2 : 8).map((item, index) => claim(item, `detail ${index}`, compact ? 140 : 1600));
+  const details = list(value.details, 'details', compact ? findings ? 4 : 2 : 8).map((item, index) => claim(item, `detail ${index}`, compact ? 140 : 1600));
   const limitations = list(value.limitations, 'limitations', compact ? 2 : 6).map((item, index) => ({
     text: field(item?.text, `limitation ${index}`, compact ? 140 : 600), quote: quote(item?.quote, `limitation ${index}`, false, true),
   }));
@@ -89,7 +95,7 @@ function assessContent(value, { source = '', observed = '', authored = '', reque
     if (nextAction) issues.push('use handoff instead of a duplicate next action');
     handoff = { kind: item.kind, temporal, priority, prompt };
   }
-  if (compact && [answer.text, ...details.map(item => item.text), ...limitations.map(item => item.text), nextAction?.text || ''].join('').length > 560) issues.push('compact explanation length');
+  if (compact && [answer.text, ...details.map(item => item.text), ...limitations.map(item => item.text), nextAction?.text || ''].join('').length > (findings ? 840 : 560)) issues.push('compact explanation length');
   const deliverables = list(value.deliverables, 'deliverables', 8).map((item, index) => {
     const name = `deliverable ${index}`;
     const label = field(item?.label, `${name} label`, 200);
@@ -136,7 +142,7 @@ function assessContent(value, { source = '', observed = '', authored = '', reque
   if (issues.length) return { content: null, issues: [...new Set(issues)] };
   const visible = [answer, handoff?.temporal, handoff?.priority, handoff?.prompt, ...limitations, ...details, nextAction].filter(Boolean).map(item => item.text);
   const bare = compact ? unexplainedLabels(visible, source) : [];
-  return { content: { version: value.version, answer, details, limitations, deliverables, ...(compact ? { background, nextAction, ...(subject ? { subject } : {}), ...(handoff ? { handoff } : {}) } : {}) }, issues: [],
+  return { content: { version: value.version, ...(compact ? { shape } : {}), answer, details, limitations, deliverables, ...(compact ? { background, nextAction, ...(subject ? { subject } : {}), ...(handoff ? { handoff } : {}) } : {}) }, issues: [],
     advisories: bare.length ? [`explain each conversation label at its first visible use, e.g. "F1(코드 포맷 도구 선택)", or replace it with words: ${bare.join(', ')}`] : [] };
 }
 
@@ -268,4 +274,4 @@ function pendingChoices(answer) {
   return blocks.slice(-3);
 }
 
-module.exports = { contentInstructions, assessContent, evidenceFor, contentIdentity, historyContent, sourceExcerpt, pendingChoices };
+module.exports = { SHAPES, contentInstructions, assessContent, evidenceFor, contentIdentity, historyContent, sourceExcerpt, pendingChoices };

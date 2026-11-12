@@ -57,7 +57,7 @@ function isStartupRequest(request) {
 const CONTROL_COMMANDS = new Set(['add-dir', 'agents', 'approvals', 'btw', 'bug', 'clear', 'compact', 'config', 'context', 'cost',
   'diff', 'doctor', 'exit', 'export', 'fast', 'feedback', 'help', 'hooks', 'ide', 'init', 'login', 'logout', 'mcp', 'memory',
   'mention', 'model', 'new', 'permissions', 'plugin', 'pr-comments', 'quit', 'release-notes', 'reload-skills', 'resume',
-  'review', 'rewind', 'skills', 'status', 'statusline', 'terminal-setup', 'theme', 'undo', 'upgrade', 'usage', 'vim']);
+  'reset', 'review', 'rewind', 'skills', 'status', 'statusline', 'terminal-setup', 'theme', 'undo', 'upgrade', 'usage', 'vim']);
 function slashCommand(request) {
   const text = String(request || '').trim();
   const tagged = text.match(/<command-name>\/([^<\s/]+)<\/command-name>/iu);
@@ -86,6 +86,26 @@ function isContinuationSummary(request) {
   // Match the provider's continuation envelope, not mentions, quoted examples,
   // or ordinary requests to summarize something. Newlines may wrap its header.
   return /^This\s+session\s+is\s+being\s+continued\s+from\s+a\s+previous\s+conversation\s+that\s+ran\s+out\s+of\s+context\.(?:\s|$)/iu.test(prefix);
+}
+// A command that empties the AI's memory of this conversation ("clear": Claude
+// /clear · /reset · /new, Codex /clear · /new, a switch with /resume) or folds
+// it into a summary ("compact"). Anything else, arguments included, is ''.
+function conversationReset(request) {
+  const command = slashCommand(request);
+  const name = command?.name.toLowerCase().replace(/^.*:/u, '') || '';
+  if (!command || command.name.includes(':')) return '';
+  if (['clear', 'reset', 'new', 'resume'].includes(name)) return 'clear';
+  return name === 'compact' ? 'compact' : '';
+}
+// The same slash command as typed and as the provider log records it: Claude
+// writes a plugin skill under its full name (`/plugin:skill`) in tags.
+function sameSlashCommand(recorded, sent) {
+  const a = slashCommand(recorded), b = slashCommand(sent);
+  if (!a || !b) return false;
+  const x = a.name.toLowerCase(), y = b.name.toLowerCase();
+  const name = x === y || x.endsWith(`:${y}`) || y.endsWith(`:${x}`);
+  const words = value => value.replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
+  return name && words(a.args) === words(b.args);
 }
 function isNonTaskRequest(request) { return isStartupRequest(request) || isContinuationSummary(request); }
 
@@ -262,7 +282,7 @@ function readinessText(buffer) {
   }
   return lines.join('\n').slice(-24000);
 }
-const api = { currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest, isSlashCommand, isContinuationSummary, isNonTaskRequest, readableRequest };
+const api = { currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest, isSlashCommand, isContinuationSummary, isNonTaskRequest, readableRequest, conversationReset, sameSlashCommand };
 if (typeof module !== 'undefined') module.exports = api;
 else window.WhiteboxTerminalReviewTurns = api;
 

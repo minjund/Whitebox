@@ -100,12 +100,28 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     if (!session) return null;
     let value = records.get(id);
     if (!value || value.creationId !== session.creationId) {
-      value = { id, creationId: session.creationId, mode: 'terminal', draft: '', attachments: [], messages: [] };
+      value = { id, creationId: session.creationId, mode: 'terminal', draft: '', attachments: [], messages: [], marks: [] };
       records.set(id, value);
     }
     return value;
   }
   const taskKey = task => String(task.taskId || task.analysisId || `${task.observedAt}:${task.request}`);
+  // Where the AI's memory was emptied (/clear) or folded (/compact). Summary
+  // cards before the last clear leave the screen; past requests stay listed.
+  const MARK_KINDS = ['clear', 'compact'];
+  function markReset(id, kind, at = Date.now()) {
+    const value = record(id);
+    if (!value || !MARK_KINDS.includes(kind)) return;
+    // One Enter can be seen twice (terminal echo and Summary send).
+    if (value.marks.some(mark => mark.kind === kind && Math.abs(mark.at - at) < 3000)) return;
+    value.marks = [...value.marks, { kind, at }].sort((a, b) => a.at - b.at).slice(-50);
+    lastMarkup = ''; lastPastMarkup = '';
+    context.save(); render();
+  }
+  const lastClear = value => value.marks?.filter(mark => mark.kind === 'clear').at(-1)?.at || 0;
+  const messageTime = message => message.role === 'answer'
+    ? Number(message.task?.submittedAt) || Date.parse(message.task?.observedAt) || 0 : sentTime(message);
+  const markText = mark => `${t(mark.kind === 'clear' ? '여기서 대화를 비웠어요' : '대화를 압축했어요')}${clock(mark.at) ? ` · ${clock(mark.at)}` : ''}`;
   const nonTask = request => window.WhiteboxTerminalReviewTurns?.isNonTaskRequest(request);
   function tasksFor(id) { return context.tasks(id).filter(task => !nonTask(task.request)
     && (task.lifecycle === 'completed' || !task.deferred && task.analysisDepth !== 'deferred')); }
@@ -387,6 +403,37 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     event.preventDefault();
     addImages(event.dataTransfer.files).catch(error => { notice.textContent = t(ipcMessage(error)); });
   });
+  // A draft's full text: the reply itself, or the file the turn wrote (read
+  // from disk only when the user opens or copies it; never sent to a model).
+  const draftTexts = new Map();
+  function draftTask(id, taskId) { return tasksFor(id).find(task => task.taskId === taskId && task.content?.shape === 'draft'); }
+  async function draftText(id, taskId) {
+    const task = draftTask(id, taskId);
+    if (!task) throw new Error(t('초안을 찾지 못했어요.'));
+    if (typeof task.draft?.text === 'string') return task.draft.text;
+    const key = `${id}:${taskId}`;
+    if (!draftTexts.has(key)) {
+      const result = await api.summaryDraft({ id, taskId });
+      draftTexts.set(key, String(result?.text || ''));
+    }
+    return draftTexts.get(key);
+  }
+  function fillDrafts() {
+    const id = context.activeId();
+    for (const node of transcript.querySelectorAll('details[data-draft-source="file"]')) {
+      const text = draftTexts.get(`${id}:${node.dataset.summaryDraft}`);
+      if (text !== undefined) node.querySelector('.wb-draft-text').textContent = text;
+    }
+  }
+  list.addEventListener('toggle', event => {
+    const node = event.target;
+    if (!node.matches?.('details[data-draft-source="file"]') || !node.open) return;
+    const pre = node.querySelector('.wb-draft-text');
+    if (pre.textContent) return;
+    pre.textContent = t('초안을 불러오는 중…');
+    draftText(context.activeId(), node.dataset.summaryDraft).then(text => { pre.textContent = text; })
+      .catch(error => { pre.textContent = t(ipcMessage(error)); });
+  }, true);
   form.addEventListener('submit', event => {
     event.preventDefault();
     // Invisible control characters (from a copied terminal line) are dropped;
@@ -412,8 +459,19 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     context.refresh().then(flush).catch(error => { notice.textContent = String(error.message || error); });
   });
   root.querySelector('#wbSummary').addEventListener('click', event => {
-    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-send-now], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry], [data-summary-resend]');
+    const button = event.target.closest('[data-summary-edit], [data-summary-cancel], [data-summary-send-now], [data-summary-choice], [data-summary-terminal], [data-summary-copy], [data-summary-retry], [data-summary-resend], [data-summary-draft-copy], [data-summary-draft-open]');
     if (!button) return;
+    if (button.dataset.summaryDraftOpen) {
+      Promise.resolve(api.summaryDraft?.({ id: context.activeId(), taskId: button.dataset.summaryDraftOpen, action: 'open' }))
+        .catch(error => { notice.textContent = t(ipcMessage(error)); });
+      return;
+    }
+    if (button.dataset.summaryDraftCopy) {
+      draftText(context.activeId(), button.dataset.summaryDraftCopy).then(text => api.writeClipboard(text))
+        .then(() => { notice.textContent = t('초안을 복사했어요.'); })
+        .catch(error => { notice.textContent = t(ipcMessage(error)); });
+      return;
+    }
     if (button.dataset.summaryResend) { resend(button.dataset.summaryResend); return; }
     if (button.hasAttribute('data-summary-retry')) {
       if (retryBusy || !context.startSummary) return;
@@ -514,6 +572,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       if (sendNow) notice.textContent = t('터미널의 입력 상태를 확인한 뒤 다시 전송해 주세요.');
     } else if (result?.ok && ['running', 'completed'].includes(result.job?.state)) {
       message.state = 'sent'; message.sentAt = result.job.sentAt; context.submitted(result.job);
+      const reset = window.WhiteboxTerminalReviewTurns?.conversationReset(message.text);
+      if (reset) markReset(value.id, reset, Number(result.job.sentAt) || Date.now());
       // The exact text the AI received (with image paths) links its turn back.
       if (message.attachments?.length && typeof result.job.request === 'string') message.delivered = result.job.request;
     } else { message.state = 'interrupted'; message.error = result?.job?.error || t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'); }
@@ -790,6 +850,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
   // with the summary's actual answer as written (no extra model call).
   const oneLine = text => String(text || '').replace(/\s+/gu, ' ').trim().slice(0, 240);
   const clock = time => Number.isFinite(time) && time > 0 ? new Date(time).toLocaleTimeString(window.WhiteboxI18n?.getLocaleTag?.() || undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+  const SHAPE_TAGS = { draft: '초안', change: '코드 변경', review: '리뷰' };
   const asksUser = task => Boolean(task && (task.awaitingResponse === true || task.content?.choices?.length || task.choices?.length));
   function answerLine(message, task, live) {
     if (typeof task?.content?.answer?.text === 'string' && task.content.answer.text.trim()) return { text: task.content.answer.text };
@@ -815,10 +876,19 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       const live = progress.liveId && message.id === progress.liveId ? progress : null;
       items.push({ message, task, live, judgement: asksUser(previousTask) });
     }
-    items.reverse();
-    const markup = items.map(({ message, task, live, judgement }) => {
+    const cut = lastClear(value), marks = [...(value.marks || [])];
+    const rows = [];
+    for (const item of items) {
+      const time = sentTime(item.message);
+      while (marks.length && time && marks[0].at <= time) rows.push({ mark: marks.shift() });
+      rows.push(item);
+    }
+    rows.push(...marks.map(mark => ({ mark })));
+    rows.reverse();
+    const markup = rows.map(({ mark, message, task, live, judgement }) => {
+      if (mark) return `<li class="wb-summary-past-mark" data-summary-mark="${esc(mark.kind)}" role="separator"><span>${esc(markText(mark))}</span></li>`;
       const answer = answerLine(message, task, live);
-      return `<li><button type="button" data-summary-past="${esc(message.id)}" data-state="${live ? 'live' : 'done'}"${pastSelected === message.id ? ' aria-current="true"' : ''}><span class="wb-summary-past-request">${judgement ? `<em>${esc(t('판단'))}</em>` : ''}<span>${esc(oneLine(message.text))}</span>${message.attachments?.length ? `<em class="wb-summary-past-images">${esc(imageCount(message.attachments.length))}</em>` : ''}<time>${esc(clock(message.sentAt || message.at))}</time></span><span class="wb-summary-past-answer" data-state="${answer.state || 'summary'}">${esc(oneLine(answer.text))}</span></button></li>`;
+      return `<li${cut && sentTime(message) < cut ? ' data-cleared="true"' : ''}><button type="button" data-summary-past="${esc(message.id)}" data-state="${live ? 'live' : 'done'}"${pastSelected === message.id ? ' aria-current="true"' : ''}><span class="wb-summary-past-request">${judgement ? `<em>${esc(t('판단'))}</em>` : ''}${SHAPE_TAGS[task?.content?.shape] ? `<em data-shape="${esc(task.content.shape)}">${esc(t(SHAPE_TAGS[task.content.shape]))}</em>` : ''}<span>${esc(oneLine(message.text))}</span>${message.attachments?.length ? `<em class="wb-summary-past-images">${esc(imageCount(message.attachments.length))}</em>` : ''}<time>${esc(clock(message.sentAt || message.at))}</time></span><span class="wb-summary-past-answer" data-state="${answer.state || 'summary'}">${esc(oneLine(answer.text))}</span></button></li>`;
     }).join('');
     $('#wbSummaryPastSection').hidden = !items.length;
     $('#wbSummaryPastCount').textContent = items.length ? `${t('{count}개').replace('{count}', items.length)} · ${t('최신순')}` : '';
@@ -829,6 +899,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     const target = [...transcript.querySelectorAll('[data-summary-message]')].find(node => node.dataset.summaryMessage === id);
     if (!target) return;
     pastSelected = id; lastPastMarkup = ''; render();
+    const folded = target.closest('details');
+    if (folded) folded.open = true;
     target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     transcript.querySelectorAll('[data-summary-flash]').forEach(node => node.removeAttribute('data-summary-flash'));
     target.setAttribute('data-summary-flash', '');
@@ -855,6 +927,28 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     // Never pull the composer away during a composition; a focused composer
     // waits longer, and an ended AI session still falls back after that.
     return composing && typing || now - missing.since < (typing ? FOCUSED_GRACE_MS : MISSING_GRACE_MS);
+  }
+  // The transcript with its clear/compact dividers. Everything before the
+  // last clear folds into one closed group the user can open again.
+  function withMarks(value, parts) {
+    const marks = [...(value.marks || [])].sort((a, b) => a.at - b.at), cut = lastClear(value);
+    const rows = [];
+    let next = 0;
+    // Queued requests (not sent yet) always follow the dividers.
+    const placed = part => part.html && (!part.user || part.time);
+    for (const part of parts) {
+      while (next < marks.length && placed(part) && marks[next].at <= part.time) rows.push({ time: marks[next].at, mark: marks[next++] });
+      rows.push(part);
+    }
+    while (next < marks.length) rows.push({ time: marks[next].at, mark: marks[next++] });
+    const html = row => row.mark ? `<div class="wb-summary-mark" data-summary-mark="${esc(row.mark.kind)}" role="separator"><span>${esc(markText(row.mark))}</span></div>` : row.html;
+    const before = cut ? rows.filter(row => row.time < cut || row.mark && row.time <= cut && row.mark.at !== cut) : [];
+    const after = rows.filter(row => !before.includes(row));
+    const visible = after.filter(row => !row.mark).length;
+    const count = before.filter(row => row.user).length;
+    const folded = count ? `<details class="wb-summary-cleared" data-summary-cleared><summary>${esc(t('비우기 전 대화 {count}개 보기').replace('{count}', count))}</summary>${before.map(html).join('')}</details>` : '';
+    const empty = cut && !visible ? `<div class="wb-summary-empty" data-summary-cleared-empty><h1>${esc(t('대화를 비웠어요.'))}</h1><p>${esc(t('AI는 앞의 대화를 기억하지 않아요. 지난 요청에서 이전 요약을 다시 볼 수 있어요.'))}</p></div>` : '';
+    return folded + after.map(html).join('') + empty;
   }
   function render() {
     const id = context.activeId(), value = record(id), available = eligible(id), member = context.member(id);
@@ -899,12 +993,12 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     }
     renderAttachments(value);
     const states = { queued: t('전송 대기'), sending: t('전송 중…'), sent: t('전송됨'), cancelled: t('전송 취소'), interrupted: t('전송 확인 필요'), stopped: t('멈춤') };
-    let markup = value.messages.map(message => {
+    const parts = value.messages.map(message => ({ time: messageTime(message), user: message.role === 'user', html: (() => {
       if (message.role === 'answer') {
         const task = message.task;
         const retained = window.WhiteboxReviewDecision.matchesRetainedAnalysis(task, retainedFailure);
         if (!retained && summaryPending(task, review)) return '';
-        const decision = window.WhiteboxReviewDecision, analyzed = decision.render(task, { t, esc, taskKey: message.key });
+        const decision = window.WhiteboxReviewDecision, analyzed = decision.render(task, { t, esc, taskKey: message.key, draftActions: true });
         const failed = !analyzed && task.summaryFailure ? task.summaryFailure : null, passThrough = !analyzed && !failed && task.passThrough;
         const kind = failed ? 'failed' : passThrough ? 'pass-through' : 'summary';
         const heading = { failed: '요약하지 못했어요 · AI 원문', 'pass-through': 'AI 답변 · 짧아서 그대로 보여요', summary: 'Whitebox 요약' }[kind];
@@ -915,7 +1009,8 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       }
       const timestamp = clock(message.sentAt || message.at);
       return `<article class="wb-summary-user" data-state="${esc(message.state)}" data-summary-message="${esc(message.id)}"><div class="wb-summary-label">${esc(t('내 요청'))} <span>${esc(states[message.state] || '')}${timestamp ? ` · ${esc(timestamp)}` : ''}</span></div><p>${esc(message.text)}</p>${userImages(message)}${message.error ? `<p class="wb-summary-delivery-error">${esc(message.error)}</p>${message.state === 'interrupted' && !message.answerKey ? control('다시 보내기', `data-summary-resend="${esc(message.id)}"`, false, 'secondary') : ''}${control('터미널에서 확인', 'data-summary-terminal')}` : ''}${message.state === 'queued' && WAIT[message.wait] ? `<p class="wb-summary-queue-note" data-summary-wait="${esc(message.wait)}">${esc(t(WAIT[message.wait]))}</p>` : ''}${message.state === 'queued' ? `<div class="wb-summary-queue-actions">${control('그래도 전송하기', `data-summary-send-now="${esc(message.id)}"`)}${control('수정', `data-summary-edit="${esc(message.id)}"`, Boolean(value.draft || value.attachments?.length))}${control('취소', `data-summary-cancel="${esc(message.id)}"`)}</div>` : ''}</article>`;
-    }).join('');
+    })() })).filter(part => part.html);
+    let markup = withMarks(value, parts);
     if (!markup) markup = `<div class="wb-summary-empty"><span>${esc(t('이해 · 검토'))}</span><h1>${esc(t('요약을 읽고, 다음 요청을 이어가세요.'))}</h1><p>${esc(t('같은 AI 세션에서 대화를 이어갑니다.'))}</p></div>`;
     const prompt = detectedPrompt(id);
     if (prompt) {
@@ -929,7 +1024,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
       const opened = [...list.querySelectorAll('details')].map((node, index) => node.open ? index : -1);
       for (const host of actionHosts) ui?.clear?.(host);
       actionHosts.clear();
-      transcript.innerHTML = markup; lastMarkup = markup; mountControls();
+      transcript.innerHTML = markup; lastMarkup = markup; mountControls(); fillDrafts();
       list.querySelectorAll('details').forEach((node, index) => { node.open = opened.includes(index); });
       if (nearBottom) list.scrollTop = list.scrollHeight;
     }
@@ -958,7 +1053,7 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
     render(); flush().catch(error => { notice.textContent = String(error.message || error); });
   }
   return {
-    render, observe, setMode, eligible,
+    render, observe, setMode, eligible, markReset,
     pendingJobs: () => [...records.values()].flatMap(value => {
       const message = value.messages.find(item => item.state === 'sent' && item.targetCreationId && !item.replyCaptured);
       return message ? [{ id: message.id, targetId: value.id, targetCreationId: message.targetCreationId,
@@ -996,7 +1091,9 @@ window.WhiteboxSummaryChat = function createSummaryChat(context) {
           if (typeof message.delivered !== 'string' || message.delivered.length > 8000) delete message.delivered;
         }
         records.set(item.id, { id: item.id, creationId: item.creationId, mode: item.mode === 'summary' ? 'summary' : 'terminal',
-          draft: String(item.draft || '').slice(0, 8000), attachments: cleanAttachments(item.attachments), messages });
+          draft: String(item.draft || '').slice(0, 8000), attachments: cleanAttachments(item.attachments), messages,
+          marks: (Array.isArray(item.marks) ? item.marks : []).filter(mark => MARK_KINDS.includes(mark?.kind) && Number.isFinite(mark.at) && mark.at > 0)
+            .map(mark => ({ kind: mark.kind, at: mark.at })).sort((a, b) => a.at - b.at).slice(-50) });
       }
     },
     forget(id) { records.delete(id); },

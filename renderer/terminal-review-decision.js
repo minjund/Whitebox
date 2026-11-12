@@ -87,7 +87,46 @@
   function renderChoices(value, { t, esc }) {
     return validChoices(value).map(block => `<div class="wb-task-section wb-content-choices"><h3>${esc(t('답해야 할 질문'))}</h3><p>${esc(block.question)}</p><ol>${block.options.map(option => `<li data-recommended="${block.recommendation?.label === option.label}"><b>${esc(option.label)}</b> ${esc(option.text)}${block.recommendation?.label === option.label ? ` <small>${esc(t('답변의 권장'))}</small>` : ''}</li>`).join('')}</ol>${block.recommendation ? `<p class="wb-content-time">${esc(block.recommendation.text)}</p>` : ''}</div>`).join('');
   }
+  // The summary's shape follows what the user wanted from the turn.
+  const SHAPES = { draft: '초안', change: '코드 변경', answer: '설명 · 답', review: '조사 · 리뷰', decision: '판단 요청' };
+  const shapeChip = (shape, { t, esc }) => SHAPES[shape] ? `<p class="wb-content-shape" data-shape="${esc(shape)}">${esc(t(SHAPES[shape]))}</p>` : '';
+  const HEADINGS = {
+    change: { details: '바꾼 것', limitations: '확인하지 못한 것' },
+    review: { details: '찾은 것 · 심각한 순', limitations: '살펴보지 못한 범위' },
+    answer: { details: '근거와 설명', limitations: '확인한 범위와 남은 점' },
+    decision: { handoff: '정할 것' },
+  };
+  // The headings of a draft, in order, as its outline.
+  const outlineOf = text => (String(text || '').match(/^#{1,4}[ \t]+[^\n]+/gmu) || []).slice(0, 20);
+  const headingText = line => String(line).replace(/^#{1,6}[ \t]+/u, '').replace(/\*\*|`/gu, '').trim().slice(0, 60);
+  // The draft's own opening words, without heading marks.
+  function opening(text) {
+    const body = String(text || '').split('\n').filter(line => line.trim() && !/^\s*(?:#{1,6}\s|\|?\s*:?-{3,})/u.test(line))
+      .map(line => line.replace(/\*\*|__|`/gu, '').trim()).join(' ');
+    return body.length > 260 ? `${body.slice(0, 260)}…` : body;
+  }
+  function renderDraft(task, { t, esc, actions = false }) {
+    const content = task.content, draft = task.draft || {}, file = typeof draft.path === 'string' ? draft.path : '';
+    const source = typeof draft.text === 'string' ? draft.text : typeof draft.opening === 'string' ? draft.opening : '';
+    const outline = (Array.isArray(draft.outline) && draft.outline.length ? draft.outline : outlineOf(source)).map(headingText).filter(Boolean);
+    const handoff = content.handoff && content.handoff.kind !== 'finish' ? content.handoff : null;
+    const key = esc(task.taskId || '');
+    return `<section class="wb-decision wb-answer-content wb-draft" data-shape="draft" aria-label="${esc(t('초안 요약'))}">
+      ${shapeChip('draft', { t, esc })}
+      <div class="wb-draft-card">
+        <p class="wb-draft-lead">${prose(content.answer.text, esc)}</p>
+        ${content.details.length ? `<ul class="wb-draft-points">${content.details.map(item => `<li>${prose(item.text, esc)}</li>`).join('')}</ul>` : ''}
+        ${outline.length > 1 ? `<ol class="wb-draft-outline" aria-label="${esc(t('초안 구성'))}">${outline.map(line => `<li>${esc(line)}</li>`).join('')}</ol>` : ''}
+      </div>
+      ${opening(source) ? `<blockquote class="wb-draft-opening">${esc(opening(source))}</blockquote>` : ''}
+      <details class="wb-draft-full" data-summary-draft="${key}" data-draft-source="${file ? 'file' : 'reply'}"><summary>${esc(t('초안 전체 보기'))}</summary><pre class="wb-draft-text">${file ? '' : esc(source)}</pre></details>
+      ${actions || file ? `<div class="wb-draft-tools">${file ? `<code title="${esc(file)}">${esc(file.replace(/^\/Users\/[^/]+/u, '~'))}</code>` : ''}${actions ? `<span>${file ? `<button type="button" data-summary-draft-open="${key}">${esc(t('파일 열기'))}</button>` : ''}<button type="button" data-summary-draft-copy="${key}">${esc(t('초안 복사'))}</button></span>` : ''}</div>` : ''}
+      ${handoff ? `<div class="wb-task-section wb-draft-check"><h3>${esc(t('보내기 전에 정할 것'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : ''}
+      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t('초안에 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
+    </section>`;
+  }
   function renderContent(content, { t, esc }, recordedAt) {
+    const heading = HEADINGS[content.shape] || {};
     const bases = new Set([content.answer, ...content.details, ...content.deliverables, ...(content.background || []), ...(content.nextAction ? [content.nextAction] : [])].map(item => item.basis));
     const mixed = bases.has('observed') && bases.has('reported');
     const source = mixed ? '대화 원문과 도구 실행 기록 기준' : bases.has('reported') ? '대화 원문 기준' : bases.has('observed') ? '도구 실행 기록 기준' : '';
@@ -105,7 +144,7 @@
     const time = new Date(recordedAt || NaN);
     const recordDate = !Number.isNaN(time.getTime()) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(time) + ' KST' : '';
     const timeNote = recordDate || handoff?.temporal ? `<div class="wb-content-time">${recordDate ? `<p>${esc(t('기록 시점'))} · ${esc(recordDate)}</p>` : ''}${handoff?.temporal ? `<p>${prose(handoff.temporal.text, esc)}</p>` : ''}</div>` : '';
-    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : '먼저 할 판단'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
+    const handoffHtml = handoff ? `<div class="wb-task-section wb-content-handoff"><h3>${esc(t(handoff.kind === 'finish' ? '다음 요청이 필요한가요?' : heading.handoff || '먼저 할 판단'))}</h3><p>${prose(handoff.priority.text, esc)}</p>${handoff.prompt ? `<h3>${esc(t('보낼 수 있는 다음 요청'))}</h3><blockquote>${esc(handoff.prompt.text)}</blockquote>` : ''}</div>` : '';
     // Every option of a question the reply ends with, verbatim from the reply.
     const choices = renderChoices(content.choices, { t, esc });
     const details = content.details.map(claim).join('');
@@ -119,19 +158,21 @@
     }).join('');
     const background = (content.background || []).map(claim).join('');
     return `<section class="wb-decision wb-answer-content" aria-label="${esc(t('답과 핵심 설명'))}">
+      ${shapeChip(content.shape, { t, esc })}
       ${source ? `<p class="wb-content-source">${esc(t(source))}</p>` : ''}
       <div class="wb-task-section wb-decision-conclusion"><h3>${esc(t('실제 답'))}</h3>${answer}</div>
       ${timeNote}
       ${choices}
       ${handoffHtml}
-      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t('확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
-      ${content.details.length ? `<div class="wb-task-section"><h3>${esc(t(content.nextAction ? '판단 근거' : '핵심과 작동 방식'))}</h3>${details}</div>` : ''}
+      ${content.limitations.length ? `<div class="wb-task-section wb-decision-caution"><h3>${esc(t(heading.limitations || '확인한 범위와 남은 점'))}</h3>${content.limitations.map(item => `<p>${prose(item.text, esc)}</p>`).join('')}</div>` : ''}
+      ${content.details.length ? `<div class="wb-task-section"${content.shape === 'review' ? ' data-findings' : ''}><h3>${esc(t(heading.details || (content.nextAction ? '판단 근거' : '핵심과 작동 방식')))}</h3>${details}</div>` : ''}
       ${nextAction ? `<div class="wb-task-section wb-decision-action"><h3>${esc(t('필요한 다음 행동'))}</h3>${nextAction}</div>` : ''}
       ${outputs}
       ${background ? `<details class="wb-task-details"><summary>${esc(t('상세 설명'))}</summary>${background}</details>` : ''}
     </section>`;
   }
-  function render(task, { t, esc, taskKey }) {
+  function render(task, { t, esc, taskKey, draftActions = false }) {
+    if (validContent(task.content) && task.content.shape === 'draft') return renderDraft(task, { t, esc, actions: draftActions });
     if (validContent(task.content)) return `${task.contentGeneratedAt ? `<p class="wb-record-label">${esc(t('기존 기록 재설명'))} · ${esc(Number.isSafeInteger(task.contentUsage?.total) ? task.contentUsage.total.toLocaleString() + ' ' + t('토큰') : t('토큰 미제공'))}</p>` : ''}${renderContent(task.content, { t, esc }, task.recordedAt || task.observedAt)}`;
     const decision = task.decision;
     if (!decision) return '';
@@ -157,5 +198,5 @@
   function plainReply(text, esc) {
     return String(text || '').split('\n').map(line => esc(line.replace(/^\s{0,3}#{1,6}\s+/u, '').replace(/\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`/gu, (_, a, b, c) => a ?? b ?? c))).join('<br>');
   }
-  return { render, renderContent, renderChoices, plainReply, applyHistoryContent, displayTitle, reviewFailure, matchesRetainedAnalysis };
+  return { SHAPES, render, renderContent, renderChoices, plainReply, applyHistoryContent, displayTitle, reviewFailure, matchesRetainedAnalysis };
 });

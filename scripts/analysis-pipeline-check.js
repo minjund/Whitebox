@@ -69,7 +69,7 @@ module.exports = async function analysisPipelineChecks() {
     const jev = new JevAnalysis({ file: keyFile, secure, fetchImpl: async (url, options) => {
       requests++; assert.equal(url, 'https://api.typesafe.ai/v1/systemone'); assert.equal(options.redirect, 'error');
       assert.equal(options.headers.Authorization, 'Bearer fixture-secret');
-      const body = JSON.parse(options.body); assert.equal(body.model, 'jev-latest'); assert.deepEqual(Object.keys(body.questions), ['needsAnalysis']);
+      const body = JSON.parse(options.body); assert.equal(body.model, 'jev-latest'); assert.deepEqual(Object.keys(body.questions), ['needsAnalysis', 'shape_draft', 'shape_change', 'shape_answer', 'shape_review', 'shape_decision']);
       return { ok: true, text: async () => JSON.stringify({ model: 'fixture-jev', answers: Object.fromEntries(Object.keys(body.questions).map(name => [name, { type: 'noul', noul: .5 }])), usage: { input_tokens: 120, output_tokens: 10 } }) };
     } });
     assert.deepEqual(jev.configure({ apiKey: 'fixture-secret' }), { configured: true, model: 'jev-latest' });

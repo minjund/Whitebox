@@ -84,7 +84,8 @@ module.exports = async function budgetChecks() {
   assert.equal(calls.length, 1, 'substantive change receives an explanation');
   assert.match(calls[0].prompt, /"understanding"/);
   assert.match(calls[0].prompt, /omitted/);
-  assert.ok(calls[0].prompt.length < 20000, `expanded evidence and decision instructions remain bounded (${calls[0].prompt.length} chars)`);
+  // The summary-shape rule adds about 120 tokens to every prompt.
+  assert.ok(calls[0].prompt.length < 20500, `expanded evidence and decision instructions remain bounded (${calls[0].prompt.length} chars)`);
   assert.equal(tasks.length, 3);
   assert.equal(tasks[2].analysisUsage.total, 120);
   assert.equal(snapshots, 0, 'all explanations use collected evidence only');

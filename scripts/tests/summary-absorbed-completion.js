@@ -199,6 +199,28 @@ const tests = [
     },
   },
   {
+    name: 'A skill sent from Summary completes when Claude logs it under its plugin name in tags',
+    async run() {
+      const f = fixture();
+      try {
+        f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first',
+          requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
+        await f.sync();
+        const { job } = await f.send('/grill-with-docs 내가 /clear를 하면 요약도 비워져야 해');
+        f.state.native = { ...f.state.native, requestId: 'r2', requestAt: job.sentAt + 500, completedAt: job.sentAt + 5000, evidence: 'GRILL',
+          request: '<command-message>mattpocock-skills:grill-with-docs</command-message>\n<command-name>/mattpocock-skills:grill-with-docs</command-name>\n<command-args>내가 /clear를 하면 요약도 비워져야 해</command-args>' };
+        f.state.now += 10_000; await f.sync();
+        assert.equal(f.job(job.id).state, 'completed', 'the tagged skill turn is this send');
+        assert.equal(f.job(job.id).answer, 'GRILL');
+        const other = await f.send('/grill-with-docs 다른 질문');
+        f.state.native = { ...f.state.native, requestId: 'r3', requestAt: other.job.sentAt + 500, completedAt: other.job.sentAt + 5000, evidence: 'OTHER',
+          request: '<command-name>/mattpocock-skills:grill-me</command-name>\n<command-args>다른 질문</command-args>' };
+        f.state.now += 10_000; await f.sync();
+        assert.equal(f.job(other.job.id).state, 'running', 'a different skill with the same words is not this send');
+      } finally { f.cleanup(); }
+    },
+  },
+  {
     name: 'Without any work signal a Summary job ends 15 minutes after the last one, not 15 minutes after sending',
     async run() {
       const f = fixture();
