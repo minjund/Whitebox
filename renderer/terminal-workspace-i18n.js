@@ -221,6 +221,7 @@
   ["독립 패널 추가", "Add independent panel", "添加独立面板"],
   ["작업 폴더별로 묶은 패널", "Panels grouped by project folder", "按项目文件夹分组的面板"],
   ["프로젝트에 속하지 않는 패널", "Panels outside projects", "不属于项目的面板"],
+  ["프로젝트 없음", "No project", "无项目"],
   ["프로젝트 펼치기·접기", "Expand or collapse project", "展开或收起项目"],
   ["패널 펼치기·접기", "Expand or collapse panel", "展开或收起面板"],
   ["생성 중…", "Creating…", "正在创建…"],
