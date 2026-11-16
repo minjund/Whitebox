@@ -4888,6 +4888,63 @@ function registerTerminalLifecycleTests(context) {
     afterCrash.dispose();
   });
 
+  test('호스트와 함께 죽은 전체 화면 프로그램이 켜 둔 마우스·화면 모드를 새 프로그램에 넘기지 않는다', () => {
+    const processes = [];
+    const storeFile = path.join(temp, 'terminal-host-crash-abandoned-screen.json');
+    const options = {
+      storeFile,
+      killTree: () => {},
+      ptyModule: { spawn: () => {
+        const processHandle = {
+          pid: 16_000 + processes.length,
+          onData(callback) { this.dataCallback = callback; },
+          onExit() {},
+          write() {}, resize() {}, kill() {},
+        };
+        processes.push(processHandle);
+        return processHandle;
+      } },
+    };
+    const beforeCrash = new TerminalManager(options);
+    const inline = beforeCrash.create({ type: 'shell', cwd: root });
+    const alternate = beforeCrash.create({ type: 'shell', cwd: root });
+    const plain = beforeCrash.create({ type: 'shell', cwd: root });
+    const exited = beforeCrash.create({ type: 'shell', cwd: root });
+    // Claude Code drawing on the main screen, cut off inside a frame.
+    processes[0].dataCallback('% claude\r\n\x1b[?2004h\x1b[>5u\x1b[>4;2m\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
+      + '\x1b[?2026h\x1b[?25l\x1b[H\r\x1b[22C\x1b[58B\x1b[');
+    processes[1].dataCallback('% claude\r\n\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[Hframe');
+    // A shell prompt, and a full-screen program that restored the terminal.
+    processes[2].dataCallback('% ls\r\nfile\r\n% \x1b[K\x1b[?2004h');
+    processes[3].dataCallback('\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?25lframe\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l% \x1b[?2004h');
+    beforeCrash.persistNow();
+
+    const afterCrash = new TerminalManager(options);
+    assert.equal(afterCrash.recoverPersistedSessions().length, 4);
+    const notice = '\r\n[Whitebox] 명령창 연결이 끊긴 뒤 새 프로그램으로 복구';
+    const handoff = id => {
+      const replay = afterCrash.get(id, true).replay;
+      return replay.slice(replay.lastIndexOf('\x1b[?2026l\x1b[?6l\x1b[r'), replay.indexOf(notice));
+    };
+    for (const id of [inline.id, alternate.id]) {
+      const reset = handoff(id);
+      assert.equal(afterCrash.get(id, true).replay.endsWith(`${reset}${notice}했습니다. 이전 명령창의 임시 상태는 이어지지 않습니다.\r\n`), true);
+      for (const mode of [1000, 1002, 1003, 1006, 1004, 2004]) assert.equal(reset.includes(`\x1b[?${mode}l`), true, `mode ${mode}`);
+      assert.equal(reset.includes('\x1b[<99u\x1b[>4;0m'), true);
+      assert.equal(reset.endsWith('\x1b[?25h\x1b[0 q'), true);
+    }
+    assert.equal(handoff(inline.id).includes('\x1b[?1047l\x1b[999;1H'), true, '본 화면에 그린 프레임은 맨 아래 줄 밑에서 이어 갑니다.');
+    assert.equal(handoff(inline.id).includes('\x1b[?1049l'), false);
+    assert.equal(handoff(alternate.id).includes('\x1b[?1049l'), true, '대체 화면은 원래 커서로 돌아갑니다.');
+    assert.equal(handoff(alternate.id).includes('\x1b[999;1H'), false);
+    for (const id of [plain.id, exited.id]) {
+      const replay = afterCrash.get(id, true).replay;
+      assert.equal(replay.includes('\x1b[?2026l'), false, '정상 종료한 화면과 일반 셸은 건드리지 않습니다.');
+      assert.equal(replay.includes(`\x1b[?2004h${notice}`), true);
+    }
+    afterCrash.dispose();
+  });
+
   test('내부 bridge ID·세션 ID 없는 재개 인자와 과거 질문이 붙은 Grok 인자는 안전하게 복구한다', () => {
     const storeFile = path.join(temp, 'terminal-safe-resume-arguments.json');
     const now = '2026-08-01T00:00:00.000Z';

@@ -1796,6 +1796,35 @@ function appendSessionReplay(session, value, { immediate = false } = {}) {
   }
 }
 
+// Private modes only a full-screen program turns on. One still set at the end
+// of a replay means that program died with its host before it could restore
+// the terminal it was drawing on.
+const ABANDONED_SCREEN_MODES = ['9', '47', '1000', '1002', '1003', '1004', '1047', '1049', '2026'];
+const ABANDONED_INPUT_MODES = [1, 9, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016, 2004, 2031, 2048];
+
+// Returns the sequence that hands such a screen to the program replacing it,
+// or '' when the replay ends in a plain shell. Without it the next output
+// lands inside the stale frame and the mouse reporting left on types
+// "32;56;47M" into the new shell on every pointer move.
+function abandonedScreenReset(replay) {
+  const set = new Map();
+  for (const match of String(replay || '').matchAll(/\x1b\[\?([\d;]+)([hl])/g)) {
+    for (const mode of match[1].split(';')) set.set(mode, match[2] === 'h');
+  }
+  if (set.get('25') !== false && !ABANDONED_SCREEN_MODES.some(mode => set.get(mode))) return '';
+  return [
+    // The leading escape also cancels a sequence the program was cut off in.
+    '\x1b[?2026l\x1b[?6l\x1b[r',
+    // 1049 restores the cursor the main screen had before the program started.
+    // A frame drawn on the main screen has no such cursor: step below it.
+    set.get('1049') ? '\x1b[?1049l' : '\x1b[?1047l\x1b[999;1H',
+    '\x1b[0m\x1b]8;;\x1b\\\x1b(B\x0f',
+    ...ABANDONED_INPUT_MODES.map(mode => `\x1b[?${mode}l`),
+    // Kitty keyboard stack, modifyOtherKeys, keypad, insert, wrap and cursor.
+    '\x1b[<99u\x1b[>4;0m\x1b>\x1b[4l\x1b[?7h\x1b[?25h\x1b[0 q',
+  ].join('');
+}
+
 function resetSessionReplay(session) {
   if (!session) return;
   session.replayPendingChunks = [];
@@ -2443,7 +2472,7 @@ class TerminalManager extends EventEmitter {
         && Boolean(session.options.tmuxPanePid);
       const message = exactTmuxReattach
         ? '\r\n[Whitebox] 명령창 호스트가 다시 시작되어 기존 tmux pane의 실제 PTY에 다시 연결했습니다.\r\n'
-        : '\r\n[Whitebox] 명령창 연결이 끊긴 뒤 새 프로그램으로 복구했습니다. 이전 명령창의 임시 상태는 이어지지 않습니다.\r\n';
+        : `${abandonedScreenReset(flushSessionReplay(session))}\r\n[Whitebox] 명령창 연결이 끊긴 뒤 새 프로그램으로 복구했습니다. 이전 명령창의 임시 상태는 이어지지 않습니다.\r\n`;
       appendSessionReplay(session, message, { immediate: true });
       try {
         this.spawn(session);
@@ -4936,4 +4965,5 @@ module.exports = {
   isInternalTerminalProjectionSessionId,
   resolveWindowsCommand,
   resolvePosixShell,
+  abandonedScreenReset,
 };
