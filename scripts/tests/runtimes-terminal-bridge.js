@@ -4906,10 +4906,11 @@ function registerTerminalLifecycleTests(context) {
       } },
     };
     const beforeCrash = new TerminalManager(options);
-    const inline = beforeCrash.create({ type: 'shell', cwd: root });
-    const alternate = beforeCrash.create({ type: 'shell', cwd: root });
-    const plain = beforeCrash.create({ type: 'shell', cwd: root });
-    const exited = beforeCrash.create({ type: 'shell', cwd: root });
+    // A resumable agent takes the same new-program path as a shell and, unlike
+    // a shell, starts on every test platform.
+    const [inline, alternate, plain, exited] = ['inline', 'alternate', 'plain', 'exited'].map(name => beforeCrash.create({
+      type: 'agent', provider: 'codex', args: ['resume', `session-${name}`], cwd: root, bridgeId: `codex:session-${name}`, sessionBackend: 'direct',
+    }));
     // Claude Code drawing on the main screen, cut off inside a frame.
     processes[0].dataCallback('% claude\r\n\x1b[?2004h\x1b[>5u\x1b[>4;2m\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
       + '\x1b[?2026h\x1b[?25l\x1b[H\r\x1b[22C\x1b[58B\x1b[');
