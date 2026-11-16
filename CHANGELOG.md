@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.36 - 2026-11-16
+
+- A terminal dragged onto another one now lands on the side you dropped it on. Whitebox used to rearrange every view into an even grid in reading order, so a terminal dropped on the top or bottom edge appeared beside its target instead. A view you arranged yourself now keeps that arrangement when a terminal is added or closed, and after a restart; a view you never arranged stays the automatic grid.
+- With several terminals on screen, each one shows next to its token count which project it is under, or “No project” when it is under none.
+
 ## 2.0.35 - 2026-11-16
 
 - A terminal restored after Whitebox restarts no longer fills the new shell with text such as “32;56;47M” whenever the mouse moves. An AI program that was closed together with Whitebox left mouse reporting and its other screen modes switched on; Whitebox now switches them off before the new shell starts, and the “restored” notice appears on its own line below the old screen instead of being written into the middle of it.

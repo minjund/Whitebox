@@ -64,6 +64,8 @@ html[data-workspace="terminal"] body { margin: 0; overflow: hidden; }
 .wb-pane-heading { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .wb-pane-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-pane-tokens { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--wb-muted); cursor: help; }
+.wb-pane-project { flex-shrink: 1; min-width: 0; max-width: 45%; padding: 1px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--wb-line); border-radius: 999px; color: var(--wb-muted); font-size: 10px; }
+.wb-pane-project.is-none { border-style: dashed; opacity: .75; }
 .wb-pane-tokens:focus-visible { outline: 1px solid var(--wb-accent); outline-offset: 2px; border-radius: 3px; }
 .wb-pane-state { margin-left: auto; font: 9px monospace; letter-spacing: .5px; }
 .wb-pane > header button { min-height: 20px !important; padding: 0 5px !important; font-size: 16px !important; }

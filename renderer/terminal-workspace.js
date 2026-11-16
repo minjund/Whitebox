@@ -467,7 +467,7 @@
     const available = new Set(owners().flatMap(item => item.tabs.flatMap(panel => layout.ids(panel.layout))));
     const view = owner.viewLayout || current.viewLayout, present = layout.ids(view);
     owner.viewLayout = present.length && present.length === new Set(present).size && present.every(id => available.has(id))
-      ? view : layout.aligned(layout.restore(view, available) || layout.restore(current.layout, available));
+      ? view : layout.fit(view, available) || layout.fit(current.layout, available);
     current.viewLayout = owner.viewLayout;
     return owner.viewLayout;
   }
@@ -730,7 +730,10 @@
       const tokens = terminalTokens(id);
       const expandTitle = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
       const splitView = layout.ids(canvasLayout()).length > 1;
-      const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, tokens, expanded && id === activeId(), expandTitle]);
+      // With several terminals on screen, each one says which project it is under.
+      const owner = splitView ? terminalPosition(id)?.owner : null;
+      const project = !owner ? '' : owner.standalone ? t('프로젝트 없음') : owner.name;
+      const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, tokens, expanded && id === activeId(), expandTitle, project, Boolean(owner?.standalone)]);
       if (pane.chromeKey === key) continue;
       pane.chromeKey = key;
       pane.node.classList.toggle('is-separate-panel', separated);
@@ -742,6 +745,10 @@
       panelBadge.removeAttribute('title');
       pane.node.querySelector('.wb-pane-title').textContent = label;
       pane.node.querySelector('.wb-pane-title').title = label;
+      const projectBadge = pane.node.querySelector('.wb-pane-project');
+      projectBadge.hidden = !project; projectBadge.textContent = project;
+      projectBadge.classList.toggle('is-none', Boolean(owner?.standalone));
+      projectBadge.title = owner?.standalone ? t('프로젝트에 속하지 않는 패널') : project;
       const tokenBadge = pane.node.querySelector('.wb-pane-tokens');
       tokenBadge.textContent = tokens.text; tokenBadge.title = tokens.detail;
       tokenBadge.setAttribute('aria-label', `${tokens.text}. ${tokens.detail}`);
@@ -972,7 +979,8 @@
     activatePanel(owner, owner.tabs.find(item => item.id === panelId));
     renderLayout();
   }
-  function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right', join = false }) {
+  // `chosen`: the user picked the side of `targetId`, so the terminal lands there.
+  function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right', join = false, chosen = false }) {
     if (busy || !sessions.has(id) || trashed(id)) return;
     const sourceOwner = owners().find(owner => owner.tabs.some(item => layout.ids(item.layout).includes(id)));
     const source = sourceOwner?.tabs.find(item => layout.ids(item.layout).includes(id));
@@ -995,7 +1003,7 @@
     // directional drop only arranges the screen; joining is explicit.
     if (!destination || join) detachFromLayout(id, true);
     if (destination && join) {
-      destination.layout = layout.split(destination.layout, targetId, id,
+      destination.layout = (chosen ? layout.drop : layout.split)(destination.layout, targetId, id,
         ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
       destination.activePane = id; destination.collapsed = false; owner.activeTab = destination.id;
     } else if (!destination) {
@@ -1004,7 +1012,7 @@
     }
     sourceOwner.viewLayout = sourceView;
     if (destination) {
-      owner.viewLayout = layout.split(layout.remove(destinationView, id), targetId, id,
+      owner.viewLayout = (chosen ? layout.drop : layout.split)(layout.remove(destinationView, id), targetId, id,
         ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
     } else owner.viewLayout = sourceOwner === owner ? sourceView
       : layout.reconcile(destinationView, [{ id }], new Set([...layout.ids(destinationView), id]));
@@ -1050,7 +1058,7 @@
     const direction = y < .25 ? 'up' : y > .75 ? 'down' : x < .5 ? 'left' : 'right';
     // Place within the shared canvas. The target's logical project may still
     // remember an older, smaller view; activating it would discard other panes.
-    return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction };
+    return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction, chosen: true };
   }
   function placePanel(panelId, target) {
     const panel = panelOwner(panelId)?.tabs.find(item => item.id === panelId);
@@ -1060,7 +1068,7 @@
     if (!targetId) return;
     const direction = target.direction || 'right';
     space().viewLayout = layout.place(current, panel.layout, targetId,
-      ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction));
+      ['up', 'down'].includes(direction) ? 'column' : 'row', ['left', 'up'].includes(direction), target.chosen);
     pinnedPanels = [...new Set([...layout.ids(space().viewLayout).map(id => panelFor(id)?.id)].filter(Boolean))];
     rememberCanvas();
     expanded = false; root.classList.remove('terminal-expanded'); renderLayout(false);
@@ -1177,7 +1185,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-hide-terminal="${esc(session.id)}" title="화면에서 숨기기" aria-label="화면에서 숨기기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-project" hidden></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-hide-terminal="${esc(session.id)}" title="화면에서 숨기기" aria-label="화면에서 숨기기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -1971,14 +1979,14 @@
     }
     if (action === 'join-panel') {
       const panelId = $('#wbMoveTarget').value;
-      if (!panelId.startsWith('owner:')) moveTerminal(arrangingId, { panelId, direction: $('#wbMoveDirection').value, join: true });
+      if (!panelId.startsWith('owner:')) moveTerminal(arrangingId, { panelId, direction: $('#wbMoveDirection').value, join: true, chosen: true });
       $('#wbArrange').close();
     }
     if (action === 'archive-arranged') { $('#wbArrange').close(); return trashInstance(arrangingId); }
     if (action === 'move-terminal') {
       const value = $('#wbMoveTarget').value;
       if (value.startsWith('owner:')) moveTerminal(arrangingId, { ownerId: value.slice(6) });
-      else moveTerminal(arrangingId, { panelId: value, direction: $('#wbMoveDirection').value });
+      else moveTerminal(arrangingId, { panelId: value, direction: $('#wbMoveDirection').value, chosen: true });
       $('#wbArrange').close();
     }
     if (action === 'split' || action === 'split-down') return createTerminal(action === 'split' ? 'row' : 'column');
@@ -2320,7 +2328,7 @@
     }
     if (!spaces.length && !Array.isArray(saved.spaces)) spaces.push({ id: uuid(), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.', name: t('내 작업 공간'), tabs: [], activeTab: '', nextNumber: 1 });
     pinnedPanels = Array.isArray(saved.pinnedPanels) ? [...new Set(saved.pinnedPanels.filter(id => typeof id === 'string'))] : [];
-    for (const owner of owners()) { owner.viewLayout = layout.aligned(layout.restore(owner.viewLayout, available)); for (const panel of owner.tabs) { panel.layout = layout.aligned(panel.layout); panel.viewLayout = layout.aligned(layout.restore(panel.viewLayout, available)); } }
+    for (const owner of owners()) { owner.viewLayout = layout.fit(owner.viewLayout, available); for (const panel of owner.tabs) panel.viewLayout = layout.fit(panel.viewLayout, available); }
     selectedSpace = owners().some(item => item.id === saved.selectedSpace) ? saved.selectedSpace : spaces[0]?.id || standalone.id;
     // The saved canvas can intentionally show only some members of a panel.
     // Older profiles without a canvas may still recover their pinned panels.

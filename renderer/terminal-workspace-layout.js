@@ -17,9 +17,9 @@
     const before = span(first, node.axis), after = span(second, node.axis);
     return { ...node, ratio: clampRatio(before / (before + after)), first, second };
   }
-  // Every arrangement is an aligned grid in reading order: about as many
-  // columns as rows, equal cells, and no row more than one cell longer than
-  // another (5 terminals: 3 over 2). Directions only decide the order.
+  // The automatic arrangement is an aligned grid in reading order: about as
+  // many columns as rows, equal cells, and no row more than one cell longer
+  // than another (5 terminals: 3 over 2).
   function chain(items, axis) {
     return items.length === 1 ? items[0] : { axis, ratio: 1 / items.length, first: items[0], second: chain(items.slice(1), axis) };
   }
@@ -40,16 +40,22 @@
     if (left.id || right.id) return left.id === right.id;
     return left.axis === right.axis && sameShape(left.first, right.first) && sameShape(left.second, right.second);
   }
-  function aligned(node) {
-    return !node || sameShape(node, grid(node)) ? node : grid(node);
+  // `after` is `before` with cells the app added or dropped. A view that was
+  // the automatic grid stays one. A view the user arranged by dropping keeps
+  // its shape and only shares the space evenly again. An unchanged view keeps
+  // the sizes its dividers were dragged to.
+  function settle(before, after) {
+    if (!after || sameShape(before, after)) return after;
+    return sameShape(before, grid(before)) ? grid(after) : balance(after);
   }
   function insert(node, target, next, axis, before) {
     if (!node) return { id: next };
     if (node.id) return node.id === target ? { axis, ratio: 0.5, first: before ? { id: next } : node, second: before ? node : { id: next } } : node;
     return { ...node, first: insert(node.first, target, next, axis, before), second: insert(node.second, target, next, axis, before) };
   }
+  // Open `next` beside `target` without the user choosing where.
   function split(node, target, next, axis = 'row', before = false) {
-    return grid(insert(node, target, next, axis, before));
+    return settle(node, insert(node, target, next, axis, before));
   }
   function prune(node, target) {
     if (!node || node.id === target) return null;
@@ -58,7 +64,15 @@
     return first && second ? { ...node, first, second } : first || second;
   }
   function remove(node, target) {
-    return grid(prune(node, target));
+    return settle(node, prune(node, target));
+  }
+  // The user dropped `next` on one side of `target`: it lands exactly there.
+  function drop(node, target, next, axis = 'row', before = false) {
+    return balance(insert(prune(node, next), target, next, axis, before));
+  }
+  // A saved view without the sessions that are gone.
+  function fit(node, available) {
+    return settle(node, restore(node, available));
   }
   function restore(node, available, seen = new Set(), depth = 0) {
     if (!node || depth > 16) return null;
@@ -79,9 +93,11 @@
       result = result ? { axis: 'row', ratio: .5, first: result, second: missing } : missing;
       ids(missing).forEach(id => present.add(id));
     }
-    return aligned(result);
+    return settle(node, result);
   }
-  function place(node, incoming, target, axis = 'row', before = false) {
+  // Put a whole panel beside `target`. `chosen` means the user dropped it on
+  // that side, so it lands exactly there.
+  function place(node, incoming, target, axis = 'row', before = false, chosen = false) {
     const incomingIds = ids(incoming);
     if (!incomingIds.length || incomingIds.includes(target)) return node;
     incoming = restore(incoming, new Set(incomingIds));
@@ -94,7 +110,7 @@
         ? { axis, ratio: .5, first: before ? incoming : branch, second: before ? branch : incoming }
         : branch
       : { ...branch, first: attach(branch.first), second: attach(branch.second) };
-    return grid(attach(remaining));
+    return chosen ? balance(attach(remaining)) : settle(node, attach(remaining));
   }
-  return { ids, split, remove, restore, reconcile, place, balance, grid, aligned };
+  return { ids, split, drop, remove, restore, fit, reconcile, place, balance, grid };
 });

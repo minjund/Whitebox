@@ -1003,8 +1003,9 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].tabs.length'), 2, 'placement does not merge panel membership');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 2);
     await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`, .5, .1);
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'row', 'two terminals stay in one aligned grid row');
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge inserts before target without changing membership');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'column', 'a terminal dropped on the top edge is stacked, not put beside its target');
+    assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge places it above the target without changing membership');
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane-project'), node => node.hidden ? null : node.textContent)`), Array(2).fill(await evaluate('WhiteboxWorkspace.getState().spaces[0].name')), 'with several terminals on screen each header names its project');
     // Drop onto another project, then return the same session to its original panel.
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
