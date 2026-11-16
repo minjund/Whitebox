@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.35 - 2026-11-16
+
+- A terminal restored after Whitebox restarts no longer fills the new shell with text such as “32;56;47M” whenever the mouse moves. An AI program that was closed together with Whitebox left mouse reporting and its other screen modes switched on; Whitebox now switches them off before the new shell starts, and the “restored” notice appears on its own line below the old screen instead of being written into the middle of it.
+
 ## 2.0.34 - 2026-11-12
 
 - A Summary request sent while the AI works now goes out on its own once the reply is finished. Claude's input box was misread as holding a draft whenever its status line had no brackets (for example “Opus 5.5 │ project”), so queued requests waited until “Send anyway”; anything below the input box's closing rule is now ignored. A finished Codex reply also ends its request right away instead of after 15 minutes: Codex closes its session log between turns, and Whitebox now keeps reading the log it saw that process write.
