@@ -7,6 +7,24 @@ affected file and line. Do not edit files unless the user also asked for a
 change. State which checks were actually run; an unexecuted check is not
 evidence that the behavior works.
 
+## Evidence in completion reports
+
+When a reply tells the user that work is done or a bug is fixed, the same reply
+must carry the evidence gathered in this turn, not only the claim.
+
+- Give each claim one short line with what shows it: the command and its key
+  output, test names and pass counts, `file:line`, commit SHA, PR or Actions
+  run URL, release asset, or screenshot path.
+- Before reporting a Whitebox UI bug as fixed, run the repro-check skill
+  (`.claude/skills/repro-check/SKILL.md`). Include its verdict table and one
+  screenshot path you opened. If the bug is outside that tool's scope, say so
+  and state what was checked instead.
+- Claims about state outside the code (merged, released, installed, closed,
+  sent) need a fresh check of that state in the same turn, such as
+  `gh pr view`, the live release API, or the installed app version.
+- List anything not verified, with the reason, on a final "Not verified" line.
+  A unit test or mock that stands in for the real check is named as such.
+
 ## Updater and release review gate
 
 Apply this gate when a change touches update discovery, release-asset naming or
