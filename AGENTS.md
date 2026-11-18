@@ -15,6 +15,11 @@ must carry the evidence gathered in this turn, not only the claim.
 - Give each claim one short line with what shows it: the command and its key
   output, test names and pass counts, `file:line`, commit SHA, PR or Actions
   run URL, release asset, or screenshot path.
+- The user must be able to open every piece of evidence. Prefer a full URL:
+  the GitHub commit, PR, Actions run or release page, or the web page or
+  documentation a fact came from. Local evidence (files, screenshots, logs) is
+  given as a complete absolute path. A bare SHA, run number or "tests passed"
+  without a link or path is not enough.
 - Before reporting a Whitebox UI bug as fixed, run the repro-check skill
   (`.claude/skills/repro-check/SKILL.md`). Include its verdict table and one
   screenshot path you opened. If the bug is outside that tool's scope, say so
