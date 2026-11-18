@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.37 - 2026-11-18
+
+- No change to the app itself. This release carries the repository's new real-app check for claimed UI fixes (`scripts/repro-check`) and the rule that an AI's completion report links the evidence behind each claim. CI now audits the packages that ship inside the app, and the update checks are pinned to the official 2.0.36 installers.
+
 ## 2.0.36 - 2026-11-16
 
 - A terminal dragged onto another one now lands on the side you dropped it on. Whitebox used to rearrange every view into an even grid in reading order, so a terminal dropped on the top or bottom edge appeared beside its target instead. A view you arranged yourself now keeps that arrangement when a terminal is added or closed, and after a restart; a view you never arranged stays the automatic grid.
