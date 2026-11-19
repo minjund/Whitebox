@@ -94,15 +94,17 @@ try {
   const hooksPath = path.join(codexHome, 'hooks.json');
   const handler = hooks.hooks.PreToolUse[1].hooks[0];
   assert.ok(toml.includes(`[hooks.state.${JSON.stringify(`${hooksPath}:pre_tool_use:1:0`)}]\ntrusted_hash = ${JSON.stringify(installer.guardHookHash('pre_tool_use', handler))}`));
-  assert.ok(toml.includes(`${hooksPath}:session_start:0:0`) && toml.includes(`${hooksPath}:user_prompt_submit:0:0`));
+  // Keys are TOML strings, so Windows backslashes appear escaped.
+  const key = suffix => JSON.stringify(`${hooksPath}:${suffix}`).slice(1, -1);
+  assert.ok(toml.includes(key('session_start:0:0')) && toml.includes(key('user_prompt_submit:0:0')));
   // Idempotent, and a moved runtime path is replaced in place with a new hash.
   assert.equal(installer.installCodexTerminalGuard(options).changed, false);
   installer.installCodexTerminalGuard({ ...options, nodeExecutable: '/y/node' });
   const moved = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
   assert.equal(moved.hooks.PreToolUse.length, 2);
-  assert.match(moved.hooks.PreToolUse[1].hooks[0].command, /'\/y\/node'/u);
+  assert.ok(moved.hooks.PreToolUse[1].hooks[0].command.includes(`'${path.resolve('/y/node')}'`), 'resolved runtime path is quoted');
   const movedToml = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
-  assert.equal(movedToml.split(`${hooksPath}:pre_tool_use:1:0`).length, 2, 'one trust section per key');
+  assert.equal(movedToml.split(key('pre_tool_use:1:0')).length, 2, 'one trust section per key');
   assert.ok(movedToml.includes(installer.guardHookHash('pre_tool_use', moved.hooks.PreToolUse[1].hooks[0])));
   // Invalid JSON is never overwritten; Windows is skipped.
   fs.writeFileSync(hooksPath, '{ broken');
