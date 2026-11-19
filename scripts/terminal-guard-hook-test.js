@@ -32,9 +32,21 @@ assert.equal(guard.respond(pre, {}), null);
 assert.equal(guard.respond(pre, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.permissionDecision, 'deny');
 assert.match(guard.respond(pre, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.permissionDecisionReason, /whitebox new-terminal/u);
 assert.equal(guard.respond({ ...pre, tool_input: { command: 'ls' } }, { WHITEBOX_SURFACE_ID: 's' }), null);
-assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext, guard.GUIDANCE);
-assert.ok(guard.respond({ hook_event_name: 'UserPromptSubmit', prompt: '터미널 3개 열어서 나눠 줘' }, { WHITEBOX_SURFACE_ID: 's' }));
-assert.equal(guard.respond({ hook_event_name: 'UserPromptSubmit', prompt: '이 함수 리팩터링해 줘' }, { WHITEBOX_SURFACE_ID: 's' }), null);
+assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext, `${guard.GUIDANCE}\n${guard.LANGUAGE_RULE}`);
+const prompted = prompt => guard.respond({ hook_event_name: 'UserPromptSubmit', prompt }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext;
+assert.equal(prompted('터미널 3개 열어서 나눠 줘'), `${guard.GUIDANCE}\n${guard.LANGUAGE_GUIDANCE.ko}`);
+// Every prompt carries the reply language; terminal guidance only when terminals come up.
+assert.equal(prompted('이 함수 리팩터링해 줘'), guard.LANGUAGE_GUIDANCE.ko);
+assert.equal(prompted('refactor this function'), guard.LANGUAGE_RULE);
+assert.equal(prompted('この関数を直して'), guard.LANGUAGE_GUIDANCE.ja);
+assert.equal(prompted('帮我修复这个函数'), guard.LANGUAGE_GUIDANCE.zh);
+// Korean words around English paste, code, URLs and paths are still Korean.
+assert.equal(guard.promptLanguage('이거 왜 실패해? <pasted_content id="a">Error: ENOENT no such file or directory</pasted_content>'), 'ko');
+assert.equal(guard.promptLanguage('`npm test` 돌려봐 https://github.com/x/y/pull/1 /Users/a/b.js'), 'ko');
+// Pasted Korean under English words is not the user's language.
+assert.equal(guard.promptLanguage('summarize this <pasted_content id="b">회의록 내용입니다</pasted_content>'), '');
+assert.equal(guard.promptLanguage('fix `한글` in /tmp/한국어.txt'), '');
+assert.equal(guard.promptLanguage('/clear'), '');
 assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, {}), null);
 
 // The script reads hook JSON on stdin and writes the decision on stdout.

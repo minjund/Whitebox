@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.38 - 2026-11-19
+
+- Claude and Codex in a Whitebox terminal now answer in the language you write in. Whitebox's own instructions to them were English, and in long sessions with English files and logs they sometimes slipped into English after a Korean message. Each message now carries a short note naming its language (Korean, Japanese or Chinese, written in that language), or for other languages a rule to follow the words you typed rather than pasted logs or code.
+
 ## 2.0.37 - 2026-11-18
 
 - No change to the app itself. This release carries the repository's new real-app check for claimed UI fixes (`scripts/repro-check`) and the rule that an AI's completion report links the evidence behind each claim. CI now audits the packages that ship inside the app, and the update checks are pinned to the official 2.0.36 installers.
