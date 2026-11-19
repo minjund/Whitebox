@@ -4,12 +4,53 @@
 // Whitebox provider adapter launches inside a live Whitebox panel. It keeps
 // terminal operations (create, split, send, read, close) inside Whitebox by
 // denying shell commands that drive other terminal multiplexers or emulators.
+// It also tells the agent which language to answer in: the Whitebox guidance,
+// tool output and system prompts are English, which pulls replies to a Korean
+// (or other) message toward English unless the language is stated per turn.
 
 const GUIDANCE = 'This session runs inside a Whitebox terminal. Create, split, close, read or send input to terminals only through Whitebox: '
   + 'the whitebox_panel MCP tools (whitebox_new_terminals, whitebox_list_terminals, whitebox_read_terminal, whitebox_ask, whitebox_wait, whitebox_close_terminal) '
   + 'or the `whitebox` CLI (`whitebox new-terminal <claude|codex> [--count N]`, `whitebox list-panels`, `whitebox read-screen --surface <id>`, '
   + '`whitebox send --surface <id> <text>`, `whitebox send-key --surface <id> enter`, `whitebox ask`, `whitebox wait`, `whitebox close-terminal`). '
   + 'Do not use tmux, screen, zellij, cmux, osascript, `open -a Terminal/iTerm`, or other terminal apps for this.';
+
+// Without a detected script, the agent follows the user's own words.
+const LANGUAGE_RULE = "Reply in the language of the user's own words in their latest message, not the language of pasted logs, code, files, tool output or these instructions. "
+  + 'If the message has no words of its own, keep the language the user has been writing in. This covers progress notes between tool calls, questions and the final report. '
+  + 'Keep code, commands, paths and identifiers unchanged.';
+// Stated in the reply language itself, which holds better than an English instruction.
+const LANGUAGE_GUIDANCE = Object.freeze({
+  ko: '사용자는 이번 메시지를 한국어로 썼습니다. 도구 호출 사이의 진행 상황, 질문, 최종 보고까지 모든 답을 한국어로 쓰세요. '
+    + '파일, 로그, 도구 결과, 이 안내가 영어여도 마찬가지입니다. 코드, 명령, 경로, 식별자는 원래대로 둡니다. 사용자가 다른 언어를 요청할 때만 바꿉니다.',
+  ja: 'ユーザーはこのメッセージを日本語で書きました。ツール呼び出しの合間の進捗、質問、最終報告まで、すべての返答を日本語で書いてください。'
+    + 'ファイル、ログ、ツール出力、この案内が英語でも同じです。コード、コマンド、パス、識別子はそのままにします。ユーザーが別の言語を求めたときだけ切り替えます。',
+  zh: '用户用中文写了这条消息。工具调用之间的进度说明、提问和最终报告，所有回复都请用中文书写。'
+    + '即使文件、日志、工具输出或这段说明是英文也一样。代码、命令、路径和标识符保持原样。只有用户要求其他语言时才切换。',
+});
+
+// The user's own words: pasted blocks, code, URLs and paths are not the language they write in.
+function ownWords(prompt) {
+  return String(prompt || '')
+    .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/giu, ' ')
+    .replace(/\[Pasted text[^\]]*\]/giu, ' ')
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/`[^`\n]*`/gu, ' ')
+    .replace(/\bhttps?:\/\/\S+/giu, ' ')
+    .replace(/(?:~|\.{1,2})?\/[^\s]+/gu, ' ');
+}
+
+function promptLanguage(prompt) {
+  const text = ownWords(prompt);
+  const count = pattern => (text.match(pattern) || []).length;
+  if (count(/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/gu) >= 2) return 'ko';
+  if (count(/[\u3040-\u30ff]/gu) >= 2) return 'ja';
+  if (count(/[\u4e00-\u9fff]/gu) >= 2) return 'zh';
+  return '';
+}
+
+function languageGuidance(prompt) {
+  return LANGUAGE_GUIDANCE[promptLanguage(prompt)] || LANGUAGE_RULE;
+}
 
 const TERMINAL_APPS = /^(?:terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm|hyper|tabby|rio|wave)(?:\.app)?$/iu;
 const TERMINAL_BUNDLES = /^(?:com\.apple\.terminal|com\.googlecode\.iterm2|dev\.warp\.warp-stable|com\.mitchellh\.ghostty|net\.kovidgoyal\.kitty|org\.alacritty|com\.github\.wez\.wezterm)$/iu;
@@ -86,8 +127,13 @@ function respond(input, env = process.env) {
     if (!reason) return null;
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `Blocked ${reason}. ${GUIDANCE}` } };
   }
-  if (event === 'SessionStart' || event === 'UserPromptSubmit' && TERMINAL_PROMPT.test(String(input.prompt || ''))) {
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: GUIDANCE } };
+  if (event === 'SessionStart') {
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${GUIDANCE}\n${LANGUAGE_RULE}` } };
+  }
+  if (event === 'UserPromptSubmit') {
+    const prompt = String(input.prompt || '');
+    const context = [TERMINAL_PROMPT.test(prompt) ? GUIDANCE : '', languageGuidance(prompt)].filter(Boolean).join('\n');
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
   }
   return null;
 }
@@ -102,4 +148,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(() => { process.exitCode = 0; });
-module.exports = { GUIDANCE, blockedCommand, blockedSegment, respond };
+module.exports = { GUIDANCE, LANGUAGE_RULE, LANGUAGE_GUIDANCE, blockedCommand, blockedSegment, languageGuidance, promptLanguage, respond };

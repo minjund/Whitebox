@@ -32,9 +32,21 @@ assert.equal(guard.respond(pre, {}), null);
 assert.equal(guard.respond(pre, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.permissionDecision, 'deny');
 assert.match(guard.respond(pre, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.permissionDecisionReason, /whitebox new-terminal/u);
 assert.equal(guard.respond({ ...pre, tool_input: { command: 'ls' } }, { WHITEBOX_SURFACE_ID: 's' }), null);
-assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext, guard.GUIDANCE);
-assert.ok(guard.respond({ hook_event_name: 'UserPromptSubmit', prompt: '터미널 3개 열어서 나눠 줘' }, { WHITEBOX_SURFACE_ID: 's' }));
-assert.equal(guard.respond({ hook_event_name: 'UserPromptSubmit', prompt: '이 함수 리팩터링해 줘' }, { WHITEBOX_SURFACE_ID: 's' }), null);
+assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext, `${guard.GUIDANCE}\n${guard.LANGUAGE_RULE}`);
+const prompted = prompt => guard.respond({ hook_event_name: 'UserPromptSubmit', prompt }, { WHITEBOX_SURFACE_ID: 's' }).hookSpecificOutput.additionalContext;
+assert.equal(prompted('터미널 3개 열어서 나눠 줘'), `${guard.GUIDANCE}\n${guard.LANGUAGE_GUIDANCE.ko}`);
+// Every prompt carries the reply language; terminal guidance only when terminals come up.
+assert.equal(prompted('이 함수 리팩터링해 줘'), guard.LANGUAGE_GUIDANCE.ko);
+assert.equal(prompted('refactor this function'), guard.LANGUAGE_RULE);
+assert.equal(prompted('この関数を直して'), guard.LANGUAGE_GUIDANCE.ja);
+assert.equal(prompted('帮我修复这个函数'), guard.LANGUAGE_GUIDANCE.zh);
+// Korean words around English paste, code, URLs and paths are still Korean.
+assert.equal(guard.promptLanguage('이거 왜 실패해? <pasted_content id="a">Error: ENOENT no such file or directory</pasted_content>'), 'ko');
+assert.equal(guard.promptLanguage('`npm test` 돌려봐 https://github.com/x/y/pull/1 /Users/a/b.js'), 'ko');
+// Pasted Korean under English words is not the user's language.
+assert.equal(guard.promptLanguage('summarize this <pasted_content id="b">회의록 내용입니다</pasted_content>'), '');
+assert.equal(guard.promptLanguage('fix `한글` in /tmp/한국어.txt'), '');
+assert.equal(guard.promptLanguage('/clear'), '');
 assert.equal(guard.respond({ hook_event_name: 'SessionStart' }, {}), null);
 
 // The script reads hook JSON on stdin and writes the decision on stdout.
@@ -82,15 +94,17 @@ try {
   const hooksPath = path.join(codexHome, 'hooks.json');
   const handler = hooks.hooks.PreToolUse[1].hooks[0];
   assert.ok(toml.includes(`[hooks.state.${JSON.stringify(`${hooksPath}:pre_tool_use:1:0`)}]\ntrusted_hash = ${JSON.stringify(installer.guardHookHash('pre_tool_use', handler))}`));
-  assert.ok(toml.includes(`${hooksPath}:session_start:0:0`) && toml.includes(`${hooksPath}:user_prompt_submit:0:0`));
+  // Keys are TOML strings, so Windows backslashes appear escaped.
+  const key = suffix => JSON.stringify(`${hooksPath}:${suffix}`).slice(1, -1);
+  assert.ok(toml.includes(key('session_start:0:0')) && toml.includes(key('user_prompt_submit:0:0')));
   // Idempotent, and a moved runtime path is replaced in place with a new hash.
   assert.equal(installer.installCodexTerminalGuard(options).changed, false);
   installer.installCodexTerminalGuard({ ...options, nodeExecutable: '/y/node' });
   const moved = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
   assert.equal(moved.hooks.PreToolUse.length, 2);
-  assert.match(moved.hooks.PreToolUse[1].hooks[0].command, /'\/y\/node'/u);
+  assert.ok(moved.hooks.PreToolUse[1].hooks[0].command.includes(`'${path.resolve('/y/node')}'`), 'resolved runtime path is quoted');
   const movedToml = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
-  assert.equal(movedToml.split(`${hooksPath}:pre_tool_use:1:0`).length, 2, 'one trust section per key');
+  assert.equal(movedToml.split(key('pre_tool_use:1:0')).length, 2, 'one trust section per key');
   assert.ok(movedToml.includes(installer.guardHookHash('pre_tool_use', moved.hooks.PreToolUse[1].hooks[0])));
   // Invalid JSON is never overwritten; Windows is skipped.
   fs.writeFileSync(hooksPath, '{ broken');
