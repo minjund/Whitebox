@@ -105,6 +105,9 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   assert.equal(inputReady(codexIdle.replace('~/Desktop', 'C:\\Users'), 'codex'), true, 'a Windows folder in the status row is ready too');
   assert.equal(inputReady(codexIdle.replace('Ask Codex to do anything', 'fix the login'), 'codex'), false, 'a real draft still blocks');
   assert.equal(inputReady(codexIdle.replace('\n \n', '\n  and also the tests\n'), 'codex'), false, 'a wrapped draft row still blocks');
+  const fixtureIdle = 'SUMMARY_READY 8228\n› Ask Codex to do anything\n  GPT-6 · fixture';
+  assert.equal(inputReady(fixtureIdle + '\n'.repeat(26), 'codex'), true, 'empty rows under the prompt (a cleared Windows ConPTY window) do not count as content');
+  assert.equal(inputReady(fixtureIdle + '\n'.repeat(5) + 'late output\n'.repeat(14), 'codex'), false, 'real output far below the prompt still means it is not the current input');
   for (const [provider, finish, prompt] of [['codex', 'Worked for 2s • 3:42 PM', '› Ask Codex to do anything'], ['claude', '✻ Baked for 2s', '❯ ']]) {
     const completed = `› first\n• Working (esc to interrupt)\n• answer\n${finish}\n${prompt}`;
     assert.equal(inputReady(completed, provider), true, 'historical busy text before an explicit finish cannot block automatic queued delivery');
