@@ -7,6 +7,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { TerminalCollaboration } = require('../../src/terminalCollaboration');
 const { providerActivity } = require('../../src/terminalActivity');
+// A value placed inside JavaScript sent to the renderer: JSON with the
+// characters that can end a script or a line escaped (see background-runtime-check.js).
+function lit(value) {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new TypeError('JavaScript 리터럴로 직렬화할 수 없는 값입니다.');
+  return serialized.replace(/[<>/\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
 
 function createFixture({ manager, profile, root }) {
   const processes = new Map();
@@ -48,7 +55,7 @@ function createFixture({ manager, profile, root }) {
           messages.push({ id: `${job.id}:a`, role: 'assistant', text: `답: ${job.request}\n\n\`\`\`\nCODE_${job.request}\n\`\`\``, timestamp: at });
         }
       }
-      const revision = JSON.stringify(jobs.map(job => [job.id, job.state]));
+      const revision = lit(jobs.map(job => [job.id, job.state]));
       if (payload.revision === revision) return { available: true, provider: providers.get(payload.id), providerPid: processes.get(payload.id), revision, unchanged: true, working: false };
       return { available: true, provider: providers.get(payload.id), providerPid: processes.get(payload.id), revision, truncated: false, working: false, messages };
     },
@@ -65,7 +72,7 @@ function createFixture({ manager, profile, root }) {
         ? `& ${quote(node)} ${quote(script)} ${provider}`
         : ` ELECTRON_RUN_AS_NODE=1 ${quote(node)} ${quote(script)} ${provider}`;
       await manager.command(id, command);
-      await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_READY')`, 'fixture provider startup');
+      await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_READY')`, 'fixture provider startup');
       const replay = manager.get(id, true).replay;
       const pid = Number(replay.match(/SUMMARY_READY (\d+)/u)?.[1]); assert(pid);
       processes.set(id, pid);
@@ -76,9 +83,9 @@ function createFixture({ manager, profile, root }) {
 
 async function run({ evaluate, waitFor, manager, win, fixture }) {
   const id = await evaluate('WhiteboxWorkspace.getState().activeId');
-  const pane = `#wbCanvas .wb-pane[data-terminal-id=${JSON.stringify(id)}]`;
-  const q = selector => JSON.stringify(selector);
-  const type = text => evaluate(`(() => { const input = document.querySelector(${q(`${pane} .wb-chat textarea`)}); input.focus(); input.value = ${JSON.stringify(text)};
+  const pane = `#wbCanvas .wb-pane[data-terminal-id=${lit(id)}]`;
+  const q = selector => lit(selector);
+  const type = text => evaluate(`(() => { const input = document.querySelector(${q(`${pane} .wb-chat textarea`)}); input.focus(); input.value = ${lit(text)};
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
   const log = () => evaluate(`document.querySelector(${q(`${pane} .wb-chat-log`)})?.textContent || ''`);
 
@@ -100,18 +107,18 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   assert.equal(await evaluate('document.querySelector("[data-workspace-mode=chat]").getAttribute("aria-pressed")'), 'true');
 
   await type('CHAT_PING');
-  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_REPLY CHAT_PING')`, 'a chat message is delivered to the real PTY and answered');
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_PING')`, 'a chat message is delivered to the real PTY and answered');
   await waitFor(`(document.querySelector(${q(`${pane} .wb-chat-log`)})?.textContent || '').includes('CODE_CHAT_PING') && !document.querySelector(${q(`${pane} .is-pending`)})`, 'the answer arrives from the transcript and the sent message leaves the queue');
   assert(await evaluate(`Boolean(document.querySelector(${q(`${pane} .wb-chat-tools`)}))`), 'tool calls are folded into one row');
   assert.doesNotMatch(await log(), /hidden/u, 'injected reminders are not shown');
 
   // A second message while the AI works waits, then goes after the first reply.
   await type('CHAT_HOLD');
-  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('› CHAT_HOLD')`, 'first message reaches the PTY');
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('› CHAT_HOLD')`, 'first message reaches the PTY');
   await type('CHAT_NEXT');
   await waitFor(`Boolean(document.querySelector(${q(`${pane} .is-pending`)}))`, 'the next message waits in the chat');
-  assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('CHAT_NEXT')`), false, 'nothing is typed into the working AI');
-  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_REPLY CHAT_NEXT')`, 'the queued message is delivered after the reply', 15000);
+  assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('CHAT_NEXT')`), false, 'nothing is typed into the working AI');
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_NEXT')`, 'the queued message is delivered after the reply', 15000);
 
   // A question in the terminal is answered there.
   await type('CHAT_PERMISSION');
@@ -119,7 +126,7 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   await evaluate(`document.querySelector(${q(`${pane} [data-chat-terminal-view]`)}).click()`);
   await waitFor(`!document.querySelector(${q(pane)}).classList.contains('is-chat')`, '"터미널로 보기" returns that pane to the terminal');
   await manager.write(id, 'y');
-  await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(id)}).includes('SUMMARY_REPLY CHAT_PERMISSION')`, 'the question answered in the terminal');
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_PERMISSION')`, 'the question answered in the terminal');
 
   assert.deepEqual((({ cols, rows }) => ({ cols, rows }))(manager.get(id)), sizeBefore, 'the PTY keeps its size while shown as chat');
 
