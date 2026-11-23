@@ -218,7 +218,9 @@ const CODEX_STATUS_ROW = /^\s*[\w.:-]+(?:\s+(?:none|minimal|low|medium|high|xhig
 function inputReady(screen, provider) {
   if (!finishedPattern[provider]) return false;
   const promptPattern = promptFor(provider);
-  const lines = String(screen || '').split('\n');
+  // Blank rows below the input are not content: Windows ConPTY clears to a
+  // full window of empty rows, which must not push the prompt out of range.
+  const lines = String(screen || '').replace(/(?:\r?\n[ \t]*)+$/u, '').split('\n');
   let index = -1;
   for (let i = 0; i < lines.length; i++) if (promptPattern.test(lines[i])) index = i;
   if (index < 0 || lines.length - index > 15) return false;

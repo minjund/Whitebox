@@ -58,6 +58,9 @@ function ownedExecutablePids() {
     '2.0.27': process.arch === 'arm64'
       ? {size:124690297,sha256:'a947eb797b83a7e856425ba6174d7db5d673395d924360ab1e3046a6f227969a'}
       : {size:128496912,sha256:'420a7e95a092877ba17c47987f34a9ce7b021f6c409cc297040620ed87809ae5'},
+    '2.0.40': process.arch === 'arm64'
+      ? {size:124772683,sha256:'f339f9712a352e9df96bb38270704a72f10da7443cc4baf331af8fba2bfa3d5c'}
+      : {size:128557821,sha256:'d0c3b30c96b4c3eb620555a8b5ba99662f63a92493b0c10bd489d1163620cf8f'},
     '2.0.39': process.arch === 'arm64'
       ? {size:124778104,sha256:'3038e8b1f81383f3d7db60ccb76ffac6dfcf43611b09d7d89863b06e9cb4be7e'}
       : {size:128564021,sha256:'b22f8cf15ec6e9cd2b42cd544420e917d091c30f4b780f200ab1122230f1ed0d'},

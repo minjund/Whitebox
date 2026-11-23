@@ -40,6 +40,8 @@ const STALE_TURN_THRESHOLD_MS = 5 * 60_000;
 const LIST_CACHE_MS = 60_000;
 const PINNED_FILE_CACHE_MS = 60_000;
 const CARD_JSONL_BYTES = 4 * 1024 * 1024;
+// Safety bound only; scans normally keep far fewer (only what they still read).
+const MAX_PARSE_CACHE = 2000;
 const STARTUP_INPUT_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const STARTUP_INPUT_RECOVERY_MAX_FILES = 20;
 const STARTUP_INPUT_RECOVERY_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
@@ -616,6 +618,7 @@ class AgentMonitor extends EventEmitter {
     ));
     this.availability = {};
     this.parseCache = new Map();
+    this.scanGeneration = 0;
     this.codexTitleCache = new Map();
     this.listCache = new Map();
     this.managedCache = new Map();
@@ -842,6 +845,7 @@ class AgentMonitor extends EventEmitter {
       || (cached.executions || []).some(execution => execution.status === 'running')
     ));
     if (cached && (!timeSensitive || Date.now() - parsedAt < ACTIVE_THRESHOLD_MS)) {
+      cachedEntry.usedAt = this.scanGeneration;
       this.parseCache.delete(key);
       this.parseCache.set(key, cachedEntry);
       return cached;
@@ -857,15 +861,18 @@ class AgentMonitor extends EventEmitter {
     const value = parser(info);
     if (value) this.parseCache.set(key, {
       value, parsedAt: Date.now(), parseMs: Date.now() - parseStarted, mtimeMs: info.mtimeMs, size: info.size,
-      fullHistory: variant === 'full-history',
+      fullHistory: variant === 'full-history', usedAt: this.scanGeneration,
     });
     // Full transcripts have a separate small budget; keep the current card
     // working set hot instead of evicting it based on raw log size (most raw
-    // provider events are discarded by the parsers).
+    // provider events are discarded by the parsers). The card set is bounded
+    // by what scans still read (see evictUnusedParses), not by a count: a
+    // fixed count below the files one scan reads evicted each card just
+    // before the next scan needed it, so every scan reparsed everything.
     let fullHistory = 0;
     let count = 0;
     for (const [entryKey, entry] of [...this.parseCache].reverse()) {
-      if (count >= 300 || (entry.fullHistory && fullHistory >= 8)) {
+      if (count >= MAX_PARSE_CACHE || (entry.fullHistory && fullHistory >= 8)) {
         this.parseCache.delete(entryKey);
       } else {
         count += 1;
@@ -873,6 +880,13 @@ class AgentMonitor extends EventEmitter {
       }
     }
     return value;
+  }
+
+  // Cards no scan has read for two scans are dropped; the rest stay parsed.
+  evictUnusedParses() {
+    for (const [key, entry] of this.parseCache) {
+      if (!entry.fullHistory && Number(entry.usedAt) < this.scanGeneration - 2) this.parseCache.delete(key);
+    }
   }
 
   detailSession(sessionId) {
@@ -1002,6 +1016,7 @@ class AgentMonitor extends EventEmitter {
   scanNow() {
     if (this.scanning) return this.lastSnapshot;
     this.scanning = true;
+    this.scanGeneration += 1;
     try {
       const sessions = [];
       const includedFiles = new Set();
@@ -1143,6 +1158,7 @@ class AgentMonitor extends EventEmitter {
       return this.lastSnapshot;
     } finally {
       this.scanning = false;
+      this.evictUnusedParses();
       this.lastScanEndedAt = Date.now();
     }
   }

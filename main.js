@@ -21,7 +21,6 @@ const { QuestionnairePreferenceStore } = require('./src/questionnairePreferenceS
 const { bindWindowNavigation } = require('./src/windowNavigation');
 const { snapshotWithoutSessions, refreshedSnapshot } = require('./src/agentMonitor');
 const { providerList, blankUsage } = require('./src/providerRegistry');
-const { collectProviderUsage } = require('./src/providerUsage');
 const { TerminalManager, isInternalTerminalProjectionSessionId } = require('./src/terminalManager');
 const { TerminalHostClient, launchTerminalHost, resolveTerminalHostExecutable, requiresUpdateShutdown } = require('./src/terminalHost');
 const { externalTerminalHost } = require('./src/updateWorkloadScope');
@@ -64,7 +63,6 @@ const { AttentionNotifier } = require('./src/attentionNotifier');
 const { ProviderVisibilityStore } = require('./src/providerVisibilityStore');
 const { AttentionPopupManager } = require('./src/attentionPopupManager');
 const { applicationMenuTemplate, closeFocusedWindow } = require('./src/appMenu');
-const { SummaryAttachments, payloadWithAttachments } = require('./src/summaryAttachments');
 const { TrayPopover } = require('./src/trayPopover');
 const { attentionProject } = require('./src/attentionProject');
 const { AttentionPopupPreferenceStore } = require('./src/attentionPopupPreferenceStore');
@@ -209,7 +207,6 @@ const MAIN_COPY = {
     traySessions: '작업 {count}개가 뒤에서 실행 중',
     trayQuit: '프로그램 끝내기 · 명령창은 유지, 직접 실행은 중지',
     closeWindow: '창 닫기',
-    summaryAttachmentLine: '첨부 이미지',
     trayPopoverTerminals: '명령창',
     trayPopoverTerminalsNote: '끝내도 계속 실행',
     trayPopoverRuns: '직접 실행',
@@ -256,7 +253,6 @@ const MAIN_COPY = {
     traySessions: '{count} background tasks active',
     trayQuit: 'Quit · Keep terminals, stop direct runs',
     closeWindow: 'Close Window',
-    summaryAttachmentLine: 'Attached image',
     trayPopoverTerminals: 'Terminals',
     trayPopoverTerminalsNote: 'Keep running after quit',
     trayPopoverRuns: 'Direct runs',
@@ -303,7 +299,6 @@ const MAIN_COPY = {
     traySessions: '正在保持 {count} 个后台任务',
     trayQuit: '退出 · 保留终端并停止直接运行',
     closeWindow: '关闭窗口',
-    summaryAttachmentLine: '附加图片',
     trayPopoverTerminals: '终端',
     trayPopoverTerminalsNote: '退出后继续运行',
     trayPopoverRuns: '直接运行',
@@ -940,17 +935,12 @@ function requireTrustedSender(event) {
   if (!trustedSender(event)) throw new Error('안전을 위해 이 명령창 요청을 차단했습니다.');
 }
 
-let summaryAttachmentStore = null;
-function summaryAttachments() {
-  if (!summaryAttachmentStore) summaryAttachmentStore = new SummaryAttachments({ directory: userFile('summary-attachments') });
-  return summaryAttachmentStore;
-}
-
-// Attached images reach the AI as absolute paths at the end of the request.
-// IDs are resolved here, so the renderer can never name another file.
-function summaryPayloadWithAttachments(payload) {
-  return payloadWithAttachments(payload, { store: summaryAttachments(), label: mainText('summaryAttachmentLine'),
-    shell: async id => (terminalManager && typeof id === 'string' ? (await terminalManager.get(id, false))?.shell : '') || '' });
+let terminalConversationReader = null;
+function terminalConversation() {
+  if (!terminalConversationReader) terminalConversationReader = new (require('./src/terminalConversation').TerminalConversation)({
+    manager: () => terminalManager, monitor: terminalReview.monitor, completion: terminalReview.completion,
+  });
+  return terminalConversationReader;
 }
 
 function handleTrusted(channel, handler) {
@@ -2679,7 +2669,6 @@ function registerIpcHandlers() {
       return { ok: true, settings };
     },
   });
-  handleTrusted('providers:usage', options => collectProviderUsage(options || {}));
   handleTrusted('terminals:review', payload => terminalReview.capture(payload));
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
@@ -2695,28 +2684,13 @@ function registerIpcHandlers() {
       } });
     if (payload?.operation === 'sync') return terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
-    if (payload?.operation === 'summary-send') return terminalCollaboration.summarySend(await summaryPayloadWithAttachments(payload));
-    if (payload?.operation === 'summary-respond') return terminalCollaboration.summaryRespond(payload);
-    if (payload?.operation === 'summary-stop') return terminalCollaboration.summaryStop(payload);
+    if (payload?.operation === 'chat-send') return terminalCollaboration.chatSend(payload);
+    if (payload?.operation === 'chat-respond') return terminalCollaboration.chatRespond(payload);
+    if (payload?.operation === 'chat-stop') return terminalCollaboration.chatStop(payload);
     throw new Error('지원하지 않는 터미널 협업 요청입니다.');
   });
-  handleTrusted('summary-attachments:save', payload => summaryAttachments().save(payload));
-  handleTrusted('summary-attachments:remove', ids => summaryAttachments().remove(ids));
-  // A summarized draft's own file: read for "초안 전체 보기"/copy, or opened.
-  // Only the document the summarized turn itself wrote is reachable.
-  handleTrusted('terminals:summary-draft', async ({ id, taskId, action } = {}) => {
-    const file = terminalReview.draftFile(String(id || ''), String(taskId || ''));
-    if (!file) throw new Error('초안 파일을 찾지 못했어요.');
-    const stat = await fs.promises.stat(file).catch(() => null);
-    if (!stat?.isFile()) throw new Error('초안 파일이 옮겨졌거나 지워졌어요.');
-    if (action === 'open') {
-      const error = await shell.openPath(file);
-      if (error) throw new Error(error);
-      return { ok: true };
-    }
-    if (stat.size > 512 * 1024) throw new Error('초안이 너무 커서 여기서 보여 줄 수 없어요. 파일로 열어 주세요.');
-    return { path: file, text: await fs.promises.readFile(file, 'utf8') };
-  });
+  // A chat pane reads the tail of its own terminal's Claude/Codex transcript.
+  handleTrusted('terminals:conversation', payload => terminalConversation().read(payload));
   handleTrusted('terminals:jev-status', () => terminalReview.jev.status());
   handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
@@ -2865,9 +2839,6 @@ app.whenReady().then(async () => {
   }
   const runtimeSetup = setupRuntime();
   createWindow();
-  setImmediate(() => {
-    try { summaryAttachments().prune(); } catch (error) { reportRecoverableError('summary-attachments-prune', error); }
-  });
   brandProfileRecoveryInProgress = false;
   await runtimeSetup;
   app.on('activate', showMainWindow);

@@ -49,7 +49,7 @@ function collaborationFixture(provider, screen) {
     activity: { observe: async members => new Map(members.map(member => [member.id, { state: providerActivity({ text: state.screen, provider }) }])) } });
   const sync = () => collaboration.sync({ groups: [{ id: 'group', cwd: directory, members: [session] }],
     frames: [{ id: session.id, creationId: session.creationId, outputSequence: session.outputSequence, text: state.screen }] });
-  const send = message => collaboration.summarySend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
+  const send = message => collaboration.chatSend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
     targetCreationId: session.creationId, targetProviderPid: 1300, targetProvider: provider });
   const show = text => { state.screen = text; session.outputSequence++; state.now += 1000; };
   return { state, session, collaboration, sync, send, show, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
@@ -183,7 +183,7 @@ const tests = [
           f.show(working); await f.sync();
           assert.equal(f.collaboration.jobs.get(sent.job.id).state, 'running');
           // Stop uses the CLI's own cancel key.
-          await f.collaboration.summaryStop({ groupId: 'group', targetId: f.session.id, targetCreationId: f.session.creationId, targetProviderPid: 1300, targetProvider: provider });
+          await f.collaboration.chatStop({ groupId: 'group', targetId: f.session.id, targetCreationId: f.session.creationId, targetProviderPid: 1300, targetProvider: provider });
           if (provider === 'grok') assert.equal(f.state.writes.at(-1).data, '\x03', 'Grok cancels a turn with Ctrl+C');
           else assert.equal(f.state.responds.at(-1).key, 'Escape', 'Gemini cancels with Escape');
           const second = await f.send(`${REQUEST} 다시`);

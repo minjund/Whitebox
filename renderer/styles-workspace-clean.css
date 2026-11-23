@@ -166,3 +166,28 @@
 #terminalWorkspace .wb-color-swatches button:focus-visible{outline:2px solid var(--clean-text);outline-offset:2px}
 #terminalWorkspace .wb-color-custom{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--clean-secondary);cursor:pointer}
 #terminalWorkspace .wb-color-custom input{width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
+
+/* Named groups (renderer/terminal-groups.js): right under the project search. */
+#terminalWorkspace .wb-groups{padding:2px 12px 10px;border-bottom:1px solid var(--clean-line)}
+#terminalWorkspace .wb-groups[hidden]{display:none}
+#terminalWorkspace .wb-groups>.wb-side-heading{padding:10px 11px 6px}
+#terminalWorkspace .wb-group-list{display:flex;flex-direction:column;gap:3px}
+#terminalWorkspace .wb-group-row{position:relative;display:flex;align-items:center;border:1px solid transparent;border-radius:8px}
+#terminalWorkspace .wb-group-row:hover{background:var(--clean-wash)}
+#terminalWorkspace .wb-group-row.active{background:var(--clean-surface);border-color:var(--clean-line)}
+#terminalWorkspace .wb-group-main{display:flex;align-items:center;gap:9px;flex:1;min-width:0;width:auto;padding:7px 4px 7px 9px;border:0;background:none;text-align:left;color:var(--clean-text);cursor:pointer}
+#terminalWorkspace .wb-group-swatches{display:grid;grid-template-columns:repeat(2,6px);gap:2px;flex:none}
+#terminalWorkspace .wb-group-swatches i{display:block;width:6px;height:6px;border-radius:2px;background:var(--wb-panel-color)}
+#terminalWorkspace .wb-group-copy{display:flex;flex-direction:column;flex:1;min-width:0}
+#terminalWorkspace .wb-group-copy strong{overflow:hidden;font-size:12.5px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+#terminalWorkspace .wb-group-copy small{overflow:hidden;font-size:10.5px;color:var(--clean-muted);text-overflow:ellipsis;white-space:nowrap}
+#terminalWorkspace .wb-group-edit{position:absolute;left:30px;right:34px;top:5px}
+#terminalWorkspace .wb-group-edit input{box-sizing:border-box;width:100%;height:22px;padding:0 6px;border:1px solid var(--clean-text);border-radius:5px;background:var(--clean-surface);color:var(--clean-text);font:600 12.5px var(--font-sans)}
+#terminalWorkspace .wb-group-more{flex:none;width:24px;min-width:24px;height:24px;margin-right:4px;padding:0;border:0;border-radius:6px;background:none;color:var(--clean-muted);font-size:15px;line-height:1;opacity:0;cursor:pointer}
+#terminalWorkspace .wb-group-row:hover .wb-group-more,#terminalWorkspace .wb-group-row.active .wb-group-more,#terminalWorkspace .wb-group-more[aria-expanded=true],#terminalWorkspace .wb-group-more:focus-visible{opacity:1}
+#terminalWorkspace .wb-group-more:hover,#terminalWorkspace .wb-group-more[aria-expanded=true]{background:var(--clean-wash);color:var(--clean-text)}
+#terminalWorkspace .wb-group-menu{position:absolute;z-index:30;top:calc(100% + 4px);right:0;display:flex;flex-direction:column;min-width:168px;padding:5px;border:1px solid var(--clean-line);border-radius:10px;background:var(--clean-surface);box-shadow:0 10px 28px #00000033}
+#terminalWorkspace .wb-group-menu button{display:flex;align-items:baseline;gap:6px;width:100%;min-height:30px;padding:0 10px;border:0;border-radius:6px;background:none;text-align:left;font-size:12px;color:var(--clean-text);cursor:pointer}
+#terminalWorkspace .wb-group-menu button:hover{background:var(--clean-wash)}
+#terminalWorkspace .wb-group-menu button.danger{color:#d0574b}
+#terminalWorkspace .wb-group-menu small{font-size:10px;color:var(--clean-muted)}

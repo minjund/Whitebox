@@ -28,6 +28,7 @@
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
     review: '<path d="M4 6h16M4 12h10M4 18h7m4-1 2 2 4-5"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4Z"/><path d="M8 9h8M8 12h5"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
     moon: '<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/>',
@@ -39,10 +40,6 @@
   let fontFamily = 'Cascadia Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
   let fontSize = 14, autoReview = true, reviewWidth = 332, expanded = false, uiFont = 'pretendard';
   const applyUiFont = () => { if (uiFont === 'pretendard') delete document.documentElement.dataset.uiFont; else document.documentElement.dataset.uiFont = uiFont; };
-  // 2048 is for the wait while a summary is generated; it closes when the
-  // summary arrives unless the user unlocks it for any time.
-  let summaryGameVisibility = 'summarizing';
-  let summaryGameBehavior = 'auto-collapse';
   let reviewView = 'current';
   let reviewTask = null;
   const reanalysisRequests = new Map();
@@ -89,17 +86,17 @@
     return session;
   }
   const workStates = new Map();
-  const summaryMembers = new Map();
+  const aiMembers = new Map();
   const terminalUsageHistory = new Map();
   let backgroundPopover = null;
   const acknowledgedCompletions = new Map();
   const root = document.createElement('div');
   root.id = 'terminalWorkspace';
   root.innerHTML = msg`
-    <button class="wb-summary-nav-backdrop" data-action="summary-sidebar-close" aria-label="사이드바 접기" tabindex="-1"></button>
     <aside class="wb-sidebar">
-      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span><button class="wb-summary-nav-close" data-action="summary-sidebar-close" aria-label="사이드바 접기">${icon('close')}</button></div>
+      <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
+      <section id="wbGroups" class="wb-groups" aria-label="그룹" hidden></section>
       <div class="wb-sidebar-scroll">
       <div class="wb-side-heading"><span>프로젝트</span><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
       <p class="wb-side-description">작업 폴더별로 묶은 패널</p>
@@ -113,24 +110,9 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span><span id="wbBreadcrumbPanel" class="wb-crumb-panel" aria-hidden="true" hidden></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong id="wbBreadcrumbLeaf">작업 공간</strong></div><div class="wb-top-actions"><div class="wb-mode-switch" role="group" aria-label="작업 모드"><button data-workspace-mode="terminal" aria-pressed="true">터미널</button><button data-workspace-mode="summary" aria-pressed="false" disabled>요약</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span><span id="wbBreadcrumbPanel" class="wb-crumb-panel" aria-hidden="true" hidden></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong id="wbBreadcrumbLeaf">작업 공간</strong></div><div class="wb-top-actions"><div class="wb-mode-switch" role="group" aria-label="작업 모드"><button data-workspace-mode="terminal" aria-pressed="true">터미널</button><button data-workspace-mode="chat" aria-pressed="false" disabled>채팅</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
-      <section id="wbSummary" class="wb-summary" aria-label="요약 채팅" hidden>
-        <header class="wb-summary-heading"><div><h1 id="wbSummaryTarget"></h1><p id="wbSummaryConnection"><i aria-hidden="true"></i><span class="wb-summary-model"><b id="wbSummaryProvider"></b> <span id="wbSummaryModel"></span></span><span class="wb-summary-effort" id="wbSummaryEffort" hidden><span class="wb-summary-effort-level" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="wb-summary-effort-label">effort</span> <b id="wbSummaryEffortValue"></b></span><span class="wb-summary-sep" aria-hidden="true"></span><span id="wbSummaryConnectionState">같은 대화에 연결됨</span></p></div><div class="wb-summary-usage"><div class="wb-summary-usage-meters" id="wbSummaryUsageMeters"></div><button type="button" class="wb-summary-history-button" id="wbSummaryHistoryButton"></button></div></header><div class="wb-summary-history" id="wbSummaryHistory" hidden></div>
-        <div class="wb-summary-body">
-          <div class="wb-summary-conversation">
-            <ol class="wb-summary-flow" aria-label="이번 요청 진행 상태"><li data-summary-step="delivery"><b aria-hidden="true">1</b><span>요청 전달</span></li><li data-summary-step="reply"><b aria-hidden="true">2</b><span>AI 답변</span><span class="sr-only" id="wbSummaryReplyState"></span></li><li data-summary-step="review"><b aria-hidden="true">3</b><span>이해 · 검토</span><span class="sr-only" id="wbSummaryReviewState"></span></li></ol><p class="sr-only" role="status" aria-live="polite"><span id="wbSummaryStateTitle"></span> <span id="wbSummaryStateDescription"></span></p>
-            <div id="wbSummaryMessages" class="wb-summary-messages" aria-label="대화 기록"><div id="wbSummaryTranscript"></div><div id="wbSummaryWorking" class="wb-summary-working" hidden><div class="wb-summary-answer-heading"><span class="wb-summary-answer-mark" aria-hidden="true">W</span><b>Whitebox 요약</b></div><div id="wbSummaryThinking"></div><p id="wbSummaryWorkingDescription"></p><i class="wb-summary-skeleton" aria-hidden="true"></i><i class="wb-summary-skeleton" aria-hidden="true"></i></div></div>
-            <form id="wbSummaryForm" class="wb-summary-composer"><label for="wbSummaryInput" class="sr-only">다음 요청</label><ul id="wbSummaryAttachments" class="wb-summary-attachments" aria-label="첨부한 이미지" hidden></ul><textarea id="wbSummaryInput" rows="2" maxlength="8000" placeholder="요약을 읽고, 다음 요청을 이어가세요." aria-describedby="wbSummaryComposerHint"></textarea><ul id="wbSummaryCommands" class="wb-summary-commands" role="listbox" aria-label="명령어" hidden></ul><div><span class="wb-summary-composer-tools"><button id="wbSummaryAttach" class="wb-summary-attach" type="button" title="이미지 첨부 · 붙여넣기나 끌어다 놓기도 돼요">＋ 이미지</button><input id="wbSummaryAttachInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden/><span id="wbSummaryComposerHint"></span></span><span id="wbSummaryStopHost" hidden><button id="wbSummaryStop" type="button">멈추기</button></span><span id="wbSummarySendHost"><button id="wbSummarySend" type="submit">전송</button></span></div><p id="wbSummaryNotice" role="status" aria-live="polite"></p></form>
-            <p class="wb-summary-footnote">같은 AI 세션으로 전달됩니다.</p>
-          </div>
-          <aside class="wb-summary-rail" aria-label="지난 요청">
-            <div class="wb-summary-past" id="wbSummaryPastSection" hidden><div class="wb-summary-rail-heading"><h2>지난 요청</h2><span id="wbSummaryPastCount"></span></div><ol id="wbSummaryPast" class="wb-summary-past-list"></ol></div>
-            <section id="wbSummaryGame" class="wb-summary-game" aria-label="2048" hidden></section>
-          </aside>
-        </div>
-      </section>
       <section id="wbCanvas" aria-label="터미널 작업 공간"></section>
       <footer class="wb-status"><span id="wbConnection"><i></i>터미널 연결 중</span><span id="wbTerminalStatus"></span><span>⌘/Ctrl T 터미널 추가 <b>·</b> ⌘/Ctrl D 분할</span></footer>
     </main>
@@ -178,8 +160,6 @@
       </section>
       <section data-settings-page="analysis" aria-labelledby="wbSettingsAnalysisTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsAnalysisTitle">이해 · 검토</h3><p>분석 방식과 사용할 AI를 선택합니다.</p></div>
         <div class="wb-setting-row"><div><label for="wbAutoReview"><strong>자동 이해 · 검토</strong></label><p>새로운 작업 결과를 자동으로 분석</p></div><label class="wb-setting-switch"><input id="wbAutoReview" type="checkbox" role="switch" aria-label="자동 이해 · 검토" checked/><span></span></label></div>
-        <div class="wb-setting-row"><label for="wbSummaryGameBehavior"><strong>요약 완료 시 게임</strong><span>요약 화면의 게임 접기 방식</span></label><select id="wbSummaryGameBehavior"><option value="auto-collapse">요약 끝나면 자동 접히기</option><option value="always-open">상시 펼치기</option></select></div>
-        <div class="wb-setting-row"><label for="wbSummaryGameVisibility"><strong>2048 사용</strong><span>요약 화면 게임을 자동으로 접는 때 · 게임은 늘 열 수 있음</span></label><select id="wbSummaryGameVisibility"><option value="summarizing">AI 작업·요약이 끝나면 접기</option><option value="always">언제나 사용</option></select></div>
         <div class="wb-setting-row"><div><label for="wbJevEnabled"><strong>Jev로 분석 필요 여부 선별</strong></label><p>필요한 경우 선택한 AI가 원문 근거로 판단합니다.</p></div><label class="wb-setting-switch"><input id="wbJevEnabled" type="checkbox" role="switch" aria-label="Jev로 분석 필요 여부 선별"/><span></span></label></div>
         <fieldset class="wb-analysis-settings"><legend class="wb-visually-hidden">이해·검토용 모델</legend>
           <div class="wb-setting-row"><label for="wbAnalysisProvider"><strong>분석 서비스</strong><span>이해 · 검토에 사용할 AI</span></label><select id="wbAnalysisProvider"><option value="auto">터미널과 같은 서비스</option><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
@@ -207,39 +187,25 @@
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
   const $ = selector => root.querySelector(selector);
-  const summaryChat = window.WhiteboxSummaryChat({
+  // A Claude/Codex terminal can be read as a chat inside its own pane.
+  const chat = window.WhiteboxTerminalChat({
     root, api, t, esc, activeId: () => activeId(), session: id => sessions.get(id),
-    member: id => summaryMembers.get(id), groupId: id => panelFor(id)?.id,
-    review: id => reviews.get(id), snapshot: id => terminal.readTerminalSnapshot(id),
-    tasks: id => explainedTasks(id, sessions.get(id)?.creationId, reviews.get(id)?.result?.tasks)
-      .filter(task => !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)),
-    label: id => { const owner = terminalPosition(id)?.owner; return `${owner?.name || ''} · ${title(id)}`; },
-    title: id => title(id),
-    refresh: () => syncCollaboration(), save: () => save(), gameVisibility: () => summaryGameVisibility, gameBehavior: () => summaryGameBehavior,
-    startSummary: () => requestReanalysis(),
-    captureReply: async job => {
-      const session = sessions.get(job.targetId);
-      if (!session || session.creationId !== job.creationId || session.pid !== job.pid) throw new Error(t('AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.'));
-      const result = await api.terminalReview({ id: session.id, creationId: session.creationId, text: terminal.readTerminal(session.id),
-        enabled: true, foreground: session.id === activeId(),
-        submission: { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } },
-        analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
-      if (sessions.get(session.id)?.creationId !== session.creationId || !acceptReview(session.id, result)) throw new Error(t('전송 상태를 확인하지 못했습니다. 터미널을 확인해 주세요.'));
-      const history = retainReview(session, result);
-      reviews.set(session.id, history ? { ...result, result: history.result } : result);
-      // A reply that ends with a question to the user stays in-progress for
-      // review, yet the turn is finished and the next message answers it.
-      const finished = item => item?.lifecycle === 'completed' || item?.awaitingResponse === true;
-      return [result.preview?.submissionId, result.preview?.latestSubmissionId].includes(job.id) && finished(result.preview)
-        || result.result?.tasks?.some(task => task.submissionId === job.id && finished(task));
-    },
-    reveal: id => selectInstance(id), focusTerminal: id => requestAnimationFrame(() => terminal.focusTerminal(id)), report: (message, id) => report(new Error(message), 'summary', id),
-    // Mirror a terminal Esc: the review marks the current turn interrupted.
-    interrupted: id => { interruptions.set(id, { id: uuid(), at: Date.now() }); captureReviews(); },
+    member: id => aiMembers.get(id), groupId: id => panelFor(id)?.id,
+    panes: () => panes, readTerminal: id => terminal.readTerminal(id),
+    visibleIds: () => { try { return layout.ids(canvasLayout()); } catch { return []; } },
+    save: () => save(), report: (message, id) => report(new Error(message), 'chat', id),
+    focusTerminal: id => requestAnimationFrame(() => terminal.focusTerminal(id)),
+    // A message sent from the chat is a submitted turn for the review, like Enter in the terminal.
     submitted: job => {
       submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
       setTimeout(() => captureReviews(), 0);
     },
+  });
+  // A split that mixes panels becomes a named group (renderer/terminal-groups.js).
+  const groups = window.WhiteboxTerminalGroups({
+    root, t, esc, layout, owners: () => owners(), panelFor: id => panelFor(id), space: () => space(), tab: () => tab(),
+    canvasLayout: () => canvasLayout(), activate: (owner, panel, id) => activatePanel(owner, panel, id),
+    renderLayout: () => renderLayout(), save: () => save(), panelColor: panel => panelColor(panel), refreshNav: () => renderNav(),
   });
   const backgroundPopup = document.createElement('section');
   backgroundPopup.id = 'wbBackgroundPopover'; backgroundPopup.className = 'wb-background-popover'; backgroundPopup.hidden = true;
@@ -553,7 +519,7 @@
   function report(error, scope = 'general', terminalId = '') {
     $('#wbError').hidden = false;
     $('#wbError').dataset.scope = scope;
-    // A terminal-scoped notice (Summary fallback) belongs to that terminal only.
+    // A terminal-scoped notice (a chat pane's delivery) belongs to that terminal only.
     $('#wbError').dataset.terminalId = terminalId || '';
     const message = String(error?.message || error).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, '');
     $('#wbError').dataset.connection = String(/명령창.*연결|터미널.*연결/u.test(message));
@@ -567,7 +533,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, summaryChats: summaryChat.serialize(), summaryGame2048: summaryChat.serializeGame(), summaryTokenHistory: summaryChat.serializeUsage(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, summaryGameAvailability: summaryGameVisibility, summaryGameBehavior, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, chatModes: chat.serialize(), groups: groups.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -606,7 +572,7 @@
     save();
     return record;
   }
-  function activeFocus() { if (root.classList.contains('summary-mode')) $('#wbSummaryInput').focus(); else terminal.focusTerminal(activeId()); }
+  function activeFocus() { if (groups.editing()) return; if (chat.isChat(activeId())) chat.focus(activeId()); else terminal.focusTerminal(activeId()); }
   function title(id) {
     const session = sessions.get(id);
     const review = reviews.get(id);
@@ -871,8 +837,9 @@
   }
 
   function renderNav() {
-    summaryChat.render();
-    $('#wbBreadcrumbProject').textContent = space()?.name || t('내 작업 공간');
+    chat.render();
+    groups.sync(); groups.render();
+    $('#wbBreadcrumbProject').textContent = groups.active()?.name || space()?.name || t('내 작업 공간');
     renderInstances();
     renderTrash();
     refreshPaneChrome();
@@ -994,7 +961,6 @@
     const owner = owners().find(item => item.tabs.some(tab => layout.ids(tab.layout).includes(id)));
     const target = owner?.tabs.find(item => layout.ids(item.layout).includes(id));
     if (!target) return;
-    root.classList.remove('summary-sidebar-open');
     activatePanel(owner, target, id);
     renderLayout();
   }
@@ -1038,6 +1004,7 @@
   }
   // `chosen`: the user picked the side of `targetId`, so the terminal lands there.
   function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right', join = false, chosen = false }) {
+    groups.arm();
     if (busy || !sessions.has(id) || trashed(id)) return;
     const sourceOwner = owners().find(owner => owner.tabs.some(item => layout.ids(item.layout).includes(id)));
     const source = sourceOwner?.tabs.find(item => layout.ids(item.layout).includes(id));
@@ -1118,6 +1085,7 @@
     return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction, chosen: true };
   }
   function placePanel(panelId, target) {
+    groups.arm();
     const panel = panelOwner(panelId)?.tabs.find(item => item.id === panelId);
     if (!panel || busy || !layout.ids(panel.layout).length) return;
     const current = canvasLayout();
@@ -1242,7 +1210,7 @@
     node.id = `wbPane-${session.id}`;
     node.dataset.terminalId = session.id;
     node.setAttribute('aria-label', msg`${session.title} 터미널`);
-    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-project" hidden></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-hide-terminal="${esc(session.id)}" title="화면에서 숨기기" aria-label="화면에서 숨기기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
+    node.innerHTML = msg`<header data-drag-terminal="${esc(session.id)}" draggable="false"><div class="wb-pane-heading"><span class="wb-pane-title"></span><span class="wb-pane-project" hidden></span><span class="wb-pane-tokens" tabindex="0"></span></div><span class="wb-pane-panel" hidden></span><span class="wb-pane-state"></span><button data-chat-terminal="${esc(session.id)}" title="채팅으로 보기" aria-label="채팅으로 보기" aria-pressed="false" hidden>${icon('chat')}</button><button data-solo-terminal="${esc(session.id)}" title="이 터미널만 보기" aria-label="이 터미널만 보기">${icon('solo')}</button><button data-expand-terminal="${esc(session.id)}" title="선택한 터미널 넓게 보기" aria-label="선택한 터미널 넓게 보기">${icon('expand')}</button><button data-arrange-instance="${esc(session.id)}" title="패널 분리 · 화면 배치" aria-label="패널 분리 · 화면 배치">${icon('panel')}</button><button data-hide-terminal="${esc(session.id)}" title="화면에서 숨기기" aria-label="화면에서 숨기기">${icon('close')}</button></header><div class="wb-terminal-mount"></div>`;
     node.querySelector('.wb-pane-title').textContent = title(session.id);
     $('#wbParking').append(node);
     pane = { node, dispose: null, promise: null, loading: true, error: false };
@@ -1260,14 +1228,6 @@
           interruptions.set(session.id, { id: uuid(), at: Date.now() });
           captureReviews();
           return;
-        }
-        // A /clear or /compact typed in the terminal empties or folds the
-        // Summary view the same way as one sent from Summary.
-        if (['\r', '\n'].includes(data) && !trashed(session.id) && summaryMembers.get(session.id)) {
-          const turns = window.WhiteboxTerminalReviewTurns;
-          const typed = turns.submittedPrompt(terminal.readTerminal(session.id), summaryMembers.get(session.id).provider);
-          const reset = typed && turns.conversationReset(typed);
-          if (reset) summaryChat.markReset(session.id, reset);
         }
         if (!autoReview || !['\r', '\n'].includes(data) || trashed(session.id)
           // A stale 'paused' projection right after re-enabling must not drop the request.
@@ -1439,7 +1399,7 @@
 
   function removeTerminalLocally(id) {
     const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove();
-    summaryChat.forget(id); summaryMembers.delete(id);
+    chat.forget(id); aiMembers.delete(id);
     panes.delete(id); sessions.delete(id); reviews.delete(id); reviewHistory.delete(id); submissions.delete(id); interruptions.delete(id);
     terminalUsageHistory.delete(id); reviewRevisions.delete(id); acknowledgedCompletions.delete(id); collaborationFrames?.forget(id);
     terminal.releaseTerminal?.(id);
@@ -1703,7 +1663,7 @@
   }
 
   function renderReview() {
-    summaryChat.render();
+    chat.render();
     renderCollaborationStatus();
     const id = activeId(), value = reviews.get(id);
     const requesting = reanalysisRequests.get(id)?.creationId === sessions.get(id)?.creationId && reanalysisRequests.has(id);
@@ -1865,13 +1825,13 @@
     // Up to 24 KB of screen text per pane: resend it only when it changed (or
     // on the tracker's freshness beat); an unchanged pane sends a marker.
     const delta = collaborationFrames?.prepare(frames, new Map(frames.map(frame => [frame.id, `${sessions.get(frame.id)?.pid ?? ''}`])));
-    const result = await api.terminalCollaboration({ operation: 'sync', groups, frames: delta ? delta.frames : frames, summaryJobs: summaryChat.pendingJobs() });
+    const result = await api.terminalCollaboration({ operation: 'sync', groups, frames: delta ? delta.frames : frames, chatJobs: chat.pendingJobs() });
     delta?.commit();
-    workStates.clear(); summaryMembers.clear();
+    workStates.clear(); aiMembers.clear();
     let usageChanged = false;
     for (const id of acknowledgedCompletions.keys()) if (!sessions.has(id) || trashed(id)) acknowledgedCompletions.delete(id);
     for (const panel of result.panels || []) for (const member of panel.members || []) {
-      summaryMembers.set(member.id, { ...member, observedAt: Date.now() });
+      aiMembers.set(member.id, { ...member, observedAt: Date.now() });
       if (member.activity) {
         workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
         usageChanged = rememberTerminalUsage(member.id, member.activity) || usageChanged;
@@ -1880,7 +1840,7 @@
     if (usageChanged) save();
     refreshPaneChrome(); renderInstances();
     collaborationJobs = result.jobs || [];
-    summaryChat.observe(collaborationJobs);
+    chat.observe(collaborationJobs);
     for (const job of collaborationJobs) {
       if (collaborationLoaded && job.state === 'completed' && collaborationStates.get(job.id) !== 'completed') {
         collaborationNotices.set(job.id, Date.now() + 7000);
@@ -1933,7 +1893,7 @@
     }
   }
   function renderCollaborationStatus() {
-    const related = collaborationJobs.filter(job => job.operation !== 'summary' && (job.sourceId === activeId() || job.targetId === activeId()));
+    const related = collaborationJobs.filter(job => job.operation !== 'chat' && (job.sourceId === activeId() || job.targetId === activeId()));
     const jobs = related.filter(job => job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now()).slice(-3);
     const status = $('#wbCollaborationStatus'); status.hidden = !jobs.length;
     const labels = { queued: t('전달 대기'), starting: t('시작 중…'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
@@ -1978,9 +1938,8 @@
           reviews.set(id, { state: 'unbound', message: t('이전 터미널에는 검토 연결 식별자가 없습니다. 새 터미널을 열면 이해·검토가 연결됩니다.') });
           continue;
         }
-        const summaryEnabled = summaryChat.needsReview(id);
         let result;
-        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget || summaryEnabled ? (manualTarget ? terminal.readTerminal(id) : reviewScreen(id, session)) : '', enabled: autoReview || Boolean(manualTarget) || summaryEnabled, force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
+        try { result = await api.terminalReview({ id, creationId: session.creationId, text: autoReview || manualTarget ? (manualTarget ? terminal.readTerminal(id) : reviewScreen(id, session)) : '', enabled: autoReview || Boolean(manualTarget), force: force && (manualTarget ? id === manualTarget.id : id === activeId()), reanalyze: Boolean(manualTarget), foreground: id === activeId(), submission: submissions.get(id), interruption: interruptions.get(id), analysis: { ...analysisSettings, locale: window.WhiteboxI18n?.getLocale() || 'ko' } });
         } catch (error) {
           if (sessions.get(id)?.creationId === session.creationId) reviews.set(id, { ...reviews.get(id), state: 'error', message: String(error.message || error) });
           continue;
@@ -2010,17 +1969,7 @@
       return revealJevKey();
     }
     if (action === 'dismiss-error') $('#wbError').hidden = true;
-    if (action === 'summary-sidebar-close') {
-      root.classList.remove('summary-sidebar-open');
-      $('.wb-topbar [data-action="toggle-sidebar"]').focus({ preventScroll: true });
-      return;
-    }
-    if (action === 'toggle-sidebar') {
-      if (root.classList.contains('summary-mode') && window.matchMedia('(max-width: 850px)').matches) {
-        const open = root.classList.toggle('summary-sidebar-open');
-        (open ? $('#wbProjectSearch') : $('.wb-topbar [data-action="toggle-sidebar"]')).focus({ preventScroll: true });
-      } else root.classList.toggle('sidebar-hidden');
-    }
+    if (action === 'toggle-sidebar') root.classList.toggle('sidebar-hidden');
     if (action === 'toggle-review') setReviewVisible(root.classList.contains('review-hidden'));
 
     if (action === 'jev-save' || action === 'jev-remove') {
@@ -2167,15 +2116,9 @@
     $('#wbTabs [aria-selected="true"]')?.focus();
   });
   document.addEventListener('keydown', event => {
-    if (!event.isComposing && event.key === 'Escape' && root.classList.contains('summary-sidebar-open')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      root.classList.remove('summary-sidebar-open');
-      $('.wb-topbar [data-action="toggle-sidebar"]').focus({ preventScroll: true });
-      return;
-    }
     if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey || root.querySelector('dialog[open]')) return;
     const key = event.key.toLowerCase();
-    if (key === 'k') { event.preventDefault(); event.stopImmediatePropagation(); root.classList.remove('sidebar-hidden'); if (root.classList.contains('summary-mode') && window.matchMedia('(max-width: 850px)').matches) root.classList.add('summary-sidebar-open'); $('#wbProjectSearch').focus(); return; }
+    if (key === 'k') { event.preventDefault(); event.stopImmediatePropagation(); root.classList.remove('sidebar-hidden'); $('#wbProjectSearch').focus(); return; }
     let action = '';
     if (key === 't') action = 'new';
     if (key === 'd') action = event.shiftKey ? 'split-down' : 'split';
@@ -2212,15 +2155,6 @@
   $('#wbUiFont').addEventListener('change', event => {
     uiFont = ['pretendard', 'system', 'geist'].includes(event.target.value) ? event.target.value : 'pretendard';
     applyUiFont(); save();
-  });
-  $('#wbSummaryGameBehavior').addEventListener('change', event => {
-    summaryGameBehavior = event.target.value === 'always-open' ? 'always-open' : 'auto-collapse';
-    save(); summaryChat.render();
-  });
-  $('#wbSummaryGameVisibility').addEventListener('change', event => {
-    summaryGameVisibility = event.target.value === 'always' ? 'always' : 'summarizing';
-    $('#wbSummaryGameBehavior').disabled = summaryGameVisibility !== 'always';
-    save(); summaryChat.render();
   });
 
   let initialization = null, initialized = false, waitingForStartupHost = false, connectionRevision = 0;
@@ -2322,13 +2256,6 @@
     renderSettingsTheme(); renderFontPreview();
     setReviewWidth(Number(saved.reviewWidth) || 332);
     autoReview = saved.autoReview !== false;
-    // Earlier versions saved "always show" as a default nobody chose, so the
-    // old key is not read: everyone starts summarizing-only until unlocked.
-    summaryGameVisibility = saved.summaryGameAvailability === 'always' ? 'always' : 'summarizing';
-    $('#wbSummaryGameVisibility').value = summaryGameVisibility;
-    $('#wbSummaryGameBehavior').disabled = summaryGameVisibility !== 'always';
-    summaryGameBehavior = saved.summaryGameBehavior === 'always-open' ? 'always-open' : 'auto-collapse';
-    $('#wbSummaryGameBehavior').value = summaryGameBehavior;
     uiFont = ['pretendard', 'system', 'geist'].includes(saved.uiFont) ? saved.uiFont : 'pretendard';
     $('#wbUiFont').value = uiFont; applyUiFont();
     const trashIds = new Set();
@@ -2366,9 +2293,8 @@
       const tabs = (Array.isArray(item.tabs) ? item.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });
-    summaryChat.restoreGame(saved.summaryGame2048);
-    summaryChat.restoreUsage(saved.summaryTokenHistory);
-    summaryChat.restore(saved.summaryChats);
+    chat.restore(saved.chatModes);
+    groups.restore(saved.groups);
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
     standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.',

@@ -116,18 +116,14 @@ When an AI reply finishes, Whitebox lays out **the actual answer, what was check
 
 Turn automatic analysis on or off with the switch at the top right. In Settings → Understand · Review, choose the AI used for analysis (**same service as the terminal**, Claude or Codex) and its model. Adding a Jev API key in Settings → Connections lets Jev pick out which requests need analysis first.
 
-### Summary mode
+### Chat view
 
-<p align="center">
-  <img src="docs/assets/readme/en/summary.png" alt="Summary mode: your request, the summarized AI answer and the next-request composer" width="100%">
-</p>
+Read a Claude or Codex terminal as a chat inside its own pane, and send the next request from the chat input to the same AI session. **Terminal / Chat** at the top switches every Claude/Codex terminal on screen at once; the chat button in a pane header switches just that pane. Each terminal remembers its view.
 
-Read summarized answers instead of the raw terminal, and send the next request straight to the same AI session. Switch with **Terminal / Summary** at the top; each terminal remembers its own view, conversation and draft.
-
-- Requests sent while the AI is busy are queued and delivered when the reply finishes. Edit or cancel them before they go, or choose **Send anyway** to deliver at once.
-- Type `/` in the composer to pick the AI's slash commands: built-in, custom, skills and plugin commands.
-- Answer supported approval prompts right in the summary, and open the original reply in the terminal with **View original reply**.
-- Play 2048 while a summary is being written; choose when it is available in Settings → Understand · Review.
+- The bubbles come from that terminal's own conversation log on this computer; no extra AI call is made. Tool calls are folded into one line and thinking is not shown.
+- The terminal keeps running underneath with its size unchanged, and the pane stays in the split with the others.
+- A message sent while the AI is working, while the terminal has unsent text or while it asks a question waits in the chat and goes when the AI is ready. It is never resent after a restart.
+- When the AI asks a question in the terminal, the chat says so; **Show terminal** opens the terminal to answer it.
 
 ### Question and approval popups
 
@@ -170,7 +166,7 @@ Run `whitebox --help` for every command. `run` and the panel commands need the W
 ## Data and privacy
 
 - Terminal output, requests and review records are stored only on your machine. Finished records are removed after 30 days by default; see [Data retention](docs/DATA-RETENTION.md) to change that.
-- Understand · Review and Summary send the request and related work evidence to the analysis service you chose (Claude or Codex). This uses that AI account's quota, and automatic analysis can be turned off at any time.
+- Understand · Review sends the request and related work evidence to the analysis service you chose (Claude or Codex). This uses that AI account's quota, and automatic analysis can be turned off at any time.
 - With Jev screening on, the request and related work records are sent to TypeSafe; it is not a local-only analysis. The Jev API key is kept in the main process's protected key store.
 - Report security issues as described in [SECURITY.md](SECURITY.md).
 
