@@ -24,7 +24,9 @@ function registerPerformanceRegressionTests({ test, temp, jsonl, root }) {
   });
 
   test('streaming transcript cache retains only current card and full-history generations', () => {
-    const monitor = new AgentMonitor({ home: temp });
+    // Every revision must be parsed: a slow runner must not trigger the production
+    // "still growing, parsed moments ago" reuse this test is not about.
+    const monitor = new AgentMonitor({ home: temp, changedReparseMinMs: 0 });
     const file = path.join(temp, 'performance', 'stream.jsonl');
     const at = '2026-09-08T01:00:00.000Z';
     for (let i = 0; i < 180; i++) {

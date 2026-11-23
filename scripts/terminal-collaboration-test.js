@@ -98,6 +98,13 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   await c.sync(adopted); assert.equal(writes.at(-1).command,'codex');
   assert.equal(c.jobs.get(created.id).state,'completed');
   assert.equal(inputReady('› ㅎㅇ','codex'),false);
+  // Newer Codex: lower-case model in the status row and a warnings note beside the shortcuts hint.
+  const codexIdle = '› Ask Codex to do anything\n \n  gpt-6.2-sol high · ~/Desktop/ubion/project/Whitebox\n  ? for shortcuts               ⚠ 2 warnings · f2 to view';
+  assert.equal(inputReady(codexIdle, 'codex'), true, 'an empty Codex prompt with a lower-case model status row is ready');
+  assert.equal(inputReady(codexIdle.replace('gpt-6.2-sol high', 'gpt-6.2-sol'), 'codex'), true, 'the status row without an effort level is ready too');
+  assert.equal(inputReady(codexIdle.replace('~/Desktop', 'C:\\Users'), 'codex'), true, 'a Windows folder in the status row is ready too');
+  assert.equal(inputReady(codexIdle.replace('Ask Codex to do anything', 'fix the login'), 'codex'), false, 'a real draft still blocks');
+  assert.equal(inputReady(codexIdle.replace('\n \n', '\n  and also the tests\n'), 'codex'), false, 'a wrapped draft row still blocks');
   for (const [provider, finish, prompt] of [['codex', 'Worked for 2s • 3:42 PM', '› Ask Codex to do anything'], ['claude', '✻ Baked for 2s', '❯ ']]) {
     const completed = `› first\n• Working (esc to interrupt)\n• answer\n${finish}\n${prompt}`;
     assert.equal(inputReady(completed, provider), true, 'historical busy text before an explicit finish cannot block automatic queued delivery');

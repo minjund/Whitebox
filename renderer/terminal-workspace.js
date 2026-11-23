@@ -495,6 +495,54 @@
     while (!panel.color || used.has(panel.color)) panel.color = `hsl(${((index++ * 137.508) % 360).toFixed(3)} 38% 66%)`;
     return panel.color;
   }
+  // The person can pick any panel's colour: one of the palette or a custom one.
+  // A chosen colour is a plain #rrggbb, which panelColor() keeps as is.
+  let colorPicker = null, colorPickerPanel = '';
+  const findPanel = id => owners().flatMap(owner => owner.tabs).find(item => item.id === id);
+  function closeColorPicker(restoreFocus = false) {
+    if (!colorPicker || colorPicker.hidden) return;
+    colorPicker.hidden = true;
+    if (restoreFocus) root.querySelector(`[data-panel-color="${CSS.escape(colorPickerPanel)}"]`)?.focus();
+    colorPickerPanel = '';
+  }
+  function setPanelColor(id, color) {
+    const panel = findPanel(id);
+    if (!panel || !/^#[a-f0-9]{6}$/iu.test(color)) return;
+    panel.color = color.toLowerCase();
+    save(); renderLayout(false);
+  }
+  function openColorPicker(id, anchor) {
+    const panel = findPanel(id);
+    if (!panel) return;
+    if (!colorPicker) {
+      colorPicker = document.createElement('div');
+      colorPicker.className = 'wb-color-picker';
+      colorPicker.setAttribute('role', 'dialog');
+      colorPicker.addEventListener('click', event => {
+        const swatch = event.target.closest('[data-pick-color]');
+        if (swatch) { setPanelColor(colorPickerPanel, swatch.dataset.pickColor); closeColorPicker(true); }
+      });
+      colorPicker.addEventListener('change', event => {
+        if (event.target.matches('[data-pick-custom]')) { setPanelColor(colorPickerPanel, event.target.value); closeColorPicker(true); }
+      });
+      colorPicker.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); closeColorPicker(true); } });
+      document.addEventListener('pointerdown', event => {
+        if (colorPicker.hidden || colorPicker.contains(event.target) || event.target.closest('[data-panel-color]')) return;
+        closeColorPicker();
+      }, true);
+      root.append(colorPicker);
+    }
+    colorPickerPanel = id;
+    const current = panelColor(panel).toLowerCase();
+    const custom = /^#[a-f0-9]{6}$/u.test(current) ? current : '#888888';
+    colorPicker.setAttribute('aria-label', t('패널 색'));
+    colorPicker.innerHTML = `<div class="wb-color-swatches">${panelColors.map(color => `<button type="button" data-pick-color="${color}" style="--swatch:${color}" aria-label="${color}" aria-pressed="${color === current}"></button>`).join('')}</div><label class="wb-color-custom"><input type="color" data-pick-custom value="${custom}"><span>${esc(t('직접 고르기'))}</span></label>`;
+    colorPicker.hidden = false;
+    const box = anchor.getBoundingClientRect(), width = colorPicker.offsetWidth, height = colorPicker.offsetHeight;
+    colorPicker.style.left = `${Math.max(8, Math.min(box.left, innerWidth - width - 8))}px`;
+    colorPicker.style.top = `${box.bottom + 6 + height > innerHeight - 8 ? Math.max(8, box.top - height - 6) : box.bottom + 6}px`;
+    (colorPicker.querySelector('[aria-pressed="true"]') || colorPicker.querySelector('button'))?.focus();
+  }
   let lastReviewKey = '';
   const DRAG_TYPE = 'application/x-whitebox-workspace-terminal';
   let draggingId = '', draggingPanelId = '', pointerDrag = null, suppressDragClick = false, consumedDragEscape = false;
@@ -838,7 +886,7 @@
         const value = terminalState(id);
         const background = backgroundBadge(id), counts = backgroundCounts(terminalBackground(id));
         return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-terminal="${esc(id)}" class="wb-trash-instance" title="${t('휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
-      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div></section>`;
+      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button><button type="button" class="wb-panel-color-button" data-panel-color="${esc(item.id)}" title="${t('패널 색 바꾸기')}" aria-label="${t('패널 색 바꾸기')}" aria-haspopup="dialog"><i aria-hidden="true"></i></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
@@ -2039,6 +2087,7 @@
     const button = event.target.closest('button');
     if (!button) return;
     if (button.dataset.backgroundTerminal) openBackgroundPopover(button.dataset.backgroundTerminal);
+    if (button.dataset.panelColor) { if (colorPickerPanel === button.dataset.panelColor) closeColorPicker(); else openColorPicker(button.dataset.panelColor, button); return; }
     if (button.hasAttribute('data-close-background')) closeBackgroundPopover(true);
     if (button.dataset.action) act(button.dataset.action).catch(report);
     if (button.dataset.space) { selectedSpace = button.dataset.space; space().collapsed = false; renderLayout(); acknowledgeCompletion(activeId()); }

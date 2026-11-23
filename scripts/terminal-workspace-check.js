@@ -1752,6 +1752,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(o=>o.tabs).map(p=>({id:p.id,members:WhiteboxWorkspaceLayout.ids(p.layout)})))'), rosterBeforeArrange, 'screen placement never changes collaboration membership');
     const beforePanelReload = manager.list().map(({id,pid,creationId})=>({id,pid,creationId}));
     assert.deepEqual(beforePanelReload, livePtyBeforeDrag, 'all UI actions retain the original native PTYs before reload');
+    // The person can recolour a panel from its sidebar swatch; the reload below must keep it.
+    const recoloured = await evaluate('document.querySelector("#wbCanvas .wb-pane[data-panel-id]").dataset.panelId');
+    await evaluate(`document.querySelector('[data-panel-color="${recoloured}"]').click()`);
+    assert.equal(await evaluate('Boolean(document.querySelector(".wb-color-picker:not([hidden]) [data-pick-color]"))'), true, 'the panel swatch opens the colour picker');
+    await evaluate('(() => { const input = document.querySelector(".wb-color-picker [data-pick-custom]"); input.value = "#3366cc"; input.dispatchEvent(new Event("change", { bubbles: true })); })()');
+    assert.equal(await evaluate('document.querySelector(".wb-color-picker").hidden'), true, 'choosing a colour closes the picker');
+    assert.equal(await evaluate(`WhiteboxWorkspace.getState().spaces.concat([WhiteboxWorkspace.getState().standalone]).flatMap(owner => owner.tabs).find(panel => panel.id === ${JSON.stringify(recoloured)}).color`), '#3366cc', 'the chosen colour is stored on the panel');
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane[data-panel-id="${recoloured}"]')).every(node => node.style.getPropertyValue('--wb-panel-color') === '#3366cc') && document.querySelector('[data-drop-panel="${recoloured}"]').style.getPropertyValue('--wb-panel-color') === '#3366cc'`), true, 'terminal headers and the sidebar box take the chosen colour');
     const visibleBeforePanelReload = await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),node=>({id:node.dataset.terminalId,color:node.style.getPropertyValue("--wb-panel-color")}))');
     const ratioBeforePanelReload = await evaluate('(() => {const divider=document.querySelector("#wbCanvas .wb-divider");divider.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}));return divider.getAttribute("aria-valuenow")})()');
     await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','per-panel arrangement restored');
@@ -1766,7 +1774,7 @@ app.whenReady().then(async () => {
     for(const {color} of headerTints){const components=color.match(/[\d.]+/g).map(Number).slice(0,3);assert.ok(!(components[0]===components[1]&&components[1]===components[2]),`header tinted by its panel colour: ${color}`)}
     assert.equal(new Set(headerTints.map(item=>item.color)).size,new Set(headerTints.map(item=>item.panel)).size,'different panels give different header colours');
     assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceTheme().background'),'#0c0c0c');
-    console.log('PASS explicit cross-panel arrangement after isolated creation, logical roster/PTY/color retention, split-ratio reload, neutral dark surfaces and panel-coloured headers');
+    console.log('PASS explicit cross-panel arrangement after isolated creation, logical roster/PTY/color retention, split-ratio reload, neutral dark surfaces, panel-coloured headers and a chosen panel colour kept across reload');
     const beforeFailure = manager.list().length;
     rejectCreation = true;
     await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click()`);

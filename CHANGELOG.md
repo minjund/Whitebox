@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.40 - 2026-11-23
+
+- You can now choose each panel's colour. A small swatch at the bottom right of every panel box in the sidebar opens eight palette colours and a custom colour picker; the terminal headers, the sidebar box and the top path follow the choice, and it is kept across restarts.
+- Asking a Codex terminal from another terminal in the same panel (`whitebox_ask`, `whitebox send`) works again with newer Codex builds. They write the model in lower case in the status row under the input box (`gpt-6.2-sol high · ~/project`), and Whitebox read that row as an unsent draft, so every request to an idle Codex was refused with "상대가 작업 중이거나 입력 중인 글이 있습니다".
+
 ## 2.0.39 - 2026-11-23
 
 - When terminals from different panels share one screen, each terminal header is now tinted with its panel's colour (the selected one a little stronger), and the sidebar panel boxes carry the same tint, so you can tell at a glance which panel a terminal belongs to. The top path shows the selected panel's colour and terminal name. The project name appears small on the right of a header only when terminals from more than one project are on screen.

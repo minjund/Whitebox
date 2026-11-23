@@ -214,6 +214,7 @@ function currentTurnEvidence(screen, request, provider) {
   return answer ? `USER:\n${request}\nASSISTANT (current report):\n${answer}` : '';
 }
 
+const CODEX_STATUS_ROW = /^\s*[\w.:-]+(?:\s+(?:none|minimal|low|medium|high|xhigh|max))?\s+·\s+(?:~|\/|[A-Za-z]:\\)/u;
 function inputReady(screen, provider) {
   if (!finishedPattern[provider]) return false;
   const promptPattern = promptFor(provider);
@@ -250,8 +251,11 @@ function inputReady(screen, provider) {
     return lines.slice(index + 1, closingRule).every(line => !line.trim());
   }
   // Wrapped input is also a draft. Status/footer rows have known delimiters.
+  // Codex's status row names the model, its effort and the folder; newer builds
+  // write the model in lower case: "gpt-6.2-sol high · ~/project".
   return !lines.slice(index + 1).some(line => /^\s{2,}\S/u.test(line)
-    && !/^\s*(?:[─━│←?⚠⏵]|\[(?:Fable|Opus|Sonnet|Haiku|GPT)|Context\b|\d+% context|GPT-|.*for shortcuts)/u.test(line));
+    && !/^\s*(?:[─━│←?⚠⏵]|\[(?:Fable|Opus|Sonnet|Haiku|GPT)|Context\b|\d+% context|GPT-|.*for shortcuts)/u.test(line)
+    && !CODEX_STATUS_ROW.test(line));
 }
 function readinessText(buffer) {
   const start = Math.max(0, buffer.length - 400);

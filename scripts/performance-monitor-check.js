@@ -22,7 +22,9 @@ const { AgentMonitor, parseCodex } = load('src/agentMonitor.js');
 const { enrichSessions } = load('src/sessionIntelligence.js');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'whitebox-perf-monitor-'));
 try {
-  const monitor = new AgentMonitor({ home: temp });
+  // Every revision must be parsed: a slow runner must not trigger the production
+  // "still growing, parsed moments ago" reuse this check is not about.
+  const monitor = new AgentMonitor({ home: temp, changedReparseMinMs: 0 });
   const file = path.join(temp, 'stream.jsonl');
   const at = '2026-09-08T01:00:00.000Z';
   const rows = [{ timestamp: at, type: 'session_meta', payload: { id: 'performance-stream', cwd: temp } }];
