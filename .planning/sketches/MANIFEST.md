@@ -29,3 +29,4 @@ LoadToAgent의 핵심 정보인 사용자 판단, 실행 관계, 완료 기록�
 | 010 | comprehension-packet-placement | 이해 패킷이 PTY 문맥을 끊지 않으면서 어디에 떠야 하는가? | A · 중앙 이해 브리핑 | comprehension, packet, pty-focus, modal, layout, open-book |
 | 011 | comprehension-remediation-flow | 오답→해설→변형 문제 전환을 같은 팝업에서 어떻게 보여줄 것인가? | C · 카드 제자리 변환 | comprehension, remediation, quiz, feedback, cognitive-debt |
 | 012 | sidebar-project-readability | 프로젝트 이름, 상태, 작업을 어떤 위계로 보여줘야 왼쪽 목록이 가장 빨리 읽히는가? | A · 심플 리스트 (구현) | sidebar, projects, readability, orca, cmux |
+| 013 | panel-identity | 다른 패널·프로젝트의 터미널을 한 화면에 섞어 볼 때, 각 터미널이 어느 패널 것인지 어떻게 가장 빨리 알아보게 할까? | B | split-view, panel, terminal-header, color, cross-project |
