@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>패널 구분 스케치</title>
+<style>
+:root{--bg:#fafbf9;--surface:#fff;--side:#f2f4f0;--text:#242923;--muted:#858e80;--secondary:#5d6858;--line:#e3e8df;--wash:#ecefe8;--accent:#537b60;--focus:#dce9d9;
+  --font:-apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo',sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+:root[data-theme=dark]{--bg:#161b17;--surface:#1c221d;--side:#181e19;--text:#e1e7df;--muted:#84917f;--secondary:#a2ae9b;--line:#303a2e;--wash:#273125;--accent:#aac69b;--focus:#30412d}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.5 var(--font);display:flex;flex-direction:column}
+button{font:inherit;color:inherit;cursor:pointer}
+
+/* review chrome */
+.review-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.review-bar h1{font-size:13px;font-weight:600;margin:0 6px 0 0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:5px 11px;font-size:12px;color:var(--secondary)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--focus);color:var(--text);font-weight:600}
+.review-bar label{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--secondary)}
+.note{padding:9px 16px;font-size:12px;color:var(--secondary);border-bottom:1px solid var(--line);background:var(--side)}
+.note b{color:var(--text)}
+
+/* app shell */
+.app{flex:1;min-height:0;display:grid;grid-template-columns:230px minmax(0,1fr)}
+.side{background:var(--side);border-right:1px solid var(--line);overflow:auto;padding-bottom:20px}
+.brand{height:60px;display:flex;align-items:center;gap:8px;padding:0 22px;font-size:20px;font-weight:650;letter-spacing:-1px}
+.brand i{color:var(--accent);font-style:normal}
+.side-h{font-size:10px;font-weight:550;letter-spacing:.5px;color:var(--muted);padding:8px 23px 6px}
+.proj{margin:0 15px 14px}
+.proj-row{display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:7px;font-weight:550;font-size:12px}
+.proj-row.active{background:var(--focus)}
+.proj-row svg{width:15px;height:15px;color:var(--muted)}
+.pgroup{margin:8px 0 10px 4px;padding:5px 5px 0;border:1px solid color-mix(in srgb,var(--pc) 75%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--surface) 55%,transparent);transition:box-shadow .15s,background .15s}
+.pgroup.lit{box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 35%,transparent);background:var(--surface)}
+.pname{display:none;align-items:center;gap:7px;padding:3px 5px 5px;font-size:11px;font-weight:600;color:var(--text)}
+.pname i{width:10px;height:10px;border-radius:3px;background:var(--pc)}
+[data-variant=A] .pname{display:flex}
+[data-variant=B] .pgroup{background:color-mix(in srgb,var(--pc) 14%,var(--surface))}
+.inst{display:flex;align-items:center;gap:7px;padding:8px 6px;border-radius:6px;font-size:11px;color:var(--secondary)}
+.inst.active{background:color-mix(in srgb,var(--pc) 16%,var(--surface));color:var(--text)}
+.inst svg{width:12px;height:12px;color:var(--muted)}
+.inst .dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.inst .dot.idle{background:var(--line)}
+
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.top{height:60px;display:flex;align-items:center;gap:9px;padding:0 24px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden}
+.top svg{width:15px;height:15px}
+.top .rule{width:1px;height:14px;background:var(--line)}
+.top strong{color:var(--text);font-weight:500}
+.crumb-panel{display:inline-flex;align-items:center;gap:6px;color:var(--text);font-weight:600}
+.crumb-panel i{width:10px;height:10px;border-radius:3px;background:var(--pc)}
+.crumb-sub{color:var(--muted)}
+.canvas{flex:1;min-height:0;margin:20px 24px 16px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px}
+
+/* terminal pane */
+.pane{--pc:#77ad91;display:flex;flex-direction:column;min-width:0;min-height:0;background:#0c0c0c;color:#d0d0d0;border:2px solid var(--pc);border-radius:8px;overflow:hidden;transition:box-shadow .15s}
+.pane.selected{box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 28%,transparent)}
+.pane.lit{box-shadow:0 0 0 4px color-mix(in srgb,var(--pc) 45%,transparent)}
+.pane header{height:38px;flex:none;display:flex;align-items:center;gap:7px;padding:0 9px 0 11px;background:#171717;border-bottom:1px solid #292929;color:#aaa;font-size:11px;white-space:nowrap;min-width:0}
+.pane.selected header{color:#ddd}
+.h-main{display:flex;align-items:center;gap:7px;min-width:0;flex:1;overflow:hidden}
+.title{overflow:hidden;text-overflow:ellipsis}
+.tokens{color:#777;font-size:10px}
+.ppill{padding:1px 6px;border:1px solid #333;border-radius:999px;color:#888;font-size:10px;max-width:45%;overflow:hidden;text-overflow:ellipsis}
+.ptag{display:none;align-items:center;gap:6px;font-weight:650;color:#eee;flex:none}
+.ptag i{width:4px;height:16px;border-radius:2px;background:var(--pc)}
+.sep{color:#555}
+.where{display:none;align-items:center;gap:5px;color:#888;font-size:10px;flex:none;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+.where svg{width:11px;height:11px}
+.state{display:inline-flex;align-items:center;gap:5px;color:#9fb98f;font-size:10px;flex:none}
+.state:before{content:'';width:6px;height:6px;border-radius:50%;background:#9fb98f}
+.state.idle{color:#777}.state.idle:before{background:#555}
+.hbtn{display:inline-flex;gap:2px;flex:none}
+.hbtn span{width:22px;height:22px;display:grid;place-items:center;color:#777;border-radius:5px}
+.hbtn svg{width:13px;height:13px}
+.term{flex:1;min-height:0;padding:10px 12px;font:11.5px/1.6 var(--mono);color:#c8c8c8;overflow:hidden;white-space:pre}
+.term .p{color:#9fb98f}.term .m{color:#777}.term .y{color:#d6b97c}
+
+/* variant A: panel name first */
+[data-variant=A] .ppill{display:none}
+[data-variant=A] .ptag{display:inline-flex}
+[data-variant=A] .where{display:inline-flex}
+[data-variant=A] .ptag + .sep{display:inline}
+/* variant B: anonymous, colour-washed header */
+[data-variant=B] .ppill{display:none}
+[data-variant=B] .pane header{background:color-mix(in srgb,var(--pc) 30%,#151515);border-bottom-color:color-mix(in srgb,var(--pc) 45%,#292929);color:#e4e4e4}
+[data-variant=B] .pane header .tokens{color:#bbb}
+[data-variant=B] .where{display:inline-flex;color:#cfcfcf}
+[data-variant=B] .hbtn span{color:#ccc}
+.sep{display:none}
+/* single-project screen: project/branch not needed */
+[data-mixed=false] .where{display:none!important}
+
+/* legend under canvas */
+.legend{margin:0 24px 14px;font-size:11px;color:var(--secondary);display:flex;flex-wrap:wrap;gap:6px 16px}
+.legend b{color:var(--text);font-weight:600}
+@media (max-width:900px){.app{grid-template-columns:1fr}.side{display:none}.canvas{grid-template-columns:1fr;grid-template-rows:repeat(4,minmax(170px,1fr))}.main{min-height:900px}}
+</style>
+</head>
+<body data-variant="A" data-mixed="true" data-stress="false">
+<div class="review-bar">
+  <h1>013 · 패널 구분</h1>
+  <div class="seg" role="group" aria-label="안">
+    <button data-set-variant="now" aria-pressed="false">지금</button>
+    <button data-set-variant="A" aria-pressed="true">A · 패널 이름표</button>
+    <button data-set-variant="B" aria-pressed="false">B · 이름 없이 색 머리</button>
+  </div>
+  <div class="seg" role="group" aria-label="상황">
+    <button data-set-scene="mixed" aria-pressed="true">두 프로젝트 섞임</button>
+    <button data-set-scene="single" aria-pressed="false">한 프로젝트만</button>
+    <button data-set-scene="stress" aria-pressed="false">패널 10개 (색 겹침)</button>
+  </div>
+  <div class="seg" role="group" aria-label="테마">
+    <button data-set-theme="light" aria-pressed="true">라이트</button>
+    <button data-set-theme="dark" aria-pressed="false">다크</button>
+  </div>
+</div>
+<p class="note" id="note"></p>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand">w<i>.</i></div>
+    <div class="side-h">프로젝트</div>
+    <div id="sidebar"></div>
+  </aside>
+  <section class="main">
+    <div class="top" id="top"></div>
+    <div class="canvas" id="canvas"></div>
+    <div class="legend">터미널이나 사이드바 패널에 마우스를 올리면 짝이 함께 밝아집니다 (세 안 공통 제안).</div>
+  </section>
+</div>
+
+<script>
+const ICON = {
+  folder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  term:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 8 4 4-4 4M12 17h7"/></svg>',
+  branch:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/></svg>',
+  panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>',
+  solo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>',
+  expand:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>',
+  close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6 6 18"/></svg>'
+};
+// Real palette from renderer/terminal-workspace.js:488, and the generated colours it falls back to after 8 panels (:494-495).
+const PALETTE = ['#77ad91','#7d9fc8','#c6a474','#ab8ebd','#bd8791','#77b7b3','#b9b66e','#ce997d'];
+const gen = i => `hsl(${((i * 137.508) % 360).toFixed(3)} 38% 66%)`;
+
+const LINES = {
+  a:['<span class="p">❯</span> 패널 머리 표시를 바꿔 줘','<span class="m">  Reading renderer/terminal-workspace.js…</span>','<span class="m">  Edit refreshPaneChrome()</span>','<span class="y">  ✓ 3 files changed</span>'],
+  b:['<span class="p">$</span> npm run test:workspace','<span class="m">  terminal-workspace-check … 41 passed</span>','<span class="y">  ✓ done in 18.2s</span>','<span class="p">$</span> <span class="m">▍</span>'],
+  c:['<span class="p">❯</span> 릴리스 노트 초안 써 줘','<span class="m">  git log v2.0.37..HEAD</span>','<span class="m">  Drafting…</span>'],
+  d:['<span class="p">❯</span> Tauri 창 크기 저장 버그 봐 줘','<span class="m">  Reading src-tauri/src/window.rs…</span>','<span class="m">  Found: size saved before restore</span>']
+};
+
+const SCENES = {
+  mixed:{
+    note:'<b>두 프로젝트 섞임</b> · 화면에 Whitebox 패널 2개와 hookwich 패널 1개의 터미널이 함께 있어요. 이때만 프로젝트·브랜치가 보조로 보입니다.',
+    projects:[
+      {name:'Whitebox', branch:'claude/panel-identity', panels:[
+        {n:1, color:PALETTE[0], terms:[{id:'w1',name:'claude · 1',st:'작업 중',tok:'18.2k',l:'a'},{id:'w2',name:'codex · 2',st:'대기',tok:'4.1k',l:'b',idle:true}]},
+        {n:2, color:PALETTE[1], terms:[{id:'w3',name:'claude · 3',st:'작업 중',tok:'9.7k',l:'c'}]}]},
+      {name:'hookwich', branch:'main', panels:[
+        {n:3, color:PALETTE[2], terms:[{id:'h1',name:'claude · 1',st:'작업 중',tok:'12.0k',l:'d'}]}]}],
+    grid:['w1','w3','w2','h1'], selected:'w1'
+  },
+  single:{
+    note:'<b>한 프로젝트만</b> · 같은 프로젝트의 패널끼리 나눠 보는 경우예요. 프로젝트·브랜치는 숨기고 패널만 구분합니다 (지금은 회색 프로젝트 이름이 모든 터미널에 똑같이 붙어요).',
+    projects:[
+      {name:'Whitebox', branch:'claude/panel-identity', panels:[
+        {n:1, color:PALETTE[0], terms:[{id:'w1',name:'claude · 1',st:'작업 중',tok:'18.2k',l:'a'},{id:'w2',name:'codex · 2',st:'대기',tok:'4.1k',l:'b',idle:true}]},
+        {n:2, color:PALETTE[1], terms:[{id:'w3',name:'claude · 3',st:'작업 중',tok:'9.7k',l:'c'}]},
+        {n:3, color:PALETTE[2], terms:[{id:'w4',name:'claude · 4',st:'작업 중',tok:'6.3k',l:'d'}]}]}],
+    grid:['w1','w3','w2','w4'], selected:'w1'
+  },
+  stress:{
+    note:'<b>패널 10개</b> · 8색을 다 쓰면 앱이 만든 색이 붙어요. 패널 8(#ce997d)과 패널 9(hsl 20°), 패널 1(#77ad91)과 패널 10(hsl 157°)은 테두리만으로는 거의 같아 보입니다. 비교해 보세요.',
+    projects:[
+      {name:'Whitebox', branch:'claude/panel-identity', panels:[
+        {n:1, color:PALETTE[0], terms:[{id:'s1',name:'claude · 1',st:'작업 중',tok:'18.2k',l:'a'}]},
+        {n:2, color:PALETTE[1], terms:[]},{n:3, color:PALETTE[2], terms:[]},{n:4, color:PALETTE[3], terms:[]},
+        {n:5, color:PALETTE[4], terms:[]},{n:6, color:PALETTE[5], terms:[]},{n:7, color:PALETTE[6], terms:[]},
+        {n:8, color:PALETTE[7], terms:[{id:'s8',name:'codex · 8',st:'대기',tok:'2.2k',l:'b',idle:true}]}]},
+      {name:'hookwich', branch:'main', panels:[
+        {n:9, color:gen(8), terms:[{id:'s9',name:'claude · 1',st:'작업 중',tok:'12.0k',l:'d'}]},
+        {n:10, color:gen(9), terms:[{id:'s10',name:'claude · 2',st:'작업 중',tok:'7.5k',l:'c'}]}]}],
+    grid:['s1','s10','s8','s9'], selected:'s1'
+  }
+};
+
+const state = { variant:'A', scene:'mixed', theme:'light' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function index(scene){
+  const map = new Map();
+  for (const p of scene.projects) for (const pn of p.panels) for (const t of pn.terms) map.set(t.id, {proj:p, panel:pn, term:t});
+  return map;
+}
+
+function render(){
+  const scene = SCENES[state.scene];
+  const byId = index(scene);
+  const shown = new Set(scene.grid.map(id => byId.get(id).proj.name));
+  document.body.dataset.variant = state.variant;
+  document.body.dataset.mixed = String(shown.size > 1);
+  document.documentElement.dataset.theme = state.theme;
+  document.getElementById('note').innerHTML = scene.note;
+
+  // sidebar
+  document.getElementById('sidebar').innerHTML = scene.projects.map(p => `
+    <div class="proj">
+      <div class="proj-row ${byId.get(scene.selected).proj === p ? 'active' : ''}">${ICON.folder}<span>${esc(p.name)}</span></div>
+      ${p.panels.map(pn => `
+        <div class="pgroup" data-panel="${pn.n}" style="--pc:${pn.color}">
+          <div class="pname"><i></i>패널 ${pn.n}</div>
+          ${pn.terms.length ? pn.terms.map(t => `<div class="inst ${t.id === scene.selected ? 'active' : ''}">${ICON.term}<span>${esc(t.name)}</span><span class="dot ${t.idle ? 'idle' : ''}"></span></div>`).join('') : '<div class="inst" style="opacity:.6">터미널 없음</div>'}
+        </div>`).join('')}
+    </div>`).join('');
+
+  // breadcrumb
+  const sel = byId.get(scene.selected);
+  const mixed = shown.size > 1;
+  const top = document.getElementById('top');
+  if (state.variant === 'now') {
+    top.innerHTML = `${ICON.panel}<span class="rule"></span>${ICON.folder}<span>${esc(sel.proj.name)}</span><span>/</span><strong>작업 공간</strong>`;
+  } else {
+    top.innerHTML = `${ICON.panel}<span class="rule"></span><span class="crumb-panel" style="--pc:${sel.panel.color}"><i></i>${state.variant === 'A' ? `패널 ${sel.panel.n}` : ''}</span>${state.variant === 'A' ? '<span>/</span>' : ''}<strong>${esc(sel.term.name)}</strong><span class="crumb-sub">· ${esc(sel.proj.name)} ${mixed ? `⎇ ${esc(sel.proj.branch)}` : ''}</span>`;
+  }
+
+  // canvas
+  document.getElementById('canvas').innerHTML = scene.grid.map(id => {
+    const {proj, panel, term} = byId.get(id);
+    return `<article class="pane ${id === scene.selected ? 'selected' : ''}" data-panel="${panel.n}" style="--pc:${panel.color}">
+      <header>
+        <div class="h-main">
+          <span class="ptag"><i></i>패널 ${panel.n}</span><span class="sep">·</span>
+          <span class="title">${esc(term.name)}</span>
+          <span class="ppill">${esc(proj.name)}</span>
+          <span class="tokens">${term.tok}</span>
+        </div>
+        <span class="where">${esc(proj.name)} ${ICON.branch}${esc(proj.branch)}</span>
+        <span class="state ${term.idle ? 'idle' : ''}">${term.st}</span>
+        <span class="hbtn"><span>${ICON.solo}</span><span>${ICON.expand}</span><span>${ICON.panel}</span><span>${ICON.close}</span></span>
+      </header>
+      <div class="term">${LINES[term.l].join('\n')}</div>
+    </article>`;
+  }).join('');
+
+  for (const [k, v] of Object.entries({variant:'data-set-variant', scene:'data-set-scene', theme:'data-set-theme'}))
+    document.querySelectorAll(`[${v}]`).forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute(v) === state[k])));
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.setVariant) state.variant = b.dataset.setVariant;
+  if (b.dataset.setScene) state.scene = b.dataset.setScene;
+  if (b.dataset.setTheme) state.theme = b.dataset.setTheme;
+  render();
+});
+// Hover link between a terminal and its sidebar panel box.
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('[data-panel]');
+  const n = el?.dataset.panel;
+  document.querySelectorAll('.lit').forEach(x => x.classList.remove('lit'));
+  if (n) document.querySelectorAll(`[data-panel="${n}"]`).forEach(x => x.classList.add('lit'));
+});
+// Optional deep link: #<variant>-<scene>-<theme>, e.g. #B-stress-dark
+const [hv, hs, ht] = location.hash.slice(1).split('-');
+if (['now', 'A', 'B'].includes(hv)) state.variant = hv;
+if (SCENES[hs]) state.scene = hs;
+if (['light', 'dark'].includes(ht)) state.theme = ht;
+render();
+</script>
+</body>
+</html>

@@ -1005,13 +1005,15 @@ app.whenReady().then(async () => {
     await drag(second.id, `#wbCanvas [data-terminal-id="${first.id}"]`, .5, .1);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.axis'), 'column', 'a terminal dropped on the top edge is stacked, not put beside its target');
     assert.equal(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout.first.id'), second.id, 'top edge places it above the target without changing membership');
-    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane-project'), node => node.hidden ? null : node.textContent)`), Array(2).fill(await evaluate('WhiteboxWorkspace.getState().spaces[0].name')), 'with several terminals on screen each header names its project');
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane-project'), node => node.hidden ? null : node.textContent)`), [null, null], 'terminals of one project on screen do not repeat the project name');
+    assert.equal(await evaluate(`Boolean(document.querySelector('#wbBreadcrumbPanel:not([hidden])')) && document.querySelector('#wbBreadcrumbPanel').style.getPropertyValue('--wb-panel-color') === document.querySelector('#wbCanvas .wb-pane[data-terminal-id="' + WhiteboxWorkspace.getState().activeId + '"]')?.style.getPropertyValue('--wb-panel-color')`), true, 'top path shows the selected terminal panel colour');
     // Drop onto another project, then return the same session to its original panel.
     await drag(second.id, `[data-drop-owner="${otherOwner}"]`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'), otherOwner);
     const membershipBeforePin = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))');
     await drag(first.id, `#wbCanvas [data-terminal-id="${second.id}"]`);
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'explicit together-view preserves cross-project panel display');
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane[data-terminal-id]'), node => node.querySelector('.wb-pane-project').hidden ? null : node.querySelector('.wb-pane-project').textContent).sort()`), await evaluate(`Array.from(document.querySelectorAll('#wbCanvas .wb-pane[data-terminal-id]'), node => { const id = node.dataset.terminalId; const owner = WhiteboxWorkspace.getState().spaces.find(item => item.tabs.some(panel => JSON.stringify(panel.layout).includes(id))); return owner ? owner.name : 'none'; }).sort()`), 'terminals from different projects on one screen name their project');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'),2);
     assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(owner=>({id:owner.id,tabs:owner.tabs.map(panel=>({id:panel.id,layout:panel.layout}))})))'),membershipBeforePin,'together-view retains logical panel membership');
     const otherPanel = await evaluate('WhiteboxWorkspace.getState().spaces[1].activeTab');
@@ -1757,10 +1759,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector("#wbCanvas .wb-divider").getAttribute("aria-valuenow")'),ratioBeforePanelReload,'explicit split ratio survives polling and reload');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),beforePanelReload,'navigation and reload retain all PTYs');
     await evaluate('WhiteboxTheme.setTheme("dark")');
-    const neutralSurfaces = await evaluate('Array.from(document.querySelectorAll(".wb-main,.wb-sidebar,.wb-review,#wbCanvas .wb-pane,#wbCanvas .wb-pane>header,.wb-terminal-mount"),node=>getComputedStyle(node).backgroundColor)');
+    const neutralSurfaces = await evaluate('Array.from(document.querySelectorAll(".wb-main,.wb-sidebar,.wb-review,#wbCanvas .wb-pane,.wb-terminal-mount"),node=>getComputedStyle(node).backgroundColor)');
     for(const color of neutralSurfaces){const components=color.match(/[\d.]+/g).map(Number);assert.ok(components[0]===components[1]&&components[1]===components[2],color)}
+    // Terminal headers are the one tinted surface: each carries its panel colour so panels stay apart on a mixed screen.
+    const headerTints = await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane[data-panel-id]"),node=>({panel:node.dataset.panelId,color:getComputedStyle(node.querySelector(":scope>header")).backgroundColor}))');
+    for(const {color} of headerTints){const components=color.match(/[\d.]+/g).map(Number).slice(0,3);assert.ok(!(components[0]===components[1]&&components[1]===components[2]),`header tinted by its panel colour: ${color}`)}
+    assert.equal(new Set(headerTints.map(item=>item.color)).size,new Set(headerTints.map(item=>item.panel)).size,'different panels give different header colours');
     assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceTheme().background'),'#0c0c0c');
-    console.log('PASS explicit cross-panel arrangement after isolated creation, logical roster/PTY/color retention, split-ratio reload and neutral dark surfaces');
+    console.log('PASS explicit cross-panel arrangement after isolated creation, logical roster/PTY/color retention, split-ratio reload, neutral dark surfaces and panel-coloured headers');
     const beforeFailure = manager.list().length;
     rejectCreation = true;
     await evaluate(`document.querySelector('[data-new-panel="${beforeAdd.ownerId}"]').click()`);

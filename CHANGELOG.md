@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.39 - 2026-11-23
+
+- When terminals from different panels share one screen, each terminal header is now tinted with its panel's colour (the selected one a little stronger), and the sidebar panel boxes carry the same tint, so you can tell at a glance which panel a terminal belongs to. The top path shows the selected panel's colour and terminal name. The project name appears small on the right of a header only when terminals from more than one project are on screen.
+
 ## 2.0.38 - 2026-11-19
 
 - Claude and Codex in a Whitebox terminal now answer in the language you write in. Whitebox's own instructions to them were English, and in long sessions with English files and logs they sometimes slipped into English after a Korean message. Each message now carries a short note naming its language (Korean, Japanese or Chinese, written in that language), or for other languages a rule to follow the words you typed rather than pasted logs or code.

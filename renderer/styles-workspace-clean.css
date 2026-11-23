@@ -143,3 +143,14 @@
 /* Sidebar shows only terminals that still need attention: unconfirmed
    completions and pending questions (yellow), live work, and failures. */
 #terminalWorkspace .wb-instance .wb-terminal-state:not([data-state=needs-review],[data-state=waiting],[data-state=working],[data-state=failed]) i{visibility:hidden}
+
+/* Panel identity in a mixed split view: the panel colour washes each terminal header and its
+   sidebar panel box; the project name sits small on the right only when projects are mixed. */
+#terminalWorkspace .wb-pane>header{background:color-mix(in srgb,var(--wb-panel-color) 30%,#151515);border-color:color-mix(in srgb,var(--wb-panel-color) 45%,#292929);color:#e4e4e4}
+#terminalWorkspace .wb-pane.is-selected>header{background:color-mix(in srgb,var(--wb-panel-color) 40%,#151515);color:#f2f2f2}
+#terminalWorkspace .wb-pane>header button{color:#ccc}
+#terminalWorkspace .wb-pane-title{flex:0 1 auto;min-width:2.5em}
+#terminalWorkspace .wb-pane-project{order:9;flex:1 1 auto;min-width:0;max-width:40%;margin-left:auto;border:0;padding:0;text-align:right;color:#cfcfcf}
+#terminalWorkspace #wbSpaces .wb-panel-group{background:color-mix(in srgb,var(--wb-panel-color) 14%,var(--clean-surface))}
+#terminalWorkspace .wb-crumb-panel{display:inline-block;flex:none;width:10px;height:10px;border-radius:3px;background:var(--wb-panel-color)}
+#terminalWorkspace .wb-crumb-panel[hidden]{display:none}

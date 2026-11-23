@@ -113,7 +113,7 @@
       <div class="wb-sidebar-bottom"><button data-action="trash">${icon('trash')} <span>휴지통</span><small id="wbTrashCount">0</small></button><hr class="wb-sidebar-separator"/><button data-action="settings">${icon('settings')} <span>설정 · 단축키</span></button><div class="wb-version-row"><small id="wbVersion"></small><button id="wbUpdateBadge" data-action="update-settings" hidden></button></div></div>
     </aside>
     <main class="wb-main">
-      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong>작업 공간</strong></div><div class="wb-top-actions"><div class="wb-mode-switch" role="group" aria-label="작업 모드"><button data-workspace-mode="terminal" aria-pressed="true">터미널</button><button data-workspace-mode="summary" aria-pressed="false" disabled>요약</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
+      <header class="wb-topbar"><div class="wb-breadcrumbs"><button data-action="toggle-sidebar" aria-label="사이드바 접기">${icon('panel')}</button><span class="wb-breadcrumb-rule"></span><span id="wbBreadcrumbPanel" class="wb-crumb-panel" aria-hidden="true" hidden></span>${icon('folder')}<span id="wbBreadcrumbProject"></span><span class="wb-slash">/</span><strong id="wbBreadcrumbLeaf">작업 공간</strong></div><div class="wb-top-actions"><div class="wb-mode-switch" role="group" aria-label="작업 모드"><button data-workspace-mode="terminal" aria-pressed="true">터미널</button><button data-workspace-mode="summary" aria-pressed="false" disabled>요약</button></div><button data-theme-toggle class="wb-theme-button"><span class="wb-theme-moon">${icon('moon')}</span><span class="wb-theme-sun">${icon('sun')}</span></button><button id="wbReviewToggle" data-action="toggle-review" aria-controls="wbReview" title="이해 · 검토" aria-label="이해 · 검토">${icon('review')}</button></div></header>
       <div id="wbTabs" role="tablist" aria-label="이 패널의 터미널" hidden></div>
       <div id="wbError" class="wb-error" role="alert" hidden></div>
       <section id="wbSummary" class="wb-summary" aria-label="요약 채팅" hidden>
@@ -723,15 +723,18 @@
     return { text, detail };
   }
   function refreshPaneChrome() {
-    const visiblePanels = new Set(layout.ids(canvasLayout()).map(panelFor).filter(Boolean));
+    const shown = layout.ids(canvasLayout());
+    const visiblePanels = new Set(shown.map(panelFor).filter(Boolean));
+    // The panel (header colour) comes first; the project is a small side note, shown only
+    // when terminals from more than one project share the screen.
+    const mixedProjects = new Set(shown.map(item => terminalPosition(item)?.owner).filter(Boolean)).size > 1;
     for (const [id, pane] of panes) {
       const panel = panelFor(id), separated = visiblePanels.size > 1 && visiblePanels.has(panel);
       const label = title(id), value = terminalState(id), color = panelColor(panel);
       const tokens = terminalTokens(id);
       const expandTitle = expanded && id === activeId() ? t('기존 배치로 돌아가기') : t('선택한 터미널 넓게 보기');
-      const splitView = layout.ids(canvasLayout()).length > 1;
-      // With several terminals on screen, each one says which project it is under.
-      const owner = splitView ? terminalPosition(id)?.owner : null;
+      const splitView = shown.length > 1;
+      const owner = splitView && mixedProjects ? terminalPosition(id)?.owner : null;
       const project = !owner ? '' : owner.standalone ? t('프로젝트 없음') : owner.name;
       const key = JSON.stringify([splitView, panel?.id, separated, color, label, value.state, value.label, tokens, expanded && id === activeId(), expandTitle, project, Boolean(owner?.standalone)]);
       if (pane.chromeKey === key) continue;
@@ -765,6 +768,12 @@
       badge.setAttribute('aria-label', value.label);
       badge.title = value.label;
     }
+    const crumbPanel = $('#wbBreadcrumbPanel'), active = activeId(), activePanel = active && panelFor(active);
+    // Top path: [panel colour] project / selected terminal.
+    crumbPanel.hidden = !activePanel;
+    if (activePanel) crumbPanel.style.setProperty('--wb-panel-color', panelColor(activePanel));
+    const leaf = active ? title(active) : t('작업 공간');
+    if ($('#wbBreadcrumbLeaf').textContent !== leaf) $('#wbBreadcrumbLeaf').textContent = leaf;
     if (activeId()) {
       const markup = `${esc(title(activeId()))} ${stateBadge(terminalState(activeId()))}`;
       if ($('#wbTerminalStatus').innerHTML !== markup) $('#wbTerminalStatus').innerHTML = markup;
