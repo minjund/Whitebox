@@ -45,6 +45,26 @@ function registerPerformanceRegressionTests({ test, temp, jsonl, root }) {
     assert.equal(monitor.parseFile(missing, () => null), null, 'invalid replacement must not return old content');
   });
 
+  test('a scan that reads more cards than any fixed count still reuses every unchanged card', () => {
+    // 2026-11-23: with a fixed 300-card cap and ~330 transcripts read per scan,
+    // each card was evicted just before the next scan needed it, so every scan
+    // reparsed everything (2.5-3.5 s per scan, about one CPU core).
+    const monitor = new AgentMonitor({ home: temp });
+    let parses = 0;
+    const parse = info => { parses++; return { id: info.file, status: 'completed' }; };
+    const scan = () => {
+      monitor.scanGeneration += 1;
+      for (let i = 0; i < 450; i++) monitor.parseFile({ file: `card-${i}`, mtimeMs: 1, size: 1 }, parse);
+      monitor.evictUnusedParses();
+    };
+    scan(); scan(); scan();
+    assert.equal(parses, 450, 'each unchanged card is parsed once across scans');
+    monitor.parseFile({ file: 'card-0', mtimeMs: 2, size: 2 }, parse);
+    assert.equal(parses, 451, 'a changed card is parsed again');
+    monitor.scanGeneration += 3; monitor.evictUnusedParses();
+    assert.equal(monitor.parseCache.size, 0, 'cards no scan reads any more are dropped');
+  });
+
   test('detail cache eviction leaves hot cards readable and reloads evicted full history', () => {
     const monitor = new AgentMonitor({ home: temp });
     const card = { file: 'hot', mtimeMs: 1, size: 1 };
