@@ -154,3 +154,15 @@
 #terminalWorkspace #wbSpaces .wb-panel-group{background:color-mix(in srgb,var(--wb-panel-color) 14%,var(--clean-surface))}
 #terminalWorkspace .wb-crumb-panel{display:inline-block;flex:none;width:10px;height:10px;border-radius:3px;background:var(--wb-panel-color)}
 #terminalWorkspace .wb-crumb-panel[hidden]{display:none}
+
+/* Panel colour: a swatch in each sidebar panel box opens a small palette. */
+#terminalWorkspace .wb-panel-actions>.wb-panel-color-button{flex:none;width:30px;min-width:30px;max-width:30px;padding:0}
+#terminalWorkspace .wb-panel-color-button i{display:block;width:12px;height:12px;border-radius:4px;background:var(--wb-panel-color);box-shadow:0 0 0 1px color-mix(in srgb,var(--clean-text) 18%,transparent)}
+#terminalWorkspace .wb-color-picker{position:fixed;z-index:40;display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--clean-line);border-radius:10px;background:var(--clean-surface);box-shadow:0 8px 24px #0000002e}
+#terminalWorkspace .wb-color-picker[hidden]{display:none}
+#terminalWorkspace .wb-color-swatches{display:grid;grid-template-columns:repeat(4,22px);gap:7px}
+#terminalWorkspace .wb-color-swatches button{width:22px;height:22px;min-width:22px;min-height:22px;padding:0;border:0;border-radius:6px;background:var(--swatch);cursor:pointer}
+#terminalWorkspace .wb-color-swatches button[aria-pressed=true]{box-shadow:0 0 0 2px var(--clean-surface),0 0 0 4px var(--clean-text)}
+#terminalWorkspace .wb-color-swatches button:focus-visible{outline:2px solid var(--clean-text);outline-offset:2px}
+#terminalWorkspace .wb-color-custom{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--clean-secondary);cursor:pointer}
+#terminalWorkspace .wb-color-custom input{width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
