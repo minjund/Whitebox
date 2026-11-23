@@ -17,7 +17,7 @@ app.whenReady().then(async () => {
   let win;
   const manager = new TerminalManager({ storeFile: path.join(profile, 'terminals.json') });
   const activityReader = new (require('../src/terminalActivity').TerminalActivity)();
-  const summaryFixture = process.argv.includes('--summary-only') ? require('./tests/terminal-summary-mode').createFixture({ manager, profile, root }) : null;
+  const chatFixture = process.argv.includes('--chat-only') ? require('./tests/terminal-chat-mode').createFixture({ manager, profile, root }) : null;
   const errors = [];
   const captured = new Map();
   const adapterDirectory = path.join(profile, 'panel-bin');
@@ -76,7 +76,8 @@ app.whenReady().then(async () => {
     ipcMain.handle('app:update-open-release', () => { releasePageCalls++; return { ok: true }; });
     ipcMain.handle('workspaces:remove', (_event, folder) => { workspaces = workspaces.filter(item => item.path !== folder); return workspaces; });
     for (const name of ['app:set-locale', 'app:set-theme-appearance', 'app:sync-attention-prompts']) ipcMain.handle(name, () => ({ ok: true }));
-    if (summaryFixture) ipcMain.handle('app:notify-attention-prompt', () => ({ ok: true }));
+    if (chatFixture) ipcMain.handle('app:notify-attention-prompt', () => ({ ok: true }));
+    ipcMain.handle('terminals:conversation', (_event, payload) => chatFixture ? chatFixture.conversation(payload) : { available: false, reason: 'log' });
     let initialInventoryReads = 0, rendererReadyCalls = 0, inventoryUnavailable = false;
     ipcMain.handle('app:renderer-ready', () => {
       assert(initialInventoryReads >= 3, 'renderer readiness must follow recovery of the initial host connection');
@@ -85,7 +86,7 @@ app.whenReady().then(async () => {
     });
     ipcMain.handle('terminals:completion-read', (_event, payload) => completionTracker.read(payload));
     ipcMain.handle('terminals:collaboration', async (_event, rawPayload) => {
-      if (summaryFixture) return summaryFixture.collaboration(rawPayload);
+      if (chatFixture) return chatFixture.collaboration(rawPayload);
       if (collaborationFailure) throw new Error(collaborationFailure);
       // The renderer sends an `unchanged` marker instead of repeating screen
       // text. Main keeps the last full frame; model that retention here.
@@ -169,7 +170,7 @@ app.whenReady().then(async () => {
       return rejectRestoreIdentity && session ? { ...session, creationId: 'different-identity' } : session;
     });
     ipcMain.handle('terminals:review', async (_event, payload) => {
-      if (summaryFixture) return summaryFixture.review(payload);
+      if (chatFixture) return chatFixture.review(payload);
       if (payload.historyContent) return { entries: [] };
       if(payload.force)forcedReviewCalls++;
       if (payload.reanalyze) {
@@ -297,8 +298,8 @@ app.whenReady().then(async () => {
       await require('./tests/workspace-startup-reconnect')({ evaluate, waitFor, win, manager, pidRace:startupPidRace, unavailable: value => { inventoryUnavailable = value; }, counters: () => ({ ready: rendererReadyCalls, reads: initialInventoryReads }) });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
-    if (process.argv.includes('--summary-only')) {
-      await require('./tests/terminal-summary-mode').run({ evaluate, waitFor, manager, win, fixture: summaryFixture, profile, clipboard: () => clipboardText });
+    if (process.argv.includes('--chat-only')) {
+      await require('./tests/terminal-chat-mode').run({ evaluate, waitFor, manager, win, fixture: chatFixture });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--hide-only')) {
@@ -2058,18 +2059,11 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error);
-    if (summaryFixture) {
-      console.error('Summary jobs:', [...summaryFixture.controller.jobs.values()]);
-      console.error('Summary frames:', [...summaryFixture.controller.frames]);
-      console.error('Summary groups:', JSON.stringify([...summaryFixture.controller.groups]));
-      console.error('Summary UI:', await win.webContents.executeJavaScript(`JSON.stringify({
-        input: document.querySelector('#wbSummaryInput')?.value,
-        disabled: document.querySelector('#wbSummarySend')?.disabled,
-        messages: document.querySelector('#wbSummaryMessages')?.textContent,
-        notice: document.querySelector('#wbSummaryNotice')?.textContent,
-        saved: Object.entries(localStorage).filter(([key]) => key.includes('workspace'))
-      })`).catch(error => error.message));
+    if (chatFixture) {
+      console.error('Chat jobs:', [...chatFixture.controller.jobs.values()]);
+      console.error('Chat UI:', await win.webContents.executeJavaScript(`JSON.stringify(Array.from(document.querySelectorAll('.wb-chat'), node => ({ hidden: node.hidden, log: node.querySelector('.wb-chat-log')?.textContent.slice(-600), notice: node.querySelector('.wb-chat-notice')?.textContent })))`).catch(error => String(error)));
     }
+
     console.error('Fixture host outputs:', manager.list().map(session => ({ id: session.id, replay: manager.get(session.id, true)?.replay })));
     console.error('Fixture terminal outputs:', await win.webContents.executeJavaScript('JSON.stringify(window.WhiteboxWorkspace?.getState().sessions.map(session => ({id:session.id, text:WhiteboxTerminal.readTerminal(session.id)})) || [])').catch(error => error.message));
     fs.writeFileSync(path.join(os.tmpdir(), 'whitebox-workspace-failure.png'), (await win.webContents.capturePage()).toPNG());

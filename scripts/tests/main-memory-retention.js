@@ -138,15 +138,15 @@ function registerMainMemoryRetentionTests({ test, temp }) {
     // A pinned summary job survives; a job finishing now gets a grace period.
     write({ id: id(900), operation: 'ask', state: 'failed', createdAt: now - 8 * 24 * 60 * 60_000 });
     service.jobs.set(id(900), JSON.parse(fs.readFileSync(path.join(directory, `${id(900)}.job.json`), 'utf8')));
-    const fresh = { id: id(902), operation: 'summary', state: 'completed', createdAt: now - 20 * 24 * 60 * 60_000 };
+    const fresh = { id: id(902), operation: 'chat', state: 'completed', createdAt: now - 20 * 24 * 60 * 60_000 };
     service.jobs.set(fresh.id, fresh); service.save(fresh);
     now += FINISHED_JOB_GRACE_MS + 1000;
-    await service.sync({ groups: [], frames: [], summaryJobs: [{ id: id(900) }] });
+    await service.sync({ groups: [], frames: [], chatJobs: [{ id: id(900) }] });
     assert.equal(service.jobs.has(id(900)), true, 'summary chat still waits for this job');
     assert.equal(service.jobs.has(id(902)), true, 'a job finished in this process is kept through the grace period');
     assert.equal(service.jobs.has(id(901)), false, 'restart-interrupted job past its grace and age is removed');
     now += FINISHED_JOB_GRACE_MS + 1000;
-    await service.sync({ groups: [], frames: [], summaryJobs: [] });
+    await service.sync({ groups: [], frames: [], chatJobs: [] });
     assert.equal(service.jobs.has(id(900)), false);
     assert.equal(service.jobs.has(id(902)), false);
     const finished = [...service.jobs.values()].filter(job => job.state === 'completed').length;

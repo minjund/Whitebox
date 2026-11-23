@@ -8,9 +8,9 @@ const { completedTurn, completionStamp, inputReady, isNonTaskRequest, sameSlashC
 const { ProcessMonitor, scanProcesses } = require('./processMonitor');
 const { TerminalReviewCompletion } = require('./terminalReviewCompletion');
 const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
-// Summary chat targets: Claude and Codex are confirmed from their own logs,
+// Chat targets: Claude and Codex are confirmed from their own logs,
 // Gemini and Grok from their own input prompt and turn markers on screen.
-const SUMMARY_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
+const CHAT_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
 // Claude records a bracketed paste wrapped in <pasted_content id="…"> tags and
 // the parser bounds request text at 8000 characters. Compare what was typed.
 const typedText = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
@@ -29,7 +29,7 @@ const FINISHED_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A job that just finished stays readable for a CLI `wait` (at most 60s) and
 // the next panel sync, whatever the count or age limits say.
 const FINISHED_JOB_GRACE_MS = 10 * 60 * 1000;
-const MAX_SUMMARY_PROMPT_RECEIPTS = 256;
+const MAX_CHAT_PROMPT_RECEIPTS = 256;
 const jobStamp = job => Math.max(Number(job.finishedAt) || 0, Number(job.sentAt) || 0, Number(job.createdAt) || 0);
 // A delivered job ends on evidence only: its finished turn, a stop, a changed
 // session, or an AI that shows no sign of work. Elapsed time alone never ends
@@ -53,7 +53,7 @@ class TerminalCollaboration {
     this.onTerminalClosed = onTerminalClosed;
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now, backgroundSnapshot });
     this.control = enableControl ? new (require('./terminalPanelControl').TerminalPanelControl)(this) : null;
-    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.summaryPromptReceipts = new Set(); this.settledJobs = new Map(); this.pinnedJobIds = new Set(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
+    this.groups = new Map(); this.frames = new Map(); this.jobs = new Map(); this.connected = new Map(); this.chatPromptReceipts = new Set(); this.settledJobs = new Map(); this.pinnedJobIds = new Set(); this.queue = Promise.resolve(); this.restoredConnections = []; this.accessSnapshots = new Map();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.helper = path.join(directory, 'panel-agent.cjs');
     fs.copyFileSync(path.join(__dirname, '../bin/panel-agent.js'), this.helper);
@@ -98,7 +98,7 @@ class TerminalCollaboration {
   save(job) { this.write(this.file(job.id, 'job'), job); }
   serialize(action) { const next = this.queue.then(action); this.queue = next.catch(() => {}); return next; }
   sync(payload) { return this.serialize(() => this.update(payload)); }
-  async update({ groups = [], frames = [], summaryJobs = [] } = {}) {
+  async update({ groups = [], frames = [], chatJobs = [] } = {}) {
     // Polling membership uses the host's event-fed metadata cache. Repeated
     // remote get calls queue behind shell launches on the host connection.
     const manager = this.manager();
@@ -166,23 +166,23 @@ class TerminalCollaboration {
     this.updatedAt = this.now();
     await this.control?.start();
     await this.poll();
-    // Summary chat still waits for these replies; keep their jobs.
-    this.pinnedJobIds = new Set((Array.isArray(summaryJobs) ? summaryJobs : []).slice(0, 100).map(request => request?.id).filter(id => typeof id === 'string'));
+    // The chat pane still waits for these replies; keep their jobs.
+    this.pinnedJobIds = new Set((Array.isArray(chatJobs) ? chatJobs : []).slice(0, 100).map(request => request?.id).filter(id => typeof id === 'string'));
     this.pruneJobs();
     const visible = new Set([...this.groups.values()].flatMap(group => group.members.map(member => member.id)));
     const jobs = new Map([...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80).map(job => [job.id, job]));
     // The display window must not hide a delivery needed to archive a reply.
     // Look up only exact, app-owned submissions; missing records never authorize replay.
-    for (const request of (Array.isArray(summaryJobs) ? summaryJobs : []).slice(0, 100)) {
+    for (const request of (Array.isArray(chatJobs) ? chatJobs : []).slice(0, 100)) {
       const member = currentMembers.get(request?.targetId);
       if (!/^[a-f0-9-]{36}$/u.test(request?.id || '') || !member || member.creationId !== request.targetCreationId) continue;
       if (!snapshot.available) continue;
       const job = this.jobs.get(request.id);
-      const matches = job?.operation === 'summary' && job.targetId === member.id
+      const matches = job?.operation === 'chat' && job.targetId === member.id
         && job.expectedCreationId === request.targetCreationId && job.expectedProviderPid === request.targetProviderPid
         && job.expectedProvider === request.targetProvider;
       const sameProcess = member.providerPid === request.targetProviderPid && member.provider === request.targetProvider;
-      jobs.set(request.id, matches && sameProcess ? job : { id: request.id, operation: 'summary', state: 'interrupted',
+      jobs.set(request.id, matches && sameProcess ? job : { id: request.id, operation: 'chat', state: 'interrupted',
         error: sameProcess ? '전송 기록을 확인하지 못했습니다. 터미널에서 확인해 주세요. 자동으로 재전송하지 않았습니다.'
           : 'AI 세션이 종료되거나 바뀌었습니다. 자동 전송하지 않았습니다.' });
     }
@@ -243,16 +243,16 @@ class TerminalCollaboration {
     await this.manager().write(id, `\x1b[200~${message}\x1b[201~${submit ? '\r' : ''}`, { deliveryId, ...(immediate ? {} : { expectedOutputSequence: target.frame.outputSequence }) });
     return { baseline: native.requestId || '', stamp: completionStamp(target.frame.text, target.child.provider), provider: target.child.provider, providerPid: target.child.pid, creationId: target.member.creationId, pid: target.member.pid };
   }
-  summarySend(payload) {
+  chatSend(payload) {
     return this.serialize(async () => {
       const { id, groupId, targetId, message, targetCreationId, targetProviderPid, targetProvider } = payload || {};
       if (!/^[a-f0-9-]{36}$/u.test(id || '') || !safeId(groupId) || !safeId(targetId)
         || typeof message !== 'string' || !message.trim() || message.length > 8000 || /[\x00-\x08\x0b-\x1f\x7f]/u.test(message)
         || typeof targetCreationId !== 'string' || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0
-        || !SUMMARY_PROVIDERS.includes(targetProvider)) throw new Error('올바른 채팅 요청과 실행 세션이 필요합니다.');
+        || !CHAT_PROVIDERS.includes(targetProvider)) throw new Error('올바른 채팅 요청과 실행 세션이 필요합니다.');
       const existing = this.jobs.get(id);
       if (existing) {
-        if (existing.operation !== 'summary' || existing.targetId !== targetId || existing.groupId !== groupId
+        if (existing.operation !== 'chat' || existing.targetId !== targetId || existing.groupId !== groupId
           || existing.request !== message || existing.expectedCreationId !== targetCreationId
           || existing.expectedProviderPid !== targetProviderPid || existing.expectedProvider !== targetProvider) throw new Error('채팅 전송 식별자가 다른 요청에 사용되었습니다.');
         return { ok: ['running', 'completed'].includes(existing.state), job: existing };
@@ -271,17 +271,17 @@ class TerminalCollaboration {
       const native = await this.completion.observe(target.child);
       if (!immediate && native.available && native.state === 'working') return { deferred: true, reason: 'working' };
       // Persist before the first write. A lost acknowledgement is never replayed.
-      const job = { id, operation: 'summary', sourceId: targetId, targetId, groupId, request: message,
+      const job = { id, operation: 'chat', sourceId: targetId, targetId, groupId, request: message,
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
         immediate, state: 'sending', createdAt: this.now(), sentAt: this.now() };
       this.jobs.set(id, job); this.save(job);
-      try { Object.assign(job, await this.send(groupId, targetId, message, `summary:${id}`, payload, true, immediate), { state: 'running' }); }
+      try { Object.assign(job, await this.send(groupId, targetId, message, `chat:${id}`, payload, true, immediate), { state: 'running' }); }
       catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
       this.save(job);
       return { ok: job.state === 'running', job };
     });
   }
-  summaryRespond(payload) {
+  chatRespond(payload) {
     return this.serialize(async () => {
       const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider, fingerprint, choiceId } = payload || {};
       const target = await this.target(groupId, targetId);
@@ -290,33 +290,33 @@ class TerminalCollaboration {
       const choice = prompt?.fingerprint === fingerprint && prompt.choices?.find(item => item.id === choiceId);
       if (!choice) throw new Error('승인 요청이 바뀌었거나 처리되었습니다.');
       const receipt = JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint]);
-      if (this.summaryPromptReceipts.has(receipt)) throw new Error('이미 응답한 승인 요청입니다. 터미널을 확인해 주세요.');
-      this.summaryPromptReceipts.add(receipt);
-      if (this.summaryPromptReceipts.size > MAX_SUMMARY_PROMPT_RECEIPTS) this.summaryPromptReceipts.delete(this.summaryPromptReceipts.values().next().value);
-      const deliveryId = `summary-approval:${require('crypto').createHash('sha256').update(JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint, choiceId])).digest('hex')}`;
+      if (this.chatPromptReceipts.has(receipt)) throw new Error('이미 응답한 승인 요청입니다. 터미널을 확인해 주세요.');
+      this.chatPromptReceipts.add(receipt);
+      if (this.chatPromptReceipts.size > MAX_CHAT_PROMPT_RECEIPTS) this.chatPromptReceipts.delete(this.chatPromptReceipts.values().next().value);
+      const deliveryId = `chat-approval:${require('crypto').createHash('sha256').update(JSON.stringify([targetId, targetCreationId, targetProviderPid, fingerprint, choiceId])).digest('hex')}`;
       await this.manager().respond(targetId, choice.key, { deliveryId, expectedOutputSequence: target.frame.outputSequence });
       return { ok: true, requiresText: choice.requiresText === true };
     });
   }
-  // The user's explicit stop for the request they sent from Summary mode. A
+  // The user's explicit stop for the request they sent from a chat pane. A
   // working provider redraws constantly, so this sends one Escape guarded by
   // the exact terminal/provider identity rather than a frozen output frame.
-  summaryStop(payload) {
+  chatStop(payload) {
     return this.serialize(async () => {
       const { groupId, targetId, targetCreationId, targetProviderPid, targetProvider } = payload || {};
       if (!safeId(groupId) || !safeId(targetId) || typeof targetCreationId !== 'string'
-        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !SUMMARY_PROVIDERS.includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
+        || !Number.isSafeInteger(targetProviderPid) || targetProviderPid <= 0 || !CHAT_PROVIDERS.includes(targetProvider)) throw new Error('올바른 실행 세션이 필요합니다.');
       const { member } = this.member(groupId, targetId);
       const live = await this.manager().get(targetId, false);
       const child = live && exactProcess(live, await scanProcesses(this.monitor));
       if (!live || live.status !== 'running' || live.creationId !== member.creationId || live.pid !== member.pid
         || live.creationId !== targetCreationId || child?.pid !== targetProviderPid || child.provider !== targetProvider) throw new Error('멈추려는 AI 세션이 바뀌었습니다.');
-      const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'summary' && ['sending', 'running'].includes(job.state));
+      const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'chat' && ['sending', 'running'].includes(job.state));
       const native = await this.completion.observe(child);
       if (!running.length && !(native.available && native.state === 'working') && member.activity?.state !== 'working') throw new Error('멈출 작업이 없습니다.');
       // Grok Build ignores Escape mid-turn; its own cancel is Ctrl+C on an empty prompt.
-      if (targetProvider === 'grok') await this.manager().write(targetId, '\x03', { deliveryId: `summary-stop:${randomUUID()}` });
-      else await this.manager().respond(targetId, 'Escape', { deliveryId: `summary-stop:${randomUUID()}` });
+      if (targetProvider === 'grok') await this.manager().write(targetId, '\x03', { deliveryId: `chat-stop:${randomUUID()}` });
+      else await this.manager().respond(targetId, 'Escape', { deliveryId: `chat-stop:${randomUUID()}` });
       for (const job of running) { Object.assign(job, { state: 'stopped', error: '', finishedAt: this.now() }); this.save(job); }
       return { ok: true, stopped: running.map(job => job.id) };
     });
@@ -419,7 +419,7 @@ class TerminalCollaboration {
         const working = native.available && native.state === 'working' || !screenReady || Boolean(prompt);
         const idle = !working && (!native.available || native.inputWaiting !== false);
         if (evidence) Object.assign(job, { state: 'completed', answer: evidence, finishedAt: now });
-        else if (abortedHere) Object.assign(job, job.operation === 'summary' ? { state: 'stopped', error: '', finishedAt: now }
+        else if (abortedHere) Object.assign(job, job.operation === 'chat' ? { state: 'stopped', error: '', finishedAt: now }
           : { state: 'interrupted', error: '상대 터미널에서 작업이 중단됐습니다. 자동 재전송하지 않습니다.', finishedAt: now });
         else if (working) { job.progressAt = now; delete job.idleSince; }
         else if (idle && native.available && now - (job.idleSince ??= now) >= IDLE_UNMATCHED_JOB_MS) Object.assign(job, { state: 'interrupted', error: IDLE_UNMATCHED_JOB_ERROR, finishedAt: now });

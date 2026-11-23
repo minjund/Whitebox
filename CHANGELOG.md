@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.41 - 2026-11-23
+
+- Chat view replaces Summary mode. **Terminal / Chat** at the top shows every Claude or Codex terminal on screen as a chat inside its own pane (the chat button in a pane header switches one pane). The bubbles come straight from that terminal's own conversation log, with tool calls folded into one line and no extra AI call; the terminal keeps running underneath with its size unchanged. A message typed in the chat goes to the same AI session and waits while the AI works, the terminal has unsent text or the AI asks a question in the terminal, which the chat points to with **Show terminal**.
+- Summary mode is removed: the summarized answers, the summary model calls, the usage meters, past requests, image attachments and 2048. Understand · Review is unchanged.
+
 ## 2.0.40 - 2026-11-23
 
 - You can now choose each panel's colour. A small swatch at the bottom right of every panel box in the sidebar opens eight palette colours and a custom colour picker; the terminal headers, the sidebar box and the top path follow the choice, and it is kept across restarts.

@@ -25,7 +25,7 @@ function fixture() {
   // `frames: false` models a renderer that stopped reporting the pane.
   const sync = ({ frames = true } = {}) => collaboration.sync({ groups: [{ id: 'group', cwd: directory, members: [session] }],
     frames: frames ? [{ id: session.id, creationId: session.creationId, outputSequence: session.outputSequence, text: state.screen, inputDraft: state.inputDraft }] : [] });
-  const send = (message, extra = {}) => collaboration.summarySend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
+  const send = (message, extra = {}) => collaboration.chatSend({ id: randomUUID(), groupId: 'group', targetId: session.id, message,
     targetCreationId: session.creationId, targetProviderPid: 1200, targetProvider: 'claude', ...extra });
   const job = id => collaboration.jobs.get(id);
   const cleanup = () => fs.rmSync(directory, { recursive: true, force: true });
