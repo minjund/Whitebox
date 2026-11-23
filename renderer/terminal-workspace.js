@@ -96,6 +96,7 @@
     <aside class="wb-sidebar">
       <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
+      <section id="wbGroups" class="wb-groups" aria-label="그룹" hidden></section>
       <div class="wb-sidebar-scroll">
       <div class="wb-side-heading"><span>프로젝트</span><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
       <p class="wb-side-description">작업 폴더별로 묶은 패널</p>
@@ -199,6 +200,12 @@
       submissions.set(job.targetId, { id: job.id, request: job.request, at: job.sentAt, stamps: { [job.provider]: job.stamp } });
       setTimeout(() => captureReviews(), 0);
     },
+  });
+  // A split that mixes panels becomes a named group (renderer/terminal-groups.js).
+  const groups = window.WhiteboxTerminalGroups({
+    root, t, esc, layout, owners: () => owners(), panelFor: id => panelFor(id), space: () => space(), tab: () => tab(),
+    canvasLayout: () => canvasLayout(), activate: (owner, panel, id) => activatePanel(owner, panel, id),
+    renderLayout: () => renderLayout(), save: () => save(), panelColor: panel => panelColor(panel), refreshNav: () => renderNav(),
   });
   const backgroundPopup = document.createElement('section');
   backgroundPopup.id = 'wbBackgroundPopover'; backgroundPopup.className = 'wb-background-popover'; backgroundPopup.hidden = true;
@@ -526,7 +533,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, chatModes: chat.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, chatModes: chat.serialize(), groups: groups.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, autoReview, uiFont, reviewWidth, analysisSettings, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -565,7 +572,7 @@
     save();
     return record;
   }
-  function activeFocus() { if (chat.isChat(activeId())) chat.focus(activeId()); else terminal.focusTerminal(activeId()); }
+  function activeFocus() { if (groups.editing()) return; if (chat.isChat(activeId())) chat.focus(activeId()); else terminal.focusTerminal(activeId()); }
   function title(id) {
     const session = sessions.get(id);
     const review = reviews.get(id);
@@ -831,7 +838,8 @@
 
   function renderNav() {
     chat.render();
-    $('#wbBreadcrumbProject').textContent = space()?.name || t('내 작업 공간');
+    groups.sync(); groups.render();
+    $('#wbBreadcrumbProject').textContent = groups.active()?.name || space()?.name || t('내 작업 공간');
     renderInstances();
     renderTrash();
     refreshPaneChrome();
@@ -996,6 +1004,7 @@
   }
   // `chosen`: the user picked the side of `targetId`, so the terminal lands there.
   function moveTerminal(id, { panelId, targetId, ownerId, direction = 'right', join = false, chosen = false }) {
+    groups.arm();
     if (busy || !sessions.has(id) || trashed(id)) return;
     const sourceOwner = owners().find(owner => owner.tabs.some(item => layout.ids(item.layout).includes(id)));
     const source = sourceOwner?.tabs.find(item => layout.ids(item.layout).includes(id));
@@ -1076,6 +1085,7 @@
     return { node: target, panelId: tab()?.id, targetId: target.dataset.terminalId, direction, chosen: true };
   }
   function placePanel(panelId, target) {
+    groups.arm();
     const panel = panelOwner(panelId)?.tabs.find(item => item.id === panelId);
     if (!panel || busy || !layout.ids(panel.layout).length) return;
     const current = canvasLayout();
@@ -2284,6 +2294,7 @@
       return { ...item, tabs, nextNumber: Math.max(1, Number(item.nextNumber) || tabs.length + 1), activeTab: tabs.some(tab => tab.id === item.activeTab) ? item.activeTab : tabs[0]?.id || '' };
     });
     chat.restore(saved.chatModes);
+    groups.restore(saved.groups);
     const savedStandalone = saved.standalone || {};
     const independentTabs = (Array.isArray(savedStandalone.tabs) ? savedStandalone.tabs : []).map(item => ({ ...item, layout: layout.restore(item.layout, available, seen) })).filter(item => item.layout);
     standalone = { id: 'standalone', standalone: true, name: t('독립 패널'), cwd: bootstrap.terminalWorkspace?.defaultCwd || '.',

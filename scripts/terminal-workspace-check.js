@@ -302,6 +302,10 @@ app.whenReady().then(async () => {
       await require('./tests/terminal-chat-mode').run({ evaluate, waitFor, manager, win, fixture: chatFixture });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
+    if (process.argv.includes('--groups-only')) {
+      await require('./tests/workspace-groups')({ evaluate, waitFor, win, manager });
+      clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
+    }
     if (process.argv.includes('--hide-only')) {
       await require('./tests/terminal-hide-view')({ evaluate, waitFor, win, manager, profile });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
