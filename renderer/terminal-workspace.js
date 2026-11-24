@@ -30,6 +30,7 @@
     review: '<path d="M4 6h16M4 12h10M4 18h7m4-1 2 2 4-5"/>',
     chat: '<path d="M4 5h16v11H9l-5 4Z"/><path d="M8 9h8M8 12h5"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+    inbox: '<path d="M4 13h4l1.5 3h5l1.5-3h4M5 5h14l1 8v6H4v-6Z"/>',
     moon: '<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/>',
   };
@@ -95,10 +96,11 @@
   root.innerHTML = msg`
     <aside class="wb-sidebar">
       <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
-      <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트 찾기" aria-label="프로젝트 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
+      <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트·터미널 찾기" aria-label="프로젝트·터미널 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
+      <button type="button" id="wbReviewInbox" class="wb-inbox-row" data-action="next-review">${icon('inbox')}<span>확인할 답</span><b id="wbInboxCount">0</b></button>
       <section id="wbGroups" class="wb-groups" aria-label="그룹" hidden></section>
       <div class="wb-sidebar-scroll">
-      <div class="wb-side-heading"><span>프로젝트</span><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
+      <div class="wb-side-heading"><span>프로젝트</span><small id="wbProjectCount"></small><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
       <p class="wb-side-description">작업 폴더별로 묶은 패널</p>
       <nav id="wbSpaces" aria-label="작업 폴더"></nav>
       <button class="wb-add-project" data-action="workspace">${icon('plus')} 프로젝트 추가</button>
@@ -201,7 +203,7 @@
       setTimeout(() => captureReviews(), 0);
     },
   });
-  // A split that mixes panels becomes a named group (renderer/terminal-groups.js).
+  // Every screen split is a named group (renderer/terminal-groups.js).
   const groups = window.WhiteboxTerminalGroups({
     root, t, esc, layout, owners: () => owners(), panelFor: id => panelFor(id), space: () => space(), tab: () => tab(),
     canvasLayout: () => canvasLayout(), activate: (owner, panel, id) => activatePanel(owner, panel, id),
@@ -577,11 +579,7 @@
     const session = sessions.get(id);
     const review = reviews.get(id);
     const tasks = review?.result?.tasks || savedReview(session)?.result?.tasks || [];
-    const namedTask = [...tasks].reverse().find(task => !task.recordOnly && !task.deferred
-      && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.request)
-      && !window.WhiteboxTerminalReviewTurns.isNonTaskRequest(task.summary)
-      && task.analysisDepth !== 'deferred' && typeof task.summary === 'string' && task.summary.trim());
-    return namedTask?.summary.trim() || review?.provider || session?.title || t('터미널');
+    return window.WhiteboxTerminalReviewTurns.terminalName(tasks, review?.preview) || review?.provider || session?.title || t('터미널');
   }
   function terminalState(id) {
     const session = sessions.get(id), pane = panes.get(id);
@@ -846,13 +844,56 @@
     renderPaneTabs();
   }
 
+  // Sidebar in affectUI's Tree View look: a project is a rounded square with its
+  // initial (affectUI Avatar), a terminal shows which AI runs in it as a letter
+  // chip, and its state sits at the end of the row.
+  const PROVIDER_CHIPS = { claude: 'C', codex: 'X', gemini: 'G', grok: 'K', opencode: 'O' };
+  function providerOf(id) { return aiMembers.get(id)?.provider || reviews.get(id)?.provider || ''; }
+  function providerChip(id) {
+    const provider = providerOf(id), letter = PROVIDER_CHIPS[provider];
+    return letter ? `<span class="wb-terminal-icon wb-provider-chip" data-provider="${esc(provider)}" title="${esc(provider)}">${letter}</span>`
+      : `<span class="wb-terminal-icon wb-provider-chip" data-provider="shell">${icon('terminal')}</span>`;
+  }
+  function projectHue(item) {
+    let hash = 0;
+    for (const character of String(item.id || item.name || '')) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+    return hash % 7;
+  }
+  function projectAvatar(item) {
+    const initial = [...String(item.name || '?').trim()][0] || '?';
+    return `<span class="wb-space-icon wb-ws-avatar" data-hue="${projectHue(item)}" aria-hidden="true">${esc(initial.toLocaleUpperCase())}</span>`;
+  }
+  // The end of a project row: working, answers to check, or how many terminals.
+  function projectMeta(item) {
+    const ids = item.tabs.flatMap(panel => layout.ids(panel.layout)).filter(id => !trashed(id));
+    const states = ids.map(id => terminalState(id).state);
+    const working = states.filter(state => state === 'working').length, review = states.filter(state => state === 'needs-review').length;
+    return `<span class="wb-space-meta">${working ? `<i class="wb-meta-spin" title="${esc(t('작업 중'))}"></i>` : ''}${review ? `<i class="wb-meta-dot" title="${esc(t('확인 필요'))}"></i>${review}` : working ? '' : ids.length}</span>`;
+  }
+  function reviewQueue() {
+    return owners().flatMap(owner => owner.tabs.flatMap(panel => layout.ids(panel.layout))).filter(id => !trashed(id) && terminalState(id).state === 'needs-review');
+  }
+  function renderInbox() {
+    const queue = reviewQueue(), button = $('#wbReviewInbox');
+    if (!button) return;
+    $('#wbInboxCount').textContent = String(queue.length);
+    button.classList.toggle('is-empty', !queue.length);
+    button.title = queue.length ? t('확인할 답이 있는 터미널로 차례로 이동') : t('확인할 답이 없어요');
+  }
+  // Each press opens the next terminal with an answer to check, alone on the screen.
+  function openNextReview() {
+    const queue = reviewQueue();
+    if (!queue.length) return;
+    const next = queue[(queue.indexOf(activeId()) + 1) % queue.length];
+    acknowledgeCompletion(next); showTerminalAlone(next);
+  }
   function instanceRows(owner) {
     return owner.tabs.map(item => {
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
       return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
         const background = backgroundBadge(id), counts = backgroundCounts(terminalBackground(id));
-        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}"><span class="wb-terminal-icon">${icon('terminal')}</span><span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-terminal="${esc(id)}" class="wb-trash-instance" title="${t('휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
+        return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}">${providerChip(id)}<span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-terminal="${esc(id)}" class="wb-trash-instance" title="${t('휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
       }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button><button type="button" class="wb-panel-color-button" data-panel-color="${esc(item.id)}" title="${t('패널 색 바꾸기')}" aria-label="${t('패널 색 바꾸기')}" aria-haspopup="dialog"><i aria-hidden="true"></i></button></div></section>`;
     }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
   }
@@ -860,10 +901,12 @@
   function renderInstances() {
     if (draggingId || pointerDrag || projectDrag) return; // Keep pressed sources attached before the drag threshold too.
     const matchingProjects = spaces.filter(item => !projectQuery || [item.name, item.cwd, ...item.tabs.flatMap(panel => layout.ids(panel.layout).map(title))].some(value => String(value).toLocaleLowerCase().includes(projectQuery)));
-    const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project" data-project-id="${esc(item.id)}"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" draggable="false" title="${esc(item.cwd)} · ${t('길게 눌러 끌어서 순서 변경 · Alt+↑/↓')}"><span class="wb-space-icon">${icon('folder')}</span><span><strong>${esc(item.name)}</strong></span></button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
+    const projectsMarkup = matchingProjects.map(item => msg`<section class="wb-project" data-project-id="${esc(item.id)}"><div class="wb-space-row"><button class="wb-project-toggle" data-toggle-project="${esc(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${esc(item.name)} ${t('프로젝트 펼치기·접기')}">${icon('chevron')}</button><button class="wb-space ${item.id === selectedSpace ? 'active' : ''}" data-space="${esc(item.id)}" draggable="false" title="${esc(item.cwd)} · ${t('길게 눌러 끌어서 순서 변경 · Alt+↑/↓')}">${projectAvatar(item)}<span><strong>${esc(item.name)}</strong></span>${projectMeta(item)}</button><button class="wb-remove-project" data-remove-project="${esc(item.id)}" title="프로젝트 목록에서 삭제" aria-label="${esc(item.name)} 프로젝트 삭제">${icon('trash')}</button></div><div class="wb-project-terminals" data-project-terminals="${esc(item.id)}" ${item.collapsed ? 'hidden' : ''}>${instanceRows(item)}</div></section>`).join('');
     const independentMarkup = instanceRows(standalone) || t('<p class="wb-no-instances">프로젝트 없는 세션이 여기에 표시됩니다.</p>');
     if (projectsMarkup !== lastProjectsMarkup) { $('#wbSpaces').innerHTML = projectsMarkup; lastProjectsMarkup = projectsMarkup; }
     if (independentMarkup !== lastInstancesMarkup) { $('#wbInstances').innerHTML = independentMarkup; lastInstancesMarkup = independentMarkup; }
+    $('#wbProjectCount').textContent = spaces.length ? String(spaces.length) : '';
+    renderInbox();
     renderBackgroundPopover();
   }
 
@@ -1059,6 +1102,9 @@
     draggingId = ''; draggingPanelId = ''; clearDrop(); root.classList.remove('is-dragging-terminal'); renderInstances();
   }
   function dropTarget(event) {
+    // A group in the sidebar takes the dragged terminal or the whole dragged panel.
+    const groupRow = event.target.closest('#wbGroups [data-group-row]');
+    if (groupRow) return { node: groupRow, groupId: groupRow.dataset.groupRow, direction: 'group' };
     const target = event.target.closest('[data-drop-owner], [data-drop-panel], #wbCanvas .wb-pane, #wbCanvas');
     if (!target) return null;
     if (draggingPanelId && (target.dataset.dropOwner || target.dataset.dropPanel)) return null;
@@ -1121,7 +1167,7 @@
     const target = pointerDropTarget(event);
     if (target) {
       target.node.dataset.dropDirection = target.direction;
-      target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치' }[target.direction]);
+      target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치', group: '그룹에 추가' }[target.direction]);
     }
     event.preventDefault();
   });
@@ -1140,7 +1186,8 @@
       event.preventDefault(); event.stopPropagation();
     }
     finishDrag();
-    if (target) {
+    if (target?.groupId) groups.add(target.groupId, drag.panelId ? layout.ids(panelOwner(drag.panelId)?.tabs.find(item => item.id === drag.panelId)?.layout) : [drag.id]);
+    else if (target) {
       if (drag.panelId && !target.ownerId) placePanel(drag.panelId, target);
       else moveTerminal(drag.id, target);
     }
@@ -1187,7 +1234,7 @@
     event.preventDefault(); event.dataTransfer.dropEffect = 'move';
     event.stopPropagation();
     target.node.dataset.dropDirection = target.direction;
-    target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치' }[target.direction]);
+    target.node.dataset.dropLabel = t({ new: '새 패널로 분리', left: '왼쪽에 배치', right: '오른쪽에 배치', up: '위에 배치', down: '아래에 배치', group: '그룹에 추가' }[target.direction]);
   }, true);
   root.addEventListener('dragleave', event => { if (!event.target.contains(event.relatedTarget)) clearDrop(); });
   root.addEventListener('drop', event => {
@@ -1195,7 +1242,8 @@
     const target = dropTarget(event), id = event.dataTransfer.getData(DRAG_TYPE);
     event.preventDefault(); event.stopPropagation();
     const valid = id === draggingId; finishDrag();
-    if (valid && target) moveTerminal(id, target);
+    if (valid && target?.groupId) groups.add(target.groupId, [id]);
+    else if (valid && target) moveTerminal(id, target);
   }, true);
   root.addEventListener('dragend', finishDrag);
   // Native desktop drags may blur the window. Keep the source identity until
@@ -1409,6 +1457,7 @@
 
   function hideInstance(id) {
     if (busy || !layout.ids(canvasLayout()).includes(id)) return;
+    groups.arm(); // Hiding changes the group's own split.
     const owner = space();
     owner.viewLayout = layout.remove(owner.viewLayout, id);
     owner.canvasHidden = !owner.viewLayout;
@@ -2017,6 +2066,7 @@
       }
       save(); renderTrash();
     }
+    if (action === 'next-review') return openNextReview();
     if (action === 'trash-empty') return emptyTrash();
     if (action === 'trash-close') $('#wbTrash').close();
     if (action === 'settings') openSettings();
@@ -2048,7 +2098,8 @@
       if (project) { project.collapsed = !project.collapsed; renderInstances(); save(); }
     }
     if (button.dataset.expandTerminal) { acknowledgeCompletion(button.dataset.expandTerminal); selectPane(button.dataset.expandTerminal); act('expand').catch(report); }
-    if (button.dataset.instance) { acknowledgeCompletion(button.dataset.instance); selectInstance(button.dataset.instance); }
+    // A terminal in the sidebar shows that terminal alone; its group brings the split back.
+    if (button.dataset.instance) { acknowledgeCompletion(button.dataset.instance); showTerminalAlone(button.dataset.instance); }
     if (button.dataset.togglePanel) {
       const owner = panelOwner(button.dataset.togglePanel);
       const panel = owner?.tabs.find(item => item.id === button.dataset.togglePanel);

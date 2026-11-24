@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.42 - 2026-11-24
+
+- The sidebar is redrawn in the affectUI Tree View look: 28px rows, projects as rounded squares with their initial, and one colour bar per panel instead of a box. Each terminal shows which AI runs in it (C Claude, X Codex, >_ a shell) and its state at the end of the row; a project row sums up its terminals (working, answers to check, count). About twice as many projects and terminals fit on one screen. **Answers to check** at the top counts the terminals with a new answer and opens them one by one.
+- Clicking a terminal in the sidebar shows that terminal alone; its split comes back from the group. Every split on screen is now a group, including a split inside one panel, and splits made before this version become groups once. Dropping a terminal or a whole panel on a group adds it to that group's split, placed the way **+ Terminal** adds one. A new group arrives with a short highlight and "Group created".
+- The chat view follows Paseo's conversation layout (Apache-2.0, see renderer/THIRD_PARTY_NOTICES.md): your request in a bubble capped with **Show more**, the answer as plain Markdown, tool calls grouped into one row, and a finished turn's work folded into one summary line above its answer, with copy and time below it. Nested lists keep their levels, numbered lists keep their numbers, https links open in the browser, and Korean wraps between words.
+- Terminals get their name from your request again while the analysis of that request is still waiting (only the selected terminal is analysed first); slash commands and resumed-session summaries never name a terminal.
+- The question window in the corner is wider (400px) with larger text, the question as a heading instead of a caption on a box border, and taller options, following WCAG 2.2 SC 1.4.8 line length and spacing.
+
 ## 2.0.41 - 2026-11-23
 
 - Chat view replaces Summary mode. **Terminal / Chat** at the top shows every Claude or Codex terminal on screen as a chat inside its own pane (the chat button in a pane header switches one pane). The bubbles come straight from that terminal's own conversation log, with tool calls folded into one line and no extra AI call; the terminal keeps running underneath with its size unchanged. A message typed in the chat goes to the same AI session and waits while the AI works, the terminal has unsent text or the AI asks a question in the terminal, which the chat points to with **Show terminal**.

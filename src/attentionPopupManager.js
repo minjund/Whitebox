@@ -2,8 +2,8 @@
 
 const { pathToFileURL } = require('url');
 
-const POPUP_WIDTH = 320;
-const MAX_HEIGHT = 420;
+const POPUP_WIDTH = 400;
+const MAX_HEIGHT = 600;
 const DEFAULT_HEIGHT = 208;
 const MIN_HEIGHT = 96;
 const WORK_AREA_RATIO = 0.9;

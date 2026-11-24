@@ -537,7 +537,12 @@ app.whenReady().then(async () => {
     assert.equal(suggestionProbe.draftReady, false, 'real text remains a draft even with cursor at the start');
     assert.equal(manager.list().length, 1, 'opens a plain shell with no provider wizard');
     const first = manager.list()[0];
-    assert.equal(await evaluate('document.querySelectorAll(".wb-space-icon svg").length'), 2, 'folder icons are SVG, independent of font glyphs');
+    // Projects are affectUI Avatar rounded squares with their initial; terminals show the AI as a letter chip.
+    const avatars = await evaluate('[...document.querySelectorAll(".wb-ws-avatar")].map(node => ({ text: node.textContent, width: node.getBoundingClientRect().width, radius: getComputedStyle(node).borderTopLeftRadius }))');
+    assert.equal(avatars.length, 2, 'each project shows an avatar');
+    assert(avatars.every(item => item.text.length === 1 && Math.round(item.width) === 18 && item.radius === '4.5px'), JSON.stringify(avatars));
+    assert.equal(await evaluate('document.querySelectorAll("#wbSpaces .wb-provider-chip[data-provider=shell] svg").length'), 1, 'a shell terminal shows the >_ chip');
+    assert.equal(await evaluate('Math.round(document.querySelector("#wbSpaces .wb-instance").getBoundingClientRect().height)'), 28, 'tree rows are 28px (affectUI Tree View)');
     await evaluate('document.querySelectorAll("[data-space]")[1].click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 0, 'project terminals never appear as independent instances');
     await evaluate('document.querySelectorAll("[data-space]")[0].click()');
@@ -820,7 +825,11 @@ app.whenReady().then(async () => {
         await mouse({type:'mousePressed',...point,button:'left',buttons:1,clickCount:1});
         await mouse({type:'mouseReleased',...point,button:'left',buttons:0,clickCount:1});
         assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), id, 'real click selects its terminal without starting a drag');
+        assert.deepEqual(await evaluate('[...document.querySelectorAll("#wbCanvas .wb-pane")].map(node => node.dataset.terminalId)'), [id], 'a sidebar terminal opens alone');
       }
+      // The split is a group; the group brings it back.
+      await evaluate('document.querySelector("#wbGroups [data-group-open]").click()');
+      await waitFor('document.querySelectorAll("#wbCanvas .wb-pane").length === 2', 'the group brings the split back');
       const before = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces.map(o=>({id:o.id,view:o.viewLayout,active:o.activeSurface})))');
       const point = await evaluate(`(() => {const r=document.querySelector('[data-terminal-id="${first.id}"]>header').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
       await mouse({type:'mousePressed',...point,button:'left',buttons:1,clickCount:1});
@@ -892,18 +901,19 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
     assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
+    // affectUI Tree View look: rows indented past one colour bar per panel (the panel's drag
+    // gutter) instead of a box around the panel.
     const checkProjectTree = async () => {
-      const branches = await evaluate(`Array.from(document.querySelectorAll('#wbSpaces .wb-project-terminals:not([hidden]) > .wb-panel-group'), group => {
-        const rect = group.getBoundingClientRect(), project = group.closest('.wb-project').getBoundingClientRect();
-        const before = getComputedStyle(group, '::before'), after = getComputedStyle(group, '::after');
-        return { visible: before.display !== 'none' && after.content === '\"\"',
-          vertical: before.borderLeftWidth, horizontal: after.borderBottomWidth,
-          ignoresInput: before.pointerEvents === 'none' && after.pointerEvents === 'none',
-          indented: rect.left > project.left + 10,
-          branchInside: rect.left + parseFloat(after.left) >= project.left && rect.right <= project.right + 1 };
+      const panels = await evaluate(`Array.from(document.querySelectorAll('#wbSpaces .wb-project-terminals:not([hidden]) > .wb-panel-group')).filter(group => group.querySelector('.wb-instance')).map(group => {
+        const project = group.closest('.wb-project').getBoundingClientRect(), members = group.querySelector('.wb-panel-members'), box = members.getBoundingClientRect(), bar = getComputedStyle(members, '::before');
+        const rows = [...group.querySelectorAll('.wb-instance')].map(row => row.getBoundingClientRect());
+        return { visible: bar.display !== 'none' && bar.content === '""', width: bar.width, colour: bar.backgroundColor, panel: getComputedStyle(group).getPropertyValue('--wb-panel-color').trim(),
+          ignoresInput: bar.pointerEvents === 'none', border: getComputedStyle(group).borderTopWidth,
+          barInside: box.left + parseFloat(bar.left) >= project.left && box.left + parseFloat(bar.left) + 3 <= rows[0].left,
+          rowsIndented: rows.every(rect => rect.left > project.left + 16), barCoversRows: Math.abs(parseFloat(bar.height) - (rows.at(-1).bottom - rows[0].top - 12)) <= 1 };
       })`);
-      assert(branches.length > 0, 'project tree must contain panel branches');
-      for (const branch of branches) assert(branch.visible && branch.vertical === '1px' && branch.horizontal === '1px' && branch.ignoresInput && branch.indented && branch.branchInside, JSON.stringify(branch));
+      assert(panels.length > 0, 'project tree must contain panels');
+      for (const panel of panels) assert(panel.visible && panel.width === '3px' && panel.colour !== 'rgba(0, 0, 0, 0)' && panel.ignoresInput && panel.border === '0px' && panel.barInside && panel.rowsIndented && panel.barCoversRows, JSON.stringify(panel));
     };
     for (const theme of ['light', 'dark']) {
       await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
@@ -950,6 +960,8 @@ app.whenReady().then(async () => {
       await assertCompletionDot(second.id, 'needs-review', 'pane');
     }
     await evaluate("document.documentElement.dataset.theme = 'dark'");
+    // "확인할 답" counts the terminals with an answer to check and opens them one by one, alone.
+    await waitFor(`document.querySelector('#wbInboxCount').textContent === '2' && !document.querySelector('#wbReviewInbox').classList.contains('is-empty')`, 'the inbox counts both answers to check');
     holdCollaborationReply = true;
     for (let attempt = 0; !releaseCollaborationReply && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(typeof releaseCollaborationReply, 'function', 'hold an unread observation already in flight');
@@ -987,7 +999,9 @@ app.whenReady().then(async () => {
     await evaluate(`window.originalTerminalNode = document.querySelector('[data-terminal-id="${second.id}"]')`);
     const splitView = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)');
     await evaluate(`document.querySelector('[data-drop-panel="${originalPanel}"] [data-instance]').click()`);
-    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)'), splitView, 'panel selection keeps the displayed split');
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'a sidebar terminal opens alone');
+    await evaluate('document.querySelector("#wbGroups .wb-group-row.active, #wbGroups .wb-group-row") && [...document.querySelectorAll("#wbGroups [data-group-open]")].find(button => button.closest(".wb-group-row").querySelector("small").textContent.includes("2")).click()');
+    assert.equal(await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].viewLayout)'), splitView, 'the group brings the displayed split back');
     assert.equal(await evaluate(`originalTerminalNode === document.querySelector('[data-terminal-id="${second.id}"]')`), true, 'moving reuses terminal DOM and buffer');
     const separatedPanels = await evaluate('JSON.stringify(WhiteboxWorkspace.getState().spaces[0].tabs.map(panel => ({id:panel.id, layout:panel.layout})))');
     await win.reload();
@@ -1307,6 +1321,10 @@ app.whenReady().then(async () => {
     reviewState = undefined;
     await forceCapture();
     assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true, 'success clears the previous failure indicator');
+    // A sidebar terminal opens alone, so the panel's split comes back through its group first.
+    await evaluate('document.querySelector("#wbGroups [data-group-open]")?.click()');
+    const panesBeforeAdd = await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length');
+    assert.equal(panesBeforeAdd, 2, 'the group shows the panel split');
     await evaluate("document.querySelector('[data-add-panel-terminal]').click()");
     await waitFor('!WhiteboxWorkspace.getState().busy && document.querySelectorAll("#wbCanvas .wb-pane").length === 3 && document.querySelectorAll("#wbCanvas canvas").length === 3', 'default new terminal joins current panel and finishes connecting');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
@@ -1353,7 +1371,8 @@ app.whenReady().then(async () => {
       const label=document.querySelector('.wb-panel-group .wb-panel-add>span'), text=document.createRange();text.selectNodeContents(label);
       return { nameWidth:name.width, inside:plus.left>=group.left&&plus.right<=group.right&&plus.bottom<=group.bottom, plusWidth:plus.width, plusHeight:plus.height, labelFits:label.clientWidth>=text.getBoundingClientRect().width, labelLines:text.getClientRects().length };
     })()`);
-    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 76 && sidebarGeometry.plusHeight >= 30 && sidebarGeometry.labelFits && sidebarGeometry.labelLines === 1, JSON.stringify(sidebarGeometry));
+    // The add action is a quiet 22px tree action (affectUI), not a full-width box.
+    assert.ok(sidebarGeometry.nameWidth >= 40 && sidebarGeometry.inside && sidebarGeometry.plusWidth >= 56 && sidebarGeometry.plusHeight >= 22 && sidebarGeometry.labelFits && sidebarGeometry.labelLines === 1, JSON.stringify(sidebarGeometry));
     await checkProjectTree();
     await evaluate("document.querySelector('#terminalWorkspace').style.removeProperty('--wb-sidebar-width')");
     for (const width of [780, 640, 1000]) {
@@ -1382,7 +1401,8 @@ app.whenReady().then(async () => {
     const oldPids = manager.list().map(item => item.pid).sort();
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore after reload');
-    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
+    assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'the terminal opened alone from the sidebar is restored alone');
+    assert.equal(await evaluate('document.querySelectorAll("#wbGroups .wb-group-row").length') >= 1, true, 'its split stays in the group list');
     assert.equal(await evaluate('document.querySelector("#wbCodexModel").value'), 'fixture-model', 'model setting persists across reload');
     assert.deepEqual(manager.list().map(item => item.pid).sort(), oldPids, 'reload reattaches without spawning duplicate shells');
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^다음 요청 제목 ONE_ONLY/u, 'terminal name survives renderer reload');

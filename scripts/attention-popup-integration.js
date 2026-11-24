@@ -86,8 +86,8 @@ async function run() {
   await waitFor(() => questionEntry.window.webContents.executeJavaScript(`document.querySelector('#popupCard').dataset.type === 'question' && document.querySelectorAll('.popup-option').length >= 2`));
   await questionEntry.window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   await waitFor(() => questionEntry.height >= 180);
-  assert.equal(questionEntry.window.getBounds().width, 320, 'question popup uses a compact corner width');
-  assert.ok(questionEntry.window.getBounds().height <= 420, 'long questionnaires stay compact and scroll');
+  assert.equal(questionEntry.window.getBounds().width, Math.min(400, Math.floor(workArea.width * 0.9)), 'question popup is wide enough for readable lines (WCAG 1.4.8, Baymard line length)');
+  assert.ok(questionEntry.window.getBounds().height <= 600, 'long questionnaires stay in the corner and scroll');
   const artifactDirectory = path.join(root, 'artifacts');
   fs.mkdirSync(artifactDirectory, { recursive: true });
   const questionImage = await questionEntry.window.webContents.capturePage();
@@ -138,8 +138,8 @@ async function run() {
   const permissionScreenshot = path.join(artifactDirectory, 'attention-popup-permission.png');
   fs.writeFileSync(permissionScreenshot, permissionImage.toPNG());
 
-  assert.equal(permissionEntry.window.getBounds().width, 320);
-  assert.ok(permissionEntry.window.getBounds().height < 280, 'ordinary approval remains compact');
+  assert.equal(permissionEntry.window.getBounds().width, Math.min(400, Math.floor(workArea.width * 0.9)));
+  assert.ok(permissionEntry.window.getBounds().height < 320, 'ordinary approval remains compact');
   nativeTheme.themeSource = 'light';
   await waitFor(() => permissionEntry.window.webContents.executeJavaScript("getComputedStyle(document.querySelector('.popup-card')).backgroundColor === 'rgb(255, 255, 255)'", true));
   const lightImage = await waitFor(async () => {
@@ -160,7 +160,7 @@ async function run() {
   })()`, true);
   assert.equal(commandLayout.text, longCommand, 'the complete command is retained');
   assert.ok(commandLayout.height <= 112 && commandLayout.overflow && commandLayout.scrolled && commandLayout.focused, 'long commands scroll and accept keyboard focus');
-  assert.ok(commandLayout.cardHeight <= 420 && longEntry.window.getBounds().height <= 420, 'long content cannot create an oversized window');
+  assert.ok(commandLayout.cardHeight <= 600 && longEntry.window.getBounds().height <= 600, 'long content cannot create an oversized window');
   manager.remove('overflow', 'long-command');
 
   const questionUi = await questionEntry.window.webContents.executeJavaScript(`(() => {
@@ -228,7 +228,7 @@ async function run() {
   await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
   await paged.window.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   fs.writeFileSync(path.join(artifactDirectory,'attention-popup-paged.png'),(await paged.window.webContents.capturePage()).toPNG());
-  assert(paged.window.getBounds().height<=420,'multi-question pages remain compact');
+  assert(paged.window.getBounds().height<=600,'multi-question pages remain compact');
   await paged.window.webContents.executeJavaScript("document.querySelector('.question-next').click()", true);
   assert.deepStrictEqual(await pageState(),{visible:['note'],progress:'질문 3 / 3',previousDisabled:false,nextHidden:true,submitHidden:false});
   assert.equal(await paged.window.webContents.executeJavaScript("document.querySelector('textarea').value"),'한글 메모 😀');

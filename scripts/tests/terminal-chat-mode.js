@@ -109,7 +109,13 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   await type('CHAT_PING');
   await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_PING')`, 'a chat message is delivered to the real PTY and answered');
   await waitFor(`(document.querySelector(${q(`${pane} .wb-chat-log`)})?.textContent || '').includes('CODE_CHAT_PING') && !document.querySelector(${q(`${pane} .is-pending`)})`, 'the answer arrives from the transcript and the sent message leaves the queue');
-  assert(await evaluate(`Boolean(document.querySelector(${q(`${pane} .wb-chat-tools`)}))`), 'tool calls are folded into one row');
+  // Paseo-style turn: the finished turn's work folds into one summary row above its answer.
+  const summaryRow = `${pane} .wb-chat-work.is-turn [data-chat-toggle]`;
+  await waitFor(`/명령 1개 실행|Commands run: 1|运行了 1 条命令/u.test(document.querySelector(${q(summaryRow)})?.textContent || '')`, 'the turn work folds into one summary row');
+  assert.equal(await evaluate(`document.querySelector(${q(`${pane} .wb-chat-rail`)})`), null, 'the folded work stays closed');
+  assert(await evaluate(`Boolean(document.querySelector(${q(`${pane} .wb-chat-footer [data-chat-copy]`)}))`), 'the answer has a copy button');
+  await evaluate(`[...document.querySelectorAll(${q(summaryRow)})].at(-1).click()`);
+  await waitFor(`(document.querySelector(${q(`${pane} .wb-chat-rail`)})?.textContent || '').includes('echo CHAT_PING')`, 'opening the summary shows the tool call and its command');
   assert.doesNotMatch(await log(), /hidden/u, 'injected reminders are not shown');
 
   // A second message while the AI works waits, then goes after the first reply.

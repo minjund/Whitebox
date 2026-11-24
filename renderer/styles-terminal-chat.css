@@ -105,15 +105,6 @@
 #terminalWorkspace .wb-chat-table table { border-collapse:collapse; font-size:12px; }
 #terminalWorkspace .wb-chat-table th, #terminalWorkspace .wb-chat-table td { padding:5px 9px; border:1px solid var(--clean-line, var(--wb-line)); text-align:left; vertical-align:top; }
 #terminalWorkspace .wb-chat-table th { background:var(--clean-wash, var(--wb-soft)); font-weight:600; }
-#terminalWorkspace .wb-chat-tools { margin:0 0 10px; font-size:12px; color:var(--clean-muted, var(--wb-muted)); }
-#terminalWorkspace .wb-chat-tools summary { display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border:1px solid var(--clean-line, var(--wb-line)); border-radius:999px; cursor:pointer; list-style:none; }
-#terminalWorkspace .wb-chat-tools summary::-webkit-details-marker { display:none; }
-#terminalWorkspace .wb-chat-tools summary:before { content:'›'; transition:transform .12s; }
-#terminalWorkspace .wb-chat-tools[open] summary:before { transform:rotate(90deg); }
-#terminalWorkspace .wb-chat-tools ul { margin:6px 0 0; padding:0 0 0 10px; list-style:none; border-left:2px solid color-mix(in srgb, var(--wb-panel-color) 45%, transparent); }
-#terminalWorkspace .wb-chat-tools li { display:flex; gap:8px; padding:2px 6px; min-width:0; }
-#terminalWorkspace .wb-chat-tools li b { flex:none; font-weight:600; color:var(--clean-secondary, var(--wb-text)); }
-#terminalWorkspace .wb-chat-tools li span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono, ui-monospace, monospace); font-size:11px; }
 #terminalWorkspace .wb-chat-empty, #terminalWorkspace .wb-chat-more { margin:0 0 12px; font-size:12px; color:var(--clean-muted, var(--wb-muted)); text-align:center; }
 #terminalWorkspace .wb-chat-working { display:flex; align-items:center; gap:8px; margin:4px 0 8px; font-size:12px; color:var(--clean-muted, var(--wb-muted)); }
 #terminalWorkspace .wb-chat-working i { width:7px; height:7px; border-radius:50%; background:var(--wb-panel-color); animation:wb-chat-pulse 1.2s ease-in-out infinite; }
@@ -128,3 +119,90 @@
 #terminalWorkspace .wb-chat-composer textarea { flex:1; min-height:38px; max-height:160px; padding:4px 6px; border:0; outline:0; resize:vertical; background:transparent; color:var(--clean-text, var(--wb-text)); font:13px/1.5 var(--font-sans); }
 #terminalWorkspace .wb-chat-send { border-color:var(--clean-text, var(--wb-text)); background:var(--clean-text, var(--wb-text)); color:var(--clean-bg, var(--wb-bg)); font-weight:600; }
 #terminalWorkspace .wb-pane > header [data-chat-terminal][aria-pressed=true] { color:var(--wb-panel-color); }
+
+/* Chat conversation, laid out like Paseo's agent stream (Apache-2.0, see renderer/
+   THIRD_PARTY_NOTICES.md): packages/app/src/components/message.tsx,
+   components/markdown/styles.ts, agent-stream/spacing.ts, styles/theme.ts and
+   styles/density.ts. Content 820px wide; 15px text; 16px between blocks and
+   around requests; 4px between an answer and its work rows; none between work
+   rows. Line spacing is 1.6 instead of Paseo's 1.4: Korean text needs the room,
+   and WCAG 2.2 SC 1.4.8 (https://www.w3.org/WAI/WCAG22/Understanding/visual-presentation)
+   asks for at least 1.5. Korean wraps between words (word-break: keep-all). */
+#terminalWorkspace .wb-chat { --chat-s1:var(--clean-surface, var(--wb-panel)); --chat-s2:var(--clean-wash, var(--wb-soft));
+  --chat-s3:color-mix(in srgb, var(--clean-text, var(--wb-text)) 13%, var(--clean-bg, var(--wb-bg)));
+  --chat-muted:var(--clean-muted, var(--wb-muted)); --chat-text:var(--clean-text, var(--wb-text)); --chat-line:var(--clean-line, var(--wb-line));
+  --chat-link:color-mix(in srgb, var(--wb-panel-color, #7d9fc8) 80%, var(--chat-text)); }
+#terminalWorkspace .wb-chat-log { padding:16px 20px 8px; font-size:15px; line-height:1.6; word-break:keep-all; overflow-wrap:anywhere; text-align:start; color:var(--chat-text); }
+#terminalWorkspace .wb-chat-column { max-width:820px; margin:0 auto; }
+#terminalWorkspace .wb-chat-turn + .wb-chat-turn { margin-top:16px; }
+#terminalWorkspace .wb-chat-msg { margin:0; }
+/* The request: a right-aligned bubble, 16px corners with a small top-right corner. */
+#terminalWorkspace .wb-chat-msg.is-user { display:flex; flex-direction:column; align-items:flex-end; margin:16px 0; padding:0; border:0; }
+#terminalWorkspace .wb-chat-turn:first-child > .wb-chat-msg.is-user:first-child { margin-top:0; }
+#terminalWorkspace .wb-chat-msg.is-user.is-pending { margin:4px 0 16px; }
+#terminalWorkspace .wb-chat-bubble { max-width:min(100%, 640px); padding:14px 16px; border:0; border-radius:16px 2px 16px 16px; background:var(--chat-s3); color:var(--chat-text); line-height:1.5; }
+#terminalWorkspace .wb-chat-preview { position:relative; max-height:240px; overflow:hidden; }
+#terminalWorkspace .wb-chat-preview.is-open { max-height:none; }
+#terminalWorkspace .wb-chat-preview.has-more:not(.is-open)::after { content:''; position:absolute; left:0; right:0; bottom:0; height:48px; background:linear-gradient(transparent, var(--chat-s3)); pointer-events:none; }
+#terminalWorkspace .wb-chat-more-toggle { display:block; width:auto; min-height:0; margin:8px 0 0; padding:0; border:0; background:none; color:var(--chat-muted); font-size:13px; cursor:pointer; }
+#terminalWorkspace .wb-chat-more-toggle[hidden] { display:none; }
+#terminalWorkspace .wb-chat-more-toggle:hover { color:var(--chat-text); }
+#terminalWorkspace .wb-chat-trailing { display:flex; align-items:center; gap:8px; height:24px; margin-top:4px; color:var(--chat-muted); font-size:13px; opacity:0; transition:opacity .12s; }
+#terminalWorkspace .wb-chat-msg.is-user:hover .wb-chat-trailing, #terminalWorkspace .wb-chat-trailing:focus-within { opacity:1; }
+#terminalWorkspace .wb-chat-copy { display:grid; place-items:center; width:24px; min-height:24px; height:24px; padding:4px; border:0; border-radius:6px; background:none; color:var(--chat-muted); cursor:pointer; }
+#terminalWorkspace .wb-chat-copy:hover, #terminalWorkspace .wb-chat-copy[data-copied] { color:var(--chat-text); background:var(--chat-s2); }
+#terminalWorkspace .wb-chat-copy svg { width:14px; height:14px; }
+/* The answer: Markdown with no bubble. */
+#terminalWorkspace .wb-chat-msg.is-ai { padding:12px 0; }
+#terminalWorkspace .wb-chat-work + .wb-chat-msg.is-ai { padding-top:4px; }
+#terminalWorkspace .wb-chat-msg.is-ai:has(+ .wb-chat-work) { padding-bottom:4px; }
+#terminalWorkspace .wb-chat-text > * { margin:0 0 16px; }
+#terminalWorkspace .wb-chat-text > :last-child { margin-bottom:0; }
+#terminalWorkspace .wb-chat-text p { margin:0 0 16px; }
+#terminalWorkspace .wb-chat-text h4 { margin:0 0 16px; font-weight:700; line-height:1.3; font-size:15px; }
+#terminalWorkspace .wb-chat-text h4[data-level="1"] { font-size:24px; }
+#terminalWorkspace .wb-chat-text h4[data-level="2"] { font-size:21px; }
+#terminalWorkspace .wb-chat-text h4[data-level="3"] { font-size:18px; }
+#terminalWorkspace .wb-chat-text h4[data-level="4"] { font-size:16.5px; }
+#terminalWorkspace .wb-chat-text h4[data-level="6"] { color:var(--chat-muted); }
+#terminalWorkspace .wb-chat-text strong { font-weight:650; color:inherit; }
+#terminalWorkspace .wb-chat-text ul, #terminalWorkspace .wb-chat-text ol { margin:0 0 16px; padding-left:20px; }
+#terminalWorkspace .wb-chat-text li { margin:4px 0; padding-left:7px; }
+#terminalWorkspace .wb-chat-text li::marker { color:var(--chat-muted); }
+#terminalWorkspace .wb-chat-text li > ul, #terminalWorkspace .wb-chat-text li > ol { margin:4px 0; }
+#terminalWorkspace .wb-chat-text li > p { margin:4px 0; }
+#terminalWorkspace .wb-chat-text code { padding:1px 5px; border:0; border-radius:4px; background:var(--chat-s2); color:var(--chat-text); font:12px/1.5 var(--font-mono, ui-monospace, monospace); word-break:normal; overflow-wrap:anywhere; }
+#terminalWorkspace .wb-chat-text pre { margin:0 0 16px; padding:12px; border:1px solid var(--chat-line); border-radius:8px; background:var(--chat-s2); overflow:auto; }
+#terminalWorkspace .wb-chat-text pre code { padding:0; background:none; font-size:12px; line-height:1.55; white-space:pre; word-break:normal; }
+#terminalWorkspace .wb-chat-text blockquote { margin:0 0 16px; padding:12px; border-left:3px solid var(--chat-s2); border-radius:0; background:var(--chat-s1); color:color-mix(in srgb, var(--chat-text) 80%, transparent); }
+#terminalWorkspace .wb-chat-text hr { margin:0 0 16px; border:0; border-top:1px solid var(--chat-line); }
+#terminalWorkspace .wb-chat-text a { color:var(--chat-link); text-decoration:none; cursor:pointer; word-break:break-all; }
+#terminalWorkspace .wb-chat-text a:hover { text-decoration:underline; }
+#terminalWorkspace .wb-chat-table { margin:0 0 16px; overflow:auto; }
+#terminalWorkspace .wb-chat-table table { border-collapse:collapse; font-size:14px; line-height:1.5; }
+#terminalWorkspace .wb-chat-table th, #terminalWorkspace .wb-chat-table td { padding:6px 10px; border:1px solid var(--chat-line); text-align:left; vertical-align:top; }
+#terminalWorkspace .wb-chat-table th { background:var(--chat-s2); font-weight:600; }
+#terminalWorkspace .wb-chat-table tr:nth-child(odd) td { background:var(--chat-s1); }
+/* Work rows: Paseo's ExpandableBadge. Muted 14px label, 22px icon, chevron; rows touch. */
+#terminalWorkspace .wb-chat-work { margin:0 -13px; }
+#terminalWorkspace .wb-chat-work.is-turn { margin-bottom:4px; }
+#terminalWorkspace .wb-chat-badge { display:flex; align-items:center; width:100%; min-height:30px; padding:4px 8px; border:1px solid transparent; border-radius:8px; background:none; color:var(--chat-muted); font-size:14px; line-height:1.5; text-align:left; cursor:pointer; }
+#terminalWorkspace .wb-chat-badge:hover, #terminalWorkspace .wb-chat-badge[aria-expanded="true"] { color:var(--chat-text); }
+#terminalWorkspace .wb-chat-badge:hover { background:var(--chat-s1); }
+#terminalWorkspace .wb-chat-badge:focus-visible { outline:2px solid var(--wb-panel-color); outline-offset:-2px; }
+#terminalWorkspace .wb-chat-badge-icon { display:grid; place-items:center; flex:none; width:22px; height:22px; margin-right:4px; }
+#terminalWorkspace .wb-chat-badge svg { width:15px; height:15px; }
+#terminalWorkspace .wb-chat-badge-label { flex:none; white-space:nowrap; }
+#terminalWorkspace .wb-chat-badge-detail { flex:1; min-width:0; margin-left:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono, ui-monospace, monospace); font-size:12.5px; }
+#terminalWorkspace .wb-chat-badge-chevron { display:grid; place-items:center; flex:none; margin-left:auto; padding-left:8px; opacity:.7; transition:transform .12s; }
+#terminalWorkspace .wb-chat-badge[aria-expanded="true"] .wb-chat-badge-chevron { transform:rotate(90deg); }
+#terminalWorkspace .wb-chat-rail { margin:2px 0 6px 20px; padding-left:12px; border-left:1px solid var(--chat-line); }
+#terminalWorkspace .wb-chat-rail .wb-chat-work { margin:0; }
+#terminalWorkspace .wb-chat-rail .wb-chat-msg.is-ai { padding:8px 0; color:color-mix(in srgb, var(--chat-text) 88%, transparent); }
+#terminalWorkspace .wb-chat-tool-detail { margin:2px 8px 8px 34px; padding:12px; max-height:220px; overflow:auto; border:1px solid var(--chat-line); border-radius:8px; background:var(--chat-s2); color:var(--chat-text); font:12px/1.55 var(--font-mono, ui-monospace, monospace); white-space:pre-wrap; word-break:break-all; }
+/* Under the final answer: copy and time. */
+#terminalWorkspace .wb-chat-footer { display:flex; align-items:center; gap:8px; min-height:24px; margin:4px 0 0 -4px; color:var(--chat-muted); font-size:13px; }
+#terminalWorkspace .wb-chat-compaction { margin:0 -13px 16px; }
+#terminalWorkspace .wb-chat-compaction > .wb-chat-text { margin:4px 13px 0; padding:12px 14px; border:1px dashed var(--chat-line); border-radius:8px; font-size:13.5px; color:var(--chat-muted); }
+#terminalWorkspace .wb-chat-working { margin:8px 0; font-size:14px; }
+#terminalWorkspace .wb-chat-composer textarea { font-size:15px; line-height:1.5; }

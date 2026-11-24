@@ -564,3 +564,35 @@ label {
 .question-actions.is-paged .question-previous{grid-column:1}
 .question-actions.is-paged .question-next,.question-actions.is-paged .question-submit{grid-column:2;grid-row:1}
 .question-actions.is-paged:not(.has-deny) .open-main{grid-column:1 / -1}
+
+/* Readable questions. Sources:
+   - WCAG 2.2 SC 1.4.8 Visual Presentation (https://www.w3.org/WAI/WCAG22/Understanding/visual-presentation):
+     lines no wider than 40 CJK glyphs / 80 Latin characters, line spacing at least 1.5,
+     paragraph spacing at least 1.5 times the line spacing, no justified text.
+   - Baymard line length (https://baymard.com/blog/line-length-readability): body lines of 50-75
+     characters; much shorter lines hurt too, so the card is wider than the old 320px.
+   - Korean breaks between words, not inside them (word-break: keep-all), with
+     overflow-wrap so a long path or URL still wraps (https://www.w3.org/TR/klreq/). */
+body { font-size: 14px; line-height: 1.6; }
+.popup-card { word-break: keep-all; overflow-wrap: anywhere; text-align: start; }
+.popup-header { padding: 14px 16px 10px; }
+.popup-content { padding: 0 16px 14px; }
+.popup-title { font-size: 16px; line-height: 1.4; }
+.popup-body, .popup-detail { max-height: none; line-height: 1.65; }
+.popup-detail { font-size: 13px; }
+.popup-questions { gap: 18px; margin-top: 12px; }
+/* The question is the heading of its answers, not a caption on a box border. */
+.popup-question { padding: 0; border: 0; background: transparent; }
+.popup-question legend { float: left; width: 100%; padding: 0; margin: 0 0 12px; color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.65; white-space: pre-line; }
+.popup-question legend + * { clear: both; }
+.question-header { display: table; margin: 0 0 8px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); font-size: 11px; letter-spacing: 0; text-transform: none; line-height: 1.5; }
+.question-description { clear: both; margin: 0 0 12px; font-size: 13px; line-height: 1.65; }
+.option-list { clear: both; gap: 8px; margin-top: 0; }
+.popup-option { gap: 10px; padding: 11px 12px; border-color: var(--line); border-radius: 10px; }
+.popup-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.popup-option input { margin-top: 4px; }
+.option-label { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.option-description { margin-top: 4px; font-size: 13px; line-height: 1.6; color: color-mix(in srgb, var(--text) 72%, var(--surface)); }
+.question-progress { font-size: 12px; }
+.popup-actions { padding-top: 10px; padding-bottom: 4px; }
+.popup-button { min-height: 34px; font-size: 13px; }
