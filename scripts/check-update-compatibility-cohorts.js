@@ -126,6 +126,7 @@ function cohortList(manifest) {
     { version: '2.0.39', size: 97594889, sha256: '986a3ac9f8ebee92ef822ecf5454e6febf796658e64ba67f1a9745cdd409df12' },
     { version: '2.0.40', size: 97587906, sha256: 'ff678010cfa28df08d60570efde61493f43736ee9760be5214fae63c0ae7613b' },
     { version: '2.0.41', size: 97550108, sha256: 'bf89b2061ab3b7177f9872d5fa41d073792123f70ad959106529f5a65d266620' },
+    { version: '2.0.42', size: 97560420, sha256: 'd417506b43db3a2ea4c3557e498dca10e8122bf94594c67ef0bccbc3aea0f989' },
     { version: '2.0.25', size: 95449830, sha256: '22249060312e6a898732064a797c9552fbe7feddc44cb0982763557178e90ff0' },
     { version: '2.0.24', size: 95479224, sha256: '1cdce7314bde60ccbb27e9d85ae736d4877aba9dd714b41c03b4a409debb0f71' },
     { version: '2.0.23', size: 95443711, sha256: '4f7625265316ea1df921a8af6ea9fd550b28fe63bb421c974c4592ff2a77f928' },

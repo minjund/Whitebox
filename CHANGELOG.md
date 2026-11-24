@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.44 - 2026-11-24
+
+- Each panel in the sidebar has its own name line: its colour (click to change it), "Panel N", how many terminals it holds, and **+ Terminal** at the end. Its terminals sit inside its colour line, and **New panel** is at the end of every open project, so it is clear which panel a new terminal joins and where a new panel goes. Clicking a panel's name line opens its selected terminal.
+- A terminal added to a group's terminal joins that group instead of making a second group: **+ Terminal** on a member panel (also while one of its terminals is shown alone) and splitting the focused terminal both change the existing group.
+- Dragging a border between split terminals resizes only the two terminals beside it. With three or more side by side, the others keep their size; in a 2×2 split, dragging the border under the top-left terminal moves the left column only (the split turns so that column stacks on its own), and dragging a border in the other direction does the same for its row.
+- **Clean up idle sessions** under **Answers to check** counts the terminals not typed into, opened or worked by their AI for seven days, lists them and, after you confirm, moves them to the trash. The terminal on screen and terminals at work are never included.
+- A failed or interrupted message between terminals no longer stays above the screen as "Delivery failed"; only deliveries in progress show there.
+
 ## 2.0.43 - 2026-11-24
 
 - Updating from 2.0.41 no longer rolls back. The updater waits up to 30 seconds for the new version's window to report ready; on a busy machine 2.0.42 could miss that while its terminals were still attaching, so the updater restored and reopened the old version. The workspace now reports ready as soon as it is drawn and attaches terminals afterwards, no longer waits for review history or the analysis model list at startup, and a failure in chat panes, groups or the sidebar summary can no longer hold startup.

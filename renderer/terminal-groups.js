@@ -110,16 +110,18 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
   // A panel or terminal dropped on a group joins its split the way "+ 터미널"
   // adds to a panel: beside the selected terminal, side by side, each next one
   // beside the one added before it. Panels and their membership are unchanged.
-  function add(groupId, ids) {
+  // A new terminal made while the group is on screen joins it the same way,
+  // beside the terminal it was split from ({ beside, axis }).
+  function add(groupId, ids, { beside = '', axis = 'row' } = {}) {
     const group = groups.find(item => item.id === groupId), found = group && anchor(group);
     const live = available();
     let view = found && layout.fit(group.layout, live);
     if (!view) return false;
     const shown = layout.ids(view);
-    let target = shown.includes(found.panel.activePane) ? found.panel.activePane : shown[0];
+    let target = shown.includes(beside) ? beside : shown.includes(found.panel.activePane) ? found.panel.activePane : shown[0];
     for (const id of ids) {
       if (!live.has(id) || layout.ids(view).includes(id)) continue;
-      view = layout.split(view, target, id, 'row');
+      view = layout.split(view, target, id, axis);
       target = id;
     }
     group.layout = view;
@@ -127,6 +129,13 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
     open(groupId);
     context.save();
     return true;
+  }
+  // The group a terminal belongs to: the one on screen, else the newest one holding it.
+  function holding(id) {
+    const on = active();
+    if (on && layout.ids(on.layout).includes(id)) return on;
+    const live = available();
+    return [...groups].reverse().find(group => layout.ids(layout.fit(group.layout, live)).includes(id)) || null;
   }
   function rename(groupId, value) {
     const group = groups.find(item => item.id === groupId);
@@ -206,7 +215,7 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
   });
 
   return {
-    sync, render, active, open, add, rename, dissolve,
+    sync, render, active, holding, open, add, rename, dissolve,
     // While a name is being typed, the workspace must not move focus to a terminal.
     editing: () => Boolean(editing),
     // The next split change comes from the person (a drag or an arrange), not a restore.

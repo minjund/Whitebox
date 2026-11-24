@@ -126,7 +126,8 @@ module.exports = async function groupChecks({ evaluate, waitFor, win, manager })
   const groupBefore = await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout');
   const selectedBefore = await activeId();
   const centre = selector => evaluate(`(() => { const r = document.querySelector(${lit(selector)}).getBoundingClientRect(); return { x: r.left + 6, y: r.top + 4 }; })()`);
-  const from = await centre(`[data-drag-panel=${JSON.stringify(thirdPanel)}]`);
+  // The panel's name line is its drag handle.
+  const from = await evaluate(`(() => { const r = document.querySelector('[data-drag-panel=' + ${lit(JSON.stringify(thirdPanel))} + '] .wb-panel-name').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   const to = await evaluate(`(() => { const r = document.querySelector('#wbGroups [data-group-row]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   win.webContents.debugger.attach('1.3');
   try {
@@ -144,6 +145,38 @@ module.exports = async function groupChecks({ evaluate, waitFor, win, manager })
   const layoutModule = require('../../renderer/terminal-workspace-layout');
   assert.deepEqual(await evaluate('WhiteboxWorkspace.getState().spaces[0].viewLayout'), layoutModule.split(groupBefore, selectedBefore, third, 'row'), 'placed like a terminal added to a panel');
   console.log('PASS groups: dragging a panel onto a group adds it beside the selected terminal');
+
+  // 8. A terminal added to a group's terminal joins that group, not a new one:
+  //    from its panel's "+ 터미널" after opening the terminal alone (the "+"
+  //    shows on the selected panel), and by splitting the focused terminal.
+  await evaluate(`document.querySelector('[data-instance=' + ${lit(JSON.stringify(third))} + ']').click()`);
+  await waitFor(`JSON.stringify([...document.querySelectorAll('#wbCanvas .wb-pane')].map(node => node.dataset.terminalId)) === ${lit(JSON.stringify([third]))}`, 'the group terminal opens alone');
+  await evaluate(`document.querySelector('[data-add-panel-terminal=' + ${lit(JSON.stringify(thirdPanel))} + ']').click()`);
+  await waitFor(`document.querySelectorAll('#wbCanvas .wb-pane').length === 4 && !WhiteboxWorkspace.getState().busy`, 'the new terminal shows inside the group');
+  const joined = (await visible()).find(id => ![first, added, third].includes(id));
+  assert(joined, 'a fourth terminal is on screen');
+  assert.deepEqual((await rows()).map(row => row.active), [true], '"+ 터미널" of a member panel changes the group, it does not make a new one');
+  assert.equal(await evaluate(`JSON.stringify(WhiteboxWorkspace.getState().spaces[0].tabs.find(panel => panel.id === ${lit(thirdPanel)}).layout).includes(${lit(joined)})`), true, 'the new terminal belongs to the panel whose "+ 터미널" made it');
+  await evaluate('WhiteboxWorkspace.createTerminal("column")');
+  await waitFor(`document.querySelectorAll('#wbCanvas .wb-pane').length === 5 && !WhiteboxWorkspace.getState().busy`, 'a split of the focused terminal stays in the group');
+  assert.deepEqual((await rows()).map(row => row.active), [true], 'splitting inside the group keeps one group');
+  assert.equal(await evaluate('document.querySelector("#wbGroups .wb-group-copy small").textContent').then(text => /5/u.test(text)), true, 'the group counts its five terminals');
+  console.log('PASS groups: a terminal added while a group is on screen joins that group');
+
+  // 9. "일주일간 안 쓴 세션 정리" moves terminals unused for a week to the trash, after asking.
+  const total = await evaluate(`WhiteboxWorkspace.getState().spaces.concat(WhiteboxWorkspace.getState().standalone).flatMap(owner => owner.tabs).flatMap(panel => JSON.stringify(panel.layout).match(/"id":"[^"]+"/gu) || []).length`);
+  const keep = await activeId();
+  await evaluate('window.realNow = Date.now; Date.now = () => realNow() + 8 * 24 * 60 * 60 * 1000; true');
+  try {
+    await waitFor(`document.querySelector('#wbStaleCount').textContent === ${lit(String(total - 1))} && !document.querySelector('#wbStaleCleanup').disabled`, 'every terminal but the one in use counts as unused for a week', 10000);
+    await evaluate('document.querySelector("#wbStaleCleanup").click()');
+    await waitFor(`document.querySelector('#wbStaleSessions').open && document.querySelectorAll('#wbStaleList li').length === ${total - 1}`, 'the cleanup asks first and lists the terminals');
+    await evaluate(`(() => { const dialog = document.querySelector('#wbStaleSessions'); dialog.querySelector('button[value=clean]').click(); })()`);
+    await waitFor(`WhiteboxWorkspace.getState().trash.length === ${total - 1} && !WhiteboxWorkspace.getState().busy`, 'unused terminals move to the trash', 20000);
+    assert.equal(await activeId(), keep, 'the terminal in use stays');
+    await waitFor(`document.querySelector('#wbStaleCount').textContent === '0' && document.querySelector('#wbStaleCleanup').disabled`, 'nothing left to clean');
+  } finally { await evaluate('Date.now = realNow; true'); }
+  console.log('PASS groups: cleaning sessions unused for a week asks, then moves them to the trash and keeps the one in use');
   console.log('PASS groups: a mixed split by drag becomes "그룹 N" with its name open, rename, same group on re-split, reopen and reload, unnamed group dropped when unmixed, ungroup keeps PTYs and panels, sidebar terminal alone and group restores the split, one-panel split is a group, existing splits migrate once');
   await new Promise(resolve => process.stdout.write('', resolve));
 };

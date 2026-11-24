@@ -26,11 +26,11 @@
     }
   ],
   "previousFixed": {
-    "version": "2.0.42",
-    "url": "https://github.com/minjund/Whitebox/releases/download/v2.0.42/Whitebox-Setup-2.0.42.exe",
-    "size": 97560420,
-    "sha256": "d417506b43db3a2ea4c3557e498dca10e8122bf94594c67ef0bccbc3aea0f989",
-    "env": "WHITEBOX_V2042_INSTALLER",
+    "version": "2.0.43",
+    "url": "https://github.com/minjund/Whitebox/releases/download/v2.0.43/Whitebox-Setup-2.0.43.exe",
+    "size": 97542946,
+    "sha256": "ea81e084a85c25c1f686860ccbf1b731a5c9db5738949c29ee33a0919f89c4b3",
+    "env": "WHITEBOX_V2043_INSTALLER",
     "installMode": "automatic"
   }
 }

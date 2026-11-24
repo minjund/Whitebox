@@ -125,3 +125,34 @@
 #terminalWorkspace .wb-sidebar .wb-add-project:hover { background:var(--tv-wash); color:var(--tv-ink); }
 #terminalWorkspace .wb-sidebar .wb-panel-actions > .wb-panel-add { display:inline-flex; align-items:center; gap:4px; width:auto; min-width:0; max-width:none; flex:0 0 auto; }
 #terminalWorkspace .wb-sidebar .wb-panel-actions > .wb-panel-add > span { display:inline-block; padding-right:1px; overflow:visible; text-overflow:clip; white-space:nowrap; }
+
+/* "일주일간 안 쓴 세션 정리" sits under "확인할 답": a neutral count, not an alert. */
+#terminalWorkspace .wb-stale-row b { background:var(--tv-wash); color:var(--tv-muted); }
+#terminalWorkspace .wb-stale-row:disabled { opacity:1; }
+#wbStaleSessions .wb-stale-list { max-height:280px; overflow:auto; margin:8px 0 12px; padding:0; list-style:none; display:grid; gap:2px; }
+#wbStaleSessions .wb-stale-list li { display:grid; gap:2px; padding:6px 8px; border-radius:6px; background:color-mix(in srgb, currentColor 5%, transparent); }
+#wbStaleSessions .wb-stale-list strong { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#wbStaleSessions .wb-stale-list small { font-size:12px; opacity:.7; }
+#terminalWorkspace .wb-inbox-row span { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+
+/* Panel name line (2안-A): project › panel › terminal. The colour square is the
+   panel colour button, the line itself is the panel's drag handle, and
+   "+ 터미널" sits at its end (shown for the selected panel, or on hover: the
+   line keeps its height either way). */
+#terminalWorkspace .wb-sidebar .wb-panel-head { display:flex; align-items:center; gap:4px; height:26px; margin:1px 0 0; padding:0 4px 0 4px; border-radius:var(--tv-r); color:var(--tv-muted); font-size:12px; cursor:grab; }
+#terminalWorkspace .wb-sidebar .wb-panel-head:hover { background:var(--tv-wash); }
+#terminalWorkspace .wb-sidebar .wb-panel-group.active > .wb-panel-head { color:var(--tv-ink); background:var(--tv-wash); }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-color-button { flex:none; width:20px; min-width:20px; height:20px; padding:0; display:grid; place-items:center; border:0; border-radius:5px; background:none; cursor:pointer; }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-color-button:hover { background:var(--tv-fill); }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-color-button i { width:10px; height:10px; border-radius:3px; }
+#terminalWorkspace .wb-sidebar .wb-panel-name { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#terminalWorkspace .wb-sidebar .wb-panel-count { flex:none; color:var(--tv-faint); font-variant-numeric:tabular-nums; }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-add { margin-left:auto; display:inline-flex; align-items:center; gap:3px; flex:0 0 auto; width:auto; min-width:0; max-width:none; height:22px; min-height:22px; padding:0 7px; border:0; border-radius:5px; background:var(--tv-fill); color:var(--tv-ink); font-size:11.5px; cursor:pointer; visibility:hidden; }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-add .wb-icon { width:12px; height:12px; }
+#terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-add > span { display:inline-block; padding-right:1px; white-space:nowrap; }
+#terminalWorkspace .wb-sidebar .wb-panel-group.active > .wb-panel-head > .wb-panel-add, #terminalWorkspace .wb-sidebar .wb-panel-head:hover > .wb-panel-add, #terminalWorkspace .wb-sidebar .wb-panel-head:focus-within > .wb-panel-add { visibility:visible; }
+#terminalWorkspace .wb-sidebar .wb-panel-members::before { top:3px; bottom:3px; }
+/* "새 패널" at the end of every open project, so where a panel comes from is plain. */
+#terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop { height:24px; min-height:24px; margin:0 0 4px 4px; width:calc(100% - 4px); padding:0 6px; opacity:1; display:flex; align-items:center; gap:6px; }
+#terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop small { display:none; }
+#terminalWorkspace .wb-sidebar .wb-new-panel-drop .wb-icon { width:12px; height:12px; }

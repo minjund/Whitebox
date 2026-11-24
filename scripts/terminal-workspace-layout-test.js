@@ -120,3 +120,54 @@ assertCells(layout.place(pair, { axis: 'row', ratio: .7, first: { id: 'x' }, sec
   { a: [0, 0, .5, 1], b: [.5, 0, .5, .5], x: [.5, .5, .25, .5], y: [.75, .5, .25, .5] }, 'panel dropped below a terminal');
 
 console.log('terminal-workspace-layout-test: ok');
+
+// Dragging a divider sizes only the two terminals beside it. Three side by side
+// are a nested split; before, the outer divider shrank the two on its right
+// together.
+{
+  const three = layout.balance({ axis: 'row', ratio: .5, first: { id: 'a' }, second: { axis: 'row', ratio: .5, first: { id: 'b' }, second: { id: 'c' } } });
+  const width = node => Object.fromEntries(Object.entries(cells(node)).map(([id, box]) => [id, box.w]));
+  const start = width(three);
+  layout.resize(three, .5);
+  const moved = width(three);
+  close(moved.a, .5, 'the left terminal grows to the divider');
+  close(moved.c, start.c, 'the terminal not beside the divider keeps its width');
+  close(moved.b, 1 - .5 - start.c, 'only its neighbour gives up the space');
+  // The inner divider (b|c) leaves a alone.
+  layout.resize(three.second, .3);
+  close(width(three).a, .5, 'the inner divider leaves the left terminal alone');
+  // A grid's row divider changes the two rows beside it only.
+  const chainOf = list => list.length === 1 ? { id: list[0] } : { axis: 'row', ratio: .5, first: { id: list[0] }, second: chainOf(list.slice(1)) };
+  const many = layout.grid(chainOf(['1', '2', '3', '4', '5', '6', '7', '8', '9'])); // three rows of three
+  const height = node => Object.fromEntries(Object.entries(cells(node)).map(([id, box]) => [id, box.h]));
+  const tall = height(many);
+  layout.resize(many, .2);
+  const last = Object.keys(tall).at(-1);
+  close(height(many)[last], tall[last], 'the last row keeps its height when the first row divider moves');
+  // Never below a usable size, and a reload keeps the sizes (ratios stay in range).
+  layout.resize(three, 0);
+  assert.ok(width(three).a >= .06 - 1e-9, 'a terminal keeps a minimum width');
+  assert.deepEqual(layout.restore(JSON.parse(JSON.stringify(three)), new Set(['a', 'b', 'c'])), three, 'dragged sizes survive a reload');
+  console.log('PASS layout: a divider resizes only the two terminals beside it');
+}
+
+// 2×2: the divider between A and C moves for the left line only, B and D keep
+// their heights. The grid turns (rows → columns) with every terminal in place.
+{
+  const chainOf = list => list.length === 1 ? { id: list[0] } : { axis: 'row', ratio: .5, first: { id: list[0] }, second: chainOf(list.slice(1)) };
+  const four = layout.grid(chainOf(['a', 'b', 'c', 'd']));
+  assert.equal(layout.transposable(four), true, 'a full grid can turn');
+  const before = cells(four);
+  const turned = layout.transpose(four, 0);
+  assert.equal(turned, four, 'turned in place, so the saved view keeps it');
+  for (const [id, box] of Object.entries(cells(four))) for (const key of ['x', 'y', 'w', 'h']) close(box[key], before[id][key], `${id}.${key} stays in place`);
+  const left = layout.parts(four, four.axis)[0].node;
+  layout.resize(layout.divider(left, 1), .7);
+  const after = cells(four);
+  close(after.a.h, .7, 'A grows');
+  close(after.b.h, before.b.h, 'B keeps its height');
+  close(after.d.h, before.d.h, 'D keeps its height');
+  assert.equal(layout.transposable(chainOf(['a', 'b', 'c'])), false, 'a single line does not turn');
+  assert.equal(layout.boundary(four, layout.divider(four, 1)), 1, 'a divider knows its place');
+  console.log('PASS layout: in a 2×2 grid one line can be resized without the other');
+}
