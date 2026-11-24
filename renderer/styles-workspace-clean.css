@@ -191,3 +191,6 @@
 #terminalWorkspace .wb-group-menu button:hover{background:var(--clean-wash)}
 #terminalWorkspace .wb-group-menu button.danger{color:#d0574b}
 #terminalWorkspace .wb-group-menu small{font-size:10px;color:var(--clean-muted)}
+
+#terminalWorkspace .wb-group-row[data-drop-direction=group]{border-color:var(--clean-accent);background:color-mix(in srgb,var(--clean-accent) 12%,var(--clean-surface))}
+#terminalWorkspace .wb-group-row[data-drop-direction=group]:after{content:attr(data-drop-label);position:absolute;right:30px;top:50%;transform:translateY(-50%);padding:1px 7px;border-radius:5px;background:var(--clean-accent);color:var(--clean-surface);font-size:10px;pointer-events:none}

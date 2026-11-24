@@ -1,0 +1,127 @@
+/* Sidebar in affectUI's Tree View (Clean) look – https://www.affectui.com/components/tree-view (MIT):
+   quiet 28px rows, 13px/20px text, 16px per level, a light fill only on the selected row, thin
+   guides, gray 12px meta at the end. Projects are affectUI Avatar (Clean) rounded squares with their
+   initial on a soft colour of their own; a terminal shows the AI in it as a letter chip (C Claude,
+   X Codex, >_ a shell) and its state at the end. Panels are a colour bar before each row instead of
+   a box. Markup and data attributes are unchanged; this sheet only restyles them. */
+#terminalWorkspace .wb-sidebar {
+  --tv-ink: var(--clean-text);
+  --tv-muted: color-mix(in srgb, var(--clean-text) 50%, transparent);
+  --tv-faint: color-mix(in srgb, var(--clean-text) 30%, transparent);
+  --tv-wash: color-mix(in srgb, var(--clean-text) 4%, transparent);
+  --tv-fill: color-mix(in srgb, var(--clean-text) 8%, transparent);
+  --tv-guide: color-mix(in srgb, var(--clean-text) 9%, transparent);
+  --tv-guide-on: color-mix(in srgb, var(--clean-text) 24%, transparent);
+  --tv-h: 28px; --tv-r: 6px;
+  --tv-amber: #e8b000; --tv-blue: #4d8dff;
+}
+/* Search and the "answers to check" row */
+#terminalWorkspace .wb-sidebar .wb-project-search { margin:4px 10px 6px; height:32px; min-height:32px; padding:0 10px; border:0; border-radius:8px; background:var(--tv-wash); }
+#terminalWorkspace .wb-sidebar .wb-project-search kbd { font-size:10.5px; padding:1px 5px; border-radius:4px; background:var(--tv-fill); border:0; color:var(--tv-muted); }
+#terminalWorkspace .wb-inbox-row { display:flex; align-items:center; gap:8px; width:calc(100% - 16px); height:var(--tv-h); min-height:var(--tv-h); margin:0 8px 2px; padding:0 8px; border:0; border-radius:var(--tv-r); background:none; color:var(--tv-ink); font-size:13px; text-align:left; cursor:pointer; }
+#terminalWorkspace .wb-inbox-row:hover { background:var(--tv-wash); }
+#terminalWorkspace .wb-inbox-row .wb-icon { width:15px; height:15px; color:var(--tv-muted); }
+#terminalWorkspace .wb-inbox-row span { flex:1; }
+#terminalWorkspace .wb-inbox-row b { min-width:18px; height:18px; padding:0 6px; border-radius:999px; display:inline-grid; place-items:center; background:color-mix(in srgb, var(--tv-amber) 16%, transparent); color:color-mix(in srgb, var(--tv-amber) 85%, var(--clean-text)); font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; }
+#terminalWorkspace .wb-inbox-row.is-empty { color:var(--tv-muted); cursor:default; }
+#terminalWorkspace .wb-inbox-row.is-empty b { background:var(--tv-wash); color:var(--tv-faint); }
+/* Section headings: label, quiet count, add button */
+#terminalWorkspace .wb-sidebar .wb-side-heading { display:flex; align-items:center; gap:6px; height:var(--tv-h); margin-top:8px; padding:0 14px; font-size:12px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--tv-muted); }
+#terminalWorkspace .wb-sidebar .wb-side-heading small { color:var(--tv-faint); font-size:12px; font-variant-numeric:tabular-nums; }
+#terminalWorkspace .wb-sidebar .wb-side-heading button { margin-left:auto; }
+#terminalWorkspace .wb-sidebar .wb-side-description, #terminalWorkspace .wb-sidebar .wb-panel-help { display:none; }
+/* Groups */
+#terminalWorkspace .wb-groups { padding:0 8px; }
+#terminalWorkspace .wb-groups .wb-side-heading { padding:0 6px; }
+#terminalWorkspace .wb-group-row { min-height:var(--tv-h); border:0; border-radius:var(--tv-r); }
+#terminalWorkspace .wb-group-row .wb-group-main { min-height:var(--tv-h); padding:0 6px; gap:8px; }
+#terminalWorkspace .wb-group-row:hover { background:var(--tv-wash); }
+#terminalWorkspace .wb-group-row.active { background:var(--tv-fill); border:0; }
+#terminalWorkspace .wb-group-row .wb-group-copy { display:flex; flex-direction:row; align-items:center; gap:8px; min-width:0; flex:1; text-align:left; }
+#terminalWorkspace .wb-group-row .wb-group-main { display:flex; align-items:center; justify-content:flex-start; text-align:left; }
+#terminalWorkspace .wb-group-row .wb-group-swatches { display:flex; gap:2px; }
+#terminalWorkspace .wb-group-row .wb-group-swatches i { width:3px; height:14px; border-radius:2px; }
+#terminalWorkspace .wb-group-row .wb-group-copy strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:400; color:var(--tv-ink); }
+#terminalWorkspace .wb-group-row .wb-group-copy small { color:var(--tv-faint); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* A group just made by a split: the row slides in, glows once and says so. */
+@keyframes wb-group-born { 0% { opacity:0; transform:translateY(-6px) scale(.98); box-shadow:0 0 0 0 color-mix(in srgb, var(--tv-blue) 0%, transparent); }
+  35% { opacity:1; transform:none; box-shadow:0 0 0 3px color-mix(in srgb, var(--tv-blue) 35%, transparent); background:color-mix(in srgb, var(--tv-blue) 16%, transparent); }
+  100% { box-shadow:0 0 0 0 transparent; } }
+@keyframes wb-group-born-label { 0%, 70% { opacity:1; } 100% { opacity:0; } }
+@keyframes wb-group-born-swatch { 0% { transform:scaleY(.2); } 60% { transform:scaleY(1.25); } 100% { transform:none; } }
+#terminalWorkspace .wb-group-row.is-born { animation:wb-group-born 1.1s cubic-bezier(.25,.9,.3,1) both; }
+#terminalWorkspace .wb-group-row.is-born .wb-group-swatches i { animation:wb-group-born-swatch .6s cubic-bezier(.25,.9,.3,1) both; }
+#terminalWorkspace .wb-group-born { flex:none; margin-left:auto; padding:1px 7px; border-radius:999px; background:color-mix(in srgb, var(--tv-blue) 18%, transparent); color:color-mix(in srgb, var(--tv-blue) 80%, var(--clean-text)); font-size:11px; white-space:nowrap; animation:wb-group-born-label 2.4s ease both; }
+#terminalWorkspace .wb-group-row.is-born .wb-group-copy small { display:none; }
+@media (prefers-reduced-motion: reduce) {
+  #terminalWorkspace .wb-group-row.is-born, #terminalWorkspace .wb-group-row.is-born .wb-group-swatches i { animation:none; background:color-mix(in srgb, var(--tv-blue) 14%, transparent); }
+}
+/* Projects: one 28px row – chevron, avatar, name, state at the end */
+#terminalWorkspace #wbSpaces, #terminalWorkspace #wbInstances { padding:0 8px; }
+#terminalWorkspace .wb-sidebar .wb-project { margin:0; }
+#terminalWorkspace .wb-sidebar .wb-space-row { position:relative; display:flex; align-items:center; height:var(--tv-h); min-height:var(--tv-h); margin:0; padding:0; border-radius:var(--tv-r); }
+#terminalWorkspace .wb-sidebar .wb-space-row:hover { background:var(--tv-wash); }
+#terminalWorkspace .wb-sidebar .wb-space-row > .wb-project-toggle { display:grid; place-items:center; flex:0 0 16px; width:16px; min-width:16px; max-width:16px; height:16px; min-height:16px; margin:0 0 0 6px; padding:0; border:0; background:none; color:var(--tv-faint); align-self:center; }
+#terminalWorkspace .wb-sidebar .wb-project-toggle .wb-icon { width:12px; height:12px; transition:transform 200ms cubic-bezier(.25,.9,.3,1); }
+#terminalWorkspace .wb-sidebar .wb-project-toggle[aria-expanded="true"] .wb-icon { transform:rotate(90deg); }
+#terminalWorkspace .wb-sidebar .wb-space { display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:var(--tv-h); min-height:var(--tv-h); padding:0 6px 0 4px; border:0; border-radius:var(--tv-r); background:none; color:var(--tv-ink); font-size:13px; }
+#terminalWorkspace .wb-sidebar .wb-space.active { background:none; }
+#terminalWorkspace .wb-sidebar .wb-space strong { font-weight:500; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#terminalWorkspace .wb-sidebar .wb-space > span:not(.wb-ws-avatar):not(.wb-space-meta) { flex:1; min-width:0; overflow:hidden; }
+#terminalWorkspace .wb-ws-avatar { display:grid; place-items:center; flex:none; width:18px; height:18px; border-radius:4.5px; font-size:10px; font-weight:600; line-height:1; --h:214; background:hsl(var(--h) 70% 93%); color:hsl(var(--h) 48% 36%); }
+[data-theme=dark] #terminalWorkspace .wb-ws-avatar { background:hsl(var(--h) 30% 21%); color:hsl(var(--h) 65% 76%); }
+#terminalWorkspace .wb-ws-avatar[data-hue="1"] { --h:152; } #terminalWorkspace .wb-ws-avatar[data-hue="2"] { --h:40; }
+#terminalWorkspace .wb-ws-avatar[data-hue="3"] { --h:22; } #terminalWorkspace .wb-ws-avatar[data-hue="4"] { --h:330; }
+#terminalWorkspace .wb-ws-avatar[data-hue="5"] { --h:268; } #terminalWorkspace .wb-ws-avatar[data-hue="6"] { --h:174; }
+#terminalWorkspace .wb-space-meta { display:flex; align-items:center; gap:5px; flex:none; margin-left:auto; color:var(--tv-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+#terminalWorkspace .wb-meta-spin { width:10px; height:10px; border-radius:50%; border:1.5px solid var(--tv-guide); border-top-color:var(--tv-blue); animation:wb-tv-spin .9s linear infinite; }
+#terminalWorkspace .wb-meta-dot { width:6px; height:6px; border-radius:50%; background:var(--tv-amber); }
+@keyframes wb-tv-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #terminalWorkspace .wb-meta-spin { animation:none; } }
+#terminalWorkspace .wb-sidebar .wb-remove-project { position:absolute; right:4px; top:4px; width:20px; min-width:20px; height:20px; min-height:20px; padding:2px; border:0; border-radius:5px; background:var(--clean-side, var(--wb-side)); opacity:0; }
+#terminalWorkspace .wb-sidebar .wb-space-row:hover .wb-remove-project, #terminalWorkspace .wb-sidebar .wb-remove-project:focus-visible { opacity:1; }
+/* Terminals: a guide under the project, a panel-colour bar, the AI chip, the name, the state */
+#terminalWorkspace #wbSpaces .wb-project-terminals { position:relative; margin:0 0 2px 0; padding:0; }
+#terminalWorkspace #wbSpaces .wb-project-terminals::before { display:none; }
+#terminalWorkspace .wb-sidebar .wb-panel-group, #terminalWorkspace .wb-sidebar .wb-panel-group.active, [data-theme=dark] #terminalWorkspace .wb-sidebar .wb-panel-group, [data-theme=dark] #terminalWorkspace .wb-sidebar .wb-panel-group.active, #terminalWorkspace #wbSpaces .wb-panel-group, #terminalWorkspace #wbSpaces .wb-panel-group.active, #terminalWorkspace #wbInstances .wb-panel-group, #terminalWorkspace #wbInstances .wb-panel-group.active { position:relative; margin:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
+/* One colour bar per panel, under the project's chevron: it shows which rows are one panel, and
+   the gutter it sits in is the panel's drag handle (pressing a row drags only that terminal). */
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::after { display:none; }
+#terminalWorkspace .wb-sidebar .wb-panel-group::before, #terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::before, #terminalWorkspace #wbInstances .wb-panel-group::before { display:none; }
+#terminalWorkspace .wb-sidebar .wb-panel-members { position:relative; }
+#terminalWorkspace .wb-sidebar .wb-panel-members::before { content:''; position:absolute; left:12.5px; top:6px; bottom:6px; width:3px; border-radius:2px; background:var(--wb-panel-color); pointer-events:none; opacity:.85; }
+#terminalWorkspace .wb-sidebar .wb-panel-group:has(.wb-instance.active) .wb-panel-members::before { opacity:1; }
+#terminalWorkspace .wb-sidebar .wb-panel-group { cursor:grab; }
+#terminalWorkspace .wb-sidebar .wb-panel-group .wb-instance, #terminalWorkspace .wb-sidebar .wb-panel-actions button { cursor:pointer; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row { position:relative; margin:0; min-height:var(--tv-h); }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance { display:flex; align-items:center; gap:6px; width:calc(100% - 24px); margin-left:24px; min-height:var(--tv-h); height:var(--tv-h); padding:0 6px; border:0; border-radius:var(--tv-r); background:none; color:var(--tv-ink); font-size:13px; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance:hover { background:var(--tv-wash); }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance.active, [data-theme=dark] #terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance.active { background:var(--tv-fill); color:var(--tv-ink); }
+#terminalWorkspace .wb-sidebar .wb-instance-copy { display:flex; align-items:center; gap:6px; flex:1; min-width:0; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-copy strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:400; color:inherit; }
+#terminalWorkspace .wb-provider-chip { display:grid; place-items:center; flex:none; width:16px; height:16px; border-radius:4px; font-size:9.5px; font-weight:700; line-height:1; background:var(--tv-wash); color:var(--tv-muted); }
+#terminalWorkspace .wb-provider-chip .wb-icon { width:11px; height:11px; }
+#terminalWorkspace .wb-provider-chip[data-provider="claude"] { background:hsl(22 70% 93%); color:hsl(22 60% 38%); }
+#terminalWorkspace .wb-provider-chip[data-provider="codex"] { background:hsl(214 70% 93%); color:hsl(214 55% 38%); }
+#terminalWorkspace .wb-provider-chip[data-provider="gemini"] { background:hsl(268 60% 94%); color:hsl(268 45% 42%); }
+[data-theme=dark] #terminalWorkspace .wb-provider-chip[data-provider="claude"] { background:hsl(22 40% 22%); color:hsl(22 80% 74%); }
+[data-theme=dark] #terminalWorkspace .wb-provider-chip[data-provider="codex"] { background:hsl(214 36% 22%); color:hsl(214 80% 80%); }
+[data-theme=dark] #terminalWorkspace .wb-provider-chip[data-provider="gemini"] { background:hsl(268 30% 24%); color:hsl(268 70% 82%); }
+#terminalWorkspace .wb-provider-chip[data-provider="shell"] + .wb-instance-copy strong { color:var(--tv-muted); }
+/* Panel actions: quiet, under the panel's last row; the colour button keeps its swatch */
+#terminalWorkspace .wb-sidebar .wb-panel-actions { display:flex; align-items:center; gap:2px; margin:0 0 2px; padding:0 0 0 24px; border:0; }
+#terminalWorkspace .wb-sidebar .wb-panel-actions > button { min-height:22px; height:22px; padding:0 6px; border:0; border-radius:5px; background:none; color:var(--tv-faint); font-size:12px; }
+#terminalWorkspace .wb-sidebar .wb-panel-actions > button:hover { background:var(--tv-wash); color:var(--tv-ink); }
+#terminalWorkspace .wb-sidebar .wb-panel-actions > .wb-panel-add { flex:0 1 auto; }
+/* Add actions show for the selected panel only – never on hover, so rows never move under the pointer. */
+#terminalWorkspace .wb-sidebar .wb-panel-actions { opacity:0; height:0; overflow:hidden; transition:opacity 120ms ease; }
+#terminalWorkspace .wb-sidebar .wb-panel-group.active > .wb-panel-actions, #terminalWorkspace .wb-sidebar .wb-panel-group:has(.wb-panel-actions :focus-visible) > .wb-panel-actions { opacity:1; height:24px; }
+#terminalWorkspace .wb-sidebar .wb-new-panel-drop { margin:0 0 4px 24px; width:calc(100% - 24px); min-height:24px; padding:2px 6px; border:0; border-radius:5px; background:none; color:var(--tv-faint); font-size:12px; }
+#terminalWorkspace .wb-sidebar .wb-new-panel-drop:hover { background:var(--tv-wash); color:var(--tv-ink); }
+#terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop { height:0; min-height:0; padding-block:0; margin-block:0; opacity:0; overflow:hidden; }
+#terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-project:has(> .wb-space-row .wb-space.active) .wb-new-panel-drop, #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar #wbInstances .wb-new-panel-drop, #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop:focus-visible { height:24px; min-height:24px; margin-bottom:4px; opacity:1; }
+#terminalWorkspace.is-dragging-terminal .wb-sidebar .wb-new-panel-drop { min-height:36px; border:1px dashed var(--tv-guide-on); color:var(--tv-muted); }
+#terminalWorkspace .wb-sidebar .wb-add-project { margin:4px 8px; height:var(--tv-h); min-height:var(--tv-h); padding:0 8px; border:0; border-radius:var(--tv-r); background:none; color:var(--tv-faint); font-size:12px; }
+#terminalWorkspace .wb-sidebar .wb-add-project:hover { background:var(--tv-wash); color:var(--tv-ink); }
+#terminalWorkspace .wb-sidebar .wb-panel-actions > .wb-panel-add { display:inline-flex; align-items:center; gap:4px; width:auto; min-width:0; max-width:none; flex:0 0 auto; }
+#terminalWorkspace .wb-sidebar .wb-panel-actions > .wb-panel-add > span { display:inline-block; padding-right:1px; overflow:visible; text-overflow:clip; white-space:nowrap; }

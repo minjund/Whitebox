@@ -289,7 +289,26 @@ function readinessText(buffer) {
   }
   return lines.join('\n').slice(-24000);
 }
-const api = { currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest, isSlashCommand, isContinuationSummary, isNonTaskRequest, readableRequest, conversationReset, sameSlashCommand };
+// The name a terminal shows: the request of its latest analysed task, or, while
+// the analysis is deferred (only the selected terminal is analysed first) or
+// still running, the person's own latest request. Bookkeeping such as a
+// resumed session's summary or startup text never names a terminal.
+function terminalName(tasks, preview) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const real = text => typeof text === 'string' && Boolean(text.trim()) && !isNonTaskRequest(text);
+  const analysed = [...list].reverse().find(task => task && !task.recordOnly && !task.deferred && task.analysisDepth !== 'deferred'
+    && !isNonTaskRequest(task.request) && real(task.summary));
+  if (analysed) return analysed.summary.trim();
+  // A slash command (/clear, /model …) is not a request to name a terminal by.
+  const named = text => real(text) && !isSlashCommand(text.trim());
+  const observed = [...list].reverse().find(task => task && named(task.request));
+  const request = observed?.request || (named(preview?.request) ? preview.request : '');
+  if (!request) return '';
+  const line = String(request).split('\n').map(part => part.trim()).find(Boolean) || '';
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+const api = { terminalName, currentTurnEvidence, submittedPrompt, completedTurn, completionStamp, inputReady, readinessText, isStartupRequest, isSlashCommand, isContinuationSummary, isNonTaskRequest, readableRequest, conversationReset, sameSlashCommand };
 if (typeof module !== 'undefined') module.exports = api;
 else window.WhiteboxTerminalReviewTurns = api;
 

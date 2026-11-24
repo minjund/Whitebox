@@ -1,17 +1,22 @@
 'use strict';
-// Named groups: a screen split that mixes terminals from more than one panel.
-// The split is created by dragging another panel's terminal onto the screen;
-// at that moment the arrangement becomes "그룹 N" and its name opens for
-// editing. Later drops only change the split. When the split goes back to one
-// panel, an unnamed group disappears; a group the person named stays and
-// restores its last split. Panels, their membership and colours are unchanged.
+// Named groups: every screen split (two or more terminals on screen) is a group.
+// Clicking a terminal in the sidebar shows that terminal alone; clicking a
+// group brings its split back. A split made by dragging a terminal onto the
+// screen becomes "그룹 N" with its name open for editing; a split made another
+// way (a new terminal beside one, or a split saved before groups existed) gets
+// a name without opening it. Later changes to that screen change the group.
+// Panels, their membership and colours are unchanged.
 window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
   const { root, t, esc, layout } = context;
-  let groups = [], nextNumber = 1, editing = '', menuFor = '', armed = false, armedFrom = '', lastActive = '', lastHtml = '';
+  let groups = [], nextNumber = 1, editing = '', menuFor = '', armed = false, armedFrom = '', lastActive = '', lastPlace = '', lastHtml = '';
+  let migrated = true;
+  const born = new Map(); // group id -> when the person's split made it, for the "새 그룹" effect
+  const BORN_MS = 2400;
 
   const allPanels = () => context.owners().flatMap(owner => owner.tabs.map(panel => ({ owner, panel })));
   const available = () => new Set(allPanels().flatMap(({ panel }) => layout.ids(panel.layout)));
   const panelsIn = view => [...new Set(layout.ids(view).map(id => context.panelFor(id)?.id).filter(Boolean))];
+  const isSplit = view => layout.ids(view).length > 1;
   const sameSet = (a, b) => a.length === b.length && a.every(id => b.includes(id));
   // The panel that shows a group's split: where it was made, or else the panel of its first terminal.
   function anchor(group) {
@@ -27,44 +32,63 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
   const groupOf = view => groups.find(group => sameSet(layout.ids(group.layout), layout.ids(view)));
   function active() {
     const now = current();
-    return now && panelsIn(now.view).length > 1 ? groupOf(now.view) || null : null;
+    return now && isSplit(now.view) ? groupOf(now.view) || null : null;
   }
   function remove(group) { groups = groups.filter(item => item !== group); if (editing === group.id) editing = ''; }
   function adopt(group, now) { group.layout = now.view; group.ownerId = now.owner.id; group.panelId = now.panel.id; }
+  function create(view, ownerId, panelId) {
+    const group = { id: crypto.randomUUID(), name: `${t('그룹')} ${nextNumber}`, number: nextNumber, named: false, ownerId, panelId, layout: view };
+    nextNumber += 1;
+    groups.push(group);
+    return group;
+  }
+  // A group made by splitting the screen says so: its row arrives with a short highlight.
+  function announce(group) {
+    born.set(group.id, Date.now());
+    setTimeout(() => { born.delete(group.id); render(true); }, BORN_MS);
+    return group;
+  }
+  // Splits saved before every split was a group become groups once, in sidebar order.
+  function migrate(ids) {
+    migrated = true;
+    for (const { owner, panel } of allPanels()) {
+      const view = layout.fit(panel.viewLayout, ids);
+      if (view && isSplit(view) && !groupOf(view) && groups.length < 50) create(view, owner.id, panel.id);
+    }
+    context.save();
+  }
 
-  // Called on every screen render. Only a split the person changes (armed by a
-  // drag or arrange) can make a group; navigating never creates one.
+  // Called on every screen render. A split on screen always belongs to a
+  // group: a change to the group's own screen changes that group, any other
+  // split becomes a new group. Showing one terminal alone leaves groups as
+  // they are, so the group still brings its split back.
   function sync() {
     const ids = available();
     groups = groups.filter(group => {
       const fitted = layout.fit(group.layout, ids);
       if (!fitted) return false;
       group.layout = fitted;
-      return group.named || panelsIn(fitted).length > 1;
+      return group.named || isSplit(fitted);
     });
+    if (!migrated) migrate(ids);
     const now = current();
     if (now) {
-      const mixed = panelsIn(now.view).length > 1, shown = layout.ids(now.view);
+      const split = isSplit(now.view), place = `${now.owner.id}\n${now.panel.id}`;
       let group = groupOf(now.view);
       if (armed) {
         // A drop continues the group whose screen it changed.
         group = groups.find(item => item.id === armedFrom) || group;
-        if (mixed && !group) {
-          group = { id: crypto.randomUUID(), name: `${t('그룹')} ${nextNumber}`, number: nextNumber, named: false, ownerId: now.owner.id, panelId: now.panel.id, layout: now.view };
-          nextNumber += 1;
-          groups.push(group);
-          editing = group.id;
-        }
-        if (group && mixed) adopt(group, now);
+        if (split && !group) { group = create(now.view, now.owner.id, now.panel.id); editing = group.id; announce(group); }
+        if (group && split) adopt(group, now);
         else if (group && !group.named) remove(group);
-      } else if (!group && lastActive) {
-        // A terminal hidden from the group's screen: same group, fewer terminals.
-        const previous = groups.find(item => item.id === lastActive), before = previous ? layout.ids(previous.layout) : [];
-        if (previous && shown.length < before.length && shown.every(id => before.includes(id))) {
-          if (mixed) { adopt(previous, now); group = previous; } else if (!previous.named) remove(previous);
-        }
-      } else if (group && mixed) group.layout = now.view;
-      lastActive = group && mixed ? group.id : '';
+      } else if (split && !group) {
+        // A terminal added to or hidden from the group's screen: same group.
+        const previous = place === lastPlace && groups.find(item => item.id === lastActive);
+        group = previous || announce(create(now.view, now.owner.id, now.panel.id));
+        adopt(group, now);
+      } else if (group && split) group.layout = now.view;
+      lastActive = group && split ? group.id : '';
+      lastPlace = place;
     }
     armed = false; armedFrom = '';
   }
@@ -74,10 +98,35 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
     if (!found) return;
     const fitted = layout.fit(group.layout, available());
     if (!fitted) return;
-    found.panel.viewLayout = fitted;
-    context.activate(found.owner, found.panel, layout.ids(fitted)[0]);
+    // Activate first: activating remembers the current screen into the panel,
+    // which would overwrite the split when the panel is the one on screen.
+    const focus = layout.ids(fitted).includes(found.panel.activePane) ? found.panel.activePane : layout.ids(fitted)[0];
+    context.activate(found.owner, found.panel, focus);
+    found.panel.viewLayout = found.owner.viewLayout = fitted;
+    found.owner.activeSurface = found.panel.activePane = focus;
     menuFor = '';
     context.renderLayout();
+  }
+  // A panel or terminal dropped on a group joins its split the way "+ 터미널"
+  // adds to a panel: beside the selected terminal, side by side, each next one
+  // beside the one added before it. Panels and their membership are unchanged.
+  function add(groupId, ids) {
+    const group = groups.find(item => item.id === groupId), found = group && anchor(group);
+    const live = available();
+    let view = found && layout.fit(group.layout, live);
+    if (!view) return false;
+    const shown = layout.ids(view);
+    let target = shown.includes(found.panel.activePane) ? found.panel.activePane : shown[0];
+    for (const id of ids) {
+      if (!live.has(id) || layout.ids(view).includes(id)) continue;
+      view = layout.split(view, target, id, 'row');
+      target = id;
+    }
+    group.layout = view;
+    found.panel.activePane = target;
+    open(groupId);
+    context.save();
+    return true;
   }
   function rename(groupId, value) {
     const group = groups.find(item => item.id === groupId);
@@ -86,15 +135,23 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
     editing = '';
     render(true); context.refreshNav(); context.save();
   }
-  // Ungrouping keeps every terminal and panel; the panel shows only its own terminals again.
+  // Ungrouping keeps every terminal and panel. A split is always a group, so
+  // the screen that showed it goes back to one terminal.
   function dissolve(groupId) {
     const group = groups.find(item => item.id === groupId), found = group && anchor(group);
     groups = groups.filter(item => item.id !== groupId);
     menuFor = '';
     if (found) {
-      found.panel.viewLayout = found.panel.layout;
-      if (context.space() === found.owner && context.tab() === found.panel) found.owner.viewLayout = found.panel.layout;
+      const ids = layout.ids(group.layout), own = layout.ids(found.panel.layout);
+      const keep = [found.panel.activePane, ...ids].find(id => own.includes(id) && ids.includes(id)) || own[0];
+      const showing = context.space() === found.owner && context.tab() === found.panel
+        && sameSet(layout.ids(found.owner.viewLayout), ids);
+      if (keep && (showing || sameSet(layout.ids(found.panel.viewLayout), ids))) {
+        found.panel.viewLayout = { id: keep };
+        if (showing) { found.owner.viewLayout = { id: keep }; found.owner.activeSurface = found.panel.activePane = keep; }
+      }
     }
+    lastActive = '';
     context.renderLayout();
   }
 
@@ -111,15 +168,16 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
         ? `<input data-group-name="${esc(group.id)}" value="${esc(group.name)}" maxlength="40" aria-label="${esc(t('그룹 이름'))}" spellcheck="false">`
         : `<strong>${esc(group.name)}</strong>`;
       const menu = menuFor === group.id ? `<div class="wb-group-menu" role="menu"><button role="menuitem" data-group-rename="${esc(group.id)}">${esc(t('이름 바꾸기'))}</button><button role="menuitem" class="danger" data-group-dissolve="${esc(group.id)}">${esc(t('분할 풀기'))} <small>${esc(t('터미널은 그대로'))}</small></button></div>` : '';
-      return `<div class="wb-group-row ${on === group ? 'active' : ''}" data-group-row="${esc(group.id)}">
+      const isNew = born.has(group.id);
+      return `<div class="wb-group-row ${on === group ? 'active' : ''} ${isNew ? 'is-born' : ''}" data-group-row="${esc(group.id)}">
         <button type="button" class="wb-group-main" data-group-open="${esc(group.id)}" aria-current="${on === group}" ${editing === group.id ? 'tabindex="-1"' : ''}>
           <span class="wb-group-swatches" aria-hidden="true">${swatches}</span>
-          <span class="wb-group-copy">${editing === group.id ? '' : label}<small>${esc(t('터미널'))} ${ids.length} · ${esc(t('패널'))} ${members.length}</small></span>
+          <span class="wb-group-copy">${editing === group.id ? '' : label}<small>${esc(t('터미널'))} ${ids.length} · ${esc(t('패널'))} ${members.length}</small></span>${isNew ? `<span class="wb-group-born" role="status">${esc(t('그룹이 생겼어요'))}</span>` : ''}
         </button>${editing === group.id ? `<span class="wb-group-edit">${label}</span>` : ''}
         <button type="button" class="wb-group-more" data-group-menu="${esc(group.id)}" aria-label="${esc(group.name)} ${esc(t('그룹 관리'))}" aria-expanded="${menuFor === group.id}">⋯</button>${menu}
       </div>`;
     }).join('');
-    const html = groups.length ? `<div class="wb-side-heading"><span>${esc(t('그룹'))}</span></div><div class="wb-group-list">${rows}</div>` : '';
+    const html = groups.length ? `<div class="wb-side-heading"><span>${esc(t('그룹'))}</span><small>${groups.length}</small></div><div class="wb-group-list">${rows}</div>` : '';
     section.hidden = !groups.length;
     if (html !== lastHtml) { section.innerHTML = html; lastHtml = html; }
     const field = section.querySelector('input[data-group-name]');
@@ -148,13 +206,15 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
   });
 
   return {
-    sync, render, active, open, rename, dissolve,
+    sync, render, active, open, add, rename, dissolve,
     // While a name is being typed, the workspace must not move focus to a terminal.
     editing: () => Boolean(editing),
     // The next split change comes from the person (a drag or an arrange), not a restore.
     arm() { armed = true; armedFrom = active()?.id || ''; },
-    serialize() { return { nextNumber, groups: groups.map(({ id, name, number, named, ownerId, panelId, layout: view }) => ({ id, name, number, named, ownerId, panelId, layout: view })) }; },
+    serialize() { return { nextNumber, migrated: true, groups: groups.map(({ id, name, number, named, ownerId, panelId, layout: view }) => ({ id, name, number, named, ownerId, panelId, layout: view })) }; },
     restore(saved) {
+      // State saved before every split was a group (none, or 2.0.41) is migrated once.
+      migrated = saved?.migrated === true;
       if (!saved || typeof saved !== 'object') return;
       nextNumber = Math.max(1, Math.min(10000, Number(saved.nextNumber) || 1));
       groups = (Array.isArray(saved.groups) ? saved.groups.slice(0, 50) : []).filter(group => group && typeof group.id === 'string'

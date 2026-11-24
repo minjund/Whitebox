@@ -84,6 +84,20 @@ module.exports = async function hideViewChecks({ evaluate, waitFor, win, manager
   assert(manager.get(first, true).replay.includes('WB_X_LIVE'), 'the original hidden PTY must execute the command');
   await reopen(first);
   await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(first)}).replace(/\\s+/g, '').includes('WB_X_LIVE')`, 'live output after reopening');
+  // The sidebar shows a terminal alone; dragging the other one beside it splits the screen again.
+  assert.deepEqual(await visible(), [first], 'a sidebar terminal opens alone');
+  await evaluate(`(() => {
+    const source = document.querySelector('[data-instance="${second}"]');
+    const target = document.querySelector('#wbCanvas [data-terminal-id="${first}"]');
+    const transfer = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    const rect = target.getBoundingClientRect();
+    const event = type => new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer, clientX: rect.left + rect.width * .85, clientY: rect.top + rect.height * .5 });
+    target.dispatchEvent(event('dragover')); target.dispatchEvent(event('drop')); source.dispatchEvent(event('dragend'));
+  })()`);
+  await waitFor(`document.querySelectorAll('#wbCanvas .wb-pane').length === 2`, 'split again by drag');
+  await evaluate(`document.querySelector('[data-terminal-id="${first}"] .ghostty-input')?.focus()`);
+  await evaluate(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(first)} || document.querySelector('#wbCanvas [data-terminal-id="${first}"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
   // Hiding the focused pane transfers focus to the remaining visible pane.
   await hide(first);
   assert.deepEqual(await visible(), [second]);
