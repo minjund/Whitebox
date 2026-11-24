@@ -96,12 +96,13 @@ module.exports = async function groupChecks({ evaluate, waitFor, win, manager })
   //    named without opening the name, and the group brings the split back.
   await evaluate(`document.querySelector('[data-instance=' + ${lit(JSON.stringify(first))} + ']').click()`);
   await waitFor(`JSON.stringify([...document.querySelectorAll('#wbCanvas .wb-pane')].map(node => node.dataset.terminalId)) === ${lit(JSON.stringify([first]))}`, 'a sidebar terminal opens alone');
+  await evaluate(`window.bornSeen = false; window.bornObserver = new MutationObserver(() => { if (document.querySelector('#wbGroups .wb-group-born[role=status]')) window.bornSeen = true; }); bornObserver.observe(document.querySelector('#wbGroups'), { childList: true, subtree: true })`);
   await evaluate('WhiteboxWorkspace.createTerminal("row")');
   await waitFor(`document.querySelectorAll('#wbCanvas .wb-pane').length === 2 && !WhiteboxWorkspace.getState().busy`, 'a new terminal beside it');
   const added = await activeId();
   await waitFor(`document.querySelectorAll('#wbGroups .wb-group-row').length === 1`, 'a split inside one panel becomes a group');
   assert.deepEqual(await rows(), [{ name: numbered(3), active: true, editing: false }], 'named in order, name not opened for a split that was not dragged');
-  assert.equal(await evaluate('document.querySelector("#wbGroups .wb-group-born")?.getAttribute("role")'), 'status', 'a split says that it made a group');
+  assert.equal(await evaluate('bornObserver.disconnect(), bornSeen'), true, 'a split says that it made a group');
   await waitFor('!document.querySelector("#wbGroups .is-born")', 'the born effect ends by itself', 5000);
   await evaluate(`document.querySelector('[data-instance=' + ${lit(JSON.stringify(added))} + ']').click()`);
   await waitFor(`JSON.stringify([...document.querySelectorAll('#wbCanvas .wb-pane')].map(node => node.dataset.terminalId)) === ${lit(JSON.stringify([added]))}`, 'a terminal of the group opens alone');
