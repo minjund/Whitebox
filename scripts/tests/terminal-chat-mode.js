@@ -27,10 +27,12 @@ function createFixture({ manager, profile, root }) {
         state: providerActivity({ text }) }];
     })) },
   });
-  let conversationReads = 0;
+  let conversationReads = 0, longHistory = false;
   return {
     controller, processes,
     get conversationReads() { return conversationReads; },
+    get longHistory() { return longHistory; },
+    set longHistory(value) { longHistory = value === true; },
     async collaboration(payload) {
       if (payload.operation === 'chat-send') return controller.chatSend(payload);
       if (payload.operation === 'chat-respond') return controller.chatRespond(payload);
@@ -47,6 +49,8 @@ function createFixture({ manager, profile, root }) {
       if (!processes.has(payload.id)) return { available: false, reason: 'provider' };
       const jobs = [...controller.jobs.values()].filter(job => job.targetId === payload.id && job.operation === 'chat');
       const messages = [{ id: 'hello', role: 'assistant', text: '안녕하세요. **FIXTURE_HELLO** 입니다.\n\n- 첫째 항목\n- `code` 항목', timestamp: new Date(0).toISOString() }];
+      // A history taller than the pane, for the scroll position on switching.
+      if (longHistory) for (let i = 1; i <= 40; i++) messages.push({ id: `long-${i}`, role: 'assistant', text: `LONG_${i}\n\n긴 대화의 ${i}번째 답입니다.`, timestamp: new Date(0).toISOString() });
       for (const job of jobs) {
         const at = new Date(job.sentAt || Date.now()).toISOString();
         messages.push({ id: `${job.id}:u`, role: 'user', text: `<system-reminder>hidden</system-reminder>${job.request}`.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gu, ''), timestamp: at });
@@ -55,7 +59,7 @@ function createFixture({ manager, profile, root }) {
           messages.push({ id: `${job.id}:a`, role: 'assistant', text: `답: ${job.request}\n\n\`\`\`\nCODE_${job.request}\n\`\`\``, timestamp: at });
         }
       }
-      const revision = lit(jobs.map(job => [job.id, job.state]));
+      const revision = lit([longHistory, ...jobs.map(job => [job.id, job.state])]);
       if (payload.revision === revision) return { available: true, provider: providers.get(payload.id), providerPid: processes.get(payload.id), revision, unchanged: true, working: false };
       return { available: true, provider: providers.get(payload.id), providerPid: processes.get(payload.id), revision, truncated: false, working: false, messages };
     },
@@ -142,6 +146,18 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   await win.reload();
   await waitFor('Boolean(window.WhiteboxWorkspace)', 'reload with a chat pane');
   await waitFor(`document.querySelector(${q(pane)})?.classList.contains('is-chat')`, 'the chat view is kept for the same terminal after reload', 15000);
+  // Switching to chat opens at the latest message, even after reading higher up.
+  fixture.longHistory = true;
+  const chatLog = `document.querySelector(${q(`${pane} .wb-chat-log`)})`;
+  const atEnd = `(${chatLog}.scrollHeight > ${chatLog}.clientHeight * 2 && ${chatLog}.scrollHeight - ${chatLog}.scrollTop - ${chatLog}.clientHeight < 4)`;
+  await waitFor(`(${chatLog}?.textContent || '').includes('LONG_40') && ${atEnd}`, 'a longer transcript keeps the chat at the latest message', 15000);
+  await evaluate(`${chatLog}.scrollTop = 0; ${chatLog}.dispatchEvent(new Event('scroll')); true`);
+  await evaluate(`document.querySelector(${q(`${pane} [data-chat-terminal]`)}).click()`);
+  await waitFor(`!document.querySelector(${q(pane)}).classList.contains('is-chat')`, 'back to the terminal');
+  await evaluate(`document.querySelector(${q(`${pane} [data-chat-terminal]`)}).click()`);
+  await waitFor(`document.querySelector(${q(pane)}).classList.contains('is-chat') && ${atEnd}`, 'switching to chat shows the latest message at the bottom');
+  console.log('PASS chat pane: switching to chat opens at the latest message');
+
   await evaluate(`document.querySelector(${q(`${pane} [data-chat-terminal]`)}).click()`);
   await waitFor(`!document.querySelector(${q(pane)}).classList.contains('is-chat') && document.querySelector(${q(`${pane} .wb-chat`)}).hidden`, 'the pane button returns it to the terminal');
   assert(fixture.conversationReads > 0);

@@ -6,6 +6,8 @@ const os = require('os');
 const { randomUUID } = require('crypto');
 const { scanProcesses } = require('./processMonitor');
 const { main: localRequest } = require('../bin/panel-agent');
+const REMOTE_KEYS = Object.freeze({ enter: '\r', esc: '\x1b', tab: '\t', 'shift-tab': '\x1b[Z', up: '\x1b[A', down: '\x1b[B',
+  right: '\x1b[C', left: '\x1b[D', backspace: '\x7f', 'ctrl-c': '\x03' });
 class TerminalPanelControl {
   constructor(collaboration) { this.owner = collaboration; this.pending = new Map(); }
   async start() {
@@ -50,7 +52,49 @@ class TerminalPanelControl {
     if (!c.updatedAt || c.now() - c.updatedAt > 10000) throw new Error('Panel membership is stale. Wait for Whitebox to refresh.');
     return { group, member };
   }
+  // Phone access (whitebox phone / whitebox connect over SSH). The person who
+  // owns this Mac account works every panel like a keyboard, so it is not tied
+  // to a source terminal. The CLI refuses to run inside a Whitebox terminal.
+  async remote(method, params) {
+    const c = this.owner;
+    if (!c.updatedAt || c.now() - c.updatedAt > 30000) throw new Error('Whitebox screen is not ready. Check that the app is open.');
+    const panels = [...c.groups.values()];
+    if (method === 'remote.list') return { panels: panels.map(group => ({ id: group.id, name: group.name,
+      terminals: group.surfaces.map(surface => {
+        const member = group.members.find(item => item.id === surface.id);
+        return { id: surface.id, title: surface.title, running: Boolean(member), provider: member?.provider || '',
+          state: member ? member.activity?.state || 'unknown' : surface.status, ready: Boolean(member?.ready) };
+      }) })) };
+    const found = panels.flatMap(group => group.members.map(member => ({ group, member }))).filter(({ member }) => member.id === params.surface_id);
+    if (found.length !== 1) throw new Error('Choose a running terminal ID from the list.');
+    const { group, member } = found[0], live = await c.manager().get(member.id, false);
+    if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('Terminal session changed; open the list again.');
+    const frame = c.frames.get(member.id), current = frame && frame.creationId === live.creationId ? frame : null;
+    if (method === 'remote.read') {
+      const lines = Math.max(1, Math.min(2000, Number(params.lines) || 200));
+      return { surface_id: member.id, panel: group.name, title: member.title, provider: member.provider || '', state: member.activity?.state || 'unknown',
+        // The screen holds blank rows below the cursor; the last lines are the last written ones.
+        text: current ? current.text.replace(/\s+$/u, '').split('\n').slice(-lines).join('\n') : '', capturedAt: current?.at || null,
+        current: Boolean(current && current.outputSequence === live.outputSequence) };
+    }
+    let data;
+    if (method === 'remote.send') {
+      const text = String(params.text ?? '').replace(/\r\n?/gu, '\n'), submit = params.submit !== false;
+      if (text.length > 8000 || /[\x00-\x08\x0b-\x1f\x7f]/u.test(text) || !text && !submit) throw new Error('Invalid terminal text');
+      // An AI CLI always takes a paste; a shell only when it enabled bracketed paste.
+      const paste = Boolean(member.provider || current?.bracketedPaste);
+      if (!paste && /[\n\t]/u.test(text)) throw new Error('This terminal takes one line at a time.');
+      data = (text ? paste ? `\x1b[200~${text}\x1b[201~` : text : '') + (submit ? '\r' : '');
+    } else if (method === 'remote.key') {
+      const key = String(params.key || '');
+      data = REMOTE_KEYS[key] || (/^[a-zA-Z0-9]$/u.test(key) ? key : '');
+      if (!data) throw new Error(`Unknown key: ${key}`);
+    } else throw new Error('Unknown remote method');
+    await c.manager().write(member.id, data, { deliveryId: `remote:${randomUUID()}` });
+    return { surface_id: member.id, ok: true };
+  }
   async handle(method, params) {
+    if (/^remote\./u.test(method)) return this.remote(method, params);
     const c = this.owner, { group, member } = await this.source(params);
     if (method === 'system.identify') return { workspace_id: group.id, surface_id: member.id, panelName: group.name };
     if (method === 'surface.list') return { workspace_id: group.id, surface_id: member.id,
@@ -170,4 +214,4 @@ class TerminalPanelControl {
     try { const file = path.join(this.owner.directory, 'control.json'); if (JSON.parse(fs.readFileSync(file)).token === this.token) fs.rmSync(file); } catch {}
   }
 }
-module.exports = { TerminalPanelControl };
+module.exports = { TerminalPanelControl, REMOTE_KEYS };

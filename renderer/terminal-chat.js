@@ -314,6 +314,11 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       if (button.dataset.chatRetry) { const item = (queues.get(id) || []).find(entry => entry.id === button.dataset.chatRetry); if (item) retry(id, item); }
       if (button.dataset.chatDiscard) { queues.set(id, (queues.get(id) || []).filter(entry => entry.id !== button.dataset.chatDiscard)); renderPane(id); }
     });
+    // Whether the reader is at the latest message; a hidden log reads as scrolled to the top.
+    const log = node.querySelector('.wb-chat-log');
+    log.addEventListener('scroll', () => {
+      if (log.clientHeight) node.dataset.pinned = String(log.scrollHeight - log.scrollTop - log.clientHeight < 48);
+    }, { passive: true });
     nodes.set(id, node);
     return node;
   }
@@ -323,7 +328,7 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
     if (!node || node.hidden) return;
     const log = node.querySelector('.wb-chat-log'), html = logHtml(id);
     if (node.dataset.html !== html) {
-      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 48 || !node.dataset.html;
+      const atBottom = node.dataset.pinned !== 'false' || !node.dataset.html;
       log.innerHTML = `<div class="wb-chat-column">${html}</div>`; node.dataset.html = html;
       // A request taller than the preview shows a fade and "더 보기" (Paseo's MessagePreview).
       for (const preview of log.querySelectorAll('[data-chat-preview]')) {
@@ -453,13 +458,21 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       if (chat) {
         const node = chatNode(id);
         if (!node) continue;
-        node.hidden = false;
+        // Switching to chat opens at the latest message. A hidden log also
+        // loses its scroll position, so a log the user left at the bottom stays there.
+        if (node.hidden || node.dataset.shown !== 'true') node.dataset.pinned = 'true';
+        node.hidden = false; node.dataset.shown = 'true';
         node.style.top = `${pane.node.querySelector(':scope > header')?.offsetHeight || 40}px`;
         if (!views.has(id)) load(id);
         renderPane(id);
-      } else if (nodes.get(id)) nodes.get(id).hidden = true;
+        if (node.dataset.pinned !== 'false') scrollToEnd(node);
+      } else if (nodes.get(id)) { nodes.get(id).hidden = true; delete nodes.get(id).dataset.shown; }
     }
     renderMode();
+  }
+  function scrollToEnd(node) {
+    const log = node.querySelector('.wb-chat-log'), end = () => { log.scrollTop = log.scrollHeight; };
+    end(); requestAnimationFrame(end);
   }
 
   root.addEventListener('click', event => {
