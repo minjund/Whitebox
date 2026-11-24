@@ -84,6 +84,34 @@ async function optimizationChecks() {
   console.log('PASS submitted request → completed answer → single analysis; no idle/stream/tool-pause triggers, manual retry');
 }
 
+// Understand · Review is gone from the app: the renderer asks for record-only
+// observation. A completed request is still recorded (it names the terminal)
+// and no model is ever called.
+async function recordOnlyChecks() {
+  const session = { id: 'record', creationId: 'record:1', pid: 20, status: 'running' };
+  let now = 0;
+  const calls = [];
+  const service = new TerminalReview({ manager: () => ({ get: () => session }), now: () => now,
+    monitor: { scan: () => ({ available: true, processes: [{ provider: 'codex', pid: 21, ancestorPids: [20] }] }) },
+    runner: { generateTerminalReview: options => { calls.push(options); return new Promise(() => {}); } } });
+  const request = 'rename the button';
+  const working = `› ${request}\n• Updating files\nWorking (esc to interrupt)\n› `;
+  const complete = `› ${request}\n• Renamed the button and ran the tests. The label now reads Save.\n─ Worked for 12s ─────\nDone.\n› `;
+  const capture = (text, extra = {}) => service.capture({ id: session.id, creationId: session.creationId, text, analysis: { recordOnly: true }, ...extra });
+  const submission = { id: 'turn-1', request };
+  await capture(working, { submission });
+  await capture(complete, { submission });
+  now += 1000; await capture(complete, { submission });
+  now += 90000; await capture(complete, { submission, force: true });
+  await tick(); await tick();
+  assert.equal(calls.length, 0, 'record-only observation never calls a model');
+  const tasks = service.entries.get(session.id).result?.tasks || [];
+  assert.equal(tasks.at(-1)?.request, request, 'the completed request is still recorded');
+  assert.equal(tasks.at(-1)?.recordOnly, true);
+  assert.equal(require('../src/terminalReviewTurns').terminalName(tasks), request, 'and names the terminal');
+  console.log('PASS record-only observation: completed request recorded and naming the terminal, no model call even when forced');
+}
+
 async function startupChecks() {
   let now = 1000, completion = { available: true, state: 'completed', requestId: 'old', request: '기존 작업', requestAt: 100,
     evidence: 'ASSISTANT: 이전 작업을 완료했고 테스트를 통과했습니다.' };
@@ -211,6 +239,7 @@ async function main() {
   assert.equal(terminalReviewUsage('claude', { input_tokens: -1, output_tokens: 10 }), null);
   assert.equal(terminalReviewUsage('codex', { input_tokens: 0, output_tokens: 0 }).total, 0);
   await optimizationChecks();
+  await recordOnlyChecks();
   require('./terminal-review-history-audit-test')();
   await require('./terminal-review-handoff-test')();
   await require('./terminal-review-label-test')();

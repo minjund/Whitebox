@@ -2,9 +2,10 @@
 const assert = require('node:assert/strict');
 module.exports = async function startupReconnect({ evaluate, waitFor, win, manager, pidRace, unavailable, counters }) {
   if (pidRace?.enabled) {
-    assert.ok(pidRace.preReadyReads >= 1, 'the startup pane read its metadata before renderer readiness');
-    // Main dropped the PID event published before readiness; the renderer
-    // must recover it with a post-ready read instead of keeping a null PID.
+    // Renderer readiness is now signalled before panes attach (an updater waits
+    // on it), so the startup pane reads its metadata only after readiness. A PID
+    // published before readiness is still dropped by main; the renderer must
+    // recover it after readiness instead of keeping a null PID.
     await waitFor(`WhiteboxWorkspace.getState().sessions.find(s=>s.id===${JSON.stringify(pidRace.id)})?.pid === ${JSON.stringify(pidRace.live.pid)}`,
       'a PID dropped before renderer readiness is recovered after it');
     assert.equal(pidRace.delivered, true, 'recovery came from a post-ready read');
@@ -13,7 +14,7 @@ module.exports = async function startupReconnect({ evaluate, waitFor, win, manag
     assert.equal(await evaluate(`WhiteboxWorkspace.getState().sessions.find(s=>s.id===${JSON.stringify(pidRace.id)}).pid`), pidRace.live.pid,
       'an old running snapshot cannot erase the live PID');
     pidRace.hold = false;
-    console.log('PASS real startup PID race: PID dropped before renderer readiness is recovered, and a late stale read or stale event cannot erase the original live PTY');
+    console.log('PASS real startup PID race: panes attach after renderer readiness, a PID missing at startup is recovered after it, and a late stale read or stale event cannot erase the original live PTY');
   }
   const original = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
   const ready = counters().ready;

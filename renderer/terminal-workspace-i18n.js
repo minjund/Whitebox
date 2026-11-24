@@ -97,7 +97,7 @@
   ['AI가 도움 AI 실행 허락을 기다려요', 'The AI is waiting for approval to start a helper AI', 'AI 正在等待启动辅助 AI 的批准'],
   ['AI가 스킬 실행 허락을 기다려요', 'The AI is waiting for approval to run a skill', 'AI 正在等待运行技能的批准'],
   ['AI가 명령 실행 허락을 기다려요', 'The AI is waiting for approval to run a command', 'AI 正在等待运行命令的批准'],
-  ['요약·메뉴 등 화면 글자 · 터미널 글꼴은 따로 설정', 'Summary, menus and other screen text · the terminal font is set separately', '摘要、菜单等界面文字 · 终端字体另行设置'],
+  ["메뉴 등 화면 글자 · 터미널 글꼴은 따로 설정", "Menus and other screen text · the terminal font is set separately", "菜单等界面文字 · 终端字体单独设置"],
   ['Pretendard (한글·영문 가독성)', 'Pretendard (readable Korean and Latin)', 'Pretendard（韩文与英文易读）'],
   ['시스템 기본', 'System default', '系统默认'],
   ['Geist (이전 글꼴)', 'Geist (previous font)', 'Geist（以前的字体）'],
