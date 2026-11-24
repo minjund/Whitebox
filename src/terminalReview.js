@@ -728,7 +728,12 @@ class TerminalReview extends EventEmitter {
     }
     const chunk = entry.pending[0];
     if (chunk) {
-      const policy = analysisPolicy(chunk, this.records(), entry.locale);
+      const observedPolicy = analysisPolicy(chunk, this.records(), entry.locale);
+      // Record-only mode (the app no longer shows Understand · Review): keep the
+      // request and observed facts, which name the terminal, and never call a model.
+      const policy = analysis.recordOnly === true && observedPolicy.mode === 'analyze'
+        ? { ...observedPolicy, mode: 'record', actual: observedPolicy.actual || observedFacts(chunk, entry.locale).join('\n') }
+        : observedPolicy;
       if (policy.mode !== 'analyze') {
         entry.pending.shift();
         const previous = this.task(entry, chunk.taskId);
@@ -776,6 +781,7 @@ class TerminalReview extends EventEmitter {
     if (this.busy || this.updating) return;
     clearTimeout(this.retryTimer); this.retryTimer = null;
     const choices = [...this.entries].filter(([id, entry]) => entry.pending.length && !entry.active && entry.state !== 'paused' && this.scheduling.has(id)
+      && this.scheduling.get(id).analysis?.recordOnly !== true
       && analysisPolicy(entry.pending[0], this.records(), entry.locale).mode === 'analyze');
     let nextRetry = Infinity;
     const available = choices.filter(([id, entry]) => {

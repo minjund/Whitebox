@@ -5,7 +5,7 @@
 <h1 align="center">Whitebox</h1>
 
 <p align="center">
-  <b>Run several AI agents side by side in real terminals,<br>and see exactly what each one did, right next to it.</b>
+  <b>Run several AI agents side by side in real terminals,<br>and see at a glance which one is working, waiting or has an answer to check.</b>
 </p>
 
 <p align="center">
@@ -29,16 +29,16 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme/en/workspace.png" alt="Whitebox workspace: project and panel tree on the left, Claude and Codex in split terminals, Understand · Review on the right" width="100%">
+  <img src="docs/assets/readme/en/workspace.png" alt="Whitebox workspace: project and panel tree on the left, Claude and Codex in split terminals" width="100%">
 </p>
 
 ## What is Whitebox?
 
-With several AI CLIs such as Claude Code and Codex open at once, it is easy to lose track of which terminal is doing what, and whether a finished task really did what you asked. Whitebox groups those terminals into panels per project and, for every request, lays out **what was actually done and what is left** beside the terminal that did it.
+With several AI CLIs such as Claude Code and Codex open at once, it is easy to lose track of which terminal is doing what and which one has finished or is waiting for you. Whitebox keeps those terminals organised in panels per project and shows at a glance **which terminal is working, which is waiting for input and which has a reply you have not checked yet**.
 
 - **Your terminal stays your terminal.** Run the CLIs you already use inside Whitebox terminals. No agent framework or prompt format required.
-- **Checked per request.** Each review is attached to the terminal and request that produced it, so parallel agents never get mixed up.
-- **A local desktop app.** Terminal output and records stay on your machine. What is sent for analysis, and where, is listed under [Data and privacy](#data-and-privacy).
+- **Status at a glance.** The sidebar marks each terminal as working, waiting or with a reply to check, and a Claude or Codex terminal can also be read as a chat, so parallel agents never get mixed up.
+- **A local desktop app.** Terminal output, requests and records stay on your machine. See [Data and privacy](#data-and-privacy).
 
 ## Install
 
@@ -92,7 +92,7 @@ Whitebox does not install AI CLIs for you. Install and sign in to the CLIs you w
 2. Click **Add panel** to open a terminal in that folder.
 3. Run `claude` or `codex` and ask as usual.
 4. Add another **Terminal** to the panel, or split with <kbd>⌘/Ctrl</kbd>+<kbd>D</kbd>, to run another agent alongside.
-5. When a reply finishes, read **Understand · Review** on the right: what you asked, what was done, and what is left.
+5. When a reply finishes, the terminal gets a yellow dot in the sidebar. Click **Answers to check** at the top of the sidebar to open each terminal with an unread reply in turn.
 
 | Shortcut | Action |
 | --- | --- |
@@ -105,16 +105,10 @@ Whitebox does not install AI CLIs for you. Install and sign in to the CLIs you w
 ### Projects, panels and split terminals
 
 - Each project has panels, and each panel splits its terminals into an aligned grid. Drag terminals to view them together with terminals from other panels.
-- The sidebar tells working terminals apart from those waiting for input or approval and those with a reply you have not read yet. Long-running background commands and monitors get their own badges.
-- A terminal is named after a summary of its latest request, so you can tell many of them apart at a glance.
+- The sidebar tells working terminals apart from those waiting for input or approval and those with a reply you have not read yet. Long-running background commands and monitors get their own badges. **Answers to check** at the top of the sidebar counts the terminals with an unread AI reply and opens them one by one.
+- A terminal is named after your latest request, so you can tell many of them apart at a glance. The request is recorded on this computer; no AI call is made.
 - Terminal sessions and output survive resizing, panel switches and app restarts. Korean and other IME input is supported.
-- Moving a terminal to the trash stops its session and frees its slot. Output and review records are kept and can be restored read-only; deleting permanently removes them.
-
-### Understand · Review
-
-When an AI reply finishes, Whitebox lays out **the actual answer, what was checked and what is left, the evidence, and the next action needed** for that request. Statements from the conversation, results confirmed by tool output and inferences are labelled separately, and commands to re-check can be copied as is. Earlier requests stay under **History**.
-
-Turn automatic analysis on or off with the switch at the top right. In Settings → Understand · Review, choose the AI used for analysis (**same service as the terminal**, Claude or Codex) and its model. Adding a Jev API key in Settings → Connections lets Jev pick out which requests need analysis first.
+- Moving a terminal to the trash stops its session and frees its slot. Output and records are kept and can be restored read-only; deleting permanently removes them.
 
 ### Chat view
 
@@ -142,10 +136,10 @@ An AI inside a Whitebox terminal can use the `whitebox` CLI or the panel MCP too
 ### Settings
 
 <p align="center">
-  <img src="docs/assets/readme/en/settings.png" alt="Settings: General, Terminal, Understand · Review, Connections, Shortcuts" width="100%">
+  <img src="docs/assets/readme/en/settings.png" alt="Settings: General, Terminal, Connections, Shortcuts" width="100%">
 </p>
 
-Settings has **General** (theme, language, input request alerts, app updates), **Terminal** (font, size), **Understand · Review** (automatic analysis, analysis service and model, 2048), **Connections** (Codex · Claude, Jev API key) and **Shortcuts**. The interface is available in 한국어, English and 简体中文. The app checks for new versions at startup and every 15 minutes.
+Settings has **General** (theme, language, input request alerts, app updates), **Terminal** (font, size), **Connections** (Codex · Claude CLI) and **Shortcuts**. The interface is available in 한국어, English and 简体中文. The app checks for new versions at startup and every 15 minutes.
 
 ## whitebox CLI
 
@@ -165,9 +159,8 @@ Run `whitebox --help` for every command. `run` and the panel commands need the W
 
 ## Data and privacy
 
-- Terminal output, requests and review records are stored only on your machine. Finished records are removed after 30 days by default; see [Data retention](docs/DATA-RETENTION.md) to change that.
-- Understand · Review sends the request and related work evidence to the analysis service you chose (Claude or Codex). This uses that AI account's quota, and automatic analysis can be turned off at any time.
-- With Jev screening on, the request and related work records are sent to TypeSafe; it is not a local-only analysis. The Jev API key is kept in the main process's protected key store.
+- Terminal output, requests and records are stored only on your machine. Finished records are removed after 30 days by default; see [Data retention](docs/DATA-RETENTION.md) to change that.
+- Whitebox does not send your requests or terminal output to an AI model for analysis. The AI CLIs you run in its terminals talk to their own services as they normally do.
 - Report security issues as described in [SECURITY.md](SECURITY.md).
 
 ## Development

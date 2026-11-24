@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.43 - 2026-11-24
+
+- Updating from 2.0.41 no longer rolls back. The updater waits up to 30 seconds for the new version's window to report ready; on a busy machine 2.0.42 could miss that while its terminals were still attaching, so the updater restored and reopened the old version. The workspace now reports ready as soon as it is drawn and attaches terminals afterwards, no longer waits for review history or the analysis model list at startup, and a failure in chat panes, groups or the sidebar summary can no longer hold startup.
+- Understand · Review is removed: the panel on the right (which opened again after every restart), its button, automatic analysis, the analysis and Jev settings and the "next request" dialog. Whitebox no longer calls an AI model to analyse terminal work. Terminal names still come from your requests, which are now recorded without any model call.
+
 ## 2.0.42 - 2026-11-24
 
 - The sidebar is redrawn in the affectUI Tree View look: 28px rows, projects as rounded squares with their initial, and one colour bar per panel instead of a box. Each terminal shows which AI runs in it (C Claude, X Codex, >_ a shell) and its state at the end of the row; a project row sums up its terminals (working, answers to check, count). About twice as many projects and terminals fit on one screen. **Answers to check** at the top counts the terminals with a new answer and opens them one by one.

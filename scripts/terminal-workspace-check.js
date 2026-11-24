@@ -172,7 +172,8 @@ app.whenReady().then(async () => {
     ipcMain.handle('terminals:review', async (_event, payload) => {
       if (chatFixture) return chatFixture.review(payload);
       if (payload.historyContent) return { entries: [] };
-      if(payload.force)forcedReviewCalls++;
+      // The app no longer asks for forced analyses; a capture of the selected terminal is marked foreground.
+      if(payload.force || payload.foreground)forcedReviewCalls++;
       if (payload.reanalyze) {
         manualReviewCalls.push({ id: payload.id, creationId: payload.creationId, enabled: payload.enabled });
         if (manualReviewDeferred) await new Promise(resolve => { releaseManualReview = resolve; });
@@ -243,51 +244,26 @@ app.whenReady().then(async () => {
       }
       throw new Error(`${label}: ${JSON.stringify(errors)}`);
     };
+    // Understand · Review is gone: at every width the canvas takes the space
+    // next to the sidebar and only the sidebar keeps a settings entry.
     const checkResponsiveReview = async () => {
     assert.equal(await evaluate('document.querySelectorAll(".wb-top-actions [data-action=settings]").length'), 0, 'topbar has no duplicate settings icon');
     assert.equal(await evaluate('document.querySelectorAll(".wb-sidebar-bottom [data-action=settings]").length'), 1, 'sidebar settings entry remains available');
-    const reviewHeaderCopy = await evaluate('({heading:document.querySelector("#wbReview h1").textContent,label:document.querySelector("#wbReviewAuto>span").textContent})');
     for (const width of [1000, 640, 360]) {
-      const beforeResize = await evaluate('({compact:matchMedia("(max-width: 850px)").matches,width:innerWidth,height:innerHeight})');
-      const nativeResize = beforeResize.width !== width || beforeResize.height !== 720;
-      if (nativeResize) await evaluate(`(() => {
-        window.__whiteboxFixtureResized = false;
-        const listener = () => { if (innerWidth === ${width}) { window.__whiteboxFixtureResized = true; removeEventListener('resize', listener); } };
-        addEventListener('resize', listener);
-      })()`);
       win.setContentSize(width, 720);
-      await waitFor(`innerWidth === ${width}`, 'responsive review viewport');
-      if (nativeResize) {
-        await waitFor('window.__whiteboxFixtureResized === true', 'native resize handlers completed');
-        await evaluate('delete window.__whiteboxFixtureResized');
-      }
-      // CSS viewport size updates before the app's media-query change event.
-      // Wait for its automatic close/open before manually opening the review;
-      // otherwise that queued event can close it during the geometry assertion.
-      if (beforeResize.compact !== (width <= 850)) {
-        await waitFor(`document.querySelector('#wbReviewToggle').getAttribute('aria-expanded') === ${JSON.stringify(String(width > 850))}`, 'responsive review mode transition');
-      }
-      if (await evaluate('getComputedStyle(document.querySelector("#wbReview")).display === "none"')) await evaluate('document.querySelector("#wbReviewToggle").click()');
-      assert.equal(await evaluate('document.querySelector("#wbReviewToggle").getAttribute("aria-expanded")'), 'true');
-      await evaluate('document.querySelector("#terminalWorkspace").style.setProperty("--wb-review-width","260px");document.querySelector("#wbReview h1").textContent="Understanding & review";document.querySelector("#wbReviewAuto>span").textContent="Auto analysis"');
-      const geometry = await evaluate(`(() => {
-        const header=document.querySelector('#wbReview>header').getBoundingClientRect(), button=document.querySelector('#wbReviewAuto'), b=button.getBoundingClientRect(), heading=document.querySelector('#wbReview h1').getBoundingClientRect(), close=document.querySelector('.wb-review-close').getBoundingClientRect(), toggle=document.querySelector('.wb-auto-switch').getBoundingClientRect();
-        return {fits:b.left>=header.left&&b.right<=header.right&&b.top>=header.top&&b.bottom<=header.bottom, separate:heading.right<=b.left&&b.right<=close.left, hit:!!document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('#wbReviewAuto'), height:b.height, switchWidth:toggle.width, columnWidth:document.querySelector('#wbReview').getBoundingClientRect().width};
-      })()`);
-      assert(geometry.fits&&geometry.separate&&geometry.hit&&geometry.height>=36&&geometry.switchWidth===28&&Math.abs(geometry.columnWidth-260)<.5, JSON.stringify({width,geometry}));
-      await evaluate('document.querySelector("#wbReviewAuto").click()');
-      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'false', 'narrow toggle responds immediately');
-      await evaluate('document.querySelector("#wbReviewAuto").click()');
-      assert.equal(await evaluate('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed")'), 'true');
+      await waitFor(`innerWidth === ${width}`, 'responsive viewport');
+      const geometry = await evaluate(`(() => { const main = document.querySelector('.wb-main').getBoundingClientRect();
+        return { review: Boolean(document.querySelector('#wbReview, #wbReviewToggle')), right: Math.round(main.right), width: innerWidth }; })()`);
+      assert(!geometry.review && Math.abs(geometry.right - geometry.width) <= 1, JSON.stringify({ width, geometry }));
     }
-    await evaluate(`document.querySelector('#wbReview h1').textContent=${JSON.stringify(reviewHeaderCopy.heading)};document.querySelector('#wbReviewAuto>span').textContent=${JSON.stringify(reviewHeaderCopy.label)};document.querySelector('#terminalWorkspace').style.removeProperty('--wb-review-width')`);
     win.setContentSize(1450, 900);
-    console.log('PASS responsive analysis toggle: 260px review column, 360/640/1000px windows, long labels, hit target, immediate on/off and one sidebar settings entry');
+    console.log('PASS responsive workspace without Understand · Review: the canvas reaches the right edge at 360/640/1000px and one sidebar settings entry');
     };
     await win.loadFile(path.join(root, 'renderer/index.html'));
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'workspace bootstrap');
-    if (process.argv.includes('--review-startup-only')) {
-      await require('./tests/workspace-review-startup')({ evaluate, waitFor, win, manager, readyCalls: () => rendererReadyCalls });
+    if (process.argv.includes('--startup-ready-only')) {
+      await require('./tests/workspace-startup-ready')({ evaluate, waitFor, win, manager, readyCalls: () => rendererReadyCalls,
+        holdReplay: id => { heldReplayId = id; }, releaseReplay: () => { heldReplayId = ''; releaseHeldReplay?.(); } });
       clearTimeout(deadline); await manager.dispose(); win.destroy(); app.exit(0); return;
     }
     if (process.argv.includes('--project-reorder-only')) {
@@ -321,7 +297,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".wb-main")).padding'), '0px', 'terminal area uses its original full-width layout');
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbCanvas")).padding'), '0px', 'terminal splits have no added outer padding');
     assert.equal(await evaluate('WhiteboxTerminalEngine.workspaceOptions(14).lineHeight'), 1.28, 'original terminal line spacing');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#wbReviewTabs [role=tab]")).map(node => node.textContent)'), ['이번 요청', '히스토리'], 'review has only request and history tabs');
+    assert.equal(await evaluate('document.querySelector("#wbReview, #wbReviewToggle, #wbReviewTabs")'), null, 'Understand · Review is gone');
     assert.equal(await evaluate('document.querySelector("#wbNewTerminal, .wb-work-heading, .wb-panel-heading-row, .wb-panel-color")'), null, 'approved workspace has no introduction, central create button or color-only tabs');
     const searchSelection = await evaluate('WhiteboxWorkspace.getState().selectedSpace');
     await evaluate('document.querySelector("#wbProjectSearch").value = "Other project"; document.querySelector("#wbProjectSearch").dispatchEvent(new Event("input"))');
@@ -375,93 +351,6 @@ app.whenReady().then(async () => {
     await waitFor('document.querySelector("#wbUpdateInstalledVersion").textContent.includes("확인 불가")', 'unknown installed version shown explicitly');
     assert.equal(await evaluate('document.querySelector("[data-action=update-install]").hidden'), true, 'blocked updater has no install action');
     assert.equal(updateInstallCalls, 1, 'state changes never install automatically');
-    await evaluate(`document.querySelector('[data-action=settings]').click(); document.querySelector('#wbAnalysisProvider').value='claude'; document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change')); document.querySelector('#wbJevKey').value = 'fixture-jev-key'; document.querySelector('#wbJevKey').dispatchEvent(new Event('input')); document.querySelector('[data-action=jev-save]').click()`);
-    await waitFor(`document.querySelector('#wbJevStatus').textContent.includes('API 키가 저장되어')`, 'Jev key saved through main IPC');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'API key cleared after saving');
-    assert.equal(await evaluate(`JSON.stringify(localStorage).includes('fixture-jev-key')`), false, 'API key never enters renderer persistence');
-    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved key is visibly confirmed even though input is empty');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
-    assert.equal(jevRevealCalls, 0, 'stored keys are never fetched for ordinary status rendering');
-    await evaluate('document.querySelector("[data-settings-section=connections]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude', 'saving a key preserves the selected LLM');
-    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.provider'), 'claude');
-    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Jev 선별 켜짐.*Claude/);
-    assert.equal(await evaluate('document.querySelector("#wbJevAnalysisSettings").hidden'), false);
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider option[value=jev]")'), null, 'Jev cannot replace the reviewer');
-    assert.equal(await evaluate('document.querySelector("#wbJevEnabled").checked'), true);
-    await evaluate('document.querySelector("#wbJevEnabled").click()');
-    assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).analysisSettings.jevEnabled'), false);
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude');
-    await evaluate('document.querySelector("#wbJevEnabled").click()');
-    const jevSpacing = await evaluate('(() => { const provider=document.querySelector(".wb-settings-provider").getBoundingClientRect(),heading=document.querySelector("#wbJevHeading").getBoundingClientRect();return heading.top-provider.bottom;})()');
-    assert(jevSpacing>=24,'Jev heading must have space below the provider separator');
-    await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
-    assert.match(await evaluate('document.querySelector("#wbJevUsage").textContent'), /Claude/);
-    const selectedBeforeJevLink = await evaluate('document.querySelector("#wbAnalysisProvider").value');
-    await evaluate('document.querySelector("#wbJevAnalysisSettings").click()');
-    assert.equal(await evaluate('document.querySelector("[data-settings-page=analysis]").hidden'), false);
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), selectedBeforeJevLink, 'navigation never changes the analysis provider');
-    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
-    await waitFor('document.querySelector("#wbJevKey").type === "text" && document.querySelector("#wbJevKey").value === "fixture-jev-key"', 'explicit Show decrypts the saved key');
-    assert.equal(jevRevealCalls,1);
-    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'viewing a saved key is not an unsaved edit');
-    assert.equal(await evaluate('JSON.stringify(localStorage).includes("fixture-jev-key")'), false);
-    await evaluate('document.querySelector("#wbSettingsDone button").click()');
-    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false);
-    assert.equal(jevConfigureCalls,1,'Done does not resave a merely revealed key');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '');
-    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click(); document.querySelector("[data-action=jev-reveal]").click()');
-    await waitFor('document.querySelector("#wbJevKey").type === "text"', 'saved key can be shown again');
-    await evaluate('document.querySelector("[data-action=jev-reveal]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'Hide removes saved plaintext from the DOM');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***', 'hidden saved key displays a fixed mask');
-    assert.equal(await evaluate('document.querySelector("[data-action=jev-save]").disabled'), true, 'the visual mask is never saved as a replacement key');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
-    jevRevealDeferred=true;
-    await evaluate('document.querySelector("[data-action=jev-reveal]").click(); document.querySelector("#wbSettingsClose button").click()');
-    await waitFor('!document.querySelector("[data-action=jev-reveal]").disabled', 'late decrypt request finishes');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'late response cannot repopulate a closed dialog');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
-    jevRevealDeferred=false;
-    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
-    console.log('PASS explicit saved Jev key reveal; no automatic reads, no resave, Hide/close clear plaintext, late responses discarded');
-
-    await evaluate('document.querySelector("#wbJevKey").value="fixture-done-key"; document.querySelector("#wbJevKey").dispatchEvent(new Event("input")); document.querySelector("#wbSettingsDone button").click()');
-    await waitFor('!document.querySelector("#wbSettings").open', 'Done saves the pending key before closing');
-    assert.equal(jevConfigureCalls, 2);
-    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false);
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '');
-    const enterPrevented = await evaluate('(() => { const input=document.querySelector("#wbJevKey"); input.value="fixture-enter-key"; input.dispatchEvent(new Event("input")); const event=new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true}); input.dispatchEvent(event); input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true})); return event.defaultPrevented; })()');
-    assert.equal(enterPrevented, true, 'Enter must not implicitly submit the close button');
-    await waitFor('!document.querySelector("#wbJevKey").disabled && !document.querySelector("#wbJevKey").value', 'Enter finishes saving');
-    assert.equal(jevConfigureCalls, 3, 'repeated Enter never duplicates an in-flight save');
-    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), true);
-    jevConfigureFailure = 'fixture secure store denied';
-    await evaluate('document.querySelector("#wbJevKey").value="fixture-retry-key"; document.querySelector("#wbJevKey").dispatchEvent(new Event("input")); document.querySelector("#wbSettingsDone button").click()');
-    await waitFor('document.querySelector("#wbJevStatus").textContent.includes("fixture secure store denied")', 'save failure is visible');
-    assert.equal(await evaluate('document.querySelector("#wbSettings").open'), true, 'failed save keeps settings open');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), 'fixture-retry-key', 'failed save retains the draft for retry');
-    jevConfigureFailure = '';
-    await evaluate('document.querySelector("#wbSettingsDone button").click()');
-    await waitFor('!document.querySelector("#wbSettings").open', 'successful retry closes settings');
-    bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
-    await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'saved key status restores after renderer reload');
-    assert.equal(await evaluate('document.querySelector("#wbJevSavedBadge").hidden'), false, 'saved badge restores from the main process');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").placeholder'), '***');
-    await evaluate('document.querySelector("[data-action=settings]").click(); document.querySelector("[data-settings-section=connections]").click()');
-    for (let index=errors.length-1; index>=0; index--) if(errors[index].includes('fixture secure store denied')) errors.splice(index,1);
-    console.log('PASS Jev saved-state badge and placeholder; button/Done/Enter save, duplicate suppression, retry and reload without plaintext persistence');
-
-    await evaluate(`(() => {const key='whitebox:workspace:v2',saved=JSON.parse(localStorage.getItem(key));saved.analysisSettings.provider='jev';delete saved.analysisSettings.jevEnabled;localStorage.setItem(key,JSON.stringify(saved));})()`);
-    await win.reload();
-    await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore legacy Jev selection');
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'auto', 'legacy Jev reviewer migrates to the terminal LLM');
-    assert.equal(await evaluate('document.querySelector("#wbJevEnabled").checked'), true, 'legacy selection enables only screening');
-    await evaluate(`document.querySelector('[data-action=settings]').click();document.querySelector('[data-settings-section=connections]').click();document.querySelector('#wbAnalysisProvider').value='claude';document.querySelector('#wbAnalysisProvider').dispatchEvent(new Event('change'));document.querySelector('[data-action=jev-remove]').click()`);
-    await waitFor(`!document.querySelector('#wbJevEnabled').checked && document.querySelector('#wbJevEnabled').disabled`, 'disconnect disables only Jev screening');
-    assert.equal(await evaluate('document.querySelector("#wbAnalysisProvider").value'), 'claude');
-    await evaluate('document.querySelector("#wbSettings").close()');
     bootstrapPush = null; bootstrapUpdate = updateCheckResponse;
     await evaluate('document.querySelector("#wbSettings").close()');
     await win.reload();
@@ -471,7 +360,7 @@ app.whenReady().then(async () => {
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
     const settingsShots = path.join(root, 'artifacts/settings'); fs.mkdirSync(settingsShots, { recursive: true });
     await evaluate('document.querySelector("[data-action=settings]").click()');
-    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 5);
+    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 4, 'general, terminal, connections and shortcuts');
     assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
     const settingsActions = await evaluate('Object.fromEntries(["wbSettingsClose","wbSettingsDone"].map(id=>{const button=document.querySelector("#"+id+" button"),r=button.getBoundingClientRect();return [id,{width:r.width,height:r.height}]}))');
     assert(settingsActions.wbSettingsClose.width>=44 && settingsActions.wbSettingsClose.height>=40,'close target has adequate space');
@@ -486,12 +375,8 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontFamily'), 'monospace');
     assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).fontFamily'), 'monospace');
     fs.writeFileSync(path.join(settingsShots, 'terminal-dark.png'), (await win.webContents.capturePage()).toPNG());
-    await evaluate('document.querySelector("[data-settings-section=connections]").click(); document.querySelector("#wbJevKey").value="unsaved-key"; document.querySelector("[data-action=jev-reveal]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'text');
     await evaluate('document.querySelector("#wbSettingsClose button").click()');
     assert.equal(await evaluate('document.querySelector("#wbSettings").open'), false, 'affectUI close preserves native dialog submission');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").value'), '', 'closing discards unsaved key');
-    assert.equal(await evaluate('document.querySelector("#wbJevKey").type'), 'password');
     await evaluate('document.querySelector("[data-action=settings]").click(); WhiteboxTheme.setTheme("system")');
     assert.equal(await evaluate('WhiteboxTheme.getPreference()'), 'system');
     win.webContents.debugger.attach('1.3');
@@ -509,7 +394,7 @@ app.whenReady().then(async () => {
     await evaluate('WhiteboxTheme.setTheme("dark"); document.querySelector("[data-action=settings]").click()');
     for (const width of [780, 360]) {
       win.setContentSize(width, 720);
-      for (const section of ['general', 'terminal', 'analysis', 'connections', 'shortcuts']) {
+      for (const section of ['general', 'terminal', 'connections', 'shortcuts']) {
         await evaluate(`document.querySelector('[data-settings-section=${section}]').click()`);
         const bounds = await evaluate('(() => { const r=document.querySelector("#wbSettings").getBoundingClientRect(), content=document.querySelector("#wbSettingsContent"); return {left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,scroll:content.scrollWidth,client:content.clientWidth}; })()');
         assert(bounds.left>=0 && bounds.right<=bounds.width && bounds.bottom<=bounds.height && bounds.scroll<=bounds.client+1, JSON.stringify({section,bounds}));
@@ -519,7 +404,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1450,900);
     await evaluate('document.querySelector("#wbSettingsDone button").click()');
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore layout after settings size checks');
-    console.log('PASS redesigned settings: native close, five categories, font persistence, key clearing, system appearance changes, 780/360px layouts');
+    console.log('PASS redesigned settings: native close, four categories, font persistence, system appearance changes, 780/360px layouts');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
@@ -553,13 +438,12 @@ app.whenReady().then(async () => {
       const activitySelector = `[data-instance="${first.id}"] .wb-terminal-state`;
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'idle shell is yellow even while its process remains running');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(223, 184, 79)');
-      await evaluate('document.querySelector("#wbAutoReview").checked = false; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
       // Keep quiet foreground work alive until the assertions explicitly finish.
       // A fixed sleep races slow CI inspection and cannot cover both motion modes.
       const silentWork = path.join(profile, 'silent-work.cjs');
       fs.writeFileSync(silentWork, "process.stdin.setRawMode(true);process.stdin.resume();process.stdin.once('data',()=>{process.stdin.setRawMode(false);process.exit(0)});");
       await manager.command(first.id, "node '" + silentWork.replace(/'/g, "'\\''") + "'");
-      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work shows a spinner with automatic review disabled');
+      await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'working'`, 'silent foreground work shows a spinner');
       win.webContents.debugger.attach('1.3');
       try {
         for (const motion of ['no-preference', 'reduce']) {
@@ -577,7 +461,6 @@ app.whenReady().then(async () => {
       assert.equal(await evaluate(`document.querySelector('${activitySelector}').textContent`), '', 'dot has no visible status copy');
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'idle'`, 'finished command returns to yellow input waiting');
       assert.equal(manager.get(first.id).pid, first.pid, 'working/idle transition never restarts the shell');
-      await evaluate('document.querySelector("#wbAutoReview").checked = true; document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
       completedActivityId = first.id;
       await waitFor(`document.querySelector('${activitySelector}').dataset.state === 'completed'`, 'confirmed AI completion becomes green');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('${activitySelector} i')).backgroundColor`), 'rgb(117, 201, 149)');
@@ -607,7 +490,6 @@ app.whenReady().then(async () => {
     });
     activityOverrides.set(first.id, usageForPane('claude', first.pid + 100000, 'terminal-tokens-first', 12000, 345, 8000));
     activityOverrides.set(second.id, usageForPane('codex', second.pid + 100000, 'terminal-tokens-second', 2100, 300, 1700));
-    await evaluate('document.querySelector("#wbAutoReview").checked=false;document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
     await evaluate('WhiteboxWorkspace.captureReviews(true)');
     await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent === '12.3K 토큰' && document.querySelector('${tokenSelector(second.id)}').textContent === '2,400 토큰'`, 'separate conversation tokens update with automatic analysis disabled');
     assert.match(await evaluate(`document.querySelector('${tokenSelector(first.id)}').title`), /12,345.*12,000.*345/u);
@@ -636,8 +518,7 @@ app.whenReady().then(async () => {
     await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent==='≥1,100 토큰'`, 'partial history is labeled as a lower bound');
     for (const session of [first, second]) activityOverrides.set(session.id, { usageStatus: 'unavailable', usage: null, providerPid: session.pid + 300000 });
     await evaluate('WhiteboxWorkspace.captureReviews(true)'); activityOverrides.clear();
-    await evaluate('document.querySelector("#wbAutoReview").checked=true;document.querySelector("#wbAutoReview").dispatchEvent(new Event("change"))');
-    console.log('PASS per-terminal header tokens: distinct conversations, tooltip breakdown, automatic-review independence, 220px dark/light geometry, persistence and ownership/zero/partial handling');
+    console.log('PASS per-terminal header tokens: distinct conversations, tooltip breakdown, 220px dark/light geometry, persistence and ownership/zero/partial handling');
     if (process.platform !== 'win32') {
       // Keep the fixture independent of personal login-shell prompt themes.
       // Long cwd prompts redraw multiple rows during rapid pane resizing.
@@ -765,38 +646,14 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbTabs [data-pane-tab]").length'), 2, 'tabs select terminals within the current panel');
     await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), first.id);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewTarget").textContent'), /터미널 \d+/u);
     assert.equal(await evaluate('document.querySelector(".wb-pane-number")'), null, 'sidebar omits redundant terminal numbering');
     assert.doesNotMatch(await evaluate('document.querySelector("#wbTabs").textContent'), /터미널 \d+/u);
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
-    contentFixture = { version: 1, answer: { text: '문서 생성은 보고됐지만 본문은 확인되지 않았습니다.', basis: 'reported', quote: '생성 보고' },
-      details: [{ text: '백업 후 SQL을 적용하고 결과를 확인하는 순서입니다.', basis: 'reported', quote: '백업 → SQL → 확인' }],
-      limitations: [{ text: '페이지 ID만으로 문서 본문이 맞다고 판단하지 않습니다.', quote: '생성 보고' }],
-      deliverables: [{ label: '상태 확인 명령어', kind: 'command', value: 'docker compose ps', basis: 'reported', quote: 'docker compose ps' }] };
-    await waitFor('document.querySelector("#wbReviewContent .wb-answer-content")', 'answer-first content displayed in the production workspace');
-    const firstScreen = await evaluate('document.querySelector("#wbReviewContent .wb-answer-content").innerText');
-    for (const value of ['본문은 확인되지 않았습니다', '백업 후 SQL', '페이지 ID만으로', 'docker compose ps', '대화 원문 기준']) assert.ok(firstScreen.includes(value), `${value} must be visible without opening a disclosure`);
-    assert.doesNotMatch(firstScreen, /생성 보고|요청을 충족/u, 'hidden evidence and generic verdicts do not replace the answer');
-    assert.equal(await evaluate('document.querySelectorAll("#wbReviewContent .wb-answer-content details[open]").length'), 0);
-    const contentShots = path.join(root, 'artifacts/answer-first-ui'); fs.mkdirSync(contentShots, { recursive: true });
-    fs.writeFileSync(path.join(contentShots, 'workspace-content.png'), (await win.webContents.capturePage()).toPNG());
-    contentFixture = { ...contentFixture, version: 2,
-      subject: { text: '설정 검사 방법 확인', basis: 'reported', quote: '설정 검사 요청' },
-      handoff: { kind: 'verify', temporal: null,
-        priority: { text: '검사 방법을 정하려면 현재 지원 명령을 먼저 확인합니다.', basis: 'inference', quote: '설정 검사 요청' },
-        prompt: { text: '현재 지원하는 설정 검사 명령과 확인할 결과를 알려줘.', basis: 'inference', quote: '설정 검사 요청' } },
-      deliverables: [{ label: '옛 검사 명령', kind: 'command', value: 'old-tool check', basis: 'reported', quote: 'old-tool check', usage: 'historical',
-        usageNote: { text: '이후 폐지된 명령입니다.', basis: 'reported', quote: '폐지 보고' } }] };
-    await waitFor('document.querySelector("#wbReviewContent .wb-task-title h2")?.textContent === "설정 검사 방법 확인"', 'source-backed task purpose replaces the raw summary');
-    const standaloneScreen = await evaluate('document.querySelector("#wbReviewContent .wb-answer-content").innerText');
-    for (const text of ['보낼 수 있는 다음 요청', '현재 지원하는 설정 검사 명령', '과거 명령 · 현재 실행 안내 아님', '이후 폐지된 명령']) assert.ok(standaloneScreen.includes(text));
-    assert.ok(!standaloneScreen.includes('old-tool check'), 'a historical command stays outside default execution instructions');
-    assert.ok(await evaluate('document.querySelector("#wbReviewContent .wb-content-historical details").textContent.includes("old-tool check")'), 'the exact historical command remains inspectable');
-    console.log('PASS standalone review UI: task purpose, reasoned next request, explicit historical boundary and preserved command bytes');
-    contentFixture = null;
-    await waitFor('!document.querySelector("#wbReviewContent .wb-answer-content")', 'legacy display restored for remaining compatibility checks');
-    console.log('PASS production answer-first UI: actual answer, mechanism, evidence limits and literal commands visible with all disclosures closed');
+    // Each terminal is named by its own recorded request (isolated per PTY).
+    await waitFor(`(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '').includes('ONE_ONLY')`, 'first terminal named by its own request');
+    await evaluate('WhiteboxWorkspace.captureReviews()');
+    await waitFor(`(document.querySelector('[data-instance="${second.id}"] strong')?.textContent || '').includes('TWO_ONLY')`, 'second terminal named by its own request');
+    assert.doesNotMatch(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /TWO_ONLY/u);
+    assert.equal(analysisOptions?.recordOnly, true, 'the app only records requests and never asks for a model analysis');
 
     // Move actual live PTYs through the same DOM drag/drop handlers as the UI.
     const identityBeforeMoves = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
@@ -1040,7 +897,6 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('WhiteboxWorkspace.getState().selectedSpace'),originalOwner,'focus follows the terminal project');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'focus retains both projects on screen');
     await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'),/ONE_ONLY/u);
     assert.equal(await evaluate(`pinnedTerminalNode === document.querySelector('#wbCanvas [data-terminal-id="${first.id}"]')`),true,'cross-project focus preserves the terminal DOM');
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)','reload pinned projects');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'),2,'cross-project shared view survives reload');
@@ -1065,10 +921,8 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${JSON.stringify(second.id)}).includes('TWO_ONLY')`), true);
     console.log('PASS panel hierarchy, detach/join, directional and cross-project drag, keyboard move, same PTY identity/buffer, hidden background output');
     await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
     await evaluate(`WhiteboxWorkspace.selectPane(${JSON.stringify(first.id)}, true); WhiteboxWorkspace.captureReviews(true)`);
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TWO_ONLY/u);
+    await forceCapture();
     assert.ok(captured.get(first.id).includes('ONE_ONLY'));
     assert.ok(!captured.get(first.id).includes('TWO_ONLY'));
     const originalSecondName = await evaluate(`document.querySelector('[data-instance="${second.id}"] strong').textContent`);
@@ -1091,7 +945,7 @@ app.whenReady().then(async () => {
       await evaluate('WhiteboxTheme.setTheme("dark")');
       win.setContentSize(1024, 800);
       await waitFor('innerWidth === 1024', 'design screenshot at laptop width');
-      assert.equal(await evaluate('document.querySelector("#wbReview").getBoundingClientRect().left >= document.querySelector(".wb-main").getBoundingClientRect().right - 1'), true);
+      assert.equal(await evaluate('document.querySelector(".wb-main").getBoundingClientRect().right >= innerWidth - 1'), true);
       assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
       fs.writeFileSync(path.join(screenshots, 'laptop-dark.png'), (await win.webContents.capturePage()).toPNG());
       win.setContentSize(1450, 900);
@@ -1099,26 +953,7 @@ app.whenReady().then(async () => {
       assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identities, 'theme and window changes keep the live PTYs');
     }
 
-    assert.equal(await evaluate('document.querySelector("#wbReviewUsage")'), null, 'account usage footer is removed');
-    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true);
-    assert.equal(await evaluate('document.querySelector(".wb-task-time").getAttribute("datetime")'), '2026-10-21T12:00:00.000Z');
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /보관된 이해|요청 한 번이|개 요청 ·/u);
     assert.equal(accountUsageCalls, 0, 'review never fetches terminal/account-wide usage');
-    assert.equal(await evaluate('document.querySelector("#wbReviewTarget strong").textContent'), '선택한 터미널');
-    assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '1,400 토큰');
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /요청한 일.*실제로 한 일.*왜 이렇게 바꿨나요.*확인된 근거/su);
-    assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), false, 'technical details start collapsed');
-    await evaluate('document.querySelector(".wb-task-details > summary").click(); WhiteboxWorkspace.captureReviews(true)');
-    assert.equal(await evaluate('document.querySelector(".wb-task-details").open'), true, 'polling preserves expanded detail');
-    const beforeFollowup = manager.get(first.id, true).output;
-    await evaluate('document.querySelector("[data-followup]").click()');
-    assert.equal(await evaluate('document.querySelector("#wbFollowup").open'), true);
-    assert.match(await evaluate('document.querySelector("#wbFollowupText").value'), /문구가 화면/u);
-    await evaluate('document.querySelector("#wbFollowupText").value="수정한 문구만 확인해줘"; document.querySelector("[data-action=copy-followup]").click()');
-    await waitFor('document.querySelector("#wbFollowupStatus").textContent.includes("복사했어요")', 'follow-up copy confirmation');
-    assert.equal(clipboardText, '수정한 문구만 확인해줘', 'the user can edit the follow-up before copying');
-    assert.equal(manager.get(first.id, true).output, beforeFollowup, 'preparing a follow-up never sends terminal input');
-    await evaluate('document.querySelector("#wbFollowup").close()');
     const continuationSummary = '## This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n<system-reminder> <tools-used-before-summary>Bash, Skill, ToolSearch, mcp__claude_ai_Notion__notion-create-pages';
     const beforeContinuation = await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory.find(r=>r.id==='${first.id}')`);
     const bogusTask = { taskId: 'compaction-internal', request: continuationSummary, actual: 'INTERNAL_COMPACTION_SENTINEL', lifecycle: 'in-progress', recordOnly: true, submittedAt: Date.now() };
@@ -1128,199 +963,25 @@ app.whenReady().then(async () => {
       result: { ...beforeContinuation.result, observedAt: '2026-11-04T04:00:00Z', tasks: [...beforeContinuation.result.tasks, bogusTask] },
     } });
     await waitFor(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory.find(r=>r.id==='${first.id}').result.observedAt==='2026-11-04T04:00:00Z'`, 'continuation event reached renderer history');
-    await waitFor('document.querySelector("#wbReviewActivity").hidden', 'internal continuation is not work observation');
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /ONE_ONLY/u, 'the actual previous request stays visible during continuation');
+    await waitFor(`!(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '').includes('continued from')`, 'internal continuation never names the terminal');
+    assert.match(await evaluate(`(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '')`), /ONE_ONLY/u, 'the actual previous request keeps naming the terminal during continuation');
     assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'internal summaries are not retained in new renderer history or digests');
     await evaluateData((id, task) => { const key='whitebox:workspace:v2', data=JSON.parse(localStorage.getItem(key)), record=data.reviewHistory.find(r=>r.id===id); record.result.tasks.push(task); record.digest=JSON.stringify(record.result); localStorage.setItem(key,JSON.stringify(data)); }, first.id, bogusTask);
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'legacy summary history migration');
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
+    assert.doesNotMatch(await evaluate(`(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '')`), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
     assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'reload removes older internal-summary cards and digests');
     await forceCapture();
-    console.log('PASS continuation UI: no internal summary/title/observation, real task retained, new history and legacy reload cache sanitized');
+    console.log('PASS continuation: no internal summary names a terminal, real task retained, new history and legacy reload cache sanitized');
     requestSummary = '다음 요청 제목';
     analysisStamp = 'second';
     reportedUsage = { input: 2400, output: 400, cachedInput: 0, cacheWrite: 0, total: 2800 };
     await forceCapture();
-    assert.equal(await evaluate('document.querySelector(".wb-task-title .wb-analysis-tokens").textContent'), '2,800 토큰');
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^다음 요청 제목 ONE_ONLY/u, 'next analyzed request updates the terminal name');
-    assert.equal(await evaluate('document.querySelector(".wb-history:not([open]) > summary .wb-analysis-tokens").textContent'), '1,400 토큰', 'collapsed history displays its own analysis cost');
-    await evaluate('document.querySelector("[data-review-view=history]").click()');
-    assert.equal(await evaluate('document.querySelector(".wb-current-review").hidden'), true);
-    assert.equal(await evaluate('document.querySelector(".wb-review-history").hidden'), false);
-    assert.equal(await evaluate('document.querySelectorAll(".wb-review-history .wb-history").length'), 1);
-    await evaluate(`document.querySelector('[data-pane-tab="${second.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
-    assert.equal(await evaluate('document.querySelector("[data-review-view=current]").getAttribute("aria-pressed")'), 'true', 'changing terminals returns to its current review');
-    assert.match(await evaluate('document.querySelector("#wbReviewTarget small").textContent'), /TWO_ONLY/u);
-    assert.match(await evaluate('document.querySelector(".wb-current-review").textContent'), /TWO_ONLY/u);
-    await evaluate(`document.querySelector('[data-pane-tab="${first.id}"]').click(); WhiteboxWorkspace.captureReviews(true)`);
-    const beforeReviewToggle = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
-    await evaluate('document.querySelector("#wbReviewAuto").click()');
-    await waitFor('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed") === "false"', 'header disables automatic review');
-    assert.equal(await evaluate('document.querySelector("#wbAutoReview").checked'), false, 'header and settings use the same analysis preference');
-    await evaluate('document.querySelector("#wbReviewAuto").click()');
-    await waitFor('document.querySelector("#wbReviewAuto").getAttribute("aria-pressed") === "true"', 'header enables automatic review');
-    assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), beforeReviewToggle, 'review navigation never replaces terminal processes');
-    await forceCapture();
-    assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'polling does not duplicate saved analysis');
-    analysisRevision++;
-    reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await forceCapture();
-    assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'reanalysis remains inside the same request');
-    assert.equal(await evaluate('document.querySelectorAll(".wb-analysis-run").length'), 2, 'each reanalysis cost remains available in details');
-    assert.match(await evaluate('document.querySelector(".wb-analysis-tokens").title'), /입력 1,200 · 출력 200/u);
-    reportedUsage = null;
-    await forceCapture();
-    assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '토큰 미제공');
-    reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await forceCapture();
-    await evaluate('document.querySelector("[data-action=settings]").click()');
-    await evaluate('document.querySelector("#wbAnalysisProvider").value="claude"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbClaudeModel").value="sonnet"; document.querySelector("#wbClaudeModel").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbSettings").close()');
-    await forceCapture();
-    assert.equal(analysisOptions.provider, 'claude');
-    assert.equal(analysisOptions.models.claude, 'sonnet');
-    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true);
-    assert.equal(await evaluate('document.querySelector(".wb-task-time").getAttribute("datetime")'), '2026-10-21T12:00:00.000Z');
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /보관된 이해|요청 한 번이|개 요청 ·/u);
-    assert.equal(accountUsageCalls, 0, 'changing the analysis provider does not fetch account usage');
-    assert.equal(await evaluate('document.querySelector("[data-detail-review]")'), null, 'no paid detailed-analysis action');
-    assert.equal(lastDetail, undefined);
-    assert.equal(await evaluate('document.querySelector(".wb-task-details").contains(document.querySelector(".wb-task-section h3"))'), false);
-    unverified = [{ item: '화면에 요청한 문구가 보이는지', reason: '사용자가 요청한 표시 변경의 완료 여부에 필요해요.' }];
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /완료 판단에 필요한 확인.*화면에 요청한 문구가/su);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /외부 원문 대조·독립 실행 검증|결과 수신은 작업 성공|내용 정확성/u);
-    unverified = [];
-    toolEvidence = { source: 'unavailable', items: [], omitted: 0 };
-    await forceCapture();
-    assert.equal(await evaluate('document.querySelector(".wb-task .wb-remaining")'), null, 'no unrelated unknowns inserted');
-    lifecycle = 'interrupted';
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /중단됨 · 수행 기록/u);
-    lifecycle = 'completed';
-
-    assert.equal(await evaluate('document.querySelectorAll(".wb-history").length'), 1, 'detail action keeps task history');
-    recordOnly = true;
-    reportedUsage = { input: 0, output: 0, cachedInput: 0, cacheWrite: 0, total: 0 };
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /0 토큰 · 호출 없음/u);
-    gateFixture = { provider: 'jev', outcome: 'not-required', probability: .0123456789, usage: { input: 120, output: 10, total: 130 } };
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /LLM 호출 없음.*Jev 130 토큰.*LLM 분석 없이 작업 기록 표시/su);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /0\.0123456789|판단의 근거 기록/);
-    legacyTyped = true; gateFixture = null;
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /이전 Jev 기록.*LLM 판단이 없습니다/su);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /0\.987654321|JEV_OLD_CONCLUSION_SENTINEL|판단의 근거 기록/);
-    legacyTyped = false;
-    await forceCapture();
-
-    assert.match(await evaluate('document.querySelector(".wb-record-only").textContent'), /AI 분석 없이 기록/u);
-    recordOnly = false;
-    reportedUsage = { input: 1200, output: 200, cachedInput: 900, cacheWrite: 0, total: 1400 };
-    await forceCapture();
-
-    await evaluate('document.querySelector("[data-action=settings]").click()');
-    await evaluate('document.querySelector("#wbAnalysisProvider").value="codex"; document.querySelector("#wbAnalysisProvider").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbCodexModel").value="fixture-model"; document.querySelector("#wbCodexModel").dispatchEvent(new Event("change"))');
-    await evaluate('document.querySelector("#wbSettings").close()');
-    await forceCapture();
-    assert.equal(analysisOptions.models.codex, 'fixture-model');
     assert.equal(await evaluate('document.querySelectorAll("#wbInstances [data-instance]").length'), 0);
     assert.equal(await evaluate('document.querySelectorAll("#wbSpaces [data-instance]").length'), 2, 'project terminals are nested below their project');
     await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
     assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
     await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
-    const manualBefore = manualReviewCalls.length;
-    holdCollaborationReply = true; releaseCollaborationReply = null;
-    await evaluate('WhiteboxWorkspace.captureReviews(); true');
-    for (let attempt = 0; !releaseCollaborationReply && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
-    assert.equal(typeof releaseCollaborationReply, 'function');
-    manualReviewDeferred = true; releaseManualReview = null;
-    await evaluate('document.querySelector("[data-action=refresh]").click(); document.querySelector("[data-action=refresh]").click()');
-    assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), true, 'manual button disables immediately while waiting for a background observation');
-    await evaluate(`document.querySelector('[data-instance="${second.id}"]').click()`);
-    releaseCollaborationReply(); releaseCollaborationReply = null;
-    for (let attempt = 0; !releaseManualReview && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
-    assert.equal(typeof releaseManualReview, 'function');
-    assert.equal(manualReviewCalls.length, manualBefore + 1, 'duplicate clicks issue one manual request');
-    assert.equal(manualReviewCalls.at(-1).id, first.id, 'queued manual request keeps the clicked terminal despite selection changes');
-    releaseManualReview(); releaseManualReview = null; manualReviewDeferred = false;
-    await waitFor('!document.querySelector("[data-action=refresh]").disabled', 'manual IPC completes');
-    assert.equal(await evaluate('WhiteboxWorkspace.getState().activeId'), second.id);
-    await evaluate('document.querySelector("[data-action=auto-review]").click()');
-    await forceCapture();
-    const offManualBefore = manualReviewCalls.length;
-    await evaluate('document.querySelector("[data-action=refresh]").click()');
-    for (let attempt = 0; manualReviewCalls.length === offManualBefore && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 30));
-    assert.equal(manualReviewCalls.length, offManualBefore + 1);
-    assert.equal(manualReviewCalls.at(-1).id, second.id);
-    assert.equal(manualReviewCalls.at(-1).enabled, true, 'manual reanalysis runs once with automatic analysis off');
-    await waitFor('!document.querySelector("[data-action=refresh]").disabled', 'one-off analysis finishes');
-    assert.equal(await evaluate('document.querySelector("#wbAutoReview").checked'), false, 'manual action leaves the automatic preference off');
-    await evaluate('document.querySelector("[data-action=auto-review]").click()');
-    await evaluate(`document.querySelector('[data-instance="${first.id}"]').click()`);
-    console.log('PASS reanalysis button: explicit intent, immediate duplicate protection, pinned terminal during queued observation, and automatic-off one-shot');
-    reviewState = 'collecting';
-    await waitFor('(async () => { await WhiteboxWorkspace.captureReviews(true); return /분석 대기/u.test(document.querySelector("#wbReviewActivity").textContent); })()', 'collecting state renders after selection refresh');
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 대기/u);
-    assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false');
-    reviewRetryAt = Date.now() + 10000;
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석 사용 한도 대기.*다시 시도까지/u);
-    assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'false', 'capacity waiting is not model execution');
-    reviewRetryAt = null;
-    reviewState = 'reviewing'; startedAt = Date.now() - 31000;
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^분석중…$/u);
-    assert.equal(await evaluate('Boolean(document.querySelector("#wbReviewActivity .ui-tlc"))'), true, 'official thinking loader shows real review state');
-    for (const theme of ['light', 'dark']) {
-      await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
-      const loadingLayout = await evaluate(`(() => {
-        const host = document.querySelector('#wbReviewActivity');
-        const loader = host.querySelector('.ui-tlc'), icon = loader.querySelector('.ui-tlc__icon').getBoundingClientRect();
-        const text = loader.querySelector('.ui-tlc__text').getBoundingClientRect(), label = loader.querySelector('.ui-tlc__label').getBoundingClientRect();
-        return { legacySpinners: host.querySelectorAll('.wb-review-state > i').length,
-          spinners: host.querySelectorAll('.ui-tlc__spinner').length,
-          horizontal: icon.right <= text.left && Math.abs((icon.top + icon.bottom - text.top - text.bottom) / 2) < 2,
-          fullLabel: label.top >= text.top - 1 && label.bottom <= text.bottom + 1 && label.width <= text.width + 1,
-          height: loader.getBoundingClientRect().height };
-      })()`);
-      assert(loadingLayout.legacySpinners === 0 && loadingLayout.spinners === 1 && loadingLayout.horizontal && loadingLayout.fullLabel && loadingLayout.height <= 24, JSON.stringify({theme, ...loadingLayout}));
-    }
-    console.log('PASS review analysis uses one loader with an aligned, unclipped label in light/dark themes');
-
-    assert.equal(await evaluate('document.querySelector(".wb-review-preview")'), null, 'no redundant observed-facts preview');
-    if (process.env.WHITEBOX_REVIEW_SCREENSHOT) fs.writeFileSync(process.env.WHITEBOX_REVIEW_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
-    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), false);
-    assert.equal(await evaluate('document.querySelector("#wbReviewContent").getAttribute("aria-busy")'), 'true');
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /이전 요청/u);
-    recordOnly = true; deferred = true;
-    for (const pendingState of ['awaiting-answer', 'collecting', 'reviewing']) {
-      reviewState = pendingState;
-      await forceCapture();
-      assert.equal(await evaluate('document.querySelector("#wbReviewActivity").textContent'), ({ 'awaiting-answer': '작업 관찰 중', collecting: '분석 대기', reviewing: '분석중…' })[pendingState]);
-      assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewContent").textContent'), /DEFERRED_USER_MESSAGE|근거가 확보되면 분석합니다|0 토큰 · 호출 없음/u, 'pending bookkeeping is not an analysis card');
-      assert.equal(await evaluate('document.querySelector(".wb-record-only")'), null);
-      assert.ok(await evaluate('document.querySelector(".wb-task")'), 'existing analysis stays available during the next request');
-    }
-    recordOnly = false; deferred = false;
-    reviewState = 'error'; startedAt = null;
-    await evaluate('WhiteboxWorkspace.captureReviews()');
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /분석중/u);
-    assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
-    retainedReviewFailure = true;
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /최종 분석을 완료하지 못했습니다/u);
-    assert.doesNotMatch(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^검토를 완료하지 못했습니다$/u);
-    assert.match(await evaluate('document.querySelector("[data-retained-analysis]").textContent'), /작업 중 작성된 분석은 보존/u);
-    assert(await evaluate('Boolean(document.querySelector("#wbReviewContent .wb-task"))'), 'the retained analysis article stays readable');
-    retainedReviewFailure = false;
-    reviewState = undefined;
-    await forceCapture();
-    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), true, 'success clears the previous failure indicator');
     // A sidebar terminal opens alone, so the panel's split comes back through its group first.
     await evaluate('document.querySelector("#wbGroups [data-group-open]")?.click()');
     const panesBeforeAdd = await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length');
@@ -1337,11 +998,9 @@ app.whenReady().then(async () => {
     assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids);
     await evaluate('document.querySelector("#wbCanvas .is-selected [data-expand-terminal]").click()');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 3);
-    await evaluate('document.querySelector("#wbReviewResize").dispatchEvent(new KeyboardEvent("keydown", {key:"ArrowRight", bubbles:true}))');
-    assert.equal(await evaluate('document.querySelector("#wbReviewResize").getAttribute("aria-valuenow")'), '312');
     win.setContentSize(1000, 800);
-    await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width >= 450', 'narrow window keeps all three columns visible');
-    assert.equal(await evaluate('document.querySelector("#wbReview").getBoundingClientRect().left >= document.querySelector(".wb-main").getBoundingClientRect().right - 1'), true, 'review does not cover terminal panes at 1000px');
+    await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width >= 450', 'narrow window keeps the sidebar and canvas visible');
+    assert.equal(await evaluate('document.querySelector(".wb-main").getBoundingClientRect().right >= innerWidth - 1'), true, 'the canvas reaches the right edge');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'no horizontal page overflow');
     const checkFittedPanes = async () => {
       await waitFor(`(async () => {
@@ -1378,18 +1037,12 @@ app.whenReady().then(async () => {
     for (const width of [780, 640, 1000]) {
       win.setContentSize(width, 700);
       await waitFor(`innerWidth === ${width}`, 'window size updated');
-      if (width <= 850) {
-        await waitFor('getComputedStyle(document.querySelector("#wbReview")).display === "none"', 'compact layout leaves terminal unobstructed after matchMedia change');
-        await evaluate('document.querySelector("#wbReviewToggle").click()');
-        assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbReview")).display'), 'flex');
-        await evaluate('document.querySelector(".wb-review-close").click()');
-      }
       await checkFittedPanes();
     }
     await evaluate(`for (let i = 0; i < 5; i++) document.querySelector('.wb-divider').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))`);
     await checkFittedPanes();
     assert.deepEqual(manager.list().map(item => item.pid).sort(), initialPids, 'resizing keeps the same running shells');
-    console.log('PASS 176px sidebar text/actions, 640/780/1000px layouts, review open/close, rapid split resize and matching canvas/PTY rows and columns');
+    console.log('PASS 176px sidebar text/actions, 640/780/1000px layouts, rapid split resize and matching canvas/PTY rows and columns');
     win.setContentSize(1450, 900);
     await waitFor('document.querySelector(".wb-main").getBoundingClientRect().width > 850', 'desktop layout restored');
     await checkFittedPanes();
@@ -1403,7 +1056,6 @@ app.whenReady().then(async () => {
     await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore after reload');
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .wb-pane").length'), 1, 'the terminal opened alone from the sidebar is restored alone');
     assert.equal(await evaluate('document.querySelectorAll("#wbGroups .wb-group-row").length') >= 1, true, 'its split stays in the group list');
-    assert.equal(await evaluate('document.querySelector("#wbCodexModel").value'), 'fixture-model', 'model setting persists across reload');
     assert.deepEqual(manager.list().map(item => item.pid).sort(), oldPids, 'reload reattaches without spawning duplicate shells');
     assert.match(await evaluate(`document.querySelector('[data-instance="${first.id}"] strong').textContent`), /^다음 요청 제목 ONE_ONLY/u, 'terminal name survives renderer reload');
     await evaluate('document.querySelector("[data-new-panel]").click()');
@@ -1415,9 +1067,8 @@ app.whenReady().then(async () => {
     await manager.write(last, command('TRASH_KEPT'));
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'trash output fixture');
     await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u);
+    await waitFor(`(document.querySelector('[data-instance="${last}"] strong')?.textContent || '').includes('TRASH_KEPT')`, 'the recorded request names the terminal before trash');
     await waitFor(`document.querySelector('${tokenSelector(last)}').textContent==='3,456 토큰'`, 'archive fixture retains its own native usage independently of analysis tokens');
-    const reviewBeforeTrash = await evaluate('document.querySelector("#wbReviewContent").textContent');
     const trashChild = path.join(profile, 'trash-child.cjs'), trashChildPidFile = path.join(profile, 'trash-child.pid');
     fs.writeFileSync(trashChild, `require('fs').writeFileSync(${JSON.stringify(trashChildPidFile)},String(process.pid));setInterval(()=>{},1000);`);
     await manager.command(last, "node '" + trashChild.replace(/'/g, process.platform === 'win32' ? "''" : "'\\''") + "'");
@@ -1505,12 +1156,10 @@ app.whenReady().then(async () => {
     assert.equal(terminalGetReads.filter(item=>item.id===last && item.full).length, 1, 'one click transfers the replay once');
     assert.equal(manager.get(last).pid, null);
     assert.equal(manager.get(last).status, 'stopped');
-    assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
-    assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'terminal native usage survives stop, trash, reload and read-only restore without mixing analysis usage');
-    const restoredReview = await evaluate('document.querySelector("#wbReviewContent").textContent');
-    assert.ok(restoredReview.includes(reviewBeforeTrash), `original review cards and observation time survive trash and renderer restart: ${JSON.stringify({before:reviewBeforeTrash,after:restoredReview})}`);
+    assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'terminal native usage survives stop, trash, reload and read-only restore');
+    assert.match(await evaluate(`(document.querySelector('[data-instance="${last}"] strong')?.textContent || '')`), /TRASH_KEPT/u, 'the recorded request survives trash and renderer restart');
     await evaluate('WhiteboxWorkspace.captureReviews()');
-    assert.match(await evaluate('document.querySelector("#wbReviewContent").textContent'), /TRASH_KEPT/u, 'empty backend poll cannot erase restored review');
+    assert.match(await evaluate(`(document.querySelector('[data-instance="${last}"] strong')?.textContent || '')`), /TRASH_KEPT/u, 'empty backend poll cannot erase the restored record');
     suppressReview = false;
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'restore keeps the stopped output');
     assert.equal(await evaluate(`Boolean(document.querySelector('#wbSpaces [data-instance="${last}"]'))`), true, 'restored terminal belongs to original project');
@@ -1526,7 +1175,6 @@ app.whenReady().then(async () => {
     await waitFor(`WhiteboxWorkspace.getState().activeId === ${JSON.stringify(last)} && !document.querySelector('#wbTrash').open && !WhiteboxWorkspace.getState().busy`, 'restore legacy archive as read-only');
     await waitFor(`WhiteboxTerminal.readTerminal(${JSON.stringify(last)}).includes('TRASH_KEPT')`, 'restore without reload rebuilds the released view from replay');
     assert.equal(manager.get(last).pid, null);
-    assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'legacy PID migration preserves prior review usage');
     assert.equal(await evaluate(`document.querySelector('${tokenSelector(last)}').textContent`), '3,456 토큰', 'legacy stopped identity preserves the original conversation counters');
     await evaluate(`WhiteboxWorkspace.trashInstance(${JSON.stringify(last)})`);
     await waitFor('WhiteboxWorkspace.getState().trash.length === 1', 'archive legacy-restored record');
@@ -1538,7 +1186,6 @@ app.whenReady().then(async () => {
     await waitFor('!window.purgeBeforeCancel.isConnected', 'cancel purge settled');
     assert.equal(manager.get(last).pid, null);
     assert.equal(manager.get(last).status, 'stopped');
-    assert.equal(await evaluate('document.querySelector(".wb-analysis-tokens").textContent'), '1,400 토큰', 'analysis usage survives trash and reload');
     await evaluate(`document.querySelector('[data-purge-instance="${last}"]').click()`);
     await waitFor('document.querySelector("#wbClose").open', 'purge confirmation again');
     await evaluate('document.querySelector("#wbClose button[value=close]").click()');
@@ -1615,14 +1262,6 @@ app.whenReady().then(async () => {
       assert.equal(lastSubmission?.request, 'TURN_BOUNDARY_FIXTURE', 'real terminal Enter sends a turn boundary to review');
       assert.ok(Number.isFinite(lastSubmission.at), 'submission records its time before terminal output arrives');
     }
-    reviewState = 'awaiting-answer';
-    await forceCapture();
-    assert.match(await evaluate('document.querySelector("#wbReviewActivity").textContent'), /^작업 관찰 중$/u);
-    assert.equal(await evaluate('document.querySelector("#wbReviewContent").textContent'), '', 'first pending request shows only the activity indicator');
-    assert.equal(await evaluate('document.querySelector("[data-action=refresh]").disabled'), false);
-    assert.equal(await evaluate('document.querySelector("[data-action=refresh]").title'), '답변 완료 다시 확인');
-    assert.equal(await evaluate('document.querySelector("#wbReviewActivity").hidden'), false);
-    reviewState = undefined;
     const localePids = manager.list().map(item => item.pid).sort();
     for (const [locale, label] of [['en', 'Settings · Shortcuts'], ['zh-CN', '设置 · 快捷键'], ['ko', '설정 · 단축키']]) {
       await evaluate(`document.querySelector('#wbLanguage').value=${JSON.stringify(locale)}; document.querySelector('#wbLanguage').dispatchEvent(new Event('change'))`);
