@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.0.45 - 2026-11-25
+
+- Use Whitebox from your phone over SSH. Turn on Remote Login on the Mac, connect with any phone SSH app and run `~/.whitebox/bin/whitebox phone`: it lists the terminals of every panel with their state (working, waiting for an answer, idle), opens one to show its screen fitted to the phone width, and types what you send into it like the keyboard (an empty line presses Enter; `:esc`, `:c` for Ctrl+C, `:1` or `:y` press a single key, `:b` goes back). Nothing listens on the network: the connection is your own SSH login, and the command refuses to run inside a Whitebox terminal.
+- `whitebox connect` carries the same calls as JSON-RPC 2.0 lines on stdin/stdout (`ssh mac ~/.whitebox/bin/whitebox connect`): `hello`, `terminal.list`, `terminal.read`, `terminal.send` and `terminal.key`, for a phone app to build on.
+- Switching a terminal to chat shows the latest message at the bottom, also when switching back to chat again; before, the chat opened at the top.
+
 ## 2.0.44 - 2026-11-24
 
 - Each panel in the sidebar has its own name line: its colour (click to change it), "Panel N", how many terminals it holds, and **+ Terminal** at the end. Its terminals sit inside its colour line, and **New panel** is at the end of every open project, so it is clear which panel a new terminal joins and where a new panel goes. Clicking a panel's name line opens its selected terminal.
