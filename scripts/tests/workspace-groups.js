@@ -50,7 +50,10 @@ module.exports = async function groupChecks({ evaluate, waitFor, win, manager })
   assert.equal(await drag(second, pane(first), .85, .5), true);
   await waitFor(`document.querySelectorAll('#wbCanvas .wb-pane').length === 2`, 'mixed split');
   await waitFor(`!document.querySelector('#wbGroups').hidden && document.activeElement === document.querySelector('#wbGroups input[data-group-name]')`, 'a group appears with its name open for editing');
-  assert.equal(await evaluate('document.querySelector("#wbGroups .wb-group-row").classList.contains("is-born") && getComputedStyle(document.querySelector("#wbGroups .wb-group-row")).animationName'), 'wb-group-born', 'a group made by a split arrives with the born effect');
+  // The born effect animates, or with reduced motion (CI runners) stays a still highlight.
+  const born = await evaluate(`(() => { const row = document.querySelector('#wbGroups .wb-group-row'), style = getComputedStyle(row);
+    return { born: row.classList.contains('is-born'), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, animation: style.animationName, background: style.backgroundColor }; })()`);
+  assert(born.born && (born.reduced ? born.animation === 'none' && born.background !== 'rgba(0, 0, 0, 0)' : born.animation === 'wb-group-born'), `a group made by a split arrives with the born effect: ${JSON.stringify(born)}`);
   assert.deepEqual(await rows(), [{ name: numbered(1), active: true, editing: true }]);
   await typeName('결제 작업', 'Enter');
   await waitFor(`document.querySelector('#wbGroups strong')?.textContent === '결제 작업'`, 'the typed name is kept');
