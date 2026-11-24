@@ -83,6 +83,9 @@
   const workStates = new Map();
   const aiMembers = new Map();
   const terminalUsageHistory = new Map();
+  // When each terminal was last used: typed into, opened, or worked by its AI.
+  const lastUsed = new Map();
+  let lastUsedSave = 0;
   let backgroundPopover = null;
   const acknowledgedCompletions = new Map();
   const root = document.createElement('div');
@@ -92,6 +95,7 @@
       <div class="wb-brand"><img src="../build/icon.png" alt=""/><strong>whitebox</strong><span>2.0</span></div>
       <label class="wb-project-search">${icon('search')}<input id="wbProjectSearch" type="search" placeholder="프로젝트·터미널 찾기" aria-label="프로젝트·터미널 찾기" autocomplete="off"/><kbd>⌘ K</kbd></label>
       <button type="button" id="wbReviewInbox" class="wb-inbox-row" data-action="next-review">${icon('inbox')}<span>확인할 답</span><b id="wbInboxCount">0</b></button>
+      <button type="button" id="wbStaleCleanup" class="wb-inbox-row wb-stale-row is-empty" data-action="clean-stale">${icon('trash')}<span>일주일간 안 쓴 세션 정리</span><b id="wbStaleCount">0</b></button>
       <section id="wbGroups" class="wb-groups" aria-label="그룹" hidden></section>
       <div class="wb-sidebar-scroll">
       <div class="wb-side-heading"><span>프로젝트</span><small id="wbProjectCount"></small><button data-action="workspace" title="프로젝트 추가" aria-label="프로젝트 추가">${icon('plus')}</button></div>
@@ -152,6 +156,7 @@
     </form></dialog>
     <dialog id="wbRemoveProject"><form method="dialog"><h2>프로젝트를 목록에서 삭제할까요?</h2><p id="wbRemoveDescription"></p><p>실제 프로젝트 폴더와 파일은 그대로 남습니다.</p><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="remove" class="wb-danger">프로젝트 삭제</button></div></form></dialog>
     <dialog id="wbTrash"><header><h2>인스턴스 휴지통</h2><button data-action="trash-close" aria-label="휴지통 닫기">${icon('close')}</button></header><p>휴지통으로 옮기면 실행 중인 세션과 프로그램이 종료됩니다. 출력과 검토 기록은 남으며, 복원해도 프로그램을 다시 실행하지 않습니다.</p><div id="wbTrashList"></div><p id="wbTrashNotice" role="status"></p><div class="wb-dialog-actions"><button data-action="trash-empty" class="wb-danger" disabled>휴지통 전체 삭제</button></div></dialog>
+    <dialog id="wbStaleSessions" aria-labelledby="wbStaleTitle"><form method="dialog"><h2 id="wbStaleTitle"></h2><p>휴지통으로 옮기면 실행 중인 프로그램이 종료돼요. 출력 기록은 휴지통에 남아요.</p><ul id="wbStaleList" class="wb-stale-list"></ul><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="clean" class="wb-danger">휴지통으로 옮기기</button></div></form></dialog>
     <dialog id="wbEmptyTrash"><form method="dialog"><h2>휴지통을 비울까요?</h2><p id="wbEmptyTrashDescription"></p><div class="wb-dialog-actions"><button value="cancel">취소</button><button value="empty" class="wb-danger">전체 영구 삭제</button></div></form></dialog>
     <dialog id="wbClose"><form method="dialog"><h2>인스턴스를 영구 삭제할까요?</h2><p>실행 중인 프로그램도 종료됩니다. 삭제 후에는 이 인스턴스를 복구할 수 없습니다.</p><div><button value="cancel">취소</button><button value="close" class="wb-danger">영구 삭제</button></div></form></dialog>`;
   document.body.append(root);
@@ -317,6 +322,7 @@
     owner.activeSurface = layout.ids(owner.viewLayout).includes(id) ? id : layout.ids(panel.layout)[0] || '';
     panel.activePane = owner.activeSurface;
     expanded = false; root.classList.remove('terminal-expanded');
+    markUsed(owner.activeSurface);
   }
   const panelColors = ['#77ad91', '#7d9fc8', '#c6a474', '#ab8ebd', '#bd8791', '#77b7b3', '#b9b66e', '#ce997d'];
   function panelColor(panel) {
@@ -399,7 +405,7 @@
       const tabs = owner.tabs.filter(panel => !panel.pending);
       return { ...owner, tabs, activeTab: tabs.some(panel => panel.id === owner.activeTab) ? owner.activeTab : tabs[0]?.id || '' };
     };
-    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, chatModes: chat.serialize(), groups: groups.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, uiFont, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()] })); }
+    try { localStorage.setItem(KEY, JSON.stringify({ version: 2, chatModes: chat.serialize(), groups: groups.serialize(), spaces: spaces.map(storedOwner), standalone: storedOwner(standalone), trash, selectedSpace, pinnedPanels, fontSize, fontFamily, uiFont, handledCollaborations: [...handledCollaborations].slice(-200), reviewHistory: [...reviewHistory.values()], terminalUsageHistory: [...terminalUsageHistory.values()], lastUsed: [...lastUsed.values()] })); }
     catch (error) { report(error); }
   }
   function savedReview(session) {
@@ -742,7 +748,55 @@
     return owners().flatMap(owner => owner.tabs.flatMap(panel => layout.ids(panel.layout))).filter(id => !trashed(id) && terminalState(id).state === 'needs-review');
   }
   function renderInbox() {
-    try { renderInboxNow(); } catch (error) { report(error, 'inbox'); }
+    try { renderInboxNow(); renderStaleNow(); } catch (error) { report(error, 'inbox'); }
+  }
+  // "일주일간 안 쓴 세션": not typed into, opened or worked by its AI for 7 days.
+  const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+  function stamp(value) { return typeof value === 'number' ? value : Date.parse(value || '') || 0; }
+  function markUsed(id, at = Date.now()) {
+    const session = sessions.get(id);
+    if (!id || !session?.creationId) return;
+    const previous = lastUsed.get(id);
+    if (previous?.creationId === session.creationId && at - previous.at < 60000) return;
+    lastUsed.set(id, { id, creationId: session.creationId, at });
+    // Saved a moment later, and never before the saved workspace has loaded.
+    clearTimeout(lastUsedSave);
+    lastUsedSave = setTimeout(() => { if (initialized) save(); }, 3000);
+  }
+  function lastUseOf(id) {
+    const session = sessions.get(id), record = lastUsed.get(id);
+    const tasks = [reviews.get(id), reviewHistory.get(id)].flatMap(value => value?.result?.tasks || []);
+    return Math.max(record?.creationId === session?.creationId ? record.at : 0, stamp(session?.createdAt),
+      stamp(submissions.get(id)?.at), ...tasks.map(task => Math.max(stamp(task.submittedAt), stamp(task.observedAt))));
+  }
+  function staleTerminals(now = Date.now()) {
+    return owners().flatMap(owner => owner.tabs.flatMap(panel => layout.ids(panel.layout).map(id => ({ id, owner }))))
+      .filter(({ id }) => {
+        const at = lastUseOf(id);
+        return sessions.has(id) && !trashed(id) && id !== activeId() && at > 0 && now - at > STALE_MS
+          && !['working', 'waiting', 'starting', 'stopping'].includes(terminalState(id).state);
+      });
+  }
+  function renderStaleNow() {
+    const button = $('#wbStaleCleanup');
+    if (!button) return;
+    const count = staleTerminals().length;
+    $('#wbStaleCount').textContent = String(count);
+    button.classList.toggle('is-empty', !count);
+    button.disabled = busy || !count;
+    button.title = count ? t('일주일 넘게 안 쓴 터미널을 휴지통으로 옮겨요') : t('일주일 넘게 안 쓴 터미널이 없어요');
+  }
+  async function cleanStaleTerminals() {
+    const targets = staleTerminals();
+    if (busy || !targets.length) return;
+    const dialog = $('#wbStaleSessions'), locale = window.WhiteboxI18n.getLocaleTag();
+    $('#wbStaleTitle').textContent = msg`일주일 넘게 안 쓴 터미널 ${targets.length}개를 휴지통으로 옮길까요?`;
+    $('#wbStaleList').innerHTML = targets.map(({ id, owner }) => `<li><strong>${esc(title(id))}</strong><small>${esc(owner.name || t('독립 패널'))} · ${esc(t('마지막 사용'))} ${esc(new Date(lastUseOf(id)).toLocaleDateString(locale))}</small></li>`).join('');
+    dialog.returnValue = ''; dialog.showModal();
+    const answer = await new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true }));
+    if (answer !== 'clean') return;
+    for (const { id } of targets) if (sessions.has(id) && !trashed(id)) await trashInstance(id);
+    renderInbox();
   }
   function renderInboxNow() {
     const queue = reviewQueue(), button = $('#wbReviewInbox');
@@ -758,15 +812,23 @@
     const next = queue[(queue.indexOf(activeId()) + 1) % queue.length];
     acknowledgeCompletion(next); showTerminalAlone(next);
   }
+  // A panel's own name line: "패널 2" unless the person named it.
+  const DEFAULT_PANEL_NAMES = new Set(['패널', 'Panel', '面板']);
+  function panelName(item, index) {
+    return item.name && !DEFAULT_PANEL_NAMES.has(item.name) ? item.name : `${t('패널')} ${index + 1}`;
+  }
+  // Project › panel › terminal: each panel has a name line with its colour,
+  // count and "+ 터미널"; its terminals sit inside its colour line.
   function instanceRows(owner) {
-    return owner.tabs.map(item => {
+    return owner.tabs.map((item, index) => {
       const ids = layout.ids(item.layout), visible = selectedSpace === owner.id && owner.activeTab === item.id;
-      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="패널" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
+      const name = panelName(item, index);
+      return msg`<section class="wb-panel-group ${visible ? 'active' : ''}" style="--wb-panel-color:${panelColor(item)}" data-drop-panel="${esc(item.id)}" data-drag-panel="${esc(item.id)}" role="group" aria-label="${esc(name)}" ${item.pending ? 'aria-busy="true"' : ''}><div class="wb-panel-head" data-panel-head="${esc(item.id)}" title="${esc(name)} · ${t('끌어서 옮기기')}"><button type="button" class="wb-panel-color-button" data-panel-color="${esc(item.id)}" title="${t('패널 색 바꾸기')}" aria-label="${esc(name)} ${t('패널 색 바꾸기')}" aria-haspopup="dialog"><i aria-hidden="true"></i></button><span class="wb-panel-name">${esc(name)}</span><span class="wb-panel-count">${ids.length}</span><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="${esc(name)}에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button></div><div class="wb-panel-members" id="wbMembers-${esc(item.id)}">${item.pending ? '<div class="wb-panel-pending" role="status">터미널 연결 중…</div>' : ''}${ids.map(id => {
         const value = terminalState(id);
         const background = backgroundBadge(id), counts = backgroundCounts(terminalBackground(id));
         return msg`<div class="wb-instance-row ${background ? 'has-background' : ''} ${counts.background > 9 || counts.monitors > 9 ? 'has-many-background' : ''} ${counts.monitors && counts.background ? 'has-two-badges' : ''}"><button class="wb-instance ${id === activeId() ? 'active' : ''}" data-instance="${esc(id)}" data-drag-terminal="${esc(id)}" draggable="false" aria-current="${id === activeId()}" title="${esc(title(id))} · ${esc(value.label)}">${providerChip(id)}<span class="wb-instance-copy"><strong>${esc(title(id))}</strong>${stateBadge(value)}</span></button>${background}<button data-trash-terminal="${esc(id)}" class="wb-trash-instance" title="${t('휴지통으로 이동')}" aria-label="${esc(title(id))} ${t('휴지통으로 이동')}">${icon('trash')}</button></div>`;
-      }).join('')}</div><div class="wb-panel-actions"><button class="wb-panel-add" data-add-panel-terminal="${esc(item.id)}" aria-label="이 패널에 터미널 추가" title="이 패널에 터미널 추가" ${busy ? 'disabled' : ''}>${icon('plus')}<span>${pendingCreation?.panelId === item.id ? t('생성 중…') : t('터미널')}</span></button><button type="button" class="wb-panel-color-button" data-panel-color="${esc(item.id)}" title="${t('패널 색 바꾸기')}" aria-label="${t('패널 색 바꾸기')}" aria-haspopup="dialog"><i aria-hidden="true"></i></button></div></section>`;
-    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>패널 추가</span><small>여기로 끌어 분리</small></button>`;
+      }).join('')}</div></section>`;
+    }).join('') + msg`<button class="wb-new-panel-drop" data-drop-owner="${esc(owner.id)}" data-new-panel="${esc(owner.id)}" ${busy ? 'disabled' : ''}>${icon('plus')}<span>새 패널</span><small>여기로 끌어 분리</small></button>`;
   }
   let lastProjectsMarkup = '', lastInstancesMarkup = '';
   function renderInstances() {
@@ -1142,6 +1204,7 @@
       allowStoppedRecord: restoring && !session.pid && ['stopped', 'exited', 'failed'].includes(session.status),
       inputLabel: !session.pid && session.status === 'stopped' ? t('종료된 터미널 기록 · 읽기 전용') : undefined,
       onUserInput: data => {
+        markUsed(session.id);
         if (!trashed(session.id) && ['awaiting-answer', 'collecting', 'reviewing'].includes(reviews.get(session.id)?.state)
           && (data === '\x03' || data === '\x1b' && /esc to (?:interrupt|cancel)/iu.test(terminal.readTerminal(session.id)))) {
           interruptions.set(session.id, { id: uuid(), at: Date.now() });
@@ -1176,26 +1239,49 @@
     node.querySelector('.wb-terminal-mount').insertAdjacentHTML('beforeend', msg`<div class="wb-pane-loading" role="status">시작 중…</div>`);
     return pane.promise;
   }
-  function renderTree(tree) {
+  const splitNodes = new WeakMap();
+  function paintSplit(tree, axis) {
+    const dom = splitNodes.get(tree);
+    if (!dom || tree.id || tree.axis !== axis) return;
+    dom.first.style.flex = `${tree.ratio} 1 0%`; dom.second.style.flex = `${1 - tree.ratio} 1 0%`;
+    dom.handle.setAttribute('aria-valuenow', String(Math.round(tree.ratio * 100)));
+    paintSplit(tree.first, axis); paintSplit(tree.second, axis);
+  }
+  function renderTree(tree, top = null) {
     if (tree.id) {
       if (!panes.has(tree.id) && sessions.has(tree.id)) ensurePane(sessions.get(tree.id)).catch(report);
       return panes.get(tree.id)?.node || document.createElement('div');
     }
     const node = document.createElement('div');
     node.className = `wb-split wb-split-${tree.axis}`;
-    const first = renderTree(tree.first), second = renderTree(tree.second);
-    first.style.flex = `${tree.ratio} 1 0%`; second.style.flex = `${1 - tree.ratio} 1 0%`;
+    // The outermost split of this run of same-direction dividers.
+    const run = top && top.axis === tree.axis ? top : tree;
+    const first = renderTree(tree.first, run), second = renderTree(tree.second, run);
     const handle = document.createElement('div');
     handle.className = 'wb-divider'; handle.tabIndex = 0;
     handle.setAttribute('role', 'separator'); handle.setAttribute('aria-label', t('터미널 분할 크기'));
     handle.setAttribute('aria-orientation', tree.axis === 'row' ? 'vertical' : 'horizontal');
-    const resize = ratio => {
-      tree.ratio = Math.min(.9, Math.max(.1, ratio));
-      first.style.flex = `${tree.ratio} 1 0%`; second.style.flex = `${1 - tree.ratio} 1 0%`;
-      handle.setAttribute('aria-valuenow', String(Math.round(tree.ratio * 100)));
-    };
-    resize(tree.ratio);
-    handle.addEventListener('pointerdown', event => { handle.setPointerCapture(event.pointerId); event.preventDefault(); });
+    splitNodes.set(tree, { first, second, handle });
+    // Only the two terminals beside the divider change size; the others keep theirs.
+    const resize = position => { layout.resize(tree, position); paintSplit(tree, tree.axis); };
+    paintSplit(tree, tree.axis);
+    handle.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      // A divider across a grid (2×2) moves for the line under the pointer
+      // only: the grid turns so that line's cells stack on their own.
+      if (!expanded && layout.transposable(run)) {
+        const index = layout.boundary(run, tree), lines = layout.parts(run, run.axis);
+        const box = node.getBoundingClientRect(), along = run.axis === 'column' ? (event.clientX - box.left) / box.width : (event.clientY - box.top) / box.height;
+        let edge = 0;
+        const line = layout.parts(lines[index - 1].node, run.axis === 'column' ? 'row' : 'column').findIndex(cell => (edge += cell.share) >= along);
+        layout.transpose(run, index - 1);
+        renderLayout(false);
+        const target = layout.divider(layout.parts(run, run.axis)[Math.max(0, line)].node, index);
+        const moved = target && splitNodes.get(target)?.handle;
+        if (moved?.isConnected) { moved.setPointerCapture(event.pointerId); save(); return; }
+      }
+      handle.setPointerCapture(event.pointerId);
+    });
     handle.addEventListener('pointermove', event => {
       if (!handle.hasPointerCapture(event.pointerId)) return;
       const bounds = node.getBoundingClientRect();
@@ -1255,19 +1341,31 @@
     if (!destination) destination = standalone;
     if (panelId && !destination.tabs.some(item => item.id === panelId)) return;
     busy = true; $('#wbError').hidden = true;
-    const owner = destination, previousTab = owner.tabs.find(item => item.id === panelId), selected = previousTab?.activePane || '';
+    const owner = destination, previousTab = owner.tabs.find(item => item.id === panelId);
+    // A group that already holds this panel's terminal takes the new terminal
+    // in: the group changes, no second group is made. That is the group on
+    // screen, or the group of the panel's selected terminal shown alone.
+    const shownGroup = groups.active(), shownIds = shownGroup ? layout.ids(shownGroup.layout) : [];
+    const panelIds = axis && previousTab?.layout ? layout.ids(previousTab.layout) : [];
+    const onScreen = panelIds.filter(id => shownIds.includes(id));
+    const joining = onScreen.length ? shownGroup : panelIds.includes(previousTab?.activePane) ? groups.holding(previousTab.activePane) : null;
+    const inGroup = joining ? panelIds.filter(id => layout.ids(joining.layout).includes(id)) : [];
+    const selected = joining ? [previousTab.activePane, activeId(), inGroup[0]].find(id => inGroup.includes(id)) : previousTab?.activePane || '';
     rememberCanvas(); rememberCanvas(owner);
     const previousActive = owner.activeTab, previousSpace = selectedSpace, previousView = owner.viewLayout, previousSurface = owner.activeSurface, previousPins = pinnedPanels, previousHidden = owner.canvasHidden;
     const splitting = axis && previousTab?.layout && layout.ids(previousTab.layout).includes(selected);
     const next = splitting ? previousTab : { id: uuid(), name: t('패널'), layout: null, activePane: '', pending: true };
-    if (!splitting) { owner.tabs.push(next); pinnedPanels = []; }
-    owner.canvasHidden = false;
-    owner.viewLayout = splitting ? previousTab.viewLayout || previousTab.layout : null;
-    if (splitting && !layout.ids(owner.viewLayout).includes(selected)) owner.viewLayout = previousTab.layout;
-    expanded = false; root.classList.remove('terminal-expanded');
     pendingCreation = { panelId: next.id };
-    owner.activeTab = next.id; owner.collapsed = false; next.collapsed = false; selectedSpace = owner.id;
-    renderLayout(false);
+    if (joining) renderNav();
+    else {
+      if (!splitting) { owner.tabs.push(next); pinnedPanels = []; }
+      owner.canvasHidden = false;
+      owner.viewLayout = splitting ? previousTab.viewLayout || previousTab.layout : null;
+      if (splitting && !layout.ids(owner.viewLayout).includes(selected)) owner.viewLayout = previousTab.layout;
+      expanded = false; root.classList.remove('terminal-expanded');
+      owner.activeTab = next.id; owner.collapsed = false; next.collapsed = false; selectedSpace = owner.id;
+      renderLayout(false);
+    }
     let created = false;
     try {
       const session = await api.terminalCreate({ type: bootstrap.platform.localShell, cwd: owner.cwd, cols: 100, rows: 30, creationId: `workspace:${uuid()}` });
@@ -1275,20 +1373,26 @@
       created = true;
       next.layout = splitting ? layout.split(next.layout, selected, session.id, axis) : { id: session.id };
       next.activePane = session.id; delete next.pending;
-      const view = layout.remove(canvasLayout(owner), session.id);
-      owner.viewLayout = splitting ? layout.split(view, layout.ids(view).includes(selected) ? selected : layout.ids(view)[0], session.id, axis) : { id: session.id };
-      next.viewLayout = owner.viewLayout;
-      owner.activeSurface = session.id;
       // Mount in the visible layout so engine/replay initialization does not
       // hold the whole panel offscreen or fit it against the hidden parking lot.
-      const mounted = ensurePane(session);
-      renderLayout(false);
+      let mounted;
+      if (joining) {
+        mounted = ensurePane(session);
+        if (!groups.add(joining.id, [session.id], { beside: selected, axis })) renderLayout(false);
+      } else {
+        const view = layout.remove(canvasLayout(owner), session.id);
+        owner.viewLayout = splitting ? layout.split(view, layout.ids(view).includes(selected) ? selected : layout.ids(view)[0], session.id, axis) : { id: session.id };
+        next.viewLayout = owner.viewLayout;
+        owner.activeSurface = session.id;
+        mounted = ensurePane(session);
+        renderLayout(false);
+      }
       await mounted;
       // Reconcile ConPTY metadata without overwriting a newer state event.
       const current = await api.terminalGet(session.id, false);
       if (current?.creationId === session.creationId && sessions.get(session.id)?.creationId === session.creationId) rememberSession(current);
       refreshPaneChrome(); renderInstances();
-      if (tab() === next) activeFocus();
+      if (tab() === next || joining) activeFocus();
     } catch (error) {
       if (!created && !splitting) {
         owner.tabs = owner.tabs.filter(item => item !== next);
@@ -1320,7 +1424,7 @@
     const pane = panes.get(id); pane?.dispose?.(); pane?.node.remove();
     chat.forget(id); aiMembers.delete(id);
     panes.delete(id); sessions.delete(id); reviews.delete(id); reviewHistory.delete(id); submissions.delete(id); interruptions.delete(id);
-    terminalUsageHistory.delete(id); reviewRevisions.delete(id); acknowledgedCompletions.delete(id); collaborationFrames?.forget(id);
+    terminalUsageHistory.delete(id); lastUsed.delete(id); reviewRevisions.delete(id); acknowledgedCompletions.delete(id); collaborationFrames?.forget(id);
     terminal.releaseTerminal?.(id);
     trash = trash.filter(item => item.id !== id);
     detachFromLayout(id);
@@ -1586,6 +1690,7 @@
       aiMembers.set(member.id, { ...member, observedAt: Date.now() });
       if (member.activity) {
         workStates.set(member.id, { ...member.activity, observedAt: Date.now() });
+        if (member.activity.state === 'working') markUsed(member.id);
         usageChanged = rememberTerminalUsage(member.id, member.activity) || usageChanged;
       }
     }
@@ -1646,7 +1751,10 @@
   }
   function renderCollaborationStatus() {
     const related = collaborationJobs.filter(job => job.operation !== 'chat' && (job.sourceId === activeId() || job.targetId === activeId()));
-    const jobs = related.filter(job => job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now()).slice(-3);
+    // Only deliveries in progress show at the top. A failed or interrupted one
+    // is reported to the AI that asked, so it does not stay above the screen.
+    const jobs = related.filter(job => !['failed', 'interrupted'].includes(job.state)
+      && (job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now())).slice(-3);
     const status = $('#wbCollaborationStatus'); status.hidden = !jobs.length;
     const labels = { queued: t('전달 대기'), starting: t('시작 중…'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
     const markup = job => `<div><strong>${esc(job.terminal && job.state === 'completed' ? t('새 터미널 열림') : labels[job.state] || job.state)}</strong><span>${esc((job.targetId || '').slice(-5))} · ${esc(job.request || t('새 터미널'))}</span>${job.error ? `<small>${esc(job.error)}</small>` : ''}</div>`;
@@ -1750,6 +1858,7 @@
       save(); renderTrash();
     }
     if (action === 'next-review') return openNextReview();
+    if (action === 'clean-stale') return cleanStaleTerminals();
     if (action === 'trash-empty') return emptyTrash();
     if (action === 'trash-close') $('#wbTrash').close();
     if (action === 'settings') openSettings();
@@ -1762,6 +1871,14 @@
   }
   root.addEventListener('click', event => {
     const button = event.target.closest('button');
+    // A panel's name line opens its selected terminal and shows its "+ 터미널".
+    const head = !button && event.target.closest('[data-panel-head]');
+    if (head) {
+      const owner = panelOwner(head.dataset.panelHead), panel = owner?.tabs.find(item => item.id === head.dataset.panelHead);
+      const id = panel && (layout.ids(panel.layout).includes(panel.activePane) ? panel.activePane : layout.ids(panel.layout)[0]);
+      if (id) showTerminalAlone(id);
+      return;
+    }
     if (!button) return;
     if (button.dataset.backgroundTerminal) openBackgroundPopover(button.dataset.backgroundTerminal);
     if (button.dataset.panelColor) { if (colorPickerPanel === button.dataset.panelColor) closeColorPicker(); else openColorPicker(button.dataset.panelColor, button); return; }
@@ -1972,6 +2089,10 @@
       const session = sessions.get(record?.id);
       if (session && record.creationId === session.creationId && validTerminalUsage(record.usage)
         && (record.pid === session.pid || stoppedArchiveSession(session))) terminalUsageHistory.set(record.id, record);
+    }
+    for (const record of (Array.isArray(saved.lastUsed) ? saved.lastUsed : []).slice(-6400)) {
+      if (record && typeof record.id === 'string' && Number.isFinite(record.at) && record.creationId
+        && sessions.get(record.id)?.creationId === record.creationId) lastUsed.set(record.id, { id: record.id, creationId: record.creationId, at: record.at });
     }
     const archivedIds = new Set(trash.filter(trashSession).map(item => item.id));
     const available = new Set([...sessions.keys()].filter(id => !archivedIds.has(id))), seen = new Set(archivedIds);

@@ -5,7 +5,7 @@
 })(typeof window === 'undefined' ? null : window, () => {
   'use strict';
   const ids = node => !node ? [] : node.id ? [node.id] : [...ids(node.first), ...ids(node.second)];
-  const MIN_RATIO = .1, MAX_RATIO = .9;
+  const MIN_RATIO = .05, MAX_RATIO = .95;
   const clampRatio = value => Math.max(MIN_RATIO, Math.min(MAX_RATIO, value));
   // Number of cells a subtree occupies along `axis`. A nested split on the
   // other axis counts as one cell, so rows/columns line up as a grid.
@@ -112,5 +112,83 @@
       : { ...branch, first: attach(branch.first), second: attach(branch.second) };
     return chosen ? balance(attach(remaining)) : settle(node, attach(remaining));
   }
-  return { ids, split, drop, remove, restore, fit, reconcile, place, balance, grid };
+  // Cells side by side along `axis` under a split, with their share of it. A
+  // split on the other axis is one cell.
+  function cells(node, axis, share = 1, out = []) {
+    if (node && !node.id && node.axis === axis) {
+      cells(node.first, axis, share * node.ratio, out);
+      cells(node.second, axis, share * (1 - node.ratio), out);
+    } else out.push(share);
+    return out;
+  }
+  function share(node, axis, sizes, at = { index: 0 }) {
+    if (!node || node.id || node.axis !== axis) return sizes[at.index++];
+    const first = share(node.first, axis, sizes, at), second = share(node.second, axis, sizes, at);
+    node.ratio = first / (first + second);
+    return first + second;
+  }
+  // Dragging a divider sizes only the two cells beside it; every other cell
+  // keeps its size, even when the split nests several cells (3 or more side
+  // by side). `position` is where the divider goes, as a share of the split.
+  const MIN_CELL = .06;
+  function resize(node, position) {
+    if (!node || node.id) return node;
+    const sizes = cells(node, node.axis), at = cells(node.first, node.axis).length;
+    const before = sizes.slice(0, at - 1).reduce((sum, value) => sum + value, 0);
+    const pair = sizes[at - 1] + sizes[at], min = Math.min(MIN_CELL, pair / 2);
+    const edge = Math.max(before + min, Math.min(before + pair - min, Number(position) || 0));
+    sizes[at - 1] = edge - before; sizes[at] = pair - sizes[at - 1];
+    share(node, node.axis, sizes);
+    return node;
+  }
+  // The cells of a same-axis run as subtrees with their share of it.
+  function parts(node, axis, part = 1, out = []) {
+    if (node && !node.id && node.axis === axis) {
+      parts(node.first, axis, part * node.ratio, out);
+      parts(node.second, axis, part * (1 - node.ratio), out);
+    } else out.push({ node, share: part });
+    return out;
+  }
+  function chainOf(items, axis) {
+    if (items.length === 1) return items[0].node;
+    const total = items.reduce((sum, item) => sum + item.share, 0);
+    return { axis, ratio: clampRatio(items[0].share / total), first: items[0].node, second: chainOf(items.slice(1), axis) };
+  }
+  const other = axis => axis === 'row' ? 'column' : 'row';
+  // Rows of the same number of terminals (2×2, 3×3) can turn into columns.
+  function transposable(node) {
+    if (!node || node.id) return false;
+    const lines = parts(node, node.axis), across = other(node.axis);
+    const counts = lines.map(line => line.node && !line.node.id && line.node.axis === across ? parts(line.node, across).length : 1);
+    return lines.length > 1 && counts[0] > 1 && counts.every(count => count === counts[0]);
+  }
+  // Rows become columns (or columns rows), in place, the same terminals in the
+  // same places. The line `widthsFrom` gives the new lines their sizes; each
+  // new line's cells keep the old lines' sizes. A divider across the grid then
+  // moves for one line only: dragging between A and C leaves B and D alone.
+  function transpose(node, widthsFrom = 0) {
+    if (!transposable(node)) return null;
+    const axis = node.axis, across = other(axis), lines = parts(node, axis);
+    const grid = lines.map(line => parts(line.node, across));
+    const source = grid[Math.max(0, Math.min(grid.length - 1, widthsFrom))];
+    const next = chainOf(source.map((cell, column) => ({ share: cell.share,
+      node: chainOf(lines.map((line, row) => ({ share: line.share, node: grid[row][column].node })), axis) })), across);
+    for (const key of Object.keys(node)) delete node[key];
+    return Object.assign(node, next);
+  }
+  // Where a divider sits in its run: the number of cells before it.
+  function boundary(run, target) {
+    const before = cells(run.first, run.axis).length;
+    if (run === target) return before;
+    const inside = (node, wanted) => node === wanted || Boolean(node && !node.id && node.axis === run.axis && (inside(node.first, wanted) || inside(node.second, wanted)));
+    return inside(run.first, target) ? boundary(run.first, target) : before + boundary(run.second, target);
+  }
+  // The split in a run whose divider has `index` cells before it.
+  function divider(run, index) {
+    if (!run || run.id) return null;
+    const before = cells(run.first, run.axis).length;
+    if (index === before) return run;
+    return index < before ? divider(run.first, index) : divider(run.second, index - before);
+  }
+  return { ids, split, drop, remove, restore, fit, reconcile, place, balance, grid, cells, resize, parts, transposable, transpose, boundary, divider };
 });

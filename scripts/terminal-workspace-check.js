@@ -767,10 +767,10 @@ app.whenReady().then(async () => {
         return { visible: bar.display !== 'none' && bar.content === '""', width: bar.width, colour: bar.backgroundColor, panel: getComputedStyle(group).getPropertyValue('--wb-panel-color').trim(),
           ignoresInput: bar.pointerEvents === 'none', border: getComputedStyle(group).borderTopWidth,
           barInside: box.left + parseFloat(bar.left) >= project.left && box.left + parseFloat(bar.left) + 3 <= rows[0].left,
-          rowsIndented: rows.every(rect => rect.left > project.left + 16), barCoversRows: Math.abs(parseFloat(bar.height) - (rows.at(-1).bottom - rows[0].top - 12)) <= 1 };
+          rowsIndented: rows.every(rect => rect.left > project.left + 16), barCoversRows: Math.abs(parseFloat(bar.height) - (rows.at(-1).bottom - rows[0].top - 6)) <= 1, head: Boolean(group.querySelector(".wb-panel-head .wb-panel-add")) };
       })`);
       assert(panels.length > 0, 'project tree must contain panels');
-      for (const panel of panels) assert(panel.visible && panel.width === '3px' && panel.colour !== 'rgba(0, 0, 0, 0)' && panel.ignoresInput && panel.border === '0px' && panel.barInside && panel.rowsIndented && panel.barCoversRows, JSON.stringify(panel));
+      for (const panel of panels) assert(panel.visible && panel.width === '3px' && panel.colour !== 'rgba(0, 0, 0, 0)' && panel.ignoresInput && panel.border === '0px' && panel.barInside && panel.rowsIndented && panel.barCoversRows && panel.head, JSON.stringify(panel));
     };
     for (const theme of ['light', 'dark']) {
       await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
