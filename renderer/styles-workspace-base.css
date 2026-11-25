@@ -15,3 +15,4 @@ button,input,select,textarea{font:inherit}
 body,body *{font-family:var(--font-sans);text-transform:none}
 body :is(code,pre,kbd,samp),body :is(code,pre,kbd,samp) *{font-family:var(--studio-mono)}
 .terminal-screen{position:absolute;overflow:hidden}
+.terminal-screen[data-phone="true"]::after{content:attr(data-phone-label);position:absolute;top:6px;right:10px;z-index:5;padding:3px 8px;border-radius:6px;font:500 11px/1.4 system-ui,sans-serif;color:var(--wb-phone-fg,#fff);background:var(--wb-phone-bg,rgba(37,99,235,.92));pointer-events:none}

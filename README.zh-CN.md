@@ -135,6 +135,10 @@ Whitebox 不会替你安装 AI CLI。请先安装并登录要使用的 CLI，例
 
 Whitebox 终端中的 AI 可以通过 `whitebox` CLI 或面板 MCP 工具，在同一面板中打开更多 AI 终端、向其他终端发送请求并等待回复。在 Whitebox 终端中，打开 tmux 或外部终端应用的命令会被阻止，并引导改用 Whitebox 工具。
 
+### 在手机上使用
+
+与 herdr 一样，手机直接通过 SSH 连接，中间没有服务器和账号。在电脑上开启远程登录（macOS：系统设置 → 通用 → 共享 → 远程登录；Windows：OpenSSH 服务器），离开家时使用 Tailscale 等 VPN。用手机 SSH 应用（Termius、Blink、Moshi 等）连接后运行 `~/.whitebox/bin/whitebox phone`，会列出所有面板的终端，选择编号即可实时打开该终端，颜色、光标和按键保持原样，按 `Ctrl+\` 返回列表。在手机上输入时终端跟随手机尺寸，在电脑上点击或输入该窗格即可切回。电脑上必须打开 Whitebox 应用。
+
 ### 设置
 
 <p align="center">

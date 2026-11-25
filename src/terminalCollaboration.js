@@ -47,8 +47,8 @@ const IDLE_UNMATCHED_JOB_ERROR = '상대 AI가 입력을 기다리고 있지만 
 // Local CLI requests are scoped to the explicit renderer workspace roster.
 // No cwd guessing, global terminal discovery, shell input, or screen clicking.
 class TerminalCollaboration {
-  constructor({ manager, directory, createTerminal = options => manager().create(options), onTerminalClosed = () => {}, monitor = new ProcessMonitor({ scanTtlMs: 1500 }), completion = new TerminalReviewCompletion(), activity = null, backgroundSnapshot = () => null, now = Date.now, enableControl = true }) {
-    Object.assign(this, { manager, directory, monitor, completion, now });
+  constructor({ manager, directory, createTerminal = options => manager().create(options), onTerminalClosed = () => {}, monitor = new ProcessMonitor({ scanTtlMs: 1500 }), completion = new TerminalReviewCompletion(), activity = null, backgroundSnapshot = () => null, now = Date.now, enableControl = true, viewers = null }) {
+    Object.assign(this, { manager, directory, monitor, completion, now, viewers });
     this.createTerminal = createTerminal;
     this.onTerminalClosed = onTerminalClosed;
     this.activity = activity || new (require('./terminalActivity').TerminalActivity)({ completion, now, backgroundSnapshot });

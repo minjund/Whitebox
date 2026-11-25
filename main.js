@@ -151,6 +151,8 @@ const cmuxClient = new CmuxClient();
 let cmuxMembership = null;
 let questionnairePreferenceStore = null;
 let terminalManager = null;
+// Phones attached over SSH (whitebox phone); size follows the last active viewer.
+let terminalViewers = null;
 let bridgeLauncher = null;
 let backgroundTray = null;
 let trayPopover = null;
@@ -2260,6 +2262,10 @@ async function setupRuntime() {
       }),
     });
   if (!demoCapture) {
+    terminalViewers = new (require('./src/terminalViewers').TerminalViewers)({ manager: () => terminalManager });
+    terminalViewers.on('change', payload => sendTerminal('terminals:viewers', payload));
+    terminalManager.on('data', payload => terminalViewers.data(payload));
+    terminalManager.on('state', payload => terminalViewers.state(payload));
     terminalManager.on('data', payload => sendTerminal('terminals:data', payload));
     terminalManager.on('state', payload => {
       if (payload.change === 'removed') terminalReview?.forget(payload.session?.id);
@@ -2672,7 +2678,7 @@ function registerIpcHandlers() {
   handleTrusted('terminals:review', payload => terminalReview.capture(payload));
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
-    if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, directory: userFile('terminal-collaboration'),
+    if (!terminalCollaboration) terminalCollaboration = new (require('./src/terminalCollaboration').TerminalCollaboration)({ manager: () => terminalManager, viewers: terminalViewers, directory: userFile('terminal-collaboration'),
       // One process snapshot cache and one transcript index for review and
       // collaboration; separate instances re-read the same logs twice.
       monitor: terminalReview.monitor, completion: terminalReview.completion,
@@ -2714,6 +2720,7 @@ function registerIpcHandlers() {
     requireTrustedSender,
     trustedSender,
     manager: () => terminalManager,
+    viewers: () => terminalViewers,
     groupStoreFile: userFile('terminal-groups.json'),
     isProviderVisible,
     listWslDistros,
