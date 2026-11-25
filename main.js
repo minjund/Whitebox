@@ -143,6 +143,7 @@ let runner = null;
 let backgroundQuestionnaire = null;
 let terminalReview = null;
 let terminalCollaboration = null;
+let phoneWeb = null;
 const { TerminalCompletionTracker, applyCompletionBadge } = require('./src/terminalCompletionBadge');
 const terminalCompletions = new TerminalCompletionTracker(count => {
   applyCompletionBadge({ app, window: mainWindow, nativeImage }, count);
@@ -950,6 +951,42 @@ function handleTrusted(channel, handler) {
     requireTrustedSender(event);
     return handler(...args);
   });
+}
+
+// The phone page (Settings › Remote): served on the Tailscale address only.
+// WHITEBOX_PHONE_WEB_HOST lets tests bind a loopback address instead.
+function startPhoneWeb() {
+  if (phoneWeb) return;
+  const directory = userFile('terminal-collaboration');
+  const loopback = /^(127\.\d+\.\d+\.\d+|::1)$/.test(process.env.WHITEBOX_PHONE_WEB_HOST || '') ? process.env.WHITEBOX_PHONE_WEB_HOST : '';
+  const { PhoneWeb, PhoneWebStore, PORT } = require('./src/phoneWeb');
+  phoneWeb = new PhoneWeb({
+    tailscale: new (require('./src/tailscale').Tailscale)(),
+    request: (method, params) => require('./bin/panel-control').request(method, params, { directory }),
+    attach: params => require('./bin/remote').attach(params, { dir: directory }),
+    root: __dirname,
+    store: new PhoneWebStore(userFile('phone-web.json')),
+    port: Number(process.env.WHITEBOX_PHONE_WEB_PORT) || PORT,
+    bindHost: loopback,
+    log: error => reportRecoverableError('phone-web', error),
+  });
+  phoneWeb.on('change', () => sendTerminal('phone:status', phoneWebStatus()));
+  phoneWeb.start().catch(error => reportRecoverableError('phone-web', error));
+}
+
+function phoneWebStatus() {
+  if (!phoneWeb) return { available: false };
+  const status = phoneWeb.status();
+  let qr = '';
+  if (status.url) {
+    try {
+      const code = require('qrcode-generator')(0, 'M');
+      code.addData(status.url);
+      code.make();
+      qr = code.createSvgTag({ cellSize: 5, margin: 3, scalable: true });
+    } catch {}
+  }
+  return { available: true, ...status, qr };
 }
 
 function sendTerminal(channel, payload) {
@@ -2263,6 +2300,7 @@ async function setupRuntime() {
     });
   if (!demoCapture) {
     terminalViewers = new (require('./src/terminalViewers').TerminalViewers)({ manager: () => terminalManager });
+    startPhoneWeb();
     terminalViewers.on('change', payload => sendTerminal('terminals:viewers', payload));
     terminalManager.on('data', payload => terminalViewers.data(payload));
     terminalManager.on('state', payload => terminalViewers.state(payload));
@@ -2675,6 +2713,12 @@ function registerIpcHandlers() {
       return { ok: true, settings };
     },
   });
+  handleTrusted('phone:status', () => phoneWebStatus());
+  handleTrusted('phone:set-enabled', async enabled => {
+    if (!phoneWeb) throw new Error('Phone page is not available in this Whitebox.');
+    await phoneWeb.setEnabled(Boolean(enabled));
+    return phoneWebStatus();
+  });
   handleTrusted('terminals:review', payload => terminalReview.capture(payload));
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
@@ -2897,6 +2941,7 @@ async function cleanupBeforeQuit() {
       interimProfileGuard = null;
       return release;
     }),
+    quitCleanupTask('phone-web', () => phoneWeb && phoneWeb.dispose()),
     quitCleanupTask('terminal-manager', () => {
       if (terminalManager instanceof TerminalHostClient) return terminalManager.dispose({ shutdownIfIdle: true });
       if (terminalManager) return terminalManager.dispose({ preserveSessions: true });

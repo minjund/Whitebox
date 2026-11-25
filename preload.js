@@ -127,6 +127,13 @@ contextBridge.exposeInMainWorld('whitebox', {
     ipcRenderer.on('terminals:data', handler);
     return () => ipcRenderer.removeListener('terminals:data', handler);
   },
+  phoneStatus: () => ipcRenderer.invoke('phone:status'),
+  setPhoneEnabled: enabled => ipcRenderer.invoke('phone:set-enabled', Boolean(enabled)),
+  onPhoneStatus: callback => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('phone:status', handler);
+    return () => ipcRenderer.removeListener('phone:status', handler);
+  },
   onTerminalViewers: callback => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('terminals:viewers', handler);

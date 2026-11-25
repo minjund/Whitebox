@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.2.0 - 2026-11-25
+
+- Open Whitebox on your phone in the browser: Settings › Remote turns on a phone page served only on this computer's Tailscale address (port 7790). It lists every panel's terminals with their state and opens one live, with a key row (Esc, Tab, Ctrl, arrows, ^C, Enter) and a compose box that sends text, Korean included, in one go. Works on iPhone and Android with no app to install; add it to the home screen to use it like an app.
+- Only a device signed in to the same Tailscale account as this computer can open it (checked with `tailscale whois` on every request; a failed check refuses). The page also checks its host name, origin and a per-launch token, so another web site cannot reach your terminals. It is off until you turn it on.
+- Settings › Remote shows the address with a QR code to open it on the phone, the Tailscale state, the phones connected now, and the SSH way (`whitebox phone`) as an advanced option.
+
 ## 2.1.1 - 2026-11-25
 
 - A project's panels sit one level inside the project in the sidebar, so it is clear which project they belong to.

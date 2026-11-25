@@ -360,7 +360,7 @@ app.whenReady().then(async () => {
     console.log('PASS workspace update UI: startup race, background badge, settings navigation, manual checks/errors, progress, single install action/cancel, absent/blocked installer and reload; installer IPC uses a fixture');
     const settingsShots = path.join(root, 'artifacts/settings'); fs.mkdirSync(settingsShots, { recursive: true });
     await evaluate('document.querySelector("[data-action=settings]").click()');
-    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 4, 'general, terminal, connections and shortcuts');
+    assert.equal(await evaluate('document.querySelectorAll("#wbSettings .wb-settings-nav [data-settings-section]").length'), 5, 'general, terminal, connections, remote and shortcuts');
     assert.equal(await evaluate('document.querySelector("[data-settings-page=general]").hidden'), false);
     const settingsActions = await evaluate('Object.fromEntries(["wbSettingsClose","wbSettingsDone"].map(id=>{const button=document.querySelector("#"+id+" button"),r=button.getBoundingClientRect();return [id,{width:r.width,height:r.height}]}))');
     assert(settingsActions.wbSettingsClose.width>=44 && settingsActions.wbSettingsClose.height>=40,'close target has adequate space');
@@ -395,7 +395,7 @@ app.whenReady().then(async () => {
     await evaluate('WhiteboxTheme.setTheme("dark"); document.querySelector("[data-action=settings]").click()');
     for (const width of [780, 360]) {
       win.setContentSize(width, 720);
-      for (const section of ['general', 'terminal', 'connections', 'shortcuts']) {
+      for (const section of ['general', 'terminal', 'connections', 'remote', 'shortcuts']) {
         await evaluate(`document.querySelector('[data-settings-section=${section}]').click()`);
         const bounds = await evaluate('(() => { const r=document.querySelector("#wbSettings").getBoundingClientRect(), content=document.querySelector("#wbSettingsContent"); return {left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,scroll:content.scrollWidth,client:content.clientWidth}; })()');
         assert(bounds.left>=0 && bounds.right<=bounds.width && bounds.bottom<=bounds.height && bounds.scroll<=bounds.client+1, JSON.stringify({section,bounds}));
@@ -405,7 +405,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1450,900);
     await evaluate('document.querySelector("#wbSettingsDone button").click()');
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'restore layout after settings size checks');
-    console.log('PASS redesigned settings: native close, four categories, font persistence, system appearance changes, 780/360px layouts');
+    console.log('PASS redesigned settings: native close, five categories, font persistence, system appearance changes, 780/360px layouts');
     const suggestionProbe = await evaluate(`(async () => {
       const host = document.createElement('div'); document.body.append(host);
       const probe = new WhiteboxTerminalEngine.Terminal({ cols: 60, rows: 12 }); probe.open(host);
