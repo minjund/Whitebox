@@ -124,4 +124,29 @@ try {
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }
+
+// Panel membership changes reach the agent on its next turn.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-roster-'));
+  try {
+    const env = { WHITEBOX_SURFACE_ID: 'terminal:me', WHITEBOX_PANEL_DIRECTORY: dir };
+    const file = path.join(dir, `${Buffer.from('terminal:me').toString('base64url')}.access.json`);
+    const publish = (groupId, groupName, members) => fs.writeFileSync(file, JSON.stringify({ id: 'terminal:me', groupId, groupName, updatedAt: Date.now(),
+      members: [{ id: 'terminal:me', title: 'me' }, ...members] }));
+    const turn = () => guard.respond({ hook_event_name: 'UserPromptSubmit', prompt: 'hello' }, env).hookSpecificOutput.additionalContext;
+    publish('p1', '패널 1', [{ id: 'terminal:a', title: 'Claude A', provider: 'claude' }]);
+    assert.match(guard.respond({ hook_event_name: 'SessionStart' }, env).hookSpecificOutput.additionalContext, /this terminal is in "패널 1"\. Other terminals in it now: "Claude A" \(terminal:a, claude\)/u);
+    assert.doesNotMatch(turn(), /Whitebox panel/u, 'nothing changed: nothing said');
+    publish('p1', '패널 1', [{ id: 'terminal:a', title: 'Claude A', provider: 'claude' }, { id: 'terminal:b', title: 'Codex B', provider: 'codex' }]);
+    assert.match(turn(), /Whitebox panel change in "패널 1": joined: "Codex B" \(terminal:b, codex\)\./u, 'a terminal moved in is announced');
+    assert.doesNotMatch(turn(), /Whitebox panel/u, 'announced once');
+    publish('p1', '패널 1', [{ id: 'terminal:b', title: 'Codex B', provider: 'codex' }]);
+    assert.match(turn(), /left: terminal:a\./u, 'a terminal moved out is announced');
+    publish('p2', '패널 2', [{ id: 'terminal:c', title: 'Claude C' }]);
+    assert.match(turn(), /this terminal was moved to the panel "패널 2"\. Other terminals in it now: "Claude C" \(terminal:c\)/u, 'this terminal moving is announced');
+    fs.writeFileSync(file, JSON.stringify({ id: 'terminal:me', groupId: 'p3', members: [{ id: 'terminal:d' }], updatedAt: Date.now() - 60000 }));
+    assert.doesNotMatch(turn(), /Whitebox panel/u, 'a stale roster (app closed) says nothing');
+    console.log('PASS terminal guard hook: panel membership changes are told to the agent once');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
 console.log('terminal guard hook tests passed');

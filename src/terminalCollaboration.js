@@ -60,6 +60,12 @@ class TerminalCollaboration {
     for (const name of fs.readdirSync(directory).filter(name => /^[a-zA-Z0-9_-]+\.access\.json$/u.test(name))) {
       try { const record = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')); if (safeId(record.id) && record.providerPid && record.token) this.restoredConnections.push(record); } catch { /* Invalid connections stay disconnected. */ }
     }
+    // The terminal guard hook remembers which panel members it told its agent
+    // about (bin/terminal-guard-hook.js). A record whose connection is gone is
+    // only clutter.
+    for (const name of fs.readdirSync(directory).filter(name => /^[a-zA-Z0-9_-]+\.seen\.json$/u.test(name))) {
+      if (!fs.existsSync(path.join(directory, name.replace(/\.seen\.json$/u, '.access.json')))) fs.rmSync(path.join(directory, name), { force: true });
+    }
     // Restart never replays an uncertain delivery.
     for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.job\.json$/u.test(name))) {
       try {

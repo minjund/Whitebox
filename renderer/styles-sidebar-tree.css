@@ -156,3 +156,7 @@
 #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop { height:24px; min-height:24px; margin:0 0 4px 4px; width:calc(100% - 4px); padding:0 6px; opacity:1; display:flex; align-items:center; gap:6px; }
 #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop small { display:none; }
 #terminalWorkspace .wb-sidebar .wb-new-panel-drop .wb-icon { width:12px; height:12px; }
+/* A project's panels sit one tree level (16px) inside the project row; panels
+   without a project (#wbInstances) stay at the edge. */
+#terminalWorkspace #wbSpaces .wb-project-terminals { padding-left:16px; }
+@container (max-width:200px) { #terminalWorkspace #wbSpaces .wb-project-terminals { padding-left:10px; } }

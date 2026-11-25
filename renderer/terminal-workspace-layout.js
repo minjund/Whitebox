@@ -40,14 +40,28 @@
     if (left.id || right.id) return left.id === right.id;
     return left.axis === right.axis && sameShape(left.first, right.first) && sameShape(left.second, right.second);
   }
+  // Same cells and the same sizes (no divider was dragged).
+  function sameSizes(left, right) {
+    if (!left || !right) return left === right;
+    if (left.id || right.id) return left.id === right.id;
+    return left.axis === right.axis && Math.abs((Number(left.ratio) || .5) - (Number(right.ratio) || .5)) < 1e-6
+      && sameSizes(left.first, right.first) && sameSizes(left.second, right.second);
+  }
+  const untouched = node => sameSizes(node, grid(node)) || sameSizes(node, balance(node));
   // `after` is `before` with cells the app added or dropped. A view that was
-  // the automatic grid stays one. A view the user arranged by dropping keeps
-  // its shape and only shares the space evenly again. An unchanged view keeps
-  // the sizes its dividers were dragged to.
+  // the automatic grid, sizes untouched, stays one; one arranged by dropping,
+  // sizes untouched, shares the space evenly again. Once a divider was dragged
+  // the sizes are the person's: the cells that stay keep them, a removed
+  // cell's space goes to its neighbour and a new cell halves the one it opens
+  // beside.
   function settle(before, after) {
     if (!after || sameShape(before, after)) return after;
-    return sameShape(before, grid(before)) ? grid(after) : balance(after);
+    if (sameSizes(before, grid(before))) return grid(after);
+    if (sameSizes(before, balance(before))) return balance(after);
+    return after;
   }
+  // A drop or a placed panel: even shares again unless the person sized the view.
+  const even = (before, after) => !before || untouched(before) ? balance(after) : after;
   function insert(node, target, next, axis, before) {
     if (!node) return { id: next };
     if (node.id) return node.id === target ? { axis, ratio: 0.5, first: before ? { id: next } : node, second: before ? node : { id: next } } : node;
@@ -68,7 +82,7 @@
   }
   // The user dropped `next` on one side of `target`: it lands exactly there.
   function drop(node, target, next, axis = 'row', before = false) {
-    return balance(insert(prune(node, next), target, next, axis, before));
+    return even(node, insert(prune(node, next), target, next, axis, before));
   }
   // A saved view without the sessions that are gone.
   function fit(node, available) {
@@ -110,7 +124,7 @@
         ? { axis, ratio: .5, first: before ? incoming : branch, second: before ? branch : incoming }
         : branch
       : { ...branch, first: attach(branch.first), second: attach(branch.second) };
-    return chosen ? balance(attach(remaining)) : settle(node, attach(remaining));
+    return chosen ? even(node, attach(remaining)) : settle(node, attach(remaining));
   }
   // Cells side by side along `axis` under a split, with their share of it. A
   // split on the other axis is one cell.

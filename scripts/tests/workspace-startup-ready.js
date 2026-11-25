@@ -11,6 +11,7 @@ module.exports = async function startupReadyChecks({ evaluate, waitFor, win, man
   const original = await evaluate('localStorage.getItem("whitebox:workspace:v2")');
   const identities = manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId }));
   const active = await evaluate('WhiteboxWorkspace.getState().activeId');
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
   await evaluate(`(() => {
     const state = WhiteboxWorkspace.getState(), saved = JSON.parse(localStorage.getItem('whitebox:workspace:v2'));
     const session = state.sessions.find(s => s.id === state.activeId);
@@ -38,9 +39,11 @@ module.exports = async function startupReadyChecks({ evaluate, waitFor, win, man
   await waitFor(`(document.querySelector('[data-instance="${active}"] strong')?.textContent || '').includes('RETAINED_RECORD_REQUEST')`, 'a recorded request still names the terminal');
   await evaluate('WhiteboxWorkspace.createTerminal("row")');
   await waitFor('!WhiteboxWorkspace.getState().busy', 'save after startup');
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // the saved state is written just after the action (save())
   const saved = await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2"))');
   assert.equal(['autoReview', 'reviewWidth', 'analysisSettings'].some(key => key in saved), false, 'review settings are no longer saved');
   assert.deepEqual(manager.list().filter(item => identities.some(old => old.id === item.id)).map(({ id, pid, creationId }) => ({ id, pid, creationId })), identities, 'startup preserves all PTYs');
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
   await evaluate(`localStorage.setItem('whitebox:workspace:v2', ${JSON.stringify(original)})`);
   console.log('PASS startup readiness: renderer-ready once while a visible terminal still attaches; old review state starts without the panel and still names the terminal');
 };

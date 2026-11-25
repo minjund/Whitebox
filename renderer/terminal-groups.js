@@ -214,8 +214,19 @@ window.WhiteboxTerminalGroups = function createTerminalGroups(context) {
     if (input && editing === input.dataset.groupName) rename(input.dataset.groupName, input.value);
   });
 
+  // X on a pane of the group on screen: that terminal leaves the group (a
+  // named group keeps its last terminal; an unnamed one goes with its split).
+  // Call after arm(), before the screen changes.
+  function hide(id) {
+    const group = active();
+    if (!group || !layout.ids(group.layout).includes(id)) return;
+    const rest = layout.remove(group.layout, id);
+    if (!rest || !isSplit(rest) && !group.named) { remove(group); armedFrom = ''; }
+    else group.layout = rest;
+  }
+
   return {
-    sync, render, active, holding, open, add, rename, dissolve,
+    sync, render, active, holding, open, add, rename, dissolve, hide,
     // While a name is being typed, the workspace must not move focus to a terminal.
     editing: () => Boolean(editing),
     // The next split change comes from the person (a drag or an arrange), not a restore.

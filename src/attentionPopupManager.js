@@ -435,7 +435,11 @@ class AttentionPopupManager {
     };
     this.windows.set(record.key, entry);
     if (typeof win.setAlwaysOnTop === 'function') win.setAlwaysOnTop(true, 'floating');
-    if (typeof win.setVisibleOnAllWorkspaces === 'function') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Without skipTransformProcessType, macOS Electron hides the Dock icon
+    // (and its running dot) every time a popup is made, to float it over other
+    // apps' full-screen windows. Keeping the Dock matters more: the popup still
+    // shows on every desktop, above normal windows.
+    if (typeof win.setVisibleOnAllWorkspaces === 'function') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
     if (win.webContents && typeof win.webContents.setWindowOpenHandler === 'function') {
       win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
