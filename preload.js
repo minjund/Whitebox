@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   terminalCommand: (id, command, options) => ipcRenderer.invoke('terminals:command', id, command, options),
   terminalRespond: (id, choiceKey) => ipcRenderer.invoke('terminals:respond', id, choiceKey),
   terminalResize: (id, cols, rows) => ipcRenderer.invoke('terminals:resize', id, cols, rows),
+  terminalDeskActive: id => ipcRenderer.invoke('terminals:desk-active', id),
   terminalSignal: (id, signal) => ipcRenderer.invoke('terminals:signal', id, signal),
   terminalRestart: id => ipcRenderer.invoke('terminals:restart', id),
   terminalReconnect: id => ipcRenderer.invoke('terminals:reconnect', id),
@@ -125,6 +126,11 @@ contextBridge.exposeInMainWorld('whitebox', {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('terminals:data', handler);
     return () => ipcRenderer.removeListener('terminals:data', handler);
+  },
+  onTerminalViewers: callback => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('terminals:viewers', handler);
+    return () => ipcRenderer.removeListener('terminals:viewers', handler);
   },
   onTerminalState: callback => {
     const handler = (_event, payload) => callback(payload);

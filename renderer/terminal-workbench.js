@@ -8,6 +8,18 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
   const {
     $, state, notice, xtermOptions, errorMessage,
   } = context;
+  // Terminals whose size a phone (whitebox phone over SSH) currently sets.
+  const phoneSized = new Set();
+  function markPhone(host, key) {
+    if (phoneSized.has(key)) Object.assign(host.dataset, { phone: 'true', phoneLabel: t('terminal.phone.using') });
+    else { delete host.dataset.phone; delete host.dataset.phoneLabel; }
+  }
+  window.whitebox.onTerminalViewers?.(payload => {
+    const id = String(payload?.id || '');
+    if (!id) return;
+    if (payload.phone) phoneSized.add(id); else phoneSized.delete(id);
+    for (const host of document.querySelectorAll(`[data-terminal-screen="${CSS.escape(id)}"]`)) markPhone(host, id);
+  });
   // Bound large replay reads across mounting and fallback prompt detection.
   const replayReads = new Map(), replayQueue = [];
   let activeReplayReads = 0;
@@ -282,6 +294,13 @@ window.WhiteboxTerminalWorkbench = function createModule(context) {
     const host = document.createElement('div');
     host.className = 'terminal-screen hidden';
     host.dataset.terminalScreen = key;
+    markPhone(host, key);
+    // As in herdr, typing, clicking or pasting here makes this pane the active
+    // viewer again and the terminal returns to this pane's size.
+    const takeBack = () => {
+      if (host.dataset.phone === 'true') Promise.resolve(window.whitebox.terminalDeskActive?.(key)).catch(() => {});
+    };
+    for (const type of ['keydown', 'pointerdown', 'paste']) host.addEventListener(type, takeBack, true);
     const stagingMount = $('#terminalRuntimeMount');
     if (!stagingMount) throw new Error(t('terminal.error.screen_unavailable'));
     stagingMount.appendChild(host);

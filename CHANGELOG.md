@@ -3,6 +3,12 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.1.0 - 2026-11-25
+
+- Phone access works like herdr: straight over SSH, with no server or account in between (use Tailscale or another VPN away from home). `whitebox phone` lists the terminals of every panel; picking one now opens the real terminal live instead of a text screen refreshed every second. You see the current screen at once, then its output as it happens, with colors and cursor, and every key goes straight in (arrows, Esc, Tab, Ctrl keys from your SSH app's key bar). `Ctrl+\` goes back to the list. It works the same from a Windows PC with the OpenSSH server.
+- As in herdr, the terminal's size follows whoever used it last. Opening it on the phone, typing there or rotating the phone makes it the phone's size, and the Mac pane shows "In use on a phone". Clicking, typing or pasting in that pane, or resizing it, takes it back to the pane's size, and when the phone leaves, the pane's size returns.
+- `whitebox connect` (JSON-RPC 2.0 over SSH, like `hc connect`) adds `terminal.attach`, `terminal.input`, `terminal.resize`, `terminal.focus` and `terminal.detach`, with `terminal.output` and `terminal.closed` notifications. An attach with `observe: true` watches without ever typing or resizing, for a phone app.
+
 ## 2.0.45 - 2026-11-25
 
 - Use Whitebox from your phone over SSH. Turn on Remote Login on the Mac, connect with any phone SSH app and run `~/.whitebox/bin/whitebox phone`: it lists the terminals of every panel with their state (working, waiting for an answer, idle), opens one to show its screen fitted to the phone width, and types what you send into it like the keyboard (an empty line presses Enter; `:esc`, `:c` for Ctrl+C, `:1` or `:y` press a single key, `:b` goes back). Nothing listens on the network: the connection is your own SSH login, and the command refuses to run inside a Whitebox terminal.

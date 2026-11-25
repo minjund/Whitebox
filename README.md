@@ -133,6 +133,10 @@ When an AI asks for permission to run a command or needs an answer, a small wind
 
 An AI inside a Whitebox terminal can use the `whitebox` CLI or the panel MCP tools to open more AI terminals in the same panel, send requests to other terminals and wait for their replies. Inside Whitebox terminals, commands that open tmux or external terminal apps are blocked and pointed to the Whitebox tools.
 
+### From your phone
+
+Like herdr, the phone connects straight over SSH, with no server or account in between. Turn on remote login on the computer (macOS: System Settings → General → Sharing → Remote Login; Windows: OpenSSH Server) and use a VPN such as Tailscale away from home. Connect from a phone SSH app (Termius, Blink, Moshi and others) and run `~/.whitebox/bin/whitebox phone`: it lists the terminals of every panel, and picking a number opens that terminal live, with colors, cursor and keys as they are. `Ctrl+\` goes back to the list. While you type on the phone the terminal follows the phone's size; clicking or typing in that pane on the computer takes it back. The Whitebox app must be open on the computer.
+
 ### Settings
 
 <p align="center">

@@ -1,6 +1,6 @@
 'use strict';
 
-function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, groupStoreFile, isCmuxEnabled = () => false, cmuxClient, onCmuxInventory = () => {}, isProviderVisible = () => true, listWslDistros, sendError, createTerminal = null }) {
+function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, manager, viewers = () => null, groupStoreFile, isCmuxEnabled = () => false, cmuxClient, onCmuxInventory = () => {}, isProviderVisible = () => true, listWslDistros, sendError, createTerminal = null }) {
   const { CmuxClient } = require('../cmuxClient');
   const cmux = cmuxClient || new CmuxClient();
   for (const operation of ['list', 'read', 'frame', 'focus', 'input', 'arrange']) {
@@ -102,7 +102,15 @@ function registerTerminalIpc({ ipcMain, requireTrustedSender, trustedSender, man
   });
   ipcMain.handle('terminals:resize', (event, id, cols, rows) => {
     requireTrustedSender(event);
-    return requireManager(manager).resize(id, cols, rows);
+    const terminalManager = requireManager(manager), phones = viewers();
+    // While a phone is attached, the most recently active viewer sets the size.
+    return phones?.watched(id) ? phones.deskResize(id, cols, rows) : terminalManager.resize(id, cols, rows);
+  });
+  // Typing, clicking or pasting in a desktop pane takes the size back from a phone.
+  ipcMain.handle('terminals:desk-active', (event, id) => {
+    requireTrustedSender(event);
+    const phones = viewers();
+    return phones ? phones.deskActive(String(id || '')) : false;
   });
   for (const operation of ['signal', 'restart', 'reconnect', 'detach', 'stop', 'close', 'retire']) {
     ipcMain.handle(`terminals:${operation}`, (event, ...args) => {

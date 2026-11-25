@@ -18,6 +18,7 @@ window.WhiteboxMessages = Object.freeze({
   "settings.attention_popups.save_failed": {"ko":"팝업 설정을 저장하지 못했습니다.","en":"Could not save popup settings.","zh-CN":"无法保存弹窗设置。"},
   "terminal.error.initialization_failed": {"ko":"컴퓨터 작업을 준비하지 못했습니다: {message}","en":"Failed to prepare the computer work screen: {message}","zh-CN":"无法准备电脑任务画面：{message}"},
   "terminal.error.input_failed": {"ko":"선택한 작업에 내용을 보내지 못했습니다.","en":"Could not send input to the selected work.","zh-CN":"无法向所选任务发送内容。"},
+  "terminal.phone.using": {"ko":"휴대폰에서 쓰는 중 · 누르거나 입력하면 이 화면 크기로 돌아와요","en":"In use on a phone · click or type to take it back","zh-CN":"正在手机上使用 · 点击或输入即可切回"},
   "terminal.error.screen_unavailable": {"ko":"컴퓨터 작업 화면을 불러오지 못했습니다.","en":"Could not load the computer work screen.","zh-CN":"无法加载电脑任务画面。"},
   "terminal.error.unknown": {"ko":"컴퓨터 작업을 완료하지 못했습니다. 잠시 후 다시 시도하세요.","en":"Could not complete the computer work. Try again shortly.","zh-CN":"无法完成电脑任务，请稍后重试。"},
   "comprehension.prompt_empty": {"ko":"작업 내용을 입력하세요.","en":"Enter the task details.","zh-CN":"请输入任务内容。"}

@@ -33,6 +33,8 @@ class TerminalPanelControl {
         let request;
         try { request = JSON.parse(buffer.slice(0, buffer.indexOf('\n'))); if (request.token !== this.token) throw new Error('Panel control authentication failed'); }
         catch (error) { reply({ ok: false, error: error.message }); return; }
+        // A live phone view keeps its connection open: screen out, keys in.
+        if (request.method === 'remote.attach') { this.stream(socket, request, buffer.slice(buffer.indexOf('\n') + 1)); return; }
         this.owner.serialize(() => this.handle(request.method, request.params || {}))
           .then(result => reply({ id: request.id, ok: true, result }), error => reply({ id: request.id, ok: false, error: error.message }));
       });
@@ -55,20 +57,66 @@ class TerminalPanelControl {
   // Phone access (whitebox phone / whitebox connect over SSH). The person who
   // owns this Mac account works every panel like a keyboard, so it is not tied
   // to a source terminal. The CLI refuses to run inside a Whitebox terminal.
-  async remote(method, params) {
+  remotePanels() {
     const c = this.owner;
     if (!c.updatedAt || c.now() - c.updatedAt > 30000) throw new Error('Whitebox screen is not ready. Check that the app is open.');
-    const panels = [...c.groups.values()];
+    return [...c.groups.values()];
+  }
+  async remoteMember(params) {
+    const c = this.owner;
+    const found = this.remotePanels().flatMap(group => group.members.map(member => ({ group, member }))).filter(({ member }) => member.id === params.surface_id);
+    if (found.length !== 1) throw new Error('Choose a running terminal ID from the list.');
+    const { group, member } = found[0], live = await c.manager().get(member.id, false);
+    if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('Terminal session changed; open the list again.');
+    return { group, member, live };
+  }
+  // A live view of one terminal, as herdr's terminal.attach: the current
+  // screen first, then its raw output. Keys, size and focus come back as
+  // JSON lines; the size follows the most recently active viewer.
+  async stream(socket, request, rest) {
+    socket.setTimeout(0);
+    const viewers = this.owner.viewers, params = request.params || {};
+    const write = frame => { if (!socket.destroyed) socket.write(JSON.stringify(frame) + '\n'); };
+    let viewer = null, closed = false, queue = Promise.resolve(), buffer = rest;
+    socket.on('close', () => { closed = true; if (viewer) viewers.detach(viewer).catch(() => {}); });
+    try {
+      if (!viewers) throw new Error('Live terminals are not available in this Whitebox.');
+      const { group, member } = await this.owner.serialize(() => this.remoteMember(params));
+      write({ id: request.id, ok: true, result: { surface_id: member.id, panel: group.name, title: member.title, provider: member.provider || '', observe: Boolean(params.observe) } });
+      viewer = await viewers.attach(member.id, { cols: params.cols, rows: params.rows, observe: Boolean(params.observe),
+        send: frame => { write(frame); return socket.writableLength < viewers.backlog(); } });
+      if (closed) { await viewers.detach(viewer); return; }
+    } catch (error) {
+      if (viewer) write({ type: 'end', reason: error.message });
+      else write({ id: request.id, ok: false, error: error.message });
+      socket.end(); return;
+    }
+    const line = text => {
+      let message; try { message = JSON.parse(text); } catch { return; }
+      if (message?.type === 'input' && typeof message.data === 'string' && message.data.length <= 65536) queue = queue.then(() => viewers.input(viewer, message.data)).catch(() => {});
+      else if (message?.type === 'resize') queue = queue.then(() => viewers.resize(viewer, message.cols, message.rows)).catch(() => {});
+      else if (message?.type === 'focus') queue = queue.then(() => viewers.focus(viewer)).catch(() => {});
+      else if (message?.type === 'detach') socket.end();
+    };
+    const take = () => {
+      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) { line(buffer.slice(0, at)); buffer = buffer.slice(at + 1); }
+      if (buffer.length > 1024 * 1024) socket.destroy();
+    };
+    socket.on('data', chunk => { buffer += chunk; take(); });
+    socket.on('drain', () => { Promise.resolve(viewers.drained(viewer)).catch(() => {}); });
+    take();
+  }
+  async remote(method, params) {
+    const c = this.owner;
+    const panels = this.remotePanels();
     if (method === 'remote.list') return { panels: panels.map(group => ({ id: group.id, name: group.name,
       terminals: group.surfaces.map(surface => {
         const member = group.members.find(item => item.id === surface.id);
         return { id: surface.id, title: surface.title, running: Boolean(member), provider: member?.provider || '',
-          state: member ? member.activity?.state || 'unknown' : surface.status, ready: Boolean(member?.ready) };
+          state: member ? member.activity?.state || 'unknown' : surface.status, ready: Boolean(member?.ready),
+          watching: Boolean(member && c.viewers?.watched(member.id)) };
       }) })) };
-    const found = panels.flatMap(group => group.members.map(member => ({ group, member }))).filter(({ member }) => member.id === params.surface_id);
-    if (found.length !== 1) throw new Error('Choose a running terminal ID from the list.');
-    const { group, member } = found[0], live = await c.manager().get(member.id, false);
-    if (!live || live.creationId !== member.creationId || live.pid !== member.pid || live.status !== 'running') throw new Error('Terminal session changed; open the list again.');
+    const { group, member, live } = await this.remoteMember(params);
     const frame = c.frames.get(member.id), current = frame && frame.creationId === live.creationId ? frame : null;
     if (method === 'remote.read') {
       const lines = Math.max(1, Math.min(2000, Number(params.lines) || 200));
