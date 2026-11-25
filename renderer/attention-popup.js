@@ -171,13 +171,19 @@
       }
       return descriptionIds;
     }
-    if (request.body) {
+    // A question popup shows each question in its own field: text that only
+    // repeats those questions is not shown a second time above them.
+    const asked = new Set(request.type === 'question' && Array.isArray(request.questions)
+      ? request.questions.map(question => String(question.question || '').trim()).filter(Boolean) : []);
+    const repeatsQuestions = text => asked.size > 0 && String(text || '').split('\n').map(line => line.trim()).filter(Boolean)
+      .every(line => asked.has(line));
+    if (request.body && !repeatsQuestions(request.body)) {
       const body = element('p', 'popup-body', request.body);
       body.id = 'popupBody';
       descriptionIds.push(body.id);
       container.append(body);
     }
-    if (request.detail && request.detail !== request.body) {
+    if (request.detail && request.detail !== request.body && !repeatsQuestions(request.detail)) {
       const detail = element('p', 'popup-detail', request.detail);
       detail.id = 'popupDetail';
       descriptionIds.push(detail.id);

@@ -53,7 +53,8 @@ module.exports = async function projectReorderChecks({ evaluate, waitFor, win, m
   await waitFor(`WhiteboxWorkspace.getState().spaces[0].id === ${JSON.stringify(second)}`, 'long press reorders');
   assert.equal(await selection(), originalSelection, 'drag must not select the dragged project');
   await clean();
-  assert.deepEqual(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).spaces.map(s => s.id)'), [second, first]);
+  // The workspace writes its saved state once the action has finished (renderer/terminal-workspace.js save()).
+  await waitFor(`JSON.stringify(JSON.parse(localStorage.getItem("whitebox:workspace:v2")).spaces.map(s => s.id)) === ${JSON.stringify(JSON.stringify([second, first]))}`, 'saved project order');
   await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'saved project order reload');
   assert.deepEqual(await order(), [second, first]);
 
@@ -91,6 +92,7 @@ module.exports = async function projectReorderChecks({ evaluate, waitFor, win, m
   await waitFor(`WhiteboxWorkspace.getState().spaces[0].id === ${JSON.stringify(first)}`, 'normal mouse drag');
   await clean();
 
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
   // Seed a larger saved list to test filtered movement and continuous scrolling.
   await evaluate(`(() => {
     const saved = JSON.parse(localStorage.getItem('whitebox:workspace:v2'));
@@ -129,6 +131,7 @@ module.exports = async function projectReorderChecks({ evaluate, waitFor, win, m
   assert.equal(await evaluate('document.activeElement.dataset.space'), 'reorder-4', 'keyboard focus follows moved project');
   assert.deepEqual(manager.list().map(({ id, pid, creationId }) => ({ id, pid, creationId })), identities, 'project reorder preserves original PTYs');
   win.webContents.debugger.detach();
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
   await evaluate(`localStorage.setItem('whitebox:workspace:v2', ${JSON.stringify(originalSaved)})`);
   await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'original project fixture restored');
   console.log('PASS project short click, long press, pointer drag, guide, Escape/blur/capture/outside cancellation, filtered order, continuous auto-scroll, keyboard, reload persistence, original PTYs and local workspace block removal');

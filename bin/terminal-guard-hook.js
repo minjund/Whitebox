@@ -7,6 +7,9 @@
 // It also tells the agent which language to answer in: the Whitebox guidance,
 // tool output and system prompts are English, which pulls replies to a Korean
 // (or other) message toward English unless the language is stated per turn.
+// And it tells the agent when its panel's membership changed (rosterNotice).
+const fs = require('fs');
+const path = require('path');
 
 const GUIDANCE = 'This session runs inside a Whitebox terminal. Create, split, close, read or send input to terminals only through Whitebox: '
   + 'the whitebox_panel MCP tools (whitebox_new_terminals, whitebox_list_terminals, whitebox_read_terminal, whitebox_ask, whitebox_wait, whitebox_close_terminal) '
@@ -118,7 +121,46 @@ function blockedCommand(command) {
 
 const TERMINAL_PROMPT = /터미널|패널|창\s*(?:을|를)?\s*(?:열|띄|나눠|분할)|분할|tmux|terminal|pane|split|panel|window|tab|whitebox|화이트박스/iu;
 
-function respond(input, env = process.env) {
+// Panel membership changes the agent has not heard about: a terminal moved
+// into or out of this panel, or this terminal moved to another panel. The app
+// publishes the live roster in this terminal's access file
+// (src/terminalCollaboration.js); the hook keeps what it last told the agent
+// beside it and says only what changed, on the agent's next turn.
+function panelDirectory(env) {
+  try { return require('./panel-control').directory(env); } catch { return ''; }
+}
+const describe = member => `"${member.title || member.id}" (${member.id}${member.provider ? `, ${member.provider}` : ''})`;
+function rosterNotice(env = process.env, { start = false, now = Date.now(), fileSystem = fs } = {}) {
+  const id = String(env.WHITEBOX_SURFACE_ID || ''), directory = panelDirectory(env);
+  if (!id || !directory) return '';
+  const key = Buffer.from(id).toString('base64url');
+  let access;
+  try { access = JSON.parse(fileSystem.readFileSync(path.join(directory, `${key}.access.json`), 'utf8')); } catch { return ''; }
+  // A stale roster (app closed) or a malformed one says nothing.
+  if (!access || !Array.isArray(access.members) || !access.updatedAt || now - access.updatedAt > 30000) return '';
+  const members = access.members.filter(member => member && typeof member.id === 'string' && member.id !== id).slice(0, 64)
+    .map(member => ({ id: member.id.slice(0, 200), title: String(member.title || '').replace(/\s+/gu, ' ').slice(0, 80), provider: String(member.provider || '').slice(0, 20) }));
+  const panel = String(access.groupName || '').replace(/\s+/gu, ' ').slice(0, 80) || 'this panel';
+  const seenFile = path.join(directory, `${key}.seen.json`);
+  let seen = null;
+  try { seen = JSON.parse(fileSystem.readFileSync(seenFile, 'utf8')); } catch {}
+  try {
+    fileSystem.writeFileSync(`${seenFile}.tmp`, JSON.stringify({ groupId: access.groupId, members: members.map(member => member.id) }), { mode: 0o600 });
+    fileSystem.renameSync(`${seenFile}.tmp`, seenFile);
+  } catch { return ''; } // Without a record, the same change would be announced every turn.
+  const roster = members.length ? `Other terminals in it now: ${members.map(describe).join(', ')}.` : 'No other terminal is in it now.';
+  if (start || !seen || !Array.isArray(seen.members)) return `Whitebox panel: this terminal is in "${panel}". ${roster}`;
+  if (seen.groupId !== access.groupId) return `Whitebox panel change: this terminal was moved to the panel "${panel}". ${roster} Use whitebox_list_terminals before asking any of them.`;
+  const before = new Set(seen.members), after = new Set(members.map(member => member.id));
+  const joined = members.filter(member => !before.has(member.id)), left = seen.members.filter(item => !after.has(item)).slice(0, 64);
+  if (!joined.length && !left.length) return '';
+  return [`Whitebox panel change in "${panel}":`,
+    joined.length ? `joined: ${joined.map(describe).join(', ')}.` : '',
+    left.length ? `left: ${left.join(', ')}.` : '',
+    roster].filter(Boolean).join(' ');
+}
+
+function respond(input, env = process.env, options = {}) {
   if (!env.WHITEBOX_SURFACE_ID) return null;
   const event = input?.hook_event_name;
   if (event === 'PreToolUse') {
@@ -128,11 +170,12 @@ function respond(input, env = process.env) {
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `Blocked ${reason}. ${GUIDANCE}` } };
   }
   if (event === 'SessionStart') {
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${GUIDANCE}\n${LANGUAGE_RULE}` } };
+    const roster = rosterNotice(env, { ...options, start: true });
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: [GUIDANCE, LANGUAGE_RULE, roster].filter(Boolean).join('\n') } };
   }
   if (event === 'UserPromptSubmit') {
     const prompt = String(input.prompt || '');
-    const context = [TERMINAL_PROMPT.test(prompt) ? GUIDANCE : '', languageGuidance(prompt)].filter(Boolean).join('\n');
+    const context = [TERMINAL_PROMPT.test(prompt) ? GUIDANCE : '', rosterNotice(env, options), languageGuidance(prompt)].filter(Boolean).join('\n');
     return { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
   }
   return null;
@@ -148,4 +191,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(() => { process.exitCode = 0; });
-module.exports = { GUIDANCE, LANGUAGE_RULE, LANGUAGE_GUIDANCE, blockedCommand, blockedSegment, languageGuidance, promptLanguage, respond };
+module.exports = { GUIDANCE, LANGUAGE_RULE, LANGUAGE_GUIDANCE, blockedCommand, blockedSegment, languageGuidance, promptLanguage, respond, rosterNotice };

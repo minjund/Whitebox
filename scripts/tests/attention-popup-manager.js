@@ -199,7 +199,7 @@ test('disabled reconciliation retains requests, enabling creates one hardened wi
       devTools: false,
     });
     assert.deepStrictEqual(win.alwaysOnTop, [true, 'floating']);
-    assert.deepStrictEqual(win.visibleOnAllWorkspaces, [true, { visibleOnFullScreen: true }]);
+    assert.deepStrictEqual(win.visibleOnAllWorkspaces, [true, { visibleOnFullScreen: true, skipTransformProcessType: true }], 'the popup never hides the Dock icon or its running dot');
     assert.equal(win.menuBarVisible, false);
     assert.deepStrictEqual(win.webContents.windowOpenHandler(), { action: 'deny' });
   }

@@ -272,6 +272,8 @@
   // by the older snapshot returned by the bootstrap request.
   const unsubscribeUpdates = api?.onUpdateState?.(update => { updateEventSeen = true; receiveUpdate(update); });
   window.addEventListener('beforeunload', () => unsubscribeUpdates?.(), { once: true });
+  // A save still waiting for its turn is written before the window goes away.
+  for (const event of ['beforeunload', 'pagehide']) window.addEventListener(event, () => { if (saveTimer) flushSave(); });
   async function runUpdateAction(action) {
     if (updateOperation || ['checking', 'downloading', 'installing'].includes(updateState?.status)) return;
     if (action === 'install' && (updateState?.blocked || !['available', 'downloaded'].includes(updateState?.status)
@@ -398,7 +400,20 @@
     $('#wbError').innerHTML = `<span>${esc(message)}</span><button data-action="dismiss-error" aria-label="${t('닫기')}">${icon('close')}</button>`;
     console.error('terminal-workspace:', error);
   }
+  // One action (a new terminal, a trash) renders and saves several times. The
+  // saved state holds every archived terminal and its kept answers and can be
+  // megabytes, so writing it each time made each click take a second. The
+  // screen state is remembered at once; the write happens once, after the
+  // action has finished (not while it waits for the terminal host), and at
+  // once when the window closes.
+  let saveTimer = 0, saveSince = 0;
   function save() {
+    owners().forEach(rememberCanvas);
+    if (!saveTimer) { saveSince = Date.now(); saveTimer = setTimeout(() => flushSave(false), 0); }
+  }
+  function flushSave(force = true) {
+    clearTimeout(saveTimer); saveTimer = 0;
+    if (!force && busy && Date.now() - saveSince < 5000) { saveTimer = setTimeout(() => flushSave(false), 30); return; }
     owners().forEach(rememberCanvas);
     // A visible creation placeholder is not a terminal and must not survive reload.
     const storedOwner = owner => {
@@ -1433,6 +1448,7 @@
   function hideInstance(id) {
     if (busy || !layout.ids(canvasLayout()).includes(id)) return;
     groups.arm(); // Hiding changes the group's own split.
+    groups.hide(id); // ...and the hidden terminal is no longer in that group.
     const owner = space();
     owner.viewLayout = layout.remove(owner.viewLayout, id);
     owner.canvasHidden = !owner.viewLayout;
@@ -1455,10 +1471,13 @@
     const session = sessions.get(item.id);
     return archiveIdentityMatches(session, item) ? session : null;
   }
-  function renderTrash() {
-    const opened = new Set([...$('#wbTrashList').querySelectorAll('details[data-trash-content][open]')].map(node => node.dataset.trashContent));
+  function renderTrash(force = false) {
     $('#wbTrashCount').textContent = String(trash.length);
     $('[data-action="trash-empty"]').disabled = busy || trash.length === 0;
+    // The list (every archived terminal with its kept answers) is built only
+    // while the trash is open; opening it builds it (force).
+    if (!force && !$('#wbTrash').open) return;
+    const opened = new Set([...$('#wbTrashList').querySelectorAll('details[data-trash-content][open]')].map(node => node.dataset.trashContent));
     $('#wbTrashList').innerHTML = [...trash].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)).map(item => {
       const session = trashSession(item);
       const provider = item.provider === 'claude' ? 'Claude' : item.provider === 'codex' ? 'Codex' : t('일반 셸');
@@ -1849,7 +1868,7 @@
       renderLayout();
     }
     if (action === 'trash') {
-      renderTrash(); $('#wbTrashNotice').textContent = ''; $('#wbTrash').showModal();
+      renderTrash(true); $('#wbTrashNotice').textContent = ''; $('#wbTrash').showModal();
       for (const item of trash) {
         if (!trashSession(item)) continue;
         const review = await api.terminalReview?.({ id: item.id, creationId: item.creationId, enabled: false });
@@ -1958,7 +1977,7 @@
     const locale = event.target.value;
     window.WhiteboxI18n.setLocale(locale);
     await api.setLocale?.(locale);
-    save(); window.location.reload();
+    save(); flushSave(); window.location.reload();
   });
   $('#wbFont').addEventListener('change', event => {
     fontSize = Math.max(11, Math.min(24, Number(event.target.value) || 14)); event.target.value = fontSize;

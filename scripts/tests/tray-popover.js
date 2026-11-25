@@ -139,6 +139,7 @@ const tests = [
       assert.strictEqual(popover.toggle({ trayBounds }), true);
       const win = window();
       assert.strictEqual(win.options.frame, false);
+      assert.deepStrictEqual(win.visibleOnAllWorkspaces, [true, { visibleOnFullScreen: true, skipTransformProcessType: true }], 'the popover never hides the Dock icon or its running dot');
       assert.strictEqual(win.options.webPreferences.sandbox, true);
       assert.strictEqual(win.options.webPreferences.contextIsolation, true);
       assert.strictEqual(win.visible, false);

@@ -108,11 +108,22 @@ assertGrid(layout.remove(arranged, 'c'), [['a', 'b']], 'closing back to a plain 
 const saved = JSON.parse(JSON.stringify(arranged));
 saved.ratio = .7;
 assert.deepEqual(layout.fit(saved, new Set(['a', 'b', 'c'])), saved, 'saved arrangement and its dragged sizes survive');
-assertCells(layout.fit(saved, new Set(['a', 'c'])), { a: [0, 0, .5, 1], c: [.5, 0, .5, 1] }, 'saved arrangement without a closed session');
+// A dragged divider is the person's size: the closed cell's space goes to its neighbour.
+assertCells(layout.fit(saved, new Set(['a', 'c'])), { a: [0, 0, .7, 1], c: [.7, 0, .3, 1] }, 'saved arrangement without a closed session keeps its dragged size');
+assertCells(layout.fit(arranged, new Set(['a', 'c'])), { a: [0, 0, .5, 1], c: [.5, 0, .5, 1] }, 'an arrangement nobody sized shares the space evenly again');
 const dragged = JSON.parse(JSON.stringify(layout.grid(eight)));
 dragged.ratio = .7;
 assert.deepEqual(layout.fit(dragged, new Set(layout.ids(eight))), dragged, 'dragged grid sizes survive');
-assertGrid(layout.fit(dragged, new Set(['t0', 't1', 't2', 't3', 't4'])), [['t0', 't1', 't2'], ['t3', 't4']], 'a grid that lost sessions is a grid again');
+close(layout.fit(dragged, new Set(['t0', 't1', 't2', 't3', 't4'])).ratio, .7, 'a dragged grid that lost sessions keeps its dragged size');
+assertGrid(layout.fit(layout.grid(eight), new Set(['t0', 't1', 't2', 't3', 't4'])), [['t0', 't1', 't2'], ['t3', 't4']], 'an untouched grid that lost sessions is a grid again');
+// Adding to or taking from a sized split (a group) keeps the other sizes.
+{
+  const sized = { axis: 'row', ratio: .3, first: { id: 'a' }, second: { axis: 'row', ratio: .4, first: { id: 'b' }, second: { id: 'c' } } };
+  assertCells(layout.split(JSON.parse(JSON.stringify(sized)), 'c', 'd', 'row'), { a: [0, 0, .3, 1], b: [.3, 0, .28, 1], c: [.58, 0, .21, 1], d: [.79, 0, .21, 1] }, 'a new terminal halves only the cell it opens beside');
+  assertCells(layout.remove(JSON.parse(JSON.stringify(sized)), 'b'), { a: [0, 0, .3, 1], c: [.3, 0, .7, 1] }, 'a removed terminal leaves its space to its neighbour');
+  assertCells(layout.drop(JSON.parse(JSON.stringify(sized)), 'a', 'd', 'column'), { a: [0, 0, .3, .5], d: [0, .5, .3, .5], b: [.3, 0, .28, 1], c: [.58, 0, .42, 1] }, 'a drop into a sized split keeps the other sizes');
+  console.log('PASS layout: adding to or taking from a sized split keeps the sizes');
+}
 assert.strictEqual(layout.fit(null, new Set()), null);
 
 // A whole panel dropped on one side lands there too.

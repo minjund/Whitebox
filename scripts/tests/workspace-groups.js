@@ -112,6 +112,7 @@ module.exports = async function groupChecks({ evaluate, waitFor, win, manager })
   assert.deepEqual(new Set(await visible()), new Set([first, added]));
 
   // 6. A split saved before every split was a group is named once on load.
+  await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
   await evaluate(`(() => { const state = JSON.parse(localStorage.getItem('whitebox:workspace:v2')); delete state.groups; localStorage.setItem('whitebox:workspace:v2', JSON.stringify(state)); })()`);
   await win.reload();
   await waitFor('Boolean(window.WhiteboxWorkspace) && document.querySelectorAll("#wbGroups .wb-group-row").length === 1', 'an existing split becomes a group after update', 15000);

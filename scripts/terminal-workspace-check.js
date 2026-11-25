@@ -373,6 +373,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontSize'), '15px');
     await evaluate('document.querySelector("#wbFontFamily").value="monospace"; document.querySelector("#wbFontFamily").dispatchEvent(new Event("change",{bubbles:true}))');
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#wbFontPreview")).fontFamily'), 'monospace');
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // the saved state is written just after the action (save())
     assert.equal(await evaluate('JSON.parse(localStorage.getItem("whitebox:workspace:v2")).fontFamily'), 'monospace');
     fs.writeFileSync(path.join(settingsShots, 'terminal-dark.png'), (await win.webContents.capturePage()).toPNG());
     await evaluate('document.querySelector("#wbSettingsClose button").click()');
@@ -494,6 +495,7 @@ app.whenReady().then(async () => {
     await waitFor(`document.querySelector('${tokenSelector(first.id)}').textContent === '12.3K 토큰' && document.querySelector('${tokenSelector(second.id)}').textContent === '2,400 토큰'`, 'separate conversation tokens update with automatic analysis disabled');
     assert.match(await evaluate(`document.querySelector('${tokenSelector(first.id)}').title`), /12,345.*12,000.*345/u);
     assert.match(await evaluate(`document.querySelector('${tokenSelector(first.id)}').title`), /8,000/u);
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // the saved state is written just after the action (save())
     assert.equal(await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).terminalUsageHistory.find(r=>r.id==='${first.id}').usage.total`), 12345, 'native terminal counters persist independently of review tokens');
     for (const theme of ['dark', 'light']) {
       await evaluate(`document.documentElement.dataset.theme='${theme}';document.querySelector('[data-terminal-id="${first.id}"]').style.maxWidth='220px'`);
@@ -955,6 +957,7 @@ app.whenReady().then(async () => {
 
     assert.equal(accountUsageCalls, 0, 'review never fetches terminal/account-wide usage');
     const continuationSummary = '## This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n<system-reminder> <tools-used-before-summary>Bash, Skill, ToolSearch, mcp__claude_ai_Notion__notion-create-pages';
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // the saved state is written just after the action (save())
     const beforeContinuation = await evaluate(`JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory.find(r=>r.id==='${first.id}')`);
     const bogusTask = { taskId: 'compaction-internal', request: continuationSummary, actual: 'INTERNAL_COMPACTION_SENTINEL', lifecycle: 'in-progress', recordOnly: true, submittedAt: Date.now() };
     win.webContents.send('terminals:review-state', { id: first.id, value: {
@@ -966,6 +969,7 @@ app.whenReady().then(async () => {
     await waitFor(`!(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '').includes('continued from')`, 'internal continuation never names the terminal');
     assert.match(await evaluate(`(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '')`), /ONE_ONLY/u, 'the actual previous request keeps naming the terminal during continuation');
     assert.equal(await evaluate(`JSON.stringify(JSON.parse(localStorage.getItem('whitebox:workspace:v2')).reviewHistory).includes('tools-used-before-summary')`), false, 'internal summaries are not retained in new renderer history or digests');
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
     await evaluateData((id, task) => { const key='whitebox:workspace:v2', data=JSON.parse(localStorage.getItem(key)), record=data.reviewHistory.find(r=>r.id===id); record.result.tasks.push(task); record.digest=JSON.stringify(record.result); localStorage.setItem(key,JSON.stringify(data)); }, first.id, bogusTask);
     await win.reload(); await waitFor('Boolean(window.WhiteboxWorkspace)', 'legacy summary history migration');
     assert.doesNotMatch(await evaluate(`(document.querySelector('[data-instance="${first.id}"] strong')?.textContent || '')`), /continued from|tools-used-before-summary|INTERNAL_COMPACTION_SENTINEL/u);
@@ -1376,6 +1380,7 @@ app.whenReady().then(async () => {
     console.log('PASS real pointer drag across panels/projects, complete-panel display, three-panel together-view and horizontal panel-add labels at 176px');
     // A foreign visible target may still remember its old single-panel view.
     // Moving beside it must preserve the rest of the current shared canvas.
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
     const crossProject = await evaluate(`(() => {
       const key='whitebox:workspace:v2', saved=JSON.parse(localStorage.getItem(key));
       sessionStorage.setItem('fixture:before-cross-project-drag',localStorage.getItem(key));
@@ -1393,6 +1398,7 @@ app.whenReady().then(async () => {
     await nativeDrag(crossProject.moving, `[data-drop-panel="${crossProject.targetPanel}"]`);
     assert.deepEqual((await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane"),n=>n.dataset.terminalId)')).sort(),crossProject.visible.sort(),'a visible foreign sidebar panel also keeps the shared canvas');
     assert.deepEqual(manager.list().map(({id,pid,creationId})=>({id,pid,creationId})),livePtyBeforeDrag,'cross-project target placement retains every native PTY');
+    await evaluate('new Promise(resolve => setTimeout(resolve, 150))'); // let the app's own save (save()) land before the fixture rewrites it
     await evaluate(`(() => {const saved=sessionStorage.getItem('fixture:before-cross-project-drag');if(!saved)throw Error('Missing fixture snapshot');localStorage.setItem('whitebox:workspace:v2',saved);sessionStorage.removeItem('fixture:before-cross-project-drag');})()`);
     await win.reload();await waitFor('Boolean(window.WhiteboxWorkspace)','original panel fixture restored');
     console.log('PASS dragging onto a foreign-project pane preserves the complete shared canvas');
@@ -1610,6 +1616,7 @@ app.whenReady().then(async () => {
         await evaluate(`document.querySelector('.wb-instance-row [data-trash-terminal="${xTarget}"]').click()`);
         await waitFor(`!WhiteboxWorkspace.getState().busy && WhiteboxWorkspace.getState().trash.some(i=>i.id===${JSON.stringify(xTarget)}) && !document.querySelector('[data-terminal-id="${xTarget}"]')`, 'sidebar trash icon archives the terminal');
         assert.equal(manager.get(xTarget)?.status, 'stopped', 'the archived session is stopped, not removed');
+        await evaluate('document.querySelector("[data-action=trash]").click()'); // the trash list is built when the trash opens
         await evaluate(`document.querySelector('#wbTrash [data-purge-instance="${xTarget}"]').click()`);
         await waitFor('document.querySelector("#wbClose").open', 'purge asks for confirmation');
         await evaluate('document.querySelector("#wbClose").close("close")');

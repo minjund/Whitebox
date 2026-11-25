@@ -3,6 +3,16 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.1.1 - 2026-11-25
+
+- A project's panels sit one level inside the project in the sidebar, so it is clear which project they belong to.
+- Closing a terminal of a group with X takes it out of the group: opening the group again no longer brings it back, also for a named group of two.
+- Sizes you dragged in a split stay when a terminal joins or leaves it: a new terminal halves only the terminal it opens beside, and a removed one leaves its space to its neighbour. A split you never resized still shares the space evenly.
+- New terminals and the trash are fast again in a long-used workspace. With many archived terminals the saved state reaches megabytes and was written several times per click (about a second per new terminal or trash); it is now written once after the action, and the trash list is built only while the trash is open.
+- A question in the popup at the bottom right is shown once, in its answer field, instead of also above it.
+- The Dock icon keeps its running dot: showing a popup no longer hides it for a moment (macOS), which made the dot disappear when you switched to another app.
+- An AI in a panel is told, on its next turn, when a terminal moves into or out of its panel, or when its own terminal moves to another panel, with the panel's current terminals.
+
 ## 2.1.0 - 2026-11-25
 
 - Phone access works like herdr: straight over SSH, with no server or account in between (use Tailscale or another VPN away from home). `whitebox phone` lists the terminals of every panel; picking one now opens the real terminal live instead of a text screen refreshed every second. You see the current screen at once, then its output as it happens, with colors and cursor, and every key goes straight in (arrows, Esc, Tab, Ctrl keys from your SSH app's key bar). `Ctrl+\` goes back to the list. It works the same from a Windows PC with the OpenSSH server.

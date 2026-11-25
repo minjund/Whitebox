@@ -180,6 +180,16 @@ async function run() {
     buttons: ['답변 보내기', '거부', '터미널로 이동'],
   });
 
+  // A Claude question's body is its question text (main.js); it is shown once, in its field.
+  manager.upsert({ id: 'repeat', type: 'question', provider: 'Claude', title: '확인', body: '배포할까요?', detail: '배포할까요?',
+    questions: [{ id: 'go', question: '배포할까요?', allowOther: true, options: [{ id: 'yes', value: 'yes', label: '예' }, { id: 'no', value: 'no', label: '아니요' }] }] }, 'repeat');
+  await waitFor(() => [...manager.windows.values()].some(entry => entry.record.request.id === 'repeat' && entry.ready && entry.presented));
+  const repeatEntry = [...manager.windows.values()].find(entry => entry.record.request.id === 'repeat');
+  const repeated = await repeatEntry.window.webContents.executeJavaScript("document.querySelector('#popupCard').innerText.split('배포할까요?').length - 1", true);
+  assert.equal(repeated, 1, 'a question that is also the popup body is shown once');
+  manager.remove('repeat', 'repeat');
+  console.log('PASS attention popup: a question is shown once');
+
   await permissionEntry.window.webContents.executeJavaScript("document.querySelector('.popup-button.allow').click()", true);
   await waitFor(() => decisions.some(item => item.request.id === 'permission'));
   await questionEntry.window.webContents.executeJavaScript("document.querySelector('input[value=\"Windows\"]').click(); document.querySelector('.popup-form').requestSubmit()", true);

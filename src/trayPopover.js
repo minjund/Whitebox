@@ -141,7 +141,8 @@ class TrayPopover {
     this.window = win;
     this.ready = false;
     if (typeof win.setAlwaysOnTop === 'function') win.setAlwaysOnTop(true, 'pop-up-menu');
-    if (typeof win.setVisibleOnAllWorkspaces === 'function') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // skipTransformProcessType keeps the Dock icon and its running dot (see attentionPopupManager).
+    if (typeof win.setVisibleOnAllWorkspaces === 'function') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
     const contents = win.webContents;
     if (contents && typeof contents.setWindowOpenHandler === 'function') contents.setWindowOpenHandler(() => ({ action: 'deny' }));
