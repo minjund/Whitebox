@@ -36,6 +36,10 @@ function attach(params, { dir } = {}) {
       on(type, callback) { listeners[type].push(callback); for (const value of early[type].splice(0)) callback(value); return view; },
       send(message) { if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`); },
       close() { view.send({ type: 'detach' }); socket.end(); },
+      // The phone web page relays frames to a slower network; holding the
+      // control socket lets the panel's backpressure mark the view stale.
+      pause() { socket.pause(); },
+      resume() { socket.resume(); },
     };
     socket.setEncoding('utf8');
     socket.setTimeout(10000, () => { if (!opened) { socket.destroy(); reject(new Error('Whitebox panel control timed out')); } });

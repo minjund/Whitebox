@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="wb-token" content="__WHITEBOX_TOKEN__">
+  <meta name="theme-color" content="#111214">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="stylesheet" href="/phone.css">
+  <title>Whitebox</title>
+</head>
+<body>
+  <main id="list" class="view">
+    <header class="bar">
+      <div class="brand"><img src="/icon.png" alt=""><span>Whitebox</span></div>
+      <span class="host">__WHITEBOX_HOST__</span>
+    </header>
+    <p id="notice" class="notice" hidden></p>
+    <div id="panels"></div>
+  </main>
+  <section id="terminal" class="view" hidden>
+    <header class="bar">
+      <button id="back" class="icon" type="button" aria-label="Back">‹</button>
+      <div class="title"><strong id="termTitle"></strong><span id="termMeta"></span></div>
+      <span id="termState" class="dot"></span>
+    </header>
+    <div id="screen"></div>
+    <p id="ended" class="ended" hidden><span></span><button id="reconnect" type="button"></button></p>
+    <div id="keys" class="keys" role="toolbar">
+      <button type="button" data-key="esc">Esc</button>
+      <button type="button" data-key="tab">Tab</button>
+      <button type="button" data-mod="ctrl">Ctrl</button>
+      <button type="button" data-key="up">↑</button>
+      <button type="button" data-key="down">↓</button>
+      <button type="button" data-key="left">←</button>
+      <button type="button" data-key="right">→</button>
+      <button type="button" data-key="ctrl-c">^C</button>
+      <button type="button" data-key="enter">⏎</button>
+    </div>
+    <form id="compose" class="compose" autocomplete="off">
+      <textarea id="text" rows="1" enterkeyhint="send"></textarea>
+      <button id="send" type="submit"></button>
+    </form>
+  </section>
+  <script type="module" src="/phone.js"></script>
+</body>
+</html>

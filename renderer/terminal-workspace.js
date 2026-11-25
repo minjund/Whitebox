@@ -24,6 +24,7 @@
     refresh: '<path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2M6 18l2-2m8-8 2-2"/>',
     plug: '<path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4"/>',
+    phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/>',
     keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 12h1m3 0h1m3 0h1m3 0h1M7 15h10"/>',
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
@@ -125,6 +126,7 @@
         <button type="button" data-settings-section="general" aria-current="page">${icon('settings')}<span>일반</span></button>
         <button type="button" data-settings-section="terminal">${icon('terminal')}<span>터미널</span></button>
         <button type="button" data-settings-section="connections">${icon('plug')}<span>연결</span></button>
+        <button type="button" data-settings-section="remote">${icon('phone')}<span>원격</span></button>
         <button type="button" data-settings-section="shortcuts">${icon('keyboard')}<span>단축키</span></button>
         <small>whitebox.</small>
       </nav><div class="wb-settings-content" id="wbSettingsContent">
@@ -151,6 +153,7 @@
       <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
         <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
       </section>
+      <section data-settings-page="remote" aria-labelledby="wbSettingsRemoteTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsRemoteTitle">원격</h3><p>휴대폰에서 이 컴퓨터의 터미널을 엽니다.</p></div><div id="wbRemote"></div></section>
       <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
       </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
     </form></dialog>
@@ -193,6 +196,8 @@
       if (button.dataset.settingsSection === name) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
+    if (name === 'remote') window.WhiteboxRemoteSettings?.open($('#wbRemote'));
+    else window.WhiteboxRemoteSettings?.close();
     $('#wbSettingsContent').scrollTop = 0;
   }
   function renderSettingsTheme() {
@@ -223,6 +228,7 @@
     if (section) settingsSection(section.dataset.settingsSection);
   });
   $('#wbSettings').addEventListener('change', () => { $('#wbSettingsSaved').textContent = t('설정이 적용되었습니다.'); });
+  $('#wbSettings').addEventListener('close', () => window.WhiteboxRemoteSettings?.close());
   window.addEventListener('whitebox:theme-changed', renderSettingsTheme);
 
   function renderUpdates() {
