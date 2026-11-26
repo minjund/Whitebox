@@ -3,6 +3,10 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.4.1 - 2026-11-26
+
+- Codex terminals on macOS show their conversation in the chat view and on the phone again instead of "This terminal's conversation log was not found yet". A helper process Codex starts shortly after launch (codex-code-mode-host) was taken for Codex itself, so its conversation file was never found; Codex's working and idle state is also read from that file again.
+
 ## 2.4.0 - 2026-11-26
 
 - The phone page can be installed as an app. With HTTPS Certificates turned on in your tailnet's DNS settings, Whitebox gets a certificate for this computer's Tailscale name and serves the page at https://<name>.ts.net:7790; Chrome then offers [Install app] (Android adds it to the app list, iPhone uses Share › Add to Home Screen). The old http address redirects to the new one.
