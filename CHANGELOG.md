@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.5.0 - 2026-11-26
+
+- The chat view reads like a messenger: it uses the pane's whole width, your messages are bubbles on the right and each AI answer (with its work rows) is one bubble on the left under the AI's name. The phone page looks the same.
+- A message typed while the AI works goes in at once, and Claude or Codex takes it at its next gap, as when you type in the terminal; it no longer waits for the whole task to finish. Messages Claude took in mid-task appear in the conversation where Claude read them.
+- [Stop and send] (or Ctrl/⌘+Enter) stops the current work with one Esc and sends the message right away. A message still waiting (for example while the terminal is being checked) has the same button.
+- Typing "/" lists the AI's commands and skills: Claude's built-in commands, your and the project's commands and skills, and enabled plugins (from the Claude folder that AI runs with, so claude-ubion shows its own); Codex's built-in commands, custom prompts (/prompts:name) and skills ($name). Arrows move, Tab or Enter picks, Esc closes. The phone has the same list.
+- Codex terminals on macOS show their conversation in the chat view and on the phone again instead of "This terminal's conversation log was not found yet". A helper process Codex starts shortly after launch (codex-code-mode-host) was taken for Codex itself, so its conversation file was never found; Codex's working and idle state is also read from that file again.
+
 ## 2.4.0 - 2026-11-26
 
 - The phone page can be installed as an app. With HTTPS Certificates turned on in your tailnet's DNS settings, Whitebox gets a certificate for this computer's Tailscale name and serves the page at https://<name>.ts.net:7790; Chrome then offers [Install app] (Android adds it to the app list, iPhone uses Share › Add to Home Screen). The old http address redirects to the new one.

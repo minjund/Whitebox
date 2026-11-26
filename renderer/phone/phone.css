@@ -73,3 +73,4 @@ button { font: inherit; color: inherit; }
 .keys button { flex: 1 0 44px; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font-size: 15px; font-weight: 600; }
 .keys button:active { background: var(--accent); color: #0b1220; }
 .off { flex: none; margin: 0 8px 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); color: var(--muted); font-size: 14px; text-align: center; }
+#terminalWorkspace .wb-chat-force { min-height: 40px; border-radius: 10px; font-size: 14px; }

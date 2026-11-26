@@ -1,8 +1,10 @@
 // Whitebox phone page: every Claude and Codex terminal as a conversation.
 // The conversation is drawn by renderer/chat-render.js, the same code as the
 // desktop chat panes. There is no terminal view: a message goes through the
-// guarded chat send (it waits while the AI works), and an AI's question is
-// shown as the screen's own words with a few keys to answer it.
+// guarded chat send (while the AI works it goes in at once and is read at the
+// next gap; "stop and send" ends the current turn first), "/" lists the AI's
+// commands and skills, and an AI's question is shown as the screen's own
+// words with a few keys to answer it.
 const token = document.querySelector('meta[name="wb-token"]').content;
 const $ = selector => document.querySelector(selector);
 const POLL_MS = 1500;
@@ -47,6 +49,17 @@ const STRINGS = {
   '메시지가 너무 길어요. 8000자 이하로 나눠 보내 주세요.': ['The message is too long. Send at most 8000 characters at a time.', '消息太长，请分成 8000 字以内发送。'],
   '멈추지 못했어요': ['Could not stop', '未能停止'],
   '키를 보내지 못했어요': ['Could not send the key', '未能发送按键'],
+  '작업을 멈추고 보내는 중…': ['Stopping the work and sending…', '正在停止工作并发送…'],
+  '작업을 멈추고 보냈어요': ['Stopped the work and sent', '已停止工作并发送'],
+  '작업 중에 넣었어요 · AI가 틈이 나면 읽어요': ['Sent while working · the AI reads it at its next pause', '已在工作中发送 · AI 会在下一个间隙读取'],
+  '멈추고 보내기': ['Stop and send', '停止并发送'],
+  'AI에게 보낼 메시지 · / 명령·스킬': ['Message to the AI · / commands and skills', '发给 AI 的消息 · / 命令和技能'],
+  '맞는 명령이나 스킬이 없어요': ['No matching command or skill', '没有匹配的命令或技能'],
+  '기본 명령': ['Built-in', '内置命令'],
+  '스킬': ['Skill', '技能'],
+  '플러그인': ['Plugin', '插件'],
+  '내 명령': ['My command', '我的命令'],
+  '프로젝트 명령': ['Project command', '项目命令'],
   // chat-render.js
   '파일 {n}개 편집': ['Files edited: {n}', '编辑了 {n} 个文件'],
   '명령 {n}개 실행': ['Commands run: {n}', '运行了 {n} 条命令'],
@@ -205,7 +218,7 @@ async function poll() {
     }
     // A sent message leaves the queue once the conversation shows it.
     const users = (view.messages || []).filter(message => message.role === 'user');
-    queue = queue.filter(item => !(item.state === 'sent' && (users.some(message => same(message.text, item.text) && Date.parse(message.timestamp) >= item.at - 5000) || Date.now() - item.sentAt > 120000)));
+    queue = queue.filter(item => !(item.state === 'sent' && (users.some(message => same(message.text, item.text) && Date.parse(message.timestamp) >= item.at - 5000) || Date.now() - item.sentAt > (item.job?.midTurn ? 900000 : 120000))));
   } catch (error) {
     if (current === target) view = { ...(view || { messages: [] }), error: view?.messages?.length ? '' : String(error.message || error) };
   } finally {
@@ -223,13 +236,15 @@ function logHtml() {
     if (!view.messages.length) parts.push(`<p class="wb-chat-empty">${esc(t('아직 대화가 없어요. 아래에 첫 요청을 써 보세요.'))}</p>`);
     render.copies.set(current.id, []);
     const turns = render.turnsOf(view.messages);
-    turns.forEach((turn, index) => parts.push(render.turnHtml(current.id, turn, view.working && index === turns.length - 1)));
+    const sender = (view.provider || current.provider) === 'codex' ? 'Codex' : 'Claude';
+    turns.forEach((turn, index) => parts.push(render.turnHtml(current.id, turn, view.working && index === turns.length - 1, sender)));
   }
   for (const item of queue) {
-    const status = item.state === 'sending' ? t('보내는 중…') : item.state === 'sent' ? t('보냈어요')
+    const status = item.state === 'sending' ? t(item.interrupt ? '작업을 멈추고 보내는 중…' : '보내는 중…')
+      : item.state === 'sent' ? t(item.job?.interrupted ? '작업을 멈추고 보냈어요' : item.job?.midTurn ? '작업 중에 넣었어요 · AI가 틈이 나면 읽어요' : '보냈어요')
       : item.state === 'failed' ? `${t('보내지 못했어요')} · ${item.error || ''}` : t(WAIT[item.reason] || '보낼 차례를 기다려요');
     const actions = item.state === 'failed' ? `<button type="button" data-retry="${esc(item.id)}">${esc(t('다시 보내기'))}</button><button type="button" data-discard="${esc(item.id)}">${esc(t('지우기'))}</button>`
-      : item.state === 'queued' ? `<button type="button" data-discard="${esc(item.id)}">${esc(t('취소'))}</button>` : '';
+      : item.state === 'queued' ? `${['draft', 'prompt'].includes(item.reason) ? '' : `<button type="button" data-force="${esc(item.id)}">${esc(t('멈추고 보내기'))}</button>`}<button type="button" data-discard="${esc(item.id)}">${esc(t('취소'))}</button>` : '';
     parts.push(`<div class="wb-chat-msg is-user is-pending" data-state="${esc(item.state)}"><div class="wb-chat-bubble"><div class="wb-chat-user-text">${esc(item.text).replace(/\n/gu, '<br>')}</div></div><div class="wb-chat-status">${esc(status)}${actions}</div></div>`);
   }
   if (view?.working) parts.push(`<div class="wb-chat-working"><i aria-hidden="true"></i>${esc(t('작업 중'))}</div>`);
@@ -258,6 +273,7 @@ function draw() {
     if (pre.textContent !== view.question) { pre.textContent = view.question; pre.scrollTop = pre.scrollHeight; }
   }
   $('#stop').hidden = !(view?.working && !view.off);
+  $('#force').hidden = $('#stop').hidden;
   if ($('#stop').hidden) $('#stopConfirm').hidden = true;
   setOff(Boolean(view?.off));
 }
@@ -265,14 +281,15 @@ let flash = { text: '', until: 0 };
 function setOff(off) {
   const line = $('#off'), text = off ? t('AI가 꺼져 있어요. 지난 대화만 볼 수 있어요.') : Date.now() < flash.until ? flash.text : '';
   line.hidden = !text; line.textContent = text;
-  $('#text').disabled = off; $('#send').disabled = off;
+  $('#text').disabled = off; $('#send').disabled = off; $('#force').disabled = off;
 }
 
-function submit() {
+function submit({ interrupt = false } = {}) {
   const box = $('#text'), text = box.value.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/gu, '').trim();
   if (!text || !current || !view || view.off || !view.providerPid) return;
   if (text.length > 8000) { alertLine(t('메시지가 너무 길어요. 8000자 이하로 나눠 보내 주세요.')); return; }
-  queue.push({ id: uuid(), text, state: 'queued', reason: '', at: Date.now(),
+  menu.close();
+  queue.push({ id: uuid(), text, state: 'queued', reason: '', at: Date.now(), interrupt,
     target: { panel_id: current.panelId, surface_id: current.id, creation_id: view.creationId, provider_pid: view.providerPid, provider: view.provider } });
   box.value = ''; box.style.height = '';
   pinned = true; draw(); flush();
@@ -286,9 +303,9 @@ async function flush() {
   if (queue.some(entry => entry.state === 'sending')) return;
   flushing = true; item.state = 'sending'; draw();
   try {
-    const result = await api('/api/chat/send', { id: item.id, text: item.text, ...item.target });
+    const result = await api('/api/chat/send', { id: item.id, text: item.text, interrupt: item.interrupt === true, ...item.target });
     if (result?.deferred) Object.assign(item, { state: 'queued', reason: result.reason });
-    else if (result?.ok) Object.assign(item, { state: 'sent', sentAt: Date.now() });
+    else if (result?.ok) Object.assign(item, { state: 'sent', sentAt: Date.now(), job: { midTurn: result.job?.midTurn === true, interrupted: result.job?.interrupted === true } });
     else Object.assign(item, { state: 'failed', error: result?.job?.error || '' });
   } catch (error) {
     Object.assign(item, { state: 'failed', error: String(error.message || error) });
@@ -328,6 +345,7 @@ $('#log').addEventListener('click', event => {
       draw(); flush();
     }
   }
+  if (button.dataset.force) { const item = queue.find(entry => entry.id === button.dataset.force); if (item?.state === 'queued') { item.interrupt = true; draw(); flush(); } }
   if (button.dataset.discard) { queue = queue.filter(entry => entry.id !== button.dataset.discard); draw(); }
 });
 $('#question').addEventListener('click', async event => {
@@ -355,10 +373,25 @@ $('#stopConfirm').addEventListener('click', async event => {
 $('#back').addEventListener('click', () => history.length > 1 && location.hash === '#c' ? history.back() : showList());
 window.addEventListener('popstate', () => { if (location.hash !== '#c') showList(); });
 $('#send').textContent = t('보내기');
-$('#text').placeholder = t('AI에게 보낼 메시지');
+$('#force').textContent = t('멈추고 보내기');
+$('#force').addEventListener('click', () => submit({ interrupt: true }));
+$('#text').placeholder = t('AI에게 보낼 메시지 · / 명령·스킬');
 $('#text').setAttribute('aria-label', t('AI에게 보낼 메시지'));
 $('#text').addEventListener('input', event => { event.target.style.height = 'auto'; event.target.style.height = `${Math.min(140, event.target.scrollHeight)}px`; });
 $('#compose').addEventListener('submit', event => { event.preventDefault(); submit(); });
+// "/" list of the open terminal's AI, read again after 30 s or another AI process.
+let commandCache = { key: '', at: 0, promise: null };
+function loadCommands() {
+  if (!current || !view?.providerPid) return Promise.resolve([]);
+  const key = `${current.id}:${view.providerPid}`;
+  if (commandCache.key === key && Date.now() - commandCache.at < 30000) return commandCache.promise;
+  const query = new URLSearchParams({ surface_id: current.id, provider: view.provider || current.provider || '', provider_pid: String(view.providerPid) });
+  const promise = api(`/api/commands?${query}`).then(value => Array.isArray(value.commands) ? value.commands : []).catch(() => []);
+  commandCache = { key, at: Date.now(), promise };
+  return promise;
+}
+const menu = render.slashMenu({ input: $('#text'), box: $('#slash'), load: loadCommands });
+$('#text').addEventListener('keydown', event => { menu.keydown(event); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (current) poll(); else loadList(); });
 
 showList();

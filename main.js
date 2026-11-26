@@ -946,6 +946,18 @@ function terminalConversation() {
   return terminalConversationReader;
 }
 
+// The "/" list of a chat composer: this terminal's AI, its Claude folder
+// (claude-ubion keeps its own skills and plugins) and the project's commands.
+async function slashCommandsFor(id, provider, providerPid) {
+  if (!['claude', 'codex'].includes(provider)) return [];
+  const session = terminalManager && typeof id === 'string' ? await terminalManager.get(id, false) : null;
+  let claudeDir;
+  if (provider === 'claude' && Number.isSafeInteger(providerPid) && providerPid > 0) {
+    claudeDir = require('./src/claudeHomes').claudeHomes().find(dir => fs.existsSync(path.join(dir, 'sessions', `${providerPid}.json`)));
+  }
+  return require('./src/slashCommandCatalog').listSlashCommands({ provider, cwd: session?.cwd || '', ...(claudeDir ? { claudeDir } : {}) });
+}
+
 function handleTrusted(channel, handler) {
   ipcMain.handle(channel, (event, ...args) => {
     requireTrustedSender(event);
@@ -982,6 +994,7 @@ function startPhoneWeb() {
         return { ...conversation, creationId: live.creationId, state, question: state === 'waiting' ? String(screen.text || '') : '' };
       },
       send: payload => collaboration().chatSend(payload),
+      commands: ({ surfaceId, provider, providerPid }) => slashCommandsFor(surfaceId, provider, providerPid),
       stop: payload => collaboration().chatStop(payload),
     },
     root: __dirname,
@@ -2765,11 +2778,7 @@ function registerIpcHandlers() {
   handleTrusted('terminals:jev-reveal', () => ({ apiKey: terminalReview.jev.key() }));
   handleTrusted('terminals:jev-configure', payload => terminalReview.jev.configure(payload));
   handleTrusted('terminals:review-models', () => require('./src/terminalReviewSettings').reviewModelCatalog());
-  handleTrusted('terminals:slash-commands', async payload => {
-    const provider = ['claude', 'codex'].includes(payload?.provider) ? payload.provider : '';
-    const session = terminalManager && typeof payload?.id === 'string' ? await terminalManager.get(payload.id, false) : null;
-    return provider ? require('./src/slashCommandCatalog').listSlashCommands({ provider, cwd: session?.cwd || '' }) : [];
-  });
+  handleTrusted('terminals:slash-commands', payload => slashCommandsFor(payload?.id, payload?.provider, payload?.providerPid));
   registerTerminalIpc({
     createTerminal: options => require('./bin/panel-provider').createWorkspaceTerminal(terminalManager, options, path.join(bridgeHome, '.whitebox', 'bin')),
     cmuxClient,

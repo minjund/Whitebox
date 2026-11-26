@@ -403,6 +403,23 @@ function registerNativeProcessTests(context) {
     assert.equal(processes[0].startedAt, '2026-07-14T09:59:50.000Z');
   });
 
+  test('macOS Codex의 도우미 프로세스(codex-code-mode-host)를 Codex 본체로 착각하지 않는다', () => {
+    const now = Date.parse('2026-11-26T10:00:00Z');
+    const vendor = '/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin';
+    const rows = posixProcessRows([
+      '400 1 01:00 zsh /bin/zsh -l',
+      '401 400 00:59 node node /usr/local/bin/codex -c model="gpt-5.5"',
+      `402 401 00:59 ${vendor}/codex ${vendor}/codex -c model="gpt-5.5"`,
+      `403 402 00:30 ${vendor}/codex-code-mode-host ${vendor}/codex-code-mode-host`,
+      '500 1 01:00 zsh /bin/zsh -l',
+      '501 500 00:40 codex-aarch64-apple-darwin /opt/codex/bin/codex-aarch64-apple-darwin',
+    ].join('\n'), now);
+    assert.equal(providerFromPosixProcess(rows.find(row => row.pid === 403)), null);
+    const processes = selectAgentProcesses(rows, { providerResolver: providerFromPosixProcess, environment: 'macos' });
+    assert.deepStrictEqual(processes.map(item => [item.provider, item.pid]), [['codex', 402], ['codex', 501]]);
+    assert.ok(processes[0].ancestorPids.includes(400));
+  });
+
   test('외부 브리지는 같은 시각의 CLI 기록에만 연결하고 Codex 데스크톱과 섞지 않는다', () => {
     const now = Date.parse('2026-07-14T10:00:00Z');
     const prompt = '새 PTY에서만 보낸 질문';

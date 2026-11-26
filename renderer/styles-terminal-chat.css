@@ -206,3 +206,35 @@
 #terminalWorkspace .wb-chat-compaction > .wb-chat-text { margin:4px 13px 0; padding:12px 14px; border:1px dashed var(--chat-line); border-radius:8px; font-size:13.5px; color:var(--chat-muted); }
 #terminalWorkspace .wb-chat-working { margin:8px 0; font-size:14px; }
 #terminalWorkspace .wb-chat-composer textarea { font-size:15px; line-height:1.5; }
+
+/* Messenger layout: the conversation uses the pane's whole width; my messages
+   are bubbles on the right in the panel's colour, the AI's work and answer one
+   bubble on the left under its name. */
+#terminalWorkspace .wb-chat { --chat-me:color-mix(in srgb, var(--wb-panel-color, #7d9fc8) 24%, var(--clean-surface, var(--wb-panel))); --chat-ai:var(--clean-surface, var(--wb-panel)); }
+#terminalWorkspace .wb-chat-column { max-width:none; margin:0; }
+#terminalWorkspace .wb-chat-msg.is-user { margin:14px 0 6px; }
+#terminalWorkspace .wb-chat-bubble { max-width:min(78%, 680px); padding:10px 14px; border-radius:16px 4px 16px 16px; background:var(--chat-me); }
+#terminalWorkspace .wb-chat-preview.has-more:not(.is-open)::after { background:linear-gradient(transparent, var(--chat-me)); }
+#terminalWorkspace .wb-chat-ai { display:flex; flex-direction:column; align-items:flex-start; margin:6px 0 4px; }
+#terminalWorkspace .wb-chat-sender { margin:0 0 4px 4px; font-size:12px; font-weight:600; color:var(--chat-muted); }
+#terminalWorkspace .wb-chat-ai-bubble { box-sizing:border-box; max-width:min(86%, 860px); min-width:0; padding:8px 14px; border:1px solid var(--chat-line); border-radius:4px 16px 16px 16px; background:var(--chat-ai); }
+#terminalWorkspace .wb-chat-ai-bubble .wb-chat-msg.is-ai { padding:6px 0; }
+#terminalWorkspace .wb-chat-ai-bubble .wb-chat-work { margin:0 -8px; }
+#terminalWorkspace .wb-chat-ai-bubble .wb-chat-footer { margin:2px 0 0 -4px; }
+#terminalWorkspace .wb-chat-working { width:max-content; max-width:100%; margin:6px 0 8px; padding:8px 14px; border:1px solid var(--chat-line); border-radius:4px 16px 16px 16px; background:var(--chat-ai); }
+@media (max-width:560px) { #terminalWorkspace .wb-chat-bubble { max-width:88%; } #terminalWorkspace .wb-chat-ai-bubble { max-width:100%; } }
+
+/* "/" list above the composer: commands and skills of this terminal's AI. */
+#terminalWorkspace .wb-chat-composer { position:relative; }
+#terminalWorkspace .wb-chat-slash { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:5; max-height:260px; overflow:auto; padding:4px; border:1px solid var(--chat-line); border-radius:10px; background:var(--clean-surface, var(--wb-panel)); box-shadow:0 8px 24px #0003; }
+#terminalWorkspace .wb-chat-slash[hidden] { display:none; }
+#terminalWorkspace .wb-chat-slash button { display:flex; align-items:baseline; gap:10px; width:100%; min-height:30px; padding:5px 8px; border:0; border-radius:6px; background:none; color:var(--chat-text); font-size:13px; text-align:left; cursor:pointer; }
+#terminalWorkspace .wb-chat-slash button[aria-selected=true] { background:var(--chat-s2); }
+#terminalWorkspace .wb-chat-slash b { flex:none; font:600 12.5px/1.4 var(--font-mono, ui-monospace, monospace); }
+#terminalWorkspace .wb-chat-slash span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chat-muted); font-size:12px; }
+#terminalWorkspace .wb-chat-slash small { flex:none; color:var(--chat-muted); font-size:10.5px; }
+#terminalWorkspace .wb-chat-slash p { margin:0; padding:6px 8px; color:var(--chat-muted); font-size:12px; }
+
+/* "Stop and send" next to Send while the AI works. */
+#terminalWorkspace .wb-chat-force { width:auto; min-height:30px; padding:0 10px; border:1px solid var(--wb-usage-warn, #c98a2b); border-radius:7px; background:transparent; color:var(--chat-text); font-size:12px; white-space:nowrap; cursor:pointer; }
+#terminalWorkspace .wb-chat-force[hidden] { display:none; }

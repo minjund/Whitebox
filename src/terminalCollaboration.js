@@ -11,6 +11,8 @@ const safeId = value => /^[a-zA-Z0-9:._-]{1,200}$/u.test(value || '');
 // Chat targets: Claude and Codex are confirmed from their own logs,
 // Gemini and Grok from their own input prompt and turn markers on screen.
 const CHAT_PROVIDERS = ['claude', 'codex', 'gemini', 'grok'];
+// These CLIs take a message typed while they work at their next gap.
+const MID_TURN_PROVIDERS = ['claude', 'codex'];
 // Claude records a bracketed paste wrapped in <pasted_content id="…"> tags and
 // the parser bounds request text at 8000 characters. Compare what was typed.
 const typedText = value => String(value || '').replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '').replace(/\s+/gu, ' ').trim();
@@ -263,24 +265,40 @@ class TerminalCollaboration {
           || existing.expectedProviderPid !== targetProviderPid || existing.expectedProvider !== targetProvider) throw new Error('채팅 전송 식별자가 다른 요청에 사용되었습니다.');
         return { ok: ['running', 'completed'].includes(existing.state), job: existing };
       }
-      const immediate = payload.sendNow === true;
+      const interrupt = payload.interrupt === true;
       let target;
-      try { target = await this.target(groupId, targetId, immediate); }
+      // A working provider redraws constantly, so the frame is checked against
+      // the live output only for an idle send (below).
+      try { target = await this.target(groupId, targetId, true); }
       // A deferred send stays queued in the chat; `reason` tells the user what it waits for.
       // A missed process scan is as transient as a lagging frame.
       catch (error) { if (['TERMINAL_FRAME_STALE', 'AI_PROCESS_MISSING'].includes(error.code)) return { deferred: true, reason: 'screen' }; throw error; }
       if (target.live.creationId !== targetCreationId || target.child.pid !== targetProviderPid || target.child.provider !== targetProvider) throw new Error('채팅을 작성한 AI 세션이 바뀌었습니다.');
       if (target.frame.inputDraft) return { deferred: true, reason: 'draft' };
       if (require('../renderer/terminal-prompt').detectPendingPrompt(target.frame.text)) return { deferred: true, reason: 'prompt' };
-      if (!immediate && [...this.jobs.values()].some(job => job.targetId === targetId && ['sending', 'running'].includes(job.state))) return { deferred: true, reason: 'previous' };
-      if (!immediate && !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)) return { deferred: true, reason: 'working' };
       const native = await this.completion.observe(target.child);
-      if (!immediate && native.available && native.state === 'working') return { deferred: true, reason: 'working' };
+      const running = [...this.jobs.values()].filter(job => job.targetId === targetId && job.operation === 'chat' && ['sending', 'running'].includes(job.state));
+      // While Claude or Codex works, a message typed into it is taken in at the
+      // next gap (between tool calls), as when the person types in the terminal.
+      const busy = running.length > 0 || !inputReady(target.frame.readinessText ?? target.frame.text, target.child.provider)
+        || native.available && native.state === 'working';
+      // Gemini and Grok drop text typed mid-turn; they still wait for the answer.
+      if (busy && !interrupt && payload.sendNow !== true && !MID_TURN_PROVIDERS.includes(target.child.provider)) {
+        return { deferred: true, reason: running.length ? 'previous' : 'working' };
+      }
+      const immediate = busy || interrupt || payload.sendNow === true;
+      if (!immediate && target.frame.outputSequence !== target.live.outputSequence) return { deferred: true, reason: 'screen' };
       // Persist before the first write. A lost acknowledgement is never replayed.
       const job = { id, operation: 'chat', sourceId: targetId, targetId, groupId, request: message,
         expectedCreationId: targetCreationId, expectedProviderPid: targetProviderPid, expectedProvider: targetProvider,
-        immediate, state: 'sending', createdAt: this.now(), sentAt: this.now() };
+        immediate, midTurn: busy && !interrupt, interrupted: busy && interrupt, state: 'sending', createdAt: this.now(), sentAt: this.now() };
       this.jobs.set(id, job); this.save(job);
+      // "Stop and send": one Escape ends the current turn, then the message goes in.
+      if (busy && interrupt) {
+        await this.manager().respond(targetId, 'Escape', { deliveryId: `chat-stop:${randomUUID()}` });
+        for (const item of running) { Object.assign(item, { state: 'stopped', error: '', finishedAt: this.now() }); this.save(item); }
+        await new Promise(resolve => setTimeout(resolve, this.interruptSettleMs ?? 800));
+      }
       try { Object.assign(job, await this.send(groupId, targetId, message, `chat:${id}`, payload, true, immediate), { state: 'running' }); }
       catch (error) { Object.assign(job, { state: error.deliveryState === 'unknown' ? 'interrupted' : 'failed', error: String(error.message || error) }); }
       this.save(job);

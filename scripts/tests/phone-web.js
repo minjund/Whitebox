@@ -109,6 +109,7 @@ function selfSigned(name) {
       : { available: true, revision: 'r1', provider: 'claude', providerPid: 42, creationId: 'c1', state: 'working', messages }; },
     send: async payload => { chatCalls.push({ send: payload }); return { ok: true, job: { id: payload.id } }; },
     stop: async payload => { chatCalls.push({ stop: payload }); return { ok: true }; },
+    commands: async params => { chatCalls.push({ commands: params }); return [{ name: 'compact', description: '대화 압축', source: 'builtin', insert: '/compact', file: '/secret/path' }]; },
   };
   const store = new PhoneWebStore(path.join(dir, 'phone-web.json'));
   const web = new PhoneWeb({ tailscale, request, chat, root, store, port: BASE, pollMs: 60000 });
@@ -179,8 +180,14 @@ function selfSigned(name) {
   const target = { panel_id: 'p1', surface_id: 't1', creation_id: 'c1', provider_pid: 42, provider: 'claude' };
   const id = '0b3a5c1e-1111-4222-8333-444455556666';
   assert.equal((await post('/api/chat/send', { id, text: '고쳐줘', ...target })).status, 200);
-  assert.deepEqual(chatCalls.at(-1), { send: { id, message: '고쳐줘', groupId: 'p1', targetId: 't1', targetCreationId: 'c1', targetProviderPid: 42, targetProvider: 'claude' } },
+  assert.deepEqual(chatCalls.at(-1), { send: { id, message: '고쳐줘', interrupt: false, groupId: 'p1', targetId: 't1', targetCreationId: 'c1', targetProviderPid: 42, targetProvider: 'claude' } },
     'a message goes through the guarded chat send with the exact AI session');
+  assert.equal((await post('/api/chat/send', { id, text: '멈추고 이거', interrupt: true, ...target })).status, 200);
+  assert.equal(chatCalls.at(-1).send.interrupt, true, '"stop and send" is passed on');
+  const commandList = await fetchRaw({ port, pathname: '/api/commands?surface_id=t1&provider=claude&provider_pid=42', headers: token });
+  assert.deepEqual(chatCalls.at(-1), { commands: { surfaceId: 't1', provider: 'claude', providerPid: 42 } });
+  assert.deepEqual(JSON.parse(commandList.text), { commands: [{ name: 'compact', description: '대화 압축', source: 'builtin', insert: '/compact' }] }, 'the "/" list carries names and what to type, nothing else');
+  assert.equal((await fetchRaw({ port, pathname: '/api/commands?surface_id=t1' })).status, 401, 'the "/" list needs the page token');
   assert.equal((await post('/api/chat/stop', target)).status, 200);
   assert.deepEqual(chatCalls.at(-1), { stop: { groupId: 'p1', targetId: 't1', targetCreationId: 'c1', targetProviderPid: 42, targetProvider: 'claude' } }, 'stop names the exact AI session');
   for (const key of ['1', '2', '3', 'enter', 'esc']) {

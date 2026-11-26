@@ -123,7 +123,10 @@ function providerFromPosixProcess(processInfo = {}) {
   const name = (rawName.startsWith('/') && executablePath.startsWith(rawName)
     ? executablePath : rawName).split('/').pop();
   if (name === 'claude') return /--type=|\/applications\/claude\.app|\bdaemon\s+run\b/.test(args) ? null : 'claude';
-  if (name === 'codex' || /^codex-/.test(name)) return /\bapp-server\b|\/applications\/(?:chatgpt|codex)\.app/.test(args) ? null : 'codex';
+  // Older npm builds named the binary codex-<target triple>. Other codex-*
+  // executables (codex-code-mode-host, sandboxes) are helpers the CLI starts;
+  // taking one for the CLI hides the real process and its conversation log.
+  if (name === 'codex' || /^codex-(?:x86_64|aarch64|arm64|x64)-/.test(name)) return /\bapp-server\b|\/applications\/(?:chatgpt|codex)\.app/.test(args) ? null : 'codex';
   if (name === 'gemini') return 'gemini';
   if (name === 'grok') return 'grok';
   if (name !== 'node') return null;

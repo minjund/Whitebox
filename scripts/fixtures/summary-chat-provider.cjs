@@ -1,11 +1,11 @@
 'use strict';
 // Real PTY fixture; no network or AI account. Each request has a distinct turn marker.
 process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
-let draft = '', request = '', turn = 0, waiting = false;
+let draft = '', request = '', turn = 0, waiting = false, timer = null;
 const provider = process.argv[2] || 'codex';
 const draw = body => process.stdout.write(`\x1b[2J\x1b[H\x1b[999;1H\x1b[?2004hSUMMARY_READY ${process.pid}\r\n${body}\r\n`);
 const finish = () => {
-  waiting = false;
+  waiting = false; timer = null;
   const footer = provider === 'claude' ? `✻ Baked for ${++turn}s` : `Worked for 1s • 3:${String(40 + ++turn).padStart(2, '0')} PM`;
   // Real providers can retain the preceding working line in scrollback.
   // The explicit later finish and empty input must release the queued request.
@@ -15,6 +15,8 @@ draw('› Ask Codex to do anything\r\n  GPT-6 · fixture');
 process.stdin.on('data', data => {
   if (data.includes('\x03')) process.exit(0);
   if (waiting) { if (/[ya\x1b]/u.test(data)) finish(); return; }
+  // Escape while working ends the turn, as Claude and Codex do.
+  if (data === '\x1b' && timer) { clearTimeout(timer); timer = null; draw(`› ${request}\r\n■ FIXTURE_INTERRUPTED\r\n› Ask Codex to do anything\r\n  GPT-6 · fixture`); return; }
   draft += data.replace(/\x1b\[(?:200|201)~/gu, '');
   if (!draft.includes('\r')) return;
   request = draft.split('\r')[0]; draft = '';
@@ -23,6 +25,7 @@ process.stdin.on('data', data => {
     draw("Edited src/example.js\r\nWould you like to make the following edits?\r\n1. Yes, proceed (y)\r\n2. Yes, and don't ask again (a)\r\n3. No, and tell Codex what to do differently (esc)");
   } else {
     draw(`› ${request}\r\n• Working (esc to interrupt)`);
-    setTimeout(finish, request.includes('HOLD') ? 1800 : 350);
+    clearTimeout(timer);
+    timer = setTimeout(finish, request.includes('HOLD') ? 1800 : 350);
   }
 });

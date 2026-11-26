@@ -2,8 +2,10 @@
 // Chat panes: a Claude or Codex terminal can be read as a conversation inside its
 // own pane on the shared canvas. The bubbles come from that terminal's own
 // transcript (no model call). A message typed here goes to that exact AI session
-// through the guarded collaboration delivery: it waits while the AI works or
-// the terminal has a draft or a question, and is never resent after a restart.
+// through the guarded collaboration delivery: while the AI works it goes in at
+// once and the AI takes it at its next gap; "stop and send" ends the current
+// turn first. It waits only for a terminal draft or question, and is never
+// resent after a restart. "/" lists the AI's commands and skills.
 // The terminal keeps running and keeps its size under the chat.
 window.WhiteboxTerminalChat = function createTerminalChat(context) {
   const { root, api, t, esc } = context;
@@ -39,7 +41,11 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
   }
 
   const chatRender = window.WhiteboxChatRender({ t, esc });
-  const { markdown, toggle, copies, workLabel, toolDetail, turnHtml, turnsOf } = chatRender;
+  const { markdown, toggle, copies, workLabel, toolDetail, turnHtml, turnsOf, slashMenu } = chatRender;
+  const commands = new Map();       // id -> { at, providerPid, promise } of the "/" list
+  const menus = new Map();          // id -> slash menu of the pane's composer
+  const SENDER = { claude: 'Claude', codex: 'Codex' };
+  const working = id => Boolean(views.get(id)?.working || member(id)?.activity?.state === 'working');
 
   const WAIT = {
     working: '앞 작업이 끝나면 보낼게요',
@@ -59,17 +65,17 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       if (view.truncated) parts.push(`<p class="wb-chat-more">${esc(t('더 이전 대화는 터미널에서 볼 수 있어요.'))}</p>`);
       if (!view.messages.length) parts.push(`<p class="wb-chat-empty">${esc(t('아직 대화가 없어요. 아래에 첫 요청을 써 보세요.'))}</p>`);
       copies.set(id, []);
-      const working = Boolean(view.working || member(id)?.activity?.state === 'working');
+      const busy = working(id), sender = SENDER[member(id)?.provider] || '';
       const turns = turnsOf(view.messages);
-      turns.forEach((turn, index) => parts.push(turnHtml(id, turn, working && index === turns.length - 1)));
+      turns.forEach((turn, index) => parts.push(turnHtml(id, turn, busy && index === turns.length - 1, sender)));
     }
     for (const item of queues.get(id) || []) {
-      const status = item.state === 'sending' ? t('보내는 중…')
-        : item.state === 'sent' ? t('보냈어요')
+      const status = item.state === 'sending' ? t(item.interrupt ? '작업을 멈추고 보내는 중…' : '보내는 중…')
+        : item.state === 'sent' ? t(item.job?.interrupted ? '작업을 멈추고 보냈어요' : item.job?.midTurn ? '작업 중에 넣었어요 · AI가 틈이 나면 읽어요' : '보냈어요')
           : item.state === 'failed' ? `${t('보내지 못했어요')} · ${item.error || ''}`
             : t(WAIT[item.reason] || '보낼 차례를 기다려요');
       const actions = item.state === 'failed' ? `<button type="button" data-chat-retry="${esc(item.id)}">${esc(t('다시 보내기'))}</button><button type="button" data-chat-discard="${esc(item.id)}">${esc(t('지우기'))}</button>`
-        : item.state === 'queued' ? `<button type="button" data-chat-discard="${esc(item.id)}">${esc(t('취소'))}</button>` : '';
+        : item.state === 'queued' ? `${['draft', 'prompt'].includes(item.reason) ? '' : `<button type="button" data-chat-force="${esc(item.id)}">${esc(t('멈추고 보내기'))}</button>`}<button type="button" data-chat-discard="${esc(item.id)}">${esc(t('취소'))}</button>` : '';
       parts.push(`<div class="wb-chat-msg is-user is-pending" data-state="${esc(item.state)}"><div class="wb-chat-bubble"><div class="wb-chat-user-text">${esc(item.text).replace(/\n/gu, '<br>')}</div></div><div class="wb-chat-status">${esc(status)}${actions}</div></div>`);
     }
     const activity = member(id)?.activity;
@@ -87,13 +93,18 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
     if (!pane) return null;
     node = document.createElement('div');
     node.className = 'wb-chat';
-    node.innerHTML = `<div class="wb-chat-log" role="log" aria-live="polite" tabindex="0"></div><div class="wb-chat-notice" hidden></div><form class="wb-chat-composer"><textarea rows="2" aria-label="${esc(t('AI에게 보낼 메시지'))}" placeholder="${esc(t('AI에게 보낼 메시지 · Enter로 보내기, Shift+Enter 줄바꿈'))}"></textarea><button type="submit" class="wb-chat-send">${esc(t('보내기'))}</button></form>`;
+    const forceTitle = `${t('지금 하던 작업을 멈추고 바로 보내요')} (${/Mac/u.test(navigator.platform) ? '⌘' : 'Ctrl'}+Enter)`;
+    node.innerHTML = `<div class="wb-chat-log" role="log" aria-live="polite" tabindex="0"></div><div class="wb-chat-notice" hidden></div><form class="wb-chat-composer"><div class="wb-chat-slash" role="listbox" aria-label="${esc(t('명령과 스킬'))}" hidden></div><textarea rows="2" aria-label="${esc(t('AI에게 보낼 메시지'))}" placeholder="${esc(t('AI에게 보낼 메시지 · / 명령·스킬 · Enter로 보내기, Shift+Enter 줄바꿈'))}"></textarea><button type="button" class="wb-chat-force" title="${esc(forceTitle)}" hidden>${esc(t('멈추고 보내기'))}</button><button type="submit" class="wb-chat-send">${esc(t('보내기'))}</button></form>`;
     pane.node.querySelector('.wb-terminal-mount').after(node);
     const input = node.querySelector('textarea');
+    const menu = slashMenu({ input, box: node.querySelector('.wb-chat-slash'), load: () => slashCommands(id) });
+    menus.set(id, menu);
     input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(id, input); }
+      if (menu.keydown(event)) return;
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(id, input, { interrupt: event.metaKey || event.ctrlKey }); }
     });
     node.querySelector('form').addEventListener('submit', event => { event.preventDefault(); submit(id, input); });
+    node.querySelector('.wb-chat-force').addEventListener('click', () => submit(id, input, { interrupt: true }));
     node.addEventListener('click', event => {
       const link = event.target.closest('a[data-chat-link]');
       if (link) { event.preventDefault(); if (/^https:\/\//u.test(link.href)) api.openExternal?.(link.href)?.catch?.(() => {}); return; }
@@ -107,6 +118,7 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       }
       if (button.dataset.chatTerminalView !== undefined) { setMode(id, 'terminal'); context.save(); render(); context.focusTerminal(id); }
       if (button.dataset.chatRetry) { const item = (queues.get(id) || []).find(entry => entry.id === button.dataset.chatRetry); if (item) retry(id, item); }
+      if (button.dataset.chatForce) { const item = (queues.get(id) || []).find(entry => entry.id === button.dataset.chatForce); if (item?.state === 'queued') { item.interrupt = true; renderPane(id); flush(id); } }
       if (button.dataset.chatDiscard) { queues.set(id, (queues.get(id) || []).filter(entry => entry.id !== button.dataset.chatDiscard)); renderPane(id); }
     });
     // Whether the reader is at the latest message; a hidden log reads as scrolled to the top.
@@ -133,6 +145,7 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       }
       if (atBottom) log.scrollTop = log.scrollHeight;
     }
+    node.querySelector('.wb-chat-force').hidden = !working(id);
     const prompt = window.WhiteboxTerminalPrompts?.detectPendingPrompt(context.readTerminal(id) || '');
     const notice = node.querySelector('.wb-chat-notice');
     notice.hidden = !prompt;
@@ -142,7 +155,18 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
     }
   }
 
-  function submit(id, input) {
+  // The "/" list of this terminal's AI, read again after 30 s or a new AI process.
+  function slashCommands(id) {
+    const m = member(id);
+    if (!m || !PROVIDERS.includes(m.provider) || typeof api.slashCommands !== 'function') return Promise.resolve([]);
+    const cached = commands.get(id);
+    if (cached && cached.providerPid === m.providerPid && Date.now() - cached.at < 30000) return cached.promise;
+    const promise = Promise.resolve(api.slashCommands({ id, provider: m.provider, providerPid: m.providerPid })).then(items => Array.isArray(items) ? items : []).catch(() => []);
+    commands.set(id, { at: Date.now(), providerPid: m.providerPid, promise });
+    return promise;
+  }
+
+  function submit(id, input, { interrupt = false } = {}) {
     const text = input.value.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/gu, '').trim();
     if (!text) return;
     if (text.length > 8000) { context.report(t('메시지가 너무 길어요. 8000자 이하로 나눠 보내 주세요.'), id); return; }
@@ -150,7 +174,8 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
     if (!supported(id)) { context.report(t('이 터미널의 AI를 아직 확인하지 못했어요. 잠시 뒤 다시 보내 주세요.'), id); return; }
     const queue = queues.get(id) || [];
     if (queue.filter(item => item.state === 'queued').length >= 20) { context.report(t('보낼 메시지가 너무 많이 쌓였어요.'), id); return; }
-    queue.push({ id: crypto.randomUUID(), text, state: 'queued', reason: '', at: Date.now(),
+    menus.get(id)?.close();
+    queue.push({ id: crypto.randomUUID(), text, state: 'queued', reason: '', at: Date.now(), interrupt,
       targetCreationId: s.creationId, targetProviderPid: m.providerPid, targetProvider: m.provider });
     queues.set(id, queue);
     input.value = '';
@@ -174,10 +199,11 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       Object.assign(item, { state: 'failed', error: t('AI 세션이 바뀌어서 보내지 않았어요.') }); renderPane(id); return;
     }
     if (!fresh(id)) { item.reason = 'connection'; renderPane(id); return; }
-    if (queue.some(entry => entry.state === 'sending' || entry.state === 'sent' && entry.job?.state === 'running')) { item.reason = 'previous'; renderPane(id); return; }
+    // One delivery at a time; a message typed while the AI works goes in now.
+    if (queue.some(entry => entry.state === 'sending')) return;
     flushing.add(id); item.state = 'sending'; renderPane(id);
     try {
-      const result = await api.terminalCollaboration({ operation: 'chat-send', id: item.id, groupId: context.groupId(id), targetId: id, message: item.text,
+      const result = await api.terminalCollaboration({ operation: 'chat-send', id: item.id, groupId: context.groupId(id), targetId: id, message: item.text, interrupt: item.interrupt === true,
         targetCreationId: item.targetCreationId, targetProviderPid: item.targetProviderPid, targetProvider: item.targetProvider });
       if (result?.deferred) Object.assign(item, { state: 'queued', reason: result.reason });
       else if (result?.ok) { Object.assign(item, { state: 'sent', sentAt: Date.now(), job: result.job }); context.submitted?.(result.job); }
@@ -203,7 +229,8 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       // A typed message leaves the queue once the transcript shows it.
       const users = (views.get(id).messages || []).filter(message => message.role === 'user');
       const queue = queues.get(id);
-      if (queue) queues.set(id, queue.filter(item => !(item.state === 'sent' && (users.some(message => same(message.text, item.text) && Date.parse(message.timestamp) >= item.at - 5000) || Date.now() - item.sentAt > 120000))));
+      // A mid-turn message shows up when the AI takes it in, which can take a long tool run.
+      if (queue) queues.set(id, queue.filter(item => !(item.state === 'sent' && (users.some(message => same(message.text, item.text) && Date.parse(message.timestamp) >= item.at - 5000) || Date.now() - item.sentAt > (item.job?.midTurn ? 900000 : 120000)))));
     } catch (error) {
       views.set(id, { ...(views.get(id) || { messages: [] }), error: String(error.message || error) });
     } finally {
@@ -295,7 +322,7 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
           const job = byId.get(item.id);
           if (!job || item.state !== 'sent') continue;
           item.job = job;
-          if (['failed', 'interrupted', 'stopped'].includes(job.state)) Object.assign(item, { state: 'failed', error: job.error || t('터미널을 확인해 주세요.') });
+          if (['failed', 'interrupted', 'stopped'].includes(job.state)) Object.assign(item, { state: 'failed', error: job.error || (job.state === 'stopped' ? t('작업을 멈췄어요.') : t('터미널을 확인해 주세요.')) });
         }
         if (queue.some(item => item.state === 'queued')) flush(id);
       }
@@ -305,7 +332,7 @@ window.WhiteboxTerminalChat = function createTerminalChat(context) {
       return [...queues].flatMap(([id, queue]) => queue.filter(item => ['sending', 'sent'].includes(item.state))
         .map(item => ({ id: item.id, targetId: id, targetCreationId: item.targetCreationId, targetProviderPid: item.targetProviderPid, targetProvider: item.targetProvider })));
     },
-    forget(id) { modes.delete(id); queues.delete(id); views.delete(id); nodes.get(id)?.remove(); nodes.delete(id); },
+    forget(id) { modes.delete(id); queues.delete(id); views.delete(id); commands.delete(id); menus.delete(id); nodes.get(id)?.remove(); nodes.delete(id); },
     // Only the chosen view is kept; typed messages are never resent after a restart.
     serialize() { return [...modes].map(([id, value]) => ({ id, creationId: value.creationId, mode: value.mode })); },
     restore(saved) {

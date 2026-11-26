@@ -122,13 +122,34 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   await waitFor(`(document.querySelector(${q(`${pane} .wb-chat-rail`)})?.textContent || '').includes('echo CHAT_PING')`, 'opening the summary shows the tool call and its command');
   assert.doesNotMatch(await log(), /hidden/u, 'injected reminders are not shown');
 
-  // A second message while the AI works waits, then goes after the first reply.
+  // A second message while the AI works goes in at once; the AI takes it at its next gap.
   await type('CHAT_HOLD');
   await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('› CHAT_HOLD')`, 'first message reaches the PTY');
   await type('CHAT_NEXT');
-  await waitFor(`Boolean(document.querySelector(${q(`${pane} .is-pending`)}))`, 'the next message waits in the chat');
-  assert.equal(await evaluate(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('CHAT_NEXT')`), false, 'nothing is typed into the working AI');
-  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_NEXT')`, 'the queued message is delivered after the reply', 15000);
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('CHAT_NEXT')`, 'a message typed while the AI works is typed into it at once', 5000);
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_NEXT')`, 'and is answered', 15000);
+
+  // "Stop and send" (Ctrl/Cmd+Enter): one Escape ends the running turn, then the message goes in.
+  await type('CHAT_HOLD_AGAIN');
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('› CHAT_HOLD_AGAIN')`, 'a long turn is running');
+  await evaluate(`(() => { const input = document.querySelector(${q(`${pane} .wb-chat textarea`)}); input.focus(); input.value = 'CHAT_FORCE';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })); })()`);
+  await waitFor(`WhiteboxTerminal.readTerminal(${lit(id)}).includes('SUMMARY_REPLY CHAT_FORCE')`, 'stop and send delivers the message', 15000);
+  assert(manager.get(id, true).replay.includes('FIXTURE_INTERRUPTED'), 'the running turn was stopped first');
+  assert(!manager.get(id, true).replay.includes('SUMMARY_REPLY CHAT_HOLD_AGAIN'), 'the stopped turn never finished');
+
+  // "/" lists the AI's commands and skills; Enter picks one into the input.
+  const input = `document.querySelector(${q(`${pane} .wb-chat textarea`)})`;
+  await evaluate(`(() => { const box = ${input}; box.focus(); box.value = '/comp'; box.setSelectionRange(5, 5); box.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await waitFor(`!document.querySelector(${q(`${pane} .wb-chat-slash`)}).hidden && (document.querySelector(${q(`${pane} .wb-chat-slash`)}).textContent || '').includes('/compact')`, 'typing "/" lists the commands');
+  await evaluate(`${input}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+  assert.equal(await evaluate(`${input}.value`), '/compact ', 'Enter picks the command instead of sending');
+  assert.equal(await evaluate(`document.querySelector(${q(`${pane} .wb-chat-slash`)}).hidden`), true, 'the list closes after a pick');
+  await evaluate(`${input}.value = ''; true`);
+
+  // Messenger layout: the AI's answer is a bubble on the left under its name.
+  assert.equal(await evaluate(`document.querySelector(${q(`${pane} .wb-chat-ai .wb-chat-sender`)})?.textContent`), 'Codex', 'the answer bubble names its AI');
+  assert(await evaluate(`(() => { const log = document.querySelector(${q(`${pane} .wb-chat-log`)}).getBoundingClientRect(); const ai = document.querySelector(${q(`${pane} .wb-chat-ai-bubble`)}).getBoundingClientRect(); const me = [...document.querySelectorAll(${q(`${pane} .wb-chat-msg.is-user .wb-chat-bubble`)})].at(-1).getBoundingClientRect(); return ai.left - log.left < 40 && log.right - me.right < 40; })()`), 'the AI bubble sits on the left and mine on the right');
 
   // A question in the terminal is answered there.
   await type('CHAT_PERMISSION');
@@ -161,7 +182,7 @@ async function run({ evaluate, waitFor, manager, win, fixture }) {
   await evaluate(`document.querySelector(${q(`${pane} [data-chat-terminal]`)}).click()`);
   await waitFor(`!document.querySelector(${q(pane)}).classList.contains('is-chat') && document.querySelector(${q(`${pane} .wb-chat`)}).hidden`, 'the pane button returns it to the terminal');
   assert(fixture.conversationReads > 0);
-  console.log('PASS chat pane: switch and pane toggle, transcript bubbles with Markdown and folded tools, guarded delivery to the real PTY with a waiting queue, terminal questions, unchanged PTY size, reload persistence');
+  console.log('PASS chat pane: switch and pane toggle, transcript bubbles with Markdown and folded tools, guarded delivery to the real PTY (mid-turn, stop and send), / command list, messenger bubbles, terminal questions, unchanged PTY size, reload persistence');
   // Under npm stdout is a pipe (asynchronous); let the line reach it before the caller exits the app.
   await new Promise(resolve => process.stdout.write('', resolve));
 }
