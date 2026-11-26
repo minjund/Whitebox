@@ -24,6 +24,8 @@ function cleanUserText(text) {
     .replace(/<command-name>([\s\S]*?)<\/command-name>/gu, '$1')
     .replace(/<command-args>([\s\S]*?)<\/command-args>/gu, ' $1')
     .replace(/<\/?pasted_content(?:\s+id="[^"]*")?\s*>/gu, '')
+    // Claude's wrapper around a message typed while it worked: keep the message.
+    .replace(/^\s*The user sent a new message while you were working:\n([\s\S]*?)(?:\n\nThis is how Claude Code surfaces messages[\s\S]*)?$/u, '$1')
     .replace(/\n{3,}/gu, '\n\n')
     .trim();
 }
@@ -50,7 +52,10 @@ function chatRows(messages) {
 }
 
 // A message typed while Claude works is logged as a queued_command attachment
-// where Claude took it in, not as a user row; the chat shows it there too.
+// where Claude took it in. Newer Claude also writes it into the next user row
+// (wrapped, see cleanUserText); older Claude does not, so the chat adds it.
+// The attachment keeps the time it was typed, so it is placed by file order:
+// at the latest time seen before it.
 function claudeQueued(file, size, tailBytes) {
   const start = Math.max(0, size - tailBytes);
   const buffer = Buffer.alloc(size - start);
@@ -59,13 +64,18 @@ function claudeQueued(file, size, tailBytes) {
   const lines = buffer.toString('utf8').split('\n');
   if (start > 0) lines.shift();
   const rows = [];
+  let latest = 0;
   for (const line of lines) {
+    const stamp = Date.parse(line.match(/"timestamp":"([^"]+)"/u)?.[1] || '');
+    if (Number.isFinite(stamp) && !line.includes('"queued_command"')) latest = Math.max(latest, stamp);
     if (!line.includes('"queued_command"')) continue;
     let row; try { row = JSON.parse(line); } catch { continue; }
     const item = row?.attachment;
     if (item?.type !== 'queued_command' || typeof item.prompt !== 'string' || row.isSidechain) continue;
     if (item.origin?.kind && item.origin.kind !== 'human' || item.commandMode && item.commandMode !== 'prompt') continue;
-    rows.push({ id: `queued:${row.uuid || rows.length}`, role: 'user', text: item.prompt, timestamp: row.timestamp || '' });
+    const typed = Date.parse(row.timestamp);
+    const at = Math.max(Number.isFinite(typed) ? typed : 0, latest);
+    rows.push({ id: `queued:${row.uuid || rows.length}`, role: 'user', text: item.prompt, timestamp: at ? new Date(at).toISOString() : '' });
   }
   return rows;
 }
@@ -118,7 +128,12 @@ class TerminalConversation {
     if (!cached || cached.key !== `${stat.mtimeMs}:${stat.size}`) {
       const session = this.parser(child.provider)({ file, mtimeMs: stat.mtimeMs, size: stat.size }, { fullHistory: true, maxBytes: this.tailBytes });
       let messages = session?.messages;
-      if (child.provider === 'claude') { try { messages = mergeQueued(messages, claudeQueued(file, stat.size, this.tailBytes)); } catch { /* the parsed rows stand */ } }
+      if (child.provider === 'claude') {
+        try {
+          const said = new Set((messages || []).filter(message => message.role === 'user').map(message => cleanUserText(message.text)));
+          messages = mergeQueued(messages, claudeQueued(file, stat.size, this.tailBytes).filter(row => !said.has(cleanUserText(row.text))));
+        } catch { /* the parsed rows stand */ }
+      }
       cached = { key: `${stat.mtimeMs}:${stat.size}`, messages: chatRows(messages), truncated: stat.size > this.tailBytes };
       this.cache.delete(file);
       this.cache.set(file, cached);

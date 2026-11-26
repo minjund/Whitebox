@@ -54,6 +54,8 @@ assert.equal(render.turnHtml('layout', turns[0], false, '<b>').includes('<b>'), 
   const file = path.join(dir, 'log.jsonl');
   const rows = [
     { type: 'user', uuid: 'u', timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: '첫 요청' } },
+    { type: 'user', uuid: 'r', timestamp: '2026-11-26T10:00:20Z', message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] } },
+    // Written where Claude took it in, stamped with the time it was typed.
     { type: 'attachment', uuid: 'q1', timestamp: '2026-11-26T10:00:05Z', attachment: { type: 'queued_command', prompt: '이것도 해줘', commandMode: 'prompt', origin: { kind: 'human' } } },
     { type: 'attachment', uuid: 'q2', timestamp: '2026-11-26T10:00:06Z', attachment: { type: 'queued_command', prompt: '<task-notification>done</task-notification>', commandMode: 'task-notification', origin: { kind: 'task-notification' } } },
     { type: 'attachment', uuid: 'q3', timestamp: '2026-11-26T10:00:07Z', isSidechain: true, attachment: { type: 'queued_command', prompt: 'subagent', commandMode: 'prompt' } },
@@ -63,10 +65,12 @@ assert.equal(render.turnHtml('layout', turns[0], false, '<b>').includes('<b>'), 
     const queued = claudeQueued(file, fs.statSync(file).size, 1 << 20);
     assert.deepEqual(queued.map(row => [row.id, row.role, row.text]), [['queued:q1', 'user', '이것도 해줘']], 'only human messages, never notifications or subagents');
     const merged = mergeQueued([
-      { id: 'a', role: 'assistant', text: '보는 중', timestamp: '2026-11-26T10:00:03Z' },
-      { id: 'b', role: 'assistant', text: '반영했어요', timestamp: '2026-11-26T10:00:09Z' },
+      { id: 'a', role: 'tool', text: 'sleep', timestamp: '2026-11-26T10:00:03Z' },
+      { id: 'b', role: 'assistant', text: '반영했어요', timestamp: '2026-11-26T10:00:21Z' },
     ], queued);
-    assert.deepEqual(merged.map(row => row.id), ['a', 'queued:q1', 'b'], 'placed where Claude took it in');
+    assert.deepEqual(merged.map(row => row.id), ['a', 'queued:q1', 'b'], 'placed where Claude took it in, not when it was typed');
+    const { cleanUserText } = require('../../src/terminalConversation');
+    assert.equal(cleanUserText('The user sent a new message while you were working:\n이것도 해줘\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn.'), '이것도 해줘', 'newer Claude wraps it in the next user row: only the message is shown');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 console.log('PASS chat Markdown and turns: nested lists, kept numbering, quotes and rules, https-only links, escaped HTML, tables, Paseo-style turns, work labels and tool details, messenger bubbles, mid-turn messages from the Claude log');
