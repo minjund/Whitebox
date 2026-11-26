@@ -960,10 +960,30 @@ function startPhoneWeb() {
   const directory = userFile('terminal-collaboration');
   const loopback = /^(127\.\d+\.\d+\.\d+|::1)$/.test(process.env.WHITEBOX_PHONE_WEB_HOST || '') ? process.env.WHITEBOX_PHONE_WEB_HOST : '';
   const { PhoneWeb, PhoneWebStore, PORT } = require('./src/phoneWeb');
+  const request = (method, params) => require('./bin/panel-control').request(method, params, { directory });
+  const collaboration = () => {
+    if (!terminalCollaboration) throw new Error('Whitebox is not ready yet.');
+    return terminalCollaboration;
+  };
   phoneWeb = new PhoneWeb({
     tailscale: new (require('./src/tailscale').Tailscale)(),
-    request: (method, params) => require('./bin/panel-control').request(method, params, { directory }),
-    attach: params => require('./bin/remote').attach(params, { dir: directory }),
+    request,
+    // The same transcript, guarded send and stop as a desktop chat pane.
+    chat: {
+      async read({ surfaceId, revision }) {
+        const live = terminalManager && await terminalManager.get(surfaceId, false);
+        if (!live || live.status !== 'running') return { available: false, reason: 'session' };
+        const [conversation, screen] = await Promise.all([
+          terminalConversation().read({ id: surfaceId, creationId: live.creationId, revision }),
+          request('remote.read', { surface_id: surfaceId, lines: 30 }).catch(() => null),
+        ]);
+        const state = screen?.state || '';
+        // An AI's question is shown as the screen's own words; the phone answers with keys.
+        return { ...conversation, creationId: live.creationId, state, question: state === 'waiting' ? String(screen.text || '') : '' };
+      },
+      send: payload => collaboration().chatSend(payload),
+      stop: payload => collaboration().chatStop(payload),
+    },
     root: __dirname,
     store: new PhoneWebStore(userFile('phone-web.json')),
     port: Number(process.env.WHITEBOX_PHONE_WEB_PORT) || PORT,

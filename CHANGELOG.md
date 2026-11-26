@@ -3,6 +3,14 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.3.0 - 2026-11-26
+
+- The phone page now shows conversations, not terminals. Tapping a Claude terminal opens its Claude conversation and a Codex terminal its Codex conversation, drawn exactly like the desktop chat panes (your request on the right, the answer as text, tool work folded into one row). It loads at once: the 1.15 MB terminal engine is no longer sent to the phone, and pages and conversations are gzipped.
+- Only Claude and Codex terminals are listed; shells, Gemini and Grok are hidden on the phone.
+- Messages from the phone go through the same safe send as the desktop chat: they wait while the AI works or has a question open, and are never sent twice.
+- When the AI asks something (for example permission to run a command), the phone shows the question as it appears on screen with 1, 2, 3, Enter and Esc buttons to answer. A Stop button (with a confirmation) ends the current work. If the AI exits, the earlier conversation stays readable and the input is locked.
+- Opening the phone page no longer shrinks the terminal on the computer to phone width.
+
 ## 2.2.0 - 2026-11-25
 
 - Open Whitebox on your phone in the browser: Settings › Remote turns on a phone page served only on this computer's Tailscale address (port 7790). It lists every panel's terminals with their state and opens one live, with a key row (Esc, Tab, Ctrl, arrows, ^C, Enter) and a compose box that sends text, Korean included, in one go. Works on iPhone and Android with no app to install; add it to the home screen to use it like an app.

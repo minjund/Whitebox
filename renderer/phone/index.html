@@ -10,10 +10,11 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.png">
   <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="stylesheet" href="/chat.css">
   <link rel="stylesheet" href="/phone.css">
   <title>Whitebox</title>
 </head>
-<body>
+<body id="terminalWorkspace">
   <main id="list" class="view">
     <header class="bar">
       <div class="brand"><img src="/icon.png" alt=""><span>Whitebox</span></div>
@@ -22,30 +23,33 @@
     <p id="notice" class="notice" hidden></p>
     <div id="panels"></div>
   </main>
-  <section id="terminal" class="view" hidden>
+  <section id="chat" class="view wb-chat" hidden>
     <header class="bar">
       <button id="back" class="icon" type="button" aria-label="Back">‹</button>
-      <div class="title"><strong id="termTitle"></strong><span id="termMeta"></span></div>
-      <span id="termState" class="dot"></span>
+      <div class="title"><strong id="chatTitle"></strong><span id="chatMeta"></span></div>
+      <button id="stop" class="stop" type="button" hidden></button>
+      <span id="chatState" class="dot"></span>
     </header>
-    <div id="screen"></div>
-    <p id="ended" class="ended" hidden><span></span><button id="reconnect" type="button"></button></p>
-    <div id="keys" class="keys" role="toolbar">
-      <button type="button" data-key="esc">Esc</button>
-      <button type="button" data-key="tab">Tab</button>
-      <button type="button" data-mod="ctrl">Ctrl</button>
-      <button type="button" data-key="up">↑</button>
-      <button type="button" data-key="down">↓</button>
-      <button type="button" data-key="left">←</button>
-      <button type="button" data-key="right">→</button>
-      <button type="button" data-key="ctrl-c">^C</button>
-      <button type="button" data-key="enter">⏎</button>
+    <div id="stopConfirm" class="confirm" hidden><span></span><button type="button" data-stop="yes"></button><button type="button" data-stop="no"></button></div>
+    <div id="log" class="wb-chat-log" role="log" aria-live="polite"></div>
+    <div id="question" class="question" hidden>
+      <strong></strong>
+      <pre></pre>
+      <div class="keys" role="toolbar">
+        <button type="button" data-key="1">1</button>
+        <button type="button" data-key="2">2</button>
+        <button type="button" data-key="3">3</button>
+        <button type="button" data-key="enter">Enter</button>
+        <button type="button" data-key="esc">Esc</button>
+      </div>
     </div>
-    <form id="compose" class="compose" autocomplete="off">
-      <textarea id="text" rows="1" enterkeyhint="send"></textarea>
-      <button id="send" type="submit"></button>
+    <p id="off" class="off" hidden></p>
+    <form id="compose" class="wb-chat-composer" autocomplete="off">
+      <textarea id="text" rows="1"></textarea>
+      <button id="send" class="wb-chat-send" type="submit"></button>
     </form>
   </section>
+  <script src="/chat-render.js"></script>
   <script type="module" src="/phone.js"></script>
 </body>
 </html>

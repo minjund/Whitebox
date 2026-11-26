@@ -1,7 +1,10 @@
 'use strict';
 // The phone page: a small web page Whitebox serves on this computer's
 // Tailscale address only. A phone signed in to the same Tailscale account
-// opens http://<tailscale ip>:7790 and sees every panel's terminals live.
+// opens http://<tailscale ip>:7790 and reads every Claude and Codex terminal
+// as a conversation (the same transcript the desktop chat panes read). There
+// is no terminal view on the phone: input goes through the guarded chat send,
+// and an AI's question is answered with a few fixed keys.
 //
 // Who may come in:
 // - The server listens on the Tailscale address only, never on Wi-Fi.
@@ -10,23 +13,27 @@
 //   failure refuses the request.
 // - The Host header must be this computer's Tailscale name or address, which
 //   stops DNS rebinding. API calls need the page's token (a custom header, so
-//   another site cannot send them without a CORS preflight we never answer);
-//   the live socket checks Origin and the token.
+//   another site cannot send them without a CORS preflight we never answer).
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 const { EventEmitter } = require('events');
 
 const PORT = 7790;
 const PORT_TRIES = 10;
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_BODY = 64 * 1024;
-const MAX_MESSAGE = 1024 * 1024;
-const SEND_BACKLOG = 1024 * 1024;
+const CHAT_PROVIDERS = new Set(['claude', 'codex']);
+// The phone gets the latest part of a conversation; older turns stay on the computer.
+const PHONE_MESSAGES = 150;
+// Keys an AI's question is answered with. Nothing else reaches the terminal raw.
+const ANSWER_KEYS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', 'enter', 'esc']);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+// Shared with the desktop chat panes so both draw a conversation the same way.
+const SHARED = { '/chat-render.js': 'chat-render.js', '/chat.css': 'styles-terminal-chat.css' };
 
 class PhoneWebStore {
   constructor(file, fileSystem = fs) { this.file = file; this.fileSystem = fileSystem; }
@@ -41,52 +48,14 @@ class PhoneWebStore {
   }
 }
 
-// --- Minimal WebSocket (RFC 6455) server side: text frames, ping/pong, close.
-function acceptKey(key) { return crypto.createHash('sha1').update(String(key) + WS_GUID).digest('base64'); }
-function encodeFrame(payload, opcode = 1) {
-  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), 'utf8');
-  const length = body.length;
-  const header = length < 126 ? Buffer.alloc(2) : length < 65536 ? Buffer.alloc(4) : Buffer.alloc(10);
-  header[0] = 0x80 | opcode;
-  if (length < 126) header[1] = length;
-  else if (length < 65536) { header[1] = 126; header.writeUInt16BE(length, 2); }
-  else { header[1] = 127; header.writeBigUInt64BE(BigInt(length), 2); }
-  return Buffer.concat([header, body]);
-}
-// Client frames must be masked. Returns { frames, rest } or throws on a
-// protocol error.
-function decodeFrames(buffer) {
-  const frames = [];
-  let offset = 0;
-  while (buffer.length - offset >= 2) {
-    const first = buffer[offset], second = buffer[offset + 1];
-    if (!(second & 0x80)) throw new Error('Unmasked client frame');
-    let length = second & 0x7f, at = offset + 2;
-    if (length === 126) { if (buffer.length < at + 2) break; length = buffer.readUInt16BE(at); at += 2; }
-    else if (length === 127) {
-      if (buffer.length < at + 8) break;
-      const big = buffer.readBigUInt64BE(at);
-      if (big > BigInt(MAX_MESSAGE)) throw new Error('Frame too large');
-      length = Number(big); at += 8;
-    }
-    if (length > MAX_MESSAGE) throw new Error('Frame too large');
-    if (buffer.length < at + 4 + length) break;
-    const mask = buffer.subarray(at, at + 4), data = Buffer.from(buffer.subarray(at + 4, at + 4 + length));
-    for (let i = 0; i < data.length; i += 1) data[i] ^= mask[i & 3];
-    frames.push({ fin: Boolean(first & 0x80), opcode: first & 0x0f, data });
-    offset = at + 4 + length;
-  }
-  return { frames, rest: buffer.subarray(offset) };
-}
-
 function peerAddress(socket) { return String(socket?.remoteAddress || '').replace(/^::ffff:/, ''); }
 
 class PhoneWeb extends EventEmitter {
-  constructor({ tailscale, request, attach, root, store, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser() } = {}) {
+  constructor({ tailscale, request, chat, root, store, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser() } = {}) {
     super();
     this.tailscale = tailscale;
     this.request = request;
-    this.attach = attach;
+    this.chat = chat;
     this.root = root;
     this.store = store;
     this.basePort = port;
@@ -103,7 +72,6 @@ class PhoneWeb extends EventEmitter {
     this.self = null;
     this.state = this.enabled ? 'starting' : 'off';
     this.devices = new Map();
-    this.sockets = new Set();
     this.timer = null;
     this.refreshing = null;
   }
@@ -149,7 +117,6 @@ class PhoneWeb extends EventEmitter {
 
   listen(host, port) {
     const server = http.createServer((req, res) => this.handle(req, res).catch(error => this.fail(res, 500, error.message)));
-    server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head).catch(() => socket.destroy()));
     server.headersTimeout = 10000;
     server.requestTimeout = 15000;
     return new Promise((resolve, reject) => {
@@ -168,8 +135,6 @@ class PhoneWeb extends EventEmitter {
     const server = this.server;
     this.server = null;
     this.listening = null;
-    for (const socket of this.sockets) socket.destroy();
-    this.sockets.clear();
     if (server) await new Promise(resolve => server.close(() => resolve()));
   }
 
@@ -186,9 +151,10 @@ class PhoneWeb extends EventEmitter {
 
   status() {
     const port = this.listening?.port || this.basePort;
-    const cutoff = this.now() - 2 * 60 * 1000;
-    const devices = [...this.devices.values()].filter(device => device.live > 0 || device.at >= cutoff)
-      .map(device => ({ device: device.device, os: device.os, live: device.live > 0, at: device.at }));
+    const cutoff = this.now() - 2 * 60 * 1000, live = this.now() - 10 * 1000;
+    // An open page polls every few seconds, so a request in the last 10 s means it is open now.
+    const devices = [...this.devices.values()].filter(device => device.at >= cutoff)
+      .map(device => ({ device: device.device, os: device.os, live: device.at >= live, at: device.at }));
     return {
       enabled: this.enabled,
       state: this.state,
@@ -219,13 +185,13 @@ class PhoneWeb extends EventEmitter {
     return { ok: true, address, device: who };
   }
 
-  seen(address, device, delta = 0) {
-    const entry = this.devices.get(address) || { device: device.device || address, os: device.os || '', live: 0, at: 0 };
+  seen(address, device) {
+    const entry = this.devices.get(address) || { device: device.device || address, os: device.os || '', at: 0 };
+    const fresh = this.now() - entry.at > 10 * 1000;
     entry.at = this.now();
-    entry.live = Math.max(0, entry.live + delta);
     if (device.device) entry.device = device.device;
     this.devices.set(address, entry);
-    if (delta) this.emit('change', this.status());
+    if (fresh) this.emit('change', this.status());
   }
 
   fail(res, code, error) {
@@ -234,19 +200,28 @@ class PhoneWeb extends EventEmitter {
     res.end(JSON.stringify({ error }));
   }
 
-  json(res, value) {
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify(value));
+  // Conversations are text; gzip makes a long one a fraction of its size on a phone link.
+  send(res, req, headers, body) {
+    if (body.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+      body = zlib.gzipSync(body);
+      headers = { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' };
+    }
+    res.writeHead(200, { ...headers, 'content-length': body.length });
+    res.end(req.method === 'HEAD' ? undefined : body);
   }
 
-  headers(type, host) {
+  json(res, req, value) {
+    this.send(res, req, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, Buffer.from(JSON.stringify(value)));
+  }
+
+  headers(type) {
     return {
       'content-type': type,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
-      'content-security-policy': `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://${host} data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
     };
   }
 
@@ -260,117 +235,56 @@ class PhoneWeb extends EventEmitter {
       return this.api(req, res, url);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return this.fail(res, 405, 'Method not allowed');
-    return this.file(res, url.pathname, req.headers.host);
+    return this.file(req, res, url.pathname);
   }
 
-  file(res, pathname, host) {
+  file(req, res, pathname) {
     const phone = path.join(this.root, 'renderer', 'phone');
-    const engine = path.join(this.root, 'node_modules', '@crunchloop', 'ghostty-web', 'dist');
     let file;
     if (pathname === '/' || pathname === '/index.html') file = path.join(phone, 'index.html');
+    else if (SHARED[pathname]) file = path.join(this.root, 'renderer', SHARED[pathname]);
     else if (/^\/[a-z-]+\.(js|css|webmanifest)$/.test(pathname)) file = path.join(phone, pathname.slice(1));
     else if (pathname === '/icon.png') file = path.join(this.root, 'build', 'icon.png');
-    else if (/^\/engine\/[A-Za-z0-9_-]+(\.es)?\.js$/.test(pathname)) file = path.join(engine, pathname.slice('/engine/'.length));
     if (!file) return this.fail(res, 404, 'Not found');
     let body;
     try { body = fs.readFileSync(file); } catch { return this.fail(res, 404, 'Not found'); }
     if (path.basename(file) === 'index.html') body = Buffer.from(String(body).replace('__WHITEBOX_TOKEN__', this.token).replace('__WHITEBOX_HOST__', escapeHtml(os.hostname())));
-    res.writeHead(200, this.headers(TYPES[path.extname(file)] || 'application/octet-stream', host));
-    res.end(body);
+    this.send(res, req, this.headers(TYPES[path.extname(file)] || 'application/octet-stream'), body);
   }
 
   async api(req, res, url) {
-    if (req.method === 'GET' && url.pathname === '/api/list') return this.json(res, await this.request('remote.list', {}));
-    if (req.method === 'POST' && url.pathname === '/api/send') {
-      const body = await readJson(req);
-      return this.json(res, await this.request('remote.send', { surface_id: String(body.surface_id || ''), text: String(body.text || ''), submit: body.submit !== false }));
+    if (req.method === 'GET' && url.pathname === '/api/list') return this.json(res, req, chatList(await this.request('remote.list', {})));
+    if (req.method === 'GET' && url.pathname === '/api/chat') {
+      const result = await this.chat.read({ surfaceId: String(url.searchParams.get('surface_id') || ''), revision: String(url.searchParams.get('revision') || '') });
+      return this.json(res, req, phoneConversation(result));
     }
-    if (req.method === 'POST' && url.pathname === '/api/key') {
-      const body = await readJson(req);
-      return this.json(res, await this.request('remote.key', { surface_id: String(body.surface_id || ''), key: String(body.key || '') }));
+    if (req.method !== 'POST') return this.fail(res, 404, 'Not found');
+    const body = await readJson(req);
+    const target = {
+      groupId: String(body.panel_id || ''), targetId: String(body.surface_id || ''),
+      targetCreationId: String(body.creation_id || ''), targetProviderPid: Number(body.provider_pid), targetProvider: String(body.provider || '')
+    };
+    if (url.pathname === '/api/chat/send') return this.json(res, req, await this.chat.send({ id: String(body.id || ''), message: String(body.text || ''), ...target }));
+    if (url.pathname === '/api/chat/stop') return this.json(res, req, await this.chat.stop(target));
+    if (url.pathname === '/api/key') {
+      const key = String(body.key || '');
+      if (!ANSWER_KEYS.has(key)) return this.fail(res, 400, 'Unknown key');
+      return this.json(res, req, await this.request('remote.key', { surface_id: target.targetId, key }));
     }
     return this.fail(res, 404, 'Not found');
   }
+}
 
-  async upgrade(req, socket) {
-    socket.on('error', () => {});
-    const reject = (code, text) => { socket.end(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
-    const admitted = await this.admit(req);
-    if (!admitted.ok) return reject(admitted.code, 'Forbidden');
-    const url = new URL(req.url, 'http://phone.invalid');
-    const host = String(req.headers.host || '').toLowerCase();
-    if (url.pathname !== '/api/attach' || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') return reject(404, 'Not Found');
-    if (String(req.headers.origin || '').toLowerCase() !== `http://${host}`) return reject(403, 'Forbidden');
-    if (url.searchParams.get('t') !== this.token) return reject(401, 'Unauthorized');
-    const key = req.headers['sec-websocket-key'];
-    if (!key) return reject(400, 'Bad Request');
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`);
-    socket.setNoDelay(true);
-    this.sockets.add(socket);
-    this.seen(admitted.address, admitted.device, 1);
-    this.relay(socket, {
-      surface_id: url.searchParams.get('surface_id') || '',
-      cols: Number(url.searchParams.get('cols')) || 80,
-      rows: Number(url.searchParams.get('rows')) || 24
-    }, () => { this.sockets.delete(socket); this.seen(admitted.address, admitted.device, -1); });
-  }
+// Only terminals running Claude or Codex: the rest have no conversation to show.
+function chatList(value) {
+  const panels = (value?.panels || []).map(panel => ({ id: panel.id, name: panel.name,
+    terminals: (panel.terminals || []).filter(item => item.running && CHAT_PROVIDERS.has(item.provider)) }));
+  return { panels: panels.filter(panel => panel.terminals.length) };
+}
 
-  // One browser socket <-> one panel-control live view.
-  relay(socket, params, onClose) {
-    let view = null, closed = false, buffer = Buffer.alloc(0), parts = [];
-    const send = value => { if (!socket.destroyed) socket.write(encodeFrame(JSON.stringify(value))); };
-    const finish = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(ping);
-      try { view?.close(); } catch {}
-      onClose();
-      if (!socket.destroyed) socket.end(encodeFrame(Buffer.alloc(0), 8));
-    };
-    const ping = setInterval(() => { if (!socket.destroyed) socket.write(encodeFrame(Buffer.alloc(0), 9)); }, 25000);
-    ping.unref?.();
-    socket.on('close', finish);
-    // The HTTP server keeps upgraded sockets half-open; a phone that drops
-    // the connection without a close frame still ends the view.
-    socket.on('end', finish);
-    socket.on('drain', () => view?.resume?.());
-    socket.on('data', chunk => {
-      buffer = Buffer.concat([buffer, chunk]);
-      let decoded;
-      try { decoded = decodeFrames(buffer); } catch { socket.destroy(); return; }
-      buffer = Buffer.from(decoded.rest);
-      for (const frame of decoded.frames) {
-        if (frame.opcode === 8) { finish(); return; }
-        if (frame.opcode === 9) { socket.write(encodeFrame(frame.data, 10)); continue; }
-        if (frame.opcode === 10) continue;
-        if (frame.opcode === 1 || frame.opcode === 0) {
-          parts.push(frame.data);
-          if (parts.reduce((sum, part) => sum + part.length, 0) > MAX_MESSAGE) { socket.destroy(); return; }
-          if (!frame.fin) continue;
-          const text = Buffer.concat(parts).toString('utf8');
-          parts = [];
-          let message;
-          try { message = JSON.parse(text); } catch { continue; }
-          if (!view) continue;
-          if (message?.type === 'input' && typeof message.data === 'string') view.send({ type: 'input', data: message.data });
-          else if (message?.type === 'resize') view.send({ type: 'resize', cols: Number(message.cols), rows: Number(message.rows) });
-          else if (message?.type === 'focus') view.send({ type: 'focus' });
-          else if (message?.type === 'detach') finish();
-        }
-      }
-    });
-    Promise.resolve().then(() => this.attach(params)).then(opened => {
-      if (closed) { opened.close(); return; }
-      view = opened;
-      send({ type: 'open', result: opened.result || {} });
-      view.on('frame', frame => {
-        send(frame);
-        if (socket.writableLength > SEND_BACKLOG) view.pause?.();
-        if (frame?.type === 'end') finish();
-      });
-      view.on('close', finish);
-    }, error => { send({ type: 'end', reason: error.message }); finish(); });
-  }
+function phoneConversation(result) {
+  if (!result?.messages || result.messages.length <= PHONE_MESSAGES) return result;
+  return { ...result, messages: result.messages.slice(-PHONE_MESSAGES), truncated: true };
 }
 
 function readJson(req) {
@@ -385,4 +299,4 @@ function readJson(req) {
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`); }
 function safeUser() { try { return os.userInfo().username; } catch { return ''; } }
 
-module.exports = { PhoneWeb, PhoneWebStore, encodeFrame, decodeFrames, acceptKey, PORT };
+module.exports = { PhoneWeb, PhoneWebStore, chatList, PORT };

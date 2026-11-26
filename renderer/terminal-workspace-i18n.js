@@ -5,9 +5,9 @@
   // terminal output, paths, user labels and AI text are never translated here.
   const messages = [
   ["원격", "Remote", "远程"],
-  ["휴대폰에서 이 컴퓨터의 터미널을 엽니다.", "Open this computer's terminals on your phone.", "在手机上打开这台电脑的终端。"],
+  ["휴대폰에서 이 컴퓨터의 Claude·Codex 대화를 봅니다.", "See this computer's Claude and Codex conversations on your phone.", "在手机上查看这台电脑的 Claude 和 Codex 对话。"],
   ["휴대폰에서 열기", "Open on phone", "在手机上打开"],
-  ["꺼져 있어요. 켜면 같은 Tailscale 계정의 휴대폰에서 이 컴퓨터의 터미널을 열 수 있어요.", "Off. Turn it on to open this computer's terminals from a phone signed in to the same Tailscale account.", "已关闭。开启后，登录同一 Tailscale 账号的手机可以打开这台电脑的终端。"],
+  ["꺼져 있어요. 켜면 같은 Tailscale 계정의 휴대폰에서 이 컴퓨터의 Claude·Codex 대화를 보고 보낼 수 있어요.", "Off. Turn it on to read and reply to this computer's Claude and Codex conversations from a phone signed in to the same Tailscale account.", "已关闭。开启后，登录同一 Tailscale 账号的手机可以查看并回复这台电脑的 Claude 和 Codex 对话。"],
   ["켜는 중…", "Turning on…", "正在开启…"],
   ["켜져 있어요. 휴대폰에서 아래 주소를 여세요.", "On. Open the address below on your phone.", "已开启。在手机上打开下面的地址。"],
   ["Tailscale이 설치되어 있지 않아요. 이 컴퓨터와 휴대폰에 Tailscale을 설치하고 같은 계정으로 로그인하세요.", "Tailscale is not installed. Install Tailscale on this computer and your phone and sign in to the same account.", "未安装 Tailscale。请在这台电脑和手机上安装 Tailscale 并登录同一账号。"],

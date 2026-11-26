@@ -153,7 +153,7 @@
       <section data-settings-page="connections" aria-labelledby="wbSettingsConnectionsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsConnectionsTitle">연결</h3><p>AI 연결과 API 키를 관리합니다.</p></div>
         <div class="wb-settings-provider"><span>C</span><div><strong>Codex · Claude</strong><p>이 컴퓨터에 설치된 CLI 사용</p></div></div>
       </section>
-      <section data-settings-page="remote" aria-labelledby="wbSettingsRemoteTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsRemoteTitle">원격</h3><p>휴대폰에서 이 컴퓨터의 터미널을 엽니다.</p></div><div id="wbRemote"></div></section>
+      <section data-settings-page="remote" aria-labelledby="wbSettingsRemoteTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsRemoteTitle">원격</h3><p>휴대폰에서 이 컴퓨터의 Claude·Codex 대화를 봅니다.</p></div><div id="wbRemote"></div></section>
       <section data-settings-page="shortcuts" aria-labelledby="wbSettingsShortcutsTitle" hidden><div class="wb-settings-section-title"><h3 id="wbSettingsShortcutsTitle">단축키</h3><p>자주 사용하는 동작을 빠르게 실행합니다.</p></div><dl class="wb-settings-shortcuts"><dt>⌘/Ctrl T</dt><dd>새 터미널</dd><dt>⌘/Ctrl D</dt><dd>오른쪽 분할</dd><dt>⌘/Ctrl Shift D</dt><dd>아래 분할</dd><dt>⌘/Ctrl 1–9</dt><dd>터미널 탭 이동</dd><dt>⌘/Ctrl Shift [ / ]</dt><dd>분할 터미널 이동</dd></dl></section>
       </div></div><footer class="wb-settings-footer"><span id="wbSettingsSaved" role="status" aria-live="polite"></span><span id="wbSettingsDone"><button value="close">완료</button></span></footer>
     </form></dialog>
