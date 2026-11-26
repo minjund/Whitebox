@@ -8,8 +8,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icon.png">
-  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="stylesheet" href="/chat.css">
   <link rel="stylesheet" href="/phone.css">
   <title>Whitebox</title>
@@ -19,7 +19,9 @@
     <header class="bar">
       <div class="brand"><img src="/icon.png" alt=""><span>Whitebox</span></div>
       <span class="host">__WHITEBOX_HOST__</span>
+      <button id="install" class="install" type="button" hidden></button>
     </header>
+    <p id="installHint" class="hint" hidden></p>
     <p id="notice" class="notice" hidden></p>
     <div id="panels"></div>
   </main>

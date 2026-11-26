@@ -1,7 +1,8 @@
 'use strict';
 // The phone page: a small web page Whitebox serves on this computer's
 // Tailscale address only. A phone signed in to the same Tailscale account
-// opens http://<tailscale ip>:7790 and reads every Claude and Codex terminal
+// opens https://<tailscale name>:7790 (http://<tailscale ip>:7790 while the
+// tailnet has no HTTPS) and reads every Claude and Codex terminal
 // as a conversation (the same transcript the desktop chat panes read). There
 // is no terminal view on the phone: input goes through the guarded chat send,
 // and an AI's question is answered with a few fixed keys.
@@ -14,7 +15,16 @@
 // - The Host header must be this computer's Tailscale name or address, which
 //   stops DNS rebinding. API calls need the page's token (a custom header, so
 //   another site cannot send them without a CORS preflight we never answer).
+//
+// HTTPS: with HTTPS turned on in the tailnet, Tailscale hands out a real
+// certificate for this computer's name; the page is then served over https so
+// the phone can install it as an app (service worker, standalone window).
+// One port answers both: a TLS hello goes to https, anything else to plain
+// http, which then only redirects to the https address.
 const http = require('http');
+const https = require('https');
+const net = require('net');
+const tls = require('tls');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -34,6 +44,9 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
   '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 // Shared with the desktop chat panes so both draw a conversation the same way.
 const SHARED = { '/chat-render.js': 'chat-render.js', '/chat.css': 'styles-terminal-chat.css' };
+// Tailscale renews the certificate itself; ask again twice a day for the current one.
+const CERT_TTL_MS = 12 * 60 * 60 * 1000;
+const CERT_RETRY_MS = 10 * 60 * 1000;
 
 class PhoneWebStore {
   constructor(file, fileSystem = fs) { this.file = file; this.fileSystem = fileSystem; }
@@ -51,7 +64,8 @@ class PhoneWebStore {
 function peerAddress(socket) { return String(socket?.remoteAddress || '').replace(/^::ffff:/, ''); }
 
 class PhoneWeb extends EventEmitter {
-  constructor({ tailscale, request, chat, root, store, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser() } = {}) {
+  constructor({ tailscale, request, chat, root, store, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser(),
+    certTtlMs = CERT_TTL_MS, certRetryMs = CERT_RETRY_MS } = {}) {
     super();
     this.tailscale = tailscale;
     this.request = request;
@@ -61,6 +75,13 @@ class PhoneWeb extends EventEmitter {
     this.basePort = port;
     // Tests bind a loopback address instead of asking Tailscale for one.
     this.bindHost = bindHost;
+    this.certTtlMs = certTtlMs;
+    this.certRetryMs = certRetryMs;
+    this.secureContext = null;
+    this.certTask = null;
+    this.certFailedAt = 0;
+    this.httpsReason = '';
+    this.sockets = new Set();
     this.log = log;
     this.pollMs = pollMs;
     this.now = now;
@@ -88,25 +109,74 @@ class PhoneWeb extends EventEmitter {
     return this.status();
   }
 
+  // One update at a time; a refresh asked for meanwhile (a certificate that just
+  // arrived) runs once more right after it instead of being dropped.
   refresh() {
-    if (!this.refreshing) this.refreshing = this.update().finally(() => { this.refreshing = null; });
+    if (this.refreshing) { this.again = true; return this.refreshing; }
+    this.refreshing = (async () => { do { this.again = false; await this.update(); } while (this.again); })().finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
 
   async update() {
     if (!this.enabled) { await this.close(); this.self = null; this.setState('off'); return; }
-    const self = this.bindHost ? { state: 'running', ip: this.bindHost, dnsName: '', shortName: '', userId: 'local' } : await this.tailscale.status();
+    const self = this.bindHost
+      ? { state: 'running', ip: this.bindHost, dnsName: '', shortName: '', userId: 'local', certDomains: [] }
+      : await this.tailscale.status();
     this.self = self;
     if (self.state !== 'running') { await this.close(); this.setState(self.state === 'missing' ? 'no-tailscale' : 'tailscale-off'); return; }
-    if (this.server && this.listening?.host === self.ip) { this.setState('on'); return; }
+    const secure = this.secure(self);
+    const mode = secure ? 'https' : 'http';
+    if (this.server && this.listening?.host === self.ip && this.listening.mode === mode) {
+      // A renewed certificate is swapped in without dropping open pages.
+      if (secure && this.listening.cert !== secure.cert) { this.servers.encrypted.setSecureContext({ cert: secure.cert, key: secure.key }); this.listening.cert = secure.cert; }
+      this.setState('on');
+      return;
+    }
+    const port = this.listening?.port;
     await this.close();
-    for (let port = this.basePort; port < this.basePort + PORT_TRIES; port += 1) {
-      try { await this.listen(self.ip, port); this.setState('on'); return; }
+    // Keep the port the page had when only the protocol changes.
+    const ports = [port, ...Array.from({ length: PORT_TRIES }, (_, index) => this.basePort + index)].filter((value, index, all) => value && all.indexOf(value) === index);
+    for (const port of ports) {
+      try {
+        await this.listen(self.ip, port, secure);
+        if (this.state === 'on') this.emit('change', this.status()); else this.setState('on');
+        return;
+      }
       catch (error) {
         if (error.code !== 'EADDRINUSE') { this.log(error); this.setState('error'); return; }
       }
     }
     this.setState('port-busy');
+  }
+
+  // The current certificate for this computer's Tailscale name, or null while
+  // the page has to stay on http. Getting one can take a minute the first time,
+  // so it runs in the background and the page switches to https when it lands.
+  secure(self) {
+    const name = String(self.dnsName || '').toLowerCase();
+    const current = this.secureContext?.name === name ? this.secureContext : null;
+    if (!name) { this.httpsReason = 'no-magicdns'; return null; }
+    if (!(self.certDomains || []).includes(name)) { this.httpsReason = 'https-off'; return null; }
+    const fresh = current && this.now() - current.at < this.certTtlMs;
+    const waiting = this.certFailedAt && this.now() - this.certFailedAt < this.certRetryMs;
+    if (!fresh && !waiting && !this.certTask) {
+      if (!current) this.httpsReason = 'cert-pending';
+      this.certTask = Promise.resolve().then(() => this.tailscale.cert(name)).then(pem => {
+        tls.createSecureContext(pem);
+        this.secureContext = { ...pem, name, at: this.now() };
+        this.certFailedAt = 0;
+        this.httpsReason = '';
+      }).catch(error => {
+        this.certFailedAt = this.now();
+        if (!this.secureContext) this.httpsReason = 'cert-failed';
+        this.log(error);
+      }).finally(() => {
+        this.certTask = null;
+        if (this.enabled) this.refresh().catch(() => {});
+      });
+    }
+    if (current) this.httpsReason = '';
+    return current;
   }
 
   setState(state) {
@@ -115,17 +185,36 @@ class PhoneWeb extends EventEmitter {
     this.emit('change', this.status());
   }
 
-  listen(host, port) {
-    const server = http.createServer((req, res) => this.handle(req, res).catch(error => this.fail(res, 500, error.message)));
-    server.headersTimeout = 10000;
-    server.requestTimeout = 15000;
+  listen(host, port, secure = null) {
+    const handle = (req, res) => this.handle(req, res).catch(error => this.fail(res, 500, error.message));
+    const plain = http.createServer(secure ? (req, res) => this.redirect(req, res).catch(error => this.fail(res, 500, error.message)) : handle);
+    const encrypted = secure ? https.createServer({ cert: secure.cert, key: secure.key }, handle) : null;
+    for (const inner of [plain, encrypted].filter(Boolean)) {
+      inner.headersTimeout = 10000;
+      inner.requestTimeout = 15000;
+    }
+    // The first byte of a connection tells TLS (0x16, a handshake record) from plain http.
+    const server = net.createServer(socket => {
+      this.sockets.add(socket);
+      socket.on('close', () => this.sockets.delete(socket));
+      socket.on('error', () => {});
+      socket.setTimeout(15000, () => socket.destroy());
+      socket.once('data', chunk => {
+        socket.setTimeout(0);
+        socket.pause();
+        socket.unshift(chunk);
+        (encrypted && chunk[0] === 0x16 ? encrypted : plain).emit('connection', socket);
+        process.nextTick(() => socket.resume());
+      });
+    });
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {
         server.removeListener('error', reject);
         server.on('error', error => this.log(error));
         this.server = server;
-        this.listening = { host, port };
+        this.servers = { plain, encrypted };
+        this.listening = { host, port, mode: secure ? 'https' : 'http', cert: secure?.cert || '' };
         resolve();
       });
     });
@@ -134,8 +223,14 @@ class PhoneWeb extends EventEmitter {
   async close() {
     const server = this.server;
     this.server = null;
+    this.servers = null;
     this.listening = null;
-    if (server) await new Promise(resolve => server.close(() => resolve()));
+    if (!server) return;
+    const closed = new Promise(resolve => server.close(() => resolve()));
+    // Open pages keep their connections alive; a switch to https must not wait for them.
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
+    await closed;
   }
 
   async dispose() {
@@ -146,11 +241,23 @@ class PhoneWeb extends EventEmitter {
 
   url() {
     if (!this.listening) return '';
+    if (this.listening.mode === 'https') return `https://${this.self.dnsName}:${this.listening.port}`;
     return `http://${this.listening.host}:${this.listening.port}`;
+  }
+
+  // In https mode plain http only sends the phone to the https address
+  // (an old http bookmark keeps working).
+  async redirect(req, res) {
+    const admitted = await this.admit(req);
+    if (!admitted.ok) return this.fail(res, admitted.code, admitted.error);
+    const { pathname } = new URL(req.url, 'http://phone.invalid');
+    res.writeHead(308, { location: `${this.url()}${pathname}`, 'cache-control': 'no-store' });
+    res.end();
   }
 
   status() {
     const port = this.listening?.port || this.basePort;
+    const secure = this.listening?.mode === 'https';
     const cutoff = this.now() - 2 * 60 * 1000, live = this.now() - 10 * 1000;
     // An open page polls every few seconds, so a request in the last 10 s means it is open now.
     const devices = [...this.devices.values()].filter(device => device.at >= cutoff)
@@ -159,7 +266,10 @@ class PhoneWeb extends EventEmitter {
       enabled: this.enabled,
       state: this.state,
       url: this.state === 'on' ? this.url() : '',
-      nameUrl: this.state === 'on' && this.self?.dnsName ? `http://${this.self.shortName}:${port}` : '',
+      nameUrl: this.state === 'on' && !secure && this.self?.dnsName ? `http://${this.self.shortName}:${port}` : '',
+      https: this.state === 'on' && secure,
+      // Why the page is still on http: no-magicdns, https-off, cert-pending, cert-failed.
+      httpsReason: this.state === 'on' && !secure ? this.httpsReason : '',
       ip: this.self?.ip || '',
       port,
       user: this.user,
@@ -243,7 +353,7 @@ class PhoneWeb extends EventEmitter {
     let file;
     if (pathname === '/' || pathname === '/index.html') file = path.join(phone, 'index.html');
     else if (SHARED[pathname]) file = path.join(this.root, 'renderer', SHARED[pathname]);
-    else if (/^\/[a-z-]+\.(js|css|webmanifest)$/.test(pathname)) file = path.join(phone, pathname.slice(1));
+    else if (/^\/[a-z0-9-]+\.(js|css|webmanifest|png)$/.test(pathname) && pathname !== '/icon.png') file = path.join(phone, pathname.slice(1));
     else if (pathname === '/icon.png') file = path.join(this.root, 'build', 'icon.png');
     if (!file) return this.fail(res, 404, 'Not found');
     let body;
