@@ -18,7 +18,10 @@ const STRINGS = {
   '쉬는 중': ['Idle', '空闲'],
   '열린 Claude·Codex 터미널이 없어요.': ['No Claude or Codex terminals are open.', '没有打开的 Claude 或 Codex 终端。'],
   '컴퓨터의 Whitebox 화면이 준비되지 않았어요. 앱이 켜져 있는지 확인하세요.': ['Whitebox on the computer is not ready. Check that the app is open.', '电脑上的 Whitebox 尚未就绪，请确认应用已打开。'],
-  '컴퓨터에 연결할 수 없어요. 다시 시도하는 중…': ['Cannot reach the computer. Retrying…', '无法连接电脑，正在重试…'],
+  '컴퓨터에 연결할 수 없어요. Whitebox와 Tailscale이 켜져 있는지 확인하세요. 다시 시도하는 중…': ['Cannot reach the computer. Check that Whitebox and Tailscale are on. Retrying…', '无法连接电脑。请确认 Whitebox 和 Tailscale 已打开。正在重试…'],
+  '앱으로 설치': ['Install app', '安装应用'],
+  '공유 버튼 › 홈 화면에 추가를 누르면 앱처럼 쓸 수 있어요.': ['Tap Share › Add to Home Screen to use this as an app.', '点按“共享” › “添加到主屏幕”即可像应用一样使用。'],
+  '컴퓨터의 Whitebox 설정 › 원격에서 HTTPS를 켜면 앱으로 설치할 수 있어요.': ['Turn on HTTPS in Whitebox Settings › Remote on the computer to install this as an app.', '在电脑上的 Whitebox 设置 › 远程 中开启 HTTPS 后即可安装为应用。'],
   '보내기': ['Send', '发送'],
   'AI에게 보낼 메시지': ['Message to the AI', '发给 AI 的消息'],
   '멈추기': ['Stop', '停止'],
@@ -72,28 +75,41 @@ function stateOf(terminal) {
 }
 
 async function api(path, body) {
+  // A computer that is off does not answer at all over Tailscale; give up and retry instead of hanging.
   const response = await fetch(path, {
     method: body ? 'POST' : 'GET',
     headers: { 'x-whitebox-token': token, ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
-    cache: 'no-store'
+    cache: 'no-store',
+    signal: AbortSignal.timeout?.(10000)
   });
   const value = await response.json().catch(() => ({}));
+  // The page was kept on the phone while Whitebox restarted with a new token: load the current page once.
+  if (response.status === 401) reloadOnce();
   if (!response.ok) throw new Error(value.error || String(response.status));
   return value;
 }
+function reloadOnce() {
+  let last = 0;
+  try { last = Number(sessionStorage.getItem('wb-reloaded')) || 0; } catch {}
+  if (Date.now() - last < 30000) return;
+  try { sessionStorage.setItem('wb-reloaded', String(Date.now())); } catch {}
+  location.reload();
+}
 
 // --- List: Claude and Codex terminals only.
-let listTimer = 0;
+let listTimer = 0, listLoading = false;
 function notice(text) { const element = $('#notice'); element.textContent = text || ''; element.hidden = !text; }
 async function loadList() {
+  if (listLoading) return;
+  listLoading = true;
   try {
     const { panels } = await api('/api/list');
     notice('');
     renderList(panels || []);
   } catch (error) {
-    notice(/not ready/i.test(error.message) ? t('컴퓨터의 Whitebox 화면이 준비되지 않았어요. 앱이 켜져 있는지 확인하세요.') : t('컴퓨터에 연결할 수 없어요. 다시 시도하는 중…'));
-  }
+    notice(/not ready/i.test(error.message) ? t('컴퓨터의 Whitebox 화면이 준비되지 않았어요. 앱이 켜져 있는지 확인하세요.') : t('컴퓨터에 연결할 수 없어요. Whitebox와 Tailscale이 켜져 있는지 확인하세요. 다시 시도하는 중…'));
+  } finally { listLoading = false; }
 }
 function renderList(panels) {
   const root = $('#panels');
@@ -144,7 +160,7 @@ function showList() {
 let current = null, view = null, pollTimer = 0, polling = false, flushing = false, queue = [], lastHtml = '', pinned = true;
 const WAIT = { working: '앞 작업이 끝나면 보낼게요', previous: '앞 작업이 끝나면 보낼게요', draft: '쓰던 글이 입력창에 있어서 기다려요',
   prompt: 'AI의 질문에 먼저 답해 주세요', screen: '터미널 상태를 확인하는 중이에요', connection: '터미널 상태를 확인하는 중이에요' };
-// crypto.randomUUID needs a secure context; this page is plain http over Tailscale.
+// crypto.randomUUID needs a secure context; the page is plain http until the tailnet has HTTPS.
 function uuid() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -346,3 +362,24 @@ $('#compose').addEventListener('submit', event => { event.preventDefault(); subm
 document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (current) poll(); else loadList(); });
 
 showList();
+
+// --- Installing as an app. Needs https (a secure context) for the service worker.
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+function hint(text) { $('#installHint').textContent = text || ''; $('#installHint').hidden = !text; }
+if (isSecureContext && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if (!standalone) {
+  if (!isSecureContext) hint(t('컴퓨터의 Whitebox 설정 › 원격에서 HTTPS를 켜면 앱으로 설치할 수 있어요.'));
+  else if (ios) hint(t('공유 버튼 › 홈 화면에 추가를 누르면 앱처럼 쓸 수 있어요.'));
+}
+$('#install').textContent = t('앱으로 설치');
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('#install').hidden = false; });
+window.addEventListener('appinstalled', () => { installPrompt = null; $('#install').hidden = true; hint(''); });
+$('#install').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  const prompt = installPrompt;
+  installPrompt = null;
+  $('#install').hidden = true;
+  try { await prompt.prompt(); } catch {}
+});

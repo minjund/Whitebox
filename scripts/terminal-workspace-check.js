@@ -760,19 +760,28 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelectorAll("#wbCanvas .is-separate-panel").length'), 2);
     assert.equal(await evaluate('Array.from(document.querySelectorAll("#wbCanvas .wb-pane-panel")).every(node => node.hidden && !node.textContent)'), true, 'panel identity uses color without repeated labels');
     assert.equal(await evaluate('new Set(Array.from(document.querySelectorAll("#wbCanvas .wb-pane"), node => getComputedStyle(node).getPropertyValue("--wb-panel-color"))).size'), 2, 'different panels have different border colors');
-    // affectUI Tree View look: rows indented past one colour bar per panel (the panel's drag
-    // gutter) instead of a box around the panel.
+    // affectUI Tree View look with tree lines: a grey line from the project to each panel, and a
+    // line in the panel's colour from the panel to each terminal, ending in a rounded corner.
     const checkProjectTree = async () => {
       const panels = await evaluate(`Array.from(document.querySelectorAll('#wbSpaces .wb-project-terminals:not([hidden]) > .wb-panel-group')).filter(group => group.querySelector('.wb-instance')).map(group => {
-        const project = group.closest('.wb-project').getBoundingClientRect(), members = group.querySelector('.wb-panel-members'), box = members.getBoundingClientRect(), bar = getComputedStyle(members, '::before');
-        const rows = [...group.querySelectorAll('.wb-instance')].map(row => row.getBoundingClientRect());
-        return { visible: bar.display !== 'none' && bar.content === '""', width: bar.width, colour: bar.backgroundColor, panel: getComputedStyle(group).getPropertyValue('--wb-panel-color').trim(),
-          ignoresInput: bar.pointerEvents === 'none', border: getComputedStyle(group).borderTopWidth,
-          barInside: box.left + parseFloat(bar.left) >= project.left && box.left + parseFloat(bar.left) + 3 <= rows[0].left,
-          rowsIndented: rows.every(rect => rect.left > project.left + 16), barCoversRows: Math.abs(parseFloat(bar.height) - (rows.at(-1).bottom - rows[0].top - 6)) <= 1, head: Boolean(group.querySelector(".wb-panel-head .wb-panel-add")) };
+        const project = group.closest('.wb-project').getBoundingClientRect(), box = group.getBoundingClientRect();
+        const probe = document.createElement('span'); probe.style.color = 'var(--wb-panel-color)'; group.append(probe); const colour = getComputedStyle(probe).color; probe.remove();
+        const rowNodes = [...group.querySelectorAll('.wb-panel-members .wb-instance-row')], rows = rowNodes.map(row => row.querySelector('.wb-instance').getBoundingClientRect());
+        const line = (node, pseudo) => { const style = getComputedStyle(node, pseudo); return { shown: style.display !== 'none' && style.content === '""', left: parseFloat(style.left), height: parseFloat(style.height),
+          vertical: style.borderLeftWidth, across: style.borderTopWidth, under: style.borderBottomWidth, colour: style.borderLeftColor, acrossColour: style.borderTopColor, radius: parseFloat(style.borderBottomLeftRadius), input: style.pointerEvents }; };
+        const down = rowNodes.map(row => line(row, '::before')), ticks = rowNodes.map(row => line(row, '::after'));
+        const project1 = line(group, '::before'), tick1 = line(group, '::after'), last = ticks.at(-1);
+        return {
+          rowsLines: down.every(item => item.shown && item.vertical === '1px' && item.colour === colour && item.input === 'none' && item.height > 0),
+          rowsTicks: ticks.slice(0, -1).every(item => item.shown && item.across === '1px' && item.acrossColour === colour && item.input === 'none'),
+          elbow: last.shown && last.vertical === '1px' && last.under === '1px' && last.radius > 0,
+          lineBeforeRows: down.every((item, index) => box.left + item.left > project.left && box.left + item.left + 1 < rows[index].left),
+          projectLine: project1.shown && project1.vertical === '1px' && project1.colour !== colour && project1.input === 'none' && tick1.shown && box.left + project1.left >= project.left,
+          oldBarGone: getComputedStyle(group.querySelector('.wb-panel-members'), '::before').display === 'none',
+          rowsIndented: rows.every(rect => rect.left > project.left + 16), border: getComputedStyle(group).borderTopWidth, head: Boolean(group.querySelector(".wb-panel-head .wb-panel-add")) };
       })`);
       assert(panels.length > 0, 'project tree must contain panels');
-      for (const panel of panels) assert(panel.visible && panel.width === '3px' && panel.colour !== 'rgba(0, 0, 0, 0)' && panel.ignoresInput && panel.border === '0px' && panel.barInside && panel.rowsIndented && panel.barCoversRows && panel.head, JSON.stringify(panel));
+      for (const panel of panels) assert(panel.rowsLines && panel.rowsTicks && panel.elbow && panel.lineBeforeRows && panel.projectLine && panel.oldBarGone && panel.rowsIndented && panel.border === '0px' && panel.head, JSON.stringify(panel));
     };
     for (const theme of ['light', 'dark']) {
       await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);

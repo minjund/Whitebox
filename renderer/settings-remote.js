@@ -11,6 +11,14 @@
     'port-busy': '7790~7799 포트를 다른 프로그램이 모두 쓰고 있어 켜지 못했어요.',
     error: '휴대폰 페이지를 켜지 못했어요.'
   };
+  // Why the page is still on http (it can then be opened but not installed as an app).
+  const HTTPS_TEXT = {
+    'no-magicdns': 'Tailscale의 MagicDNS가 꺼져 있어 앱으로 설치할 수 없어요. Tailscale 관리 화면의 DNS에서 MagicDNS와 HTTPS Certificates를 켜세요.',
+    'https-off': '앱으로 설치하려면 Tailscale 관리 화면의 DNS에서 HTTPS Certificates를 켜세요. 켜면 이 컴퓨터의 Tailscale 이름이 인증서 공개 기록에 남아요.',
+    'cert-pending': 'HTTPS 인증서를 받는 중이에요. 처음에는 1분쯤 걸려요.',
+    'cert-failed': 'HTTPS 인증서를 받지 못했어요. 10분 뒤 다시 시도해요.'
+  };
+  const TAILSCALE_DNS = 'https://login.tailscale.com/admin/dns';
   let root = null, status = null, unsubscribe = null, timer = 0;
   const t = text => window.WhiteboxWorkspaceI18n?.t(text) || text;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
@@ -31,8 +39,9 @@
         <div><p class="wb-remote-label">${escape(t('휴대폰 주소'))}</p>
           <p class="wb-remote-url"><code>${escape(status.url)}</code>${copyButton(status.url)}</p>
           ${status.nameUrl ? `<p class="wb-remote-url"><code>${escape(status.nameUrl)}</code>${copyButton(status.nameUrl)}</p>` : ''}
-          <p class="wb-remote-note">${escape(t('휴대폰 카메라로 QR을 찍거나 주소를 여세요. 홈 화면에 추가하면 앱처럼 쓸 수 있어요.'))}</p></div>
+          <p class="wb-remote-note">${escape(t(status.https ? '휴대폰 카메라로 QR을 찍거나 주소를 연 뒤 [앱으로 설치]를 누르면 앱처럼 쓸 수 있어요. 아이폰은 공유 › 홈 화면에 추가.' : '휴대폰 카메라로 QR을 찍거나 주소를 여세요.'))}</p></div>
       </div>` : ''}
+      ${on && !status.https && HTTPS_TEXT[status.httpsReason] ? `<p class="wb-remote-note">${escape(t(HTTPS_TEXT[status.httpsReason]))}${['no-magicdns', 'https-off'].includes(status.httpsReason) ? ` <button type="button" class="wb-remote-copy" data-open="${TAILSCALE_DNS}">${escape(t('Tailscale DNS 설정 열기'))}</button>` : ''}</p>` : ''}
       ${status.enabled && (status.state === 'no-tailscale' || status.state === 'tailscale-off') ? `<p class="wb-remote-note"><button type="button" class="wb-remote-copy" data-open="https://tailscale.com/download">${escape(t('Tailscale 내려받기'))}</button></p>` : ''}
       ${on ? `<div class="wb-setting-row"><div><strong>${escape(t('연결된 휴대폰'))}</strong><p>${devices.length ? devices.map(device => `${escape(device.device)}${device.os ? ` · ${escape(device.os)}` : ''}${device.live ? ` · ${escape(t('보는 중'))}` : ''}`).join('<br>') : escape(t('아직 없어요'))}</p></div></div>` : ''}
       <details class="wb-remote-ssh"><summary>${escape(t('SSH로 연결하기 (고급)'))}</summary>

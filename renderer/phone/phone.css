@@ -30,6 +30,8 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; flex: 1; }
 .brand img { width: 22px; height: 22px; border-radius: 5px; }
 .host { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
+.install { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 16px; background: var(--accent); color: #0b1220; font: 600 13px/1 var(--font-sans); }
+.hint { margin: 10px 16px 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .notice { margin: 12px 16px; padding: 10px 12px; border-radius: 10px; background: #2a1f12; color: #f6d39a; font-size: 14px; }
 #panels { overflow-y: auto; flex: 1; padding: 4px 0 24px; }
 .panel h2 { margin: 16px 16px 6px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }

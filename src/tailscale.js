@@ -27,7 +27,10 @@ function parseStatus(json) {
     ip: ipv4,
     dnsName: status.CurrentTailnet?.MagicDNSEnabled === false ? '' : dnsName,
     shortName: dnsName.split('.')[0] || '',
-    userId: status.Self.UserID == null ? '' : String(status.Self.UserID)
+    userId: status.Self.UserID == null ? '' : String(status.Self.UserID),
+    // Names Tailscale can get an HTTPS certificate for; empty until HTTPS is
+    // turned on in the tailnet's DNS settings.
+    certDomains: (status.CertDomains || []).map(name => String(name).replace(/\.$/, '').toLowerCase())
   };
 }
 
@@ -40,6 +43,14 @@ function parseWhois(json) {
   };
 }
 
+function parsePem(text) {
+  const value = String(text || '');
+  const key = value.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----/)?.[0] || '';
+  const cert = (value.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || []).join('\n');
+  if (!key || !cert) throw new Error('Tailscale did not return a certificate');
+  return { cert: `${cert}\n`, key: `${key}\n` };
+}
+
 class Tailscale {
   constructor({ platform = process.platform, exists = fs.existsSync, run = execFile, whoisTtlMs = 60000, now = Date.now } = {}) {
     this.platform = platform;
@@ -50,15 +61,15 @@ class Tailscale {
     this.cache = new Map();
   }
   cli() { return findCli({ platform: this.platform, exists: this.exists }); }
-  call(args) {
+  call(args, timeout = 5000) {
     const cli = this.cli();
     if (!cli) return Promise.reject(Object.assign(new Error('Tailscale is not installed'), { code: 'TAILSCALE_MISSING' }));
     return new Promise((resolve, reject) => {
       // The Mac app's binary is also its CLI, but without a terminal in the
       // environment (an app opened from Finder) it tries to start the GUI
       // and fails; TAILSCALE_BE_CLI makes it act as the CLI.
-      this.run(cli, args, { timeout: 5000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, TAILSCALE_BE_CLI: '1' } }, (error, stdout) => {
-        if (error) reject(error); else resolve(String(stdout));
+      this.run(cli, args, { timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, TAILSCALE_BE_CLI: '1' } }, (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { detail: String(stderr || '').trim().slice(0, 400) })); else resolve(String(stdout));
       });
     });
   }
@@ -66,6 +77,14 @@ class Tailscale {
     if (!this.cli()) return { state: 'missing' };
     try { return parseStatus(await this.call(['status', '--json'])); }
     catch { return { state: 'stopped' }; }
+  }
+  // A Let's Encrypt certificate for this computer's Tailscale name. Both PEM
+  // parts come back on stdout ("-"): the Mac app's CLI is sandboxed and cannot
+  // write files where we ask, and the key then never touches the disk here.
+  // Tailscale keeps and renews the certificate itself, so asking again is cheap.
+  async cert(domain) {
+    const output = await this.call(['cert', '--min-validity', '168h', '--cert-file', '-', '--key-file', '-', domain], 120000);
+    return parsePem(output);
   }
   // Who is behind a Tailscale address. Cached briefly; failures are not cached.
   async whois(ip) {
@@ -77,4 +96,4 @@ class Tailscale {
   }
 }
 
-module.exports = { Tailscale, findCli, parseStatus, parseWhois };
+module.exports = { Tailscale, findCli, parseStatus, parseWhois, parsePem };

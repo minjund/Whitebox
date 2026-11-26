@@ -3,6 +3,13 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.4.0 - 2026-11-26
+
+- The phone page can be installed as an app. With HTTPS Certificates turned on in your tailnet's DNS settings, Whitebox gets a certificate for this computer's Tailscale name and serves the page at https://<name>.ts.net:7790; Chrome then offers [Install app] (Android adds it to the app list, iPhone uses Share › Add to Home Screen). The old http address redirects to the new one.
+- Without HTTPS the page works on http as before, and Settings › Remote explains how to turn HTTPS on (with a link to the Tailscale DNS settings). Turning it on puts this computer's Tailscale name in the public certificate logs.
+- The installed app opens at once even when the computer cannot be reached, then shows "Cannot reach the computer" and keeps retrying. Only the page frame is kept on the phone; conversations are never stored there.
+- The left sidebar draws tree lines: a grey line from each project to its panels and a line in the panel's colour from each panel to its terminals, replacing the panel colour bar.
+
 ## 2.3.0 - 2026-11-26
 
 - The phone page now shows conversations, not terminals. Tapping a Claude terminal opens its Claude conversation and a Codex terminal its Codex conversation, drawn exactly like the desktop chat panes (your request on the right, the answer as text, tool work folded into one row). It loads at once: the 1.15 MB terminal engine is no longer sent to the phone, and pages and conversations are gzipped.

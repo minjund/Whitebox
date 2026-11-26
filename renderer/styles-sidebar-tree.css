@@ -80,17 +80,32 @@
 @media (prefers-reduced-motion: reduce) { #terminalWorkspace .wb-meta-spin { animation:none; } }
 #terminalWorkspace .wb-sidebar .wb-remove-project { position:absolute; right:4px; top:4px; width:20px; min-width:20px; height:20px; min-height:20px; padding:2px; border:0; border-radius:5px; background:var(--clean-side, var(--wb-side)); opacity:0; }
 #terminalWorkspace .wb-sidebar .wb-space-row:hover .wb-remove-project, #terminalWorkspace .wb-sidebar .wb-remove-project:focus-visible { opacity:1; }
-/* Terminals: a guide under the project, a panel-colour bar, the AI chip, the name, the state */
+/* Terminals: tree lines under the project and the panel, the AI chip, the name, the state */
 #terminalWorkspace #wbSpaces .wb-project-terminals { position:relative; margin:0 0 2px 0; padding:0; }
 #terminalWorkspace #wbSpaces .wb-project-terminals::before { display:none; }
 #terminalWorkspace .wb-sidebar .wb-panel-group, #terminalWorkspace .wb-sidebar .wb-panel-group.active, [data-theme=dark] #terminalWorkspace .wb-sidebar .wb-panel-group, [data-theme=dark] #terminalWorkspace .wb-sidebar .wb-panel-group.active, #terminalWorkspace #wbSpaces .wb-panel-group, #terminalWorkspace #wbSpaces .wb-panel-group.active, #terminalWorkspace #wbInstances .wb-panel-group, #terminalWorkspace #wbInstances .wb-panel-group.active { position:relative; margin:0; padding:0; border:0; border-radius:0; background:none; box-shadow:none; }
-/* One colour bar per panel, under the project's chevron: it shows which rows are one panel, and
-   the gutter it sits in is the panel's drag handle (pressing a row drags only that terminal). */
-#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::after { display:none; }
-#terminalWorkspace .wb-sidebar .wb-panel-group::before, #terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::before, #terminalWorkspace #wbInstances .wb-panel-group::before { display:none; }
+/* Tree lines: a grey line from the project's chevron to each panel, and a line in the panel's
+   colour from the panel's square to each terminal (it shows which rows are one panel), each ending
+   in a rounded corner at the last child. Lines take no input: the gutter they sit in stays the
+   panel's drag handle (pressing a row drags only that terminal). */
+#terminalWorkspace .wb-sidebar { --tv-l1:-2px; --tv-l2:14px; --tv-elbow:5px; --tv-row-mid:14px; }
+#terminalWorkspace .wb-sidebar .wb-panel-group::before, #terminalWorkspace #wbInstances .wb-panel-group::before { display:none; }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::before { display:block; content:''; position:absolute; left:var(--tv-l1); top:0; bottom:0; width:0; height:auto; border:0; border-left:1px solid var(--tv-guide-on); border-radius:0; background:none; pointer-events:none; }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group:first-of-type::before { top:-8px; }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group::after { display:block; content:''; position:absolute; left:var(--tv-l1); top:var(--tv-row-mid); width:9px; height:0; border:0; border-top:1px solid var(--tv-guide-on); border-radius:0; pointer-events:none; }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group:last-of-type::before { bottom:auto; height:calc(var(--tv-row-mid) - var(--tv-elbow)); }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group:last-of-type:first-of-type::before { height:calc(var(--tv-row-mid) - var(--tv-elbow) + 8px); }
+#terminalWorkspace #wbSpaces .wb-project-terminals > .wb-panel-group:last-of-type::after { top:calc(var(--tv-row-mid) - var(--tv-elbow)); height:var(--tv-elbow); border-top:0; border-left:1px solid var(--tv-guide-on); border-bottom:1px solid var(--tv-guide-on); border-bottom-left-radius:var(--tv-elbow); }
 #terminalWorkspace .wb-sidebar .wb-panel-members { position:relative; }
-#terminalWorkspace .wb-sidebar .wb-panel-members::before { content:''; position:absolute; left:12.5px; top:6px; bottom:6px; width:3px; border-radius:2px; background:var(--wb-panel-color); pointer-events:none; opacity:.85; }
-#terminalWorkspace .wb-sidebar .wb-panel-group:has(.wb-instance.active) .wb-panel-members::before { opacity:1; }
+#terminalWorkspace .wb-sidebar .wb-panel-members::before { display:none; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row::before, #terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row::after { content:''; position:absolute; left:var(--tv-l2); width:0; height:0; border:0 solid var(--wb-panel-color); pointer-events:none; opacity:.85; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row::before { top:0; bottom:0; height:auto; border-left-width:1px; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row:first-child::before { top:-6px; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row::after { top:var(--tv-row-mid); width:10px; border-top-width:1px; }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row:last-child::before { bottom:auto; height:calc(var(--tv-row-mid) - var(--tv-elbow)); }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row:last-child:first-child::before { height:calc(var(--tv-row-mid) - var(--tv-elbow) + 6px); }
+#terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row:last-child::after { top:calc(var(--tv-row-mid) - var(--tv-elbow)); height:var(--tv-elbow); border-top-width:0; border-left-width:1px; border-bottom-width:1px; border-bottom-left-radius:var(--tv-elbow); }
+#terminalWorkspace .wb-sidebar .wb-panel-group:has(.wb-instance.active) .wb-instance-row::before, #terminalWorkspace .wb-sidebar .wb-panel-group:has(.wb-instance.active) .wb-instance-row::after { opacity:1; }
 #terminalWorkspace .wb-sidebar .wb-panel-group { cursor:grab; }
 #terminalWorkspace .wb-sidebar .wb-panel-group .wb-instance, #terminalWorkspace .wb-sidebar .wb-panel-actions button { cursor:pointer; }
 #terminalWorkspace .wb-sidebar .wb-panel-members .wb-instance-row { position:relative; margin:0; min-height:var(--tv-h); }
@@ -151,7 +166,6 @@
 #terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-add .wb-icon { width:12px; height:12px; }
 #terminalWorkspace .wb-sidebar .wb-panel-head > .wb-panel-add > span { display:inline-block; padding-right:1px; white-space:nowrap; }
 #terminalWorkspace .wb-sidebar .wb-panel-group.active > .wb-panel-head > .wb-panel-add, #terminalWorkspace .wb-sidebar .wb-panel-head:hover > .wb-panel-add, #terminalWorkspace .wb-sidebar .wb-panel-head:focus-within > .wb-panel-add { visibility:visible; }
-#terminalWorkspace .wb-sidebar .wb-panel-members::before { top:3px; bottom:3px; }
 /* "새 패널" at the end of every open project, so where a panel comes from is plain. */
 #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop { height:24px; min-height:24px; margin:0 0 4px 4px; width:calc(100% - 4px); padding:0 6px; opacity:1; display:flex; align-items:center; gap:6px; }
 #terminalWorkspace:not(.is-dragging-terminal) .wb-sidebar .wb-new-panel-drop small { display:none; }
@@ -159,4 +173,4 @@
 /* A project's panels sit one tree level (16px) inside the project row; panels
    without a project (#wbInstances) stay at the edge. */
 #terminalWorkspace #wbSpaces .wb-project-terminals { padding-left:16px; }
-@container (max-width:200px) { #terminalWorkspace #wbSpaces .wb-project-terminals { padding-left:10px; } }
+@container (max-width:200px) { #terminalWorkspace #wbSpaces .wb-project-terminals { padding-left:10px; } #terminalWorkspace #wbSpaces { --tv-l1:2px; } }
