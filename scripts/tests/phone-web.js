@@ -16,7 +16,7 @@ const { parseStatus, parseWhois, parsePem, findCli } = require('../../src/tailsc
 
 const root = path.join(__dirname, '..', '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-phone-web-'));
-const BASE = 27790 + Math.floor(Math.random() * 500);
+const BASE = 27790 + crypto.randomInt(500);
 
 function fetchRaw({ port, pathname = '/', host, method = 'GET', headers = {}, body }) {
   return new Promise((resolve, reject) => {
