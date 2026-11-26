@@ -66,11 +66,14 @@ function skillDirectories(directory) {
     .map(entry => ({ name: entry.name, file: path.join(directory, entry.name, 'SKILL.md') })).filter(item => fs.existsSync(item.file));
 }
 
-function claudePlugins(home) {
-  const file = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+// Installed plugins, minus those settings.json turns off (enabledPlugins).
+function claudePlugins(claudeDir) {
+  const file = path.join(claudeDir, 'plugins', 'installed_plugins.json');
+  let enabled = null;
+  try { const value = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8')).enabledPlugins; if (value && typeof value === 'object') enabled = value; } catch { /* no settings: every installed plugin */ }
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Object.entries(data.plugins || {}).flatMap(([key, installs]) => {
+    return Object.entries(data.plugins || {}).filter(([key]) => !enabled || enabled[key] === true).flatMap(([key, installs]) => {
       const plugin = String(key).split('@')[0];
       const install = (Array.isArray(installs) ? installs : [installs]).find(item => item && typeof item.installPath === 'string');
       return plugin && NAME.test(plugin) && install ? [{ plugin, root: install.installPath }] : [];
@@ -78,25 +81,31 @@ function claudePlugins(home) {
   } catch { return []; }
 }
 
-function listSlashCommands({ provider, cwd = '', home = os.homedir() } = {}) {
+// `insert` is what the composer types: Claude runs commands and skills as
+// /name; Codex runs custom prompts as /prompts:name and skills as $name.
+function listSlashCommands({ provider, cwd = '', home = os.homedir(), claudeDir = path.join(home, '.claude') } = {}) {
   const builtin = BUILTIN[provider];
   if (!builtin) return [];
   const commands = new Map();
-  const add = (name, description, source) => {
-    if (!name || commands.has(name) || commands.size >= LIMIT) return;
-    commands.set(name, { name, description: String(description || ''), source });
+  const add = (name, description, source, insert = `/${name}`) => {
+    if (!name || commands.has(insert) || commands.size >= LIMIT) return;
+    commands.set(insert, { name, description: String(description || ''), source, insert });
   };
   for (const [name, description] of builtin) add(name, description, 'builtin');
   const roots = [];
   if (provider === 'claude') {
-    for (const [root, source] of [[path.join(home, '.claude'), 'user'], ...(cwd ? [[path.join(cwd, '.claude'), 'project']] : [])]) {
+    for (const [root, source] of [[claudeDir, 'user'], ...(cwd ? [[path.join(cwd, '.claude'), 'project']] : [])]) {
       roots.push({ commands: path.join(root, 'commands'), skills: path.join(root, 'skills'), prefix: '', source });
     }
-    for (const { plugin, root } of claudePlugins(home)) {
+    for (const { plugin, root } of claudePlugins(claudeDir)) {
       roots.push({ commands: path.join(root, 'commands'), skills: path.join(root, 'skills'), prefix: `${plugin}:`, source: 'plugin' });
     }
   } else if (provider === 'codex') {
-    roots.push({ commands: path.join(home, '.codex', 'prompts'), skills: '', prefix: '', source: 'user' });
+    const codexHome = process.env.CODEX_HOME || path.join(home, '.codex');
+    for (const item of commandFiles(path.join(codexHome, 'prompts'))) add(item.name, frontmatterDescription(item.file), 'user', `/prompts:${item.name}`);
+    for (const directory of [path.join(codexHome, 'skills'), ...(cwd ? [path.join(cwd, '.codex', 'skills'), path.join(cwd, '.agents', 'skills')] : []), path.join(home, '.agents', 'skills')]) {
+      for (const item of skillDirectories(directory)) add(item.name, frontmatterDescription(item.file), 'skill', `$${item.name}`);
+    }
   }
   for (const root of roots) {
     for (const item of commandFiles(root.commands)) add(`${root.prefix}${item.name}`, frontmatterDescription(item.file), root.source);

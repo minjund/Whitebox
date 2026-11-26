@@ -368,13 +368,19 @@ class PhoneWeb extends EventEmitter {
       const result = await this.chat.read({ surfaceId: String(url.searchParams.get('surface_id') || ''), revision: String(url.searchParams.get('revision') || '') });
       return this.json(res, req, phoneConversation(result));
     }
+    // The "/" list: names, descriptions and what to type, never command bodies.
+    if (req.method === 'GET' && url.pathname === '/api/commands') {
+      const items = this.chat.commands ? await this.chat.commands({ surfaceId: String(url.searchParams.get('surface_id') || ''),
+        provider: String(url.searchParams.get('provider') || ''), providerPid: Number(url.searchParams.get('provider_pid')) }) : [];
+      return this.json(res, req, { commands: (items || []).map(({ name, description, source, insert }) => ({ name, description, source, insert })) });
+    }
     if (req.method !== 'POST') return this.fail(res, 404, 'Not found');
     const body = await readJson(req);
     const target = {
       groupId: String(body.panel_id || ''), targetId: String(body.surface_id || ''),
       targetCreationId: String(body.creation_id || ''), targetProviderPid: Number(body.provider_pid), targetProvider: String(body.provider || '')
     };
-    if (url.pathname === '/api/chat/send') return this.json(res, req, await this.chat.send({ id: String(body.id || ''), message: String(body.text || ''), ...target }));
+    if (url.pathname === '/api/chat/send') return this.json(res, req, await this.chat.send({ id: String(body.id || ''), message: String(body.text || ''), interrupt: body.interrupt === true, ...target }));
     if (url.pathname === '/api/chat/stop') return this.json(res, req, await this.chat.stop(target));
     if (url.pathname === '/api/key') {
       const key = String(body.key || '');

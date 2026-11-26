@@ -139,7 +139,7 @@ const tests = [
     },
   },
   {
-    name: 'Summary chat does not send while Claude shows a live status line',
+    name: 'A chat message sent while Claude shows a live status line goes in mid-turn',
     async run() {
       const f = fixture();
       try {
@@ -147,8 +147,9 @@ const tests = [
         f.state.native = { available: true, state: 'unconfirmed', requestId: 'r1', request: 'first', requestAt: f.state.now - 60_000 };
         await f.sync();
         const result = await f.send('작업 중에 보낸 요청');
-        assert.equal(result.deferred, true);
-        assert.equal(f.state.writes.length, 0);
+        assert.equal(result.ok, true); assert.equal(result.job.midTurn, true);
+        assert.equal(f.state.writes.length, 1);
+        assert.equal(f.state.writes[0].options.expectedOutputSequence, undefined, 'the spinner frame is not pinned');
       } finally { f.cleanup(); }
     },
   },
@@ -196,7 +197,7 @@ const tests = [
     // Real job 3a41cbda (v2.0.27): an immediate Summary send right after
     // "✻ Baked for 12m 5s · done 9:54 AM"; the Claude turn it started ran past
     // 15 minutes and the job was marked "15분 안에 완료를 확인하지 못했습니다".
-    name: 'A Summary turn still working after 15 minutes keeps its job, holds later sends as queued, then completes',
+    name: 'A Summary turn still working after 15 minutes keeps its job, takes later sends mid-turn, then completes',
     async run() {
       const f = fixture();
       try {
@@ -215,8 +216,9 @@ const tests = [
           await f.sync();
           assert.equal(f.job(job.id).state, 'running', `still working at minute ${minute}`);
         }
-        assert.deepEqual(await f.send('다음 요청'), { deferred: true, reason: 'previous' }, 'a later send waits as queued, never fails');
-        assert.equal(f.state.writes.length, 1);
+        const later = await f.send('다음 요청');
+        assert.equal(later.ok, true, 'a later send goes in mid-turn, never fails'); assert.equal(later.job.midTurn, true);
+        assert.equal(f.state.writes.length, 2);
         f.state.now += MINUTE;
         f.state.screen = idleScreen;
         f.state.native = { ...f.state.native, state: 'completed', inputWaiting: true, completedAt: f.state.now, evidence: 'LONG DONE' };
@@ -340,11 +342,11 @@ const tests = [
         f.state.native = { available: true, state: 'completed', inputWaiting: true, requestId: 'r1', request: 'first', requestAt: f.state.now - MINUTE, completedAt: f.state.now - 30_000, evidence: 'E1', absorbed: [] };
         f.state.inputDraft = '터미널에 쓰던 글'; await f.sync();
         assert.deepEqual(await f.send('a'), { deferred: true, reason: 'draft' });
-        f.state.inputDraft = ''; f.state.screen = workingScreen('✻ Thinking…'); await f.sync();
-        assert.deepEqual(await f.send('a'), { deferred: true, reason: 'working' });
-        f.state.screen = idleScreen; f.state.native = { ...f.state.native, state: 'working', inputWaiting: false }; await f.sync();
-        assert.deepEqual(await f.send('a'), { deferred: true, reason: 'working' });
         assert.equal(f.state.writes.length, 0);
+        // A working Claude no longer makes a send wait: it goes in mid-turn.
+        f.state.inputDraft = ''; f.state.screen = workingScreen('✻ Thinking…'); await f.sync();
+        assert.equal((await f.send('a')).job.midTurn, true);
+        assert.equal(f.state.writes.length, 1);
       } finally { f.cleanup(); }
     },
   },

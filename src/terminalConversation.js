@@ -49,6 +49,39 @@ function chatRows(messages) {
   return rows.slice(-MAX_MESSAGES);
 }
 
+// A message typed while Claude works is logged as a queued_command attachment
+// where Claude took it in, not as a user row; the chat shows it there too.
+function claudeQueued(file, size, tailBytes) {
+  const start = Math.max(0, size - tailBytes);
+  const buffer = Buffer.alloc(size - start);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buffer, 0, buffer.length, start); } finally { fs.closeSync(fd); }
+  const lines = buffer.toString('utf8').split('\n');
+  if (start > 0) lines.shift();
+  const rows = [];
+  for (const line of lines) {
+    if (!line.includes('"queued_command"')) continue;
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    const item = row?.attachment;
+    if (item?.type !== 'queued_command' || typeof item.prompt !== 'string' || row.isSidechain) continue;
+    if (item.origin?.kind && item.origin.kind !== 'human' || item.commandMode && item.commandMode !== 'prompt') continue;
+    rows.push({ id: `queued:${row.uuid || rows.length}`, role: 'user', text: item.prompt, timestamp: row.timestamp || '' });
+  }
+  return rows;
+}
+
+// Inserts each queued message before the first row recorded after it.
+function mergeQueued(messages, queued) {
+  if (!queued.length) return messages || [];
+  const output = [], rest = [...queued];
+  for (const message of messages || []) {
+    const at = Date.parse(message.timestamp);
+    while (rest.length && Number.isFinite(at) && Date.parse(rest[0].timestamp) <= at) output.push(rest.shift());
+    output.push(message);
+  }
+  return [...output, ...rest];
+}
+
 class TerminalConversation {
   constructor({ manager, monitor, completion, parsers = null, tailBytes = TAIL_BYTES } = {}) {
     this.manager = manager;
@@ -84,7 +117,9 @@ class TerminalConversation {
     let cached = this.cache.get(file);
     if (!cached || cached.key !== `${stat.mtimeMs}:${stat.size}`) {
       const session = this.parser(child.provider)({ file, mtimeMs: stat.mtimeMs, size: stat.size }, { fullHistory: true, maxBytes: this.tailBytes });
-      cached = { key: `${stat.mtimeMs}:${stat.size}`, messages: chatRows(session?.messages), truncated: stat.size > this.tailBytes };
+      let messages = session?.messages;
+      if (child.provider === 'claude') { try { messages = mergeQueued(messages, claudeQueued(file, stat.size, this.tailBytes)); } catch { /* the parsed rows stand */ } }
+      cached = { key: `${stat.mtimeMs}:${stat.size}`, messages: chatRows(messages), truncated: stat.size > this.tailBytes };
       this.cache.delete(file);
       this.cache.set(file, cached);
       while (this.cache.size > MAX_CACHE) this.cache.delete(this.cache.keys().next().value);
@@ -93,4 +128,4 @@ class TerminalConversation {
   }
 }
 
-module.exports = { TerminalConversation, chatRows, cleanUserText };
+module.exports = { TerminalConversation, chatRows, cleanUserText, claudeQueued, mergeQueued };

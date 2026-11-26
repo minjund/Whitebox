@@ -184,10 +184,13 @@
   }
   // A turn: the request, its work, and the answer. A finished turn folds the work
   // (tool calls and the notes between them) into one row above its last answer.
-  function turnHtml(id, turn, live) {
-    const parts = [];
-    if (turn.user) parts.push(userHtml(id, turn.user));
+  // Laid out like a messenger: the request on the right, the AI's work and
+  // answer in one bubble on the left under the AI's name.
+  function turnHtml(id, turn, live, sender = '') {
+    const user = turn.user ? userHtml(id, turn.user) : '';
     const rows = turn.rows;
+    if (!rows.length) return `<section class="wb-chat-turn">${user}</section>`;
+    const parts = [];
     let last = -1;
     for (let index = rows.length - 1; index >= 0; index--) if (rows[index].role === 'assistant') { last = index; break; }
     const work = last > 0 ? rows.slice(0, last) : [];
@@ -200,7 +203,8 @@
       const time = clock(rows[last].timestamp);
       parts.push(`<div class="wb-chat-footer">${copyButton(id, rows[last].text, t('답 복사'))}${time ? `<time>${esc(time)}</time>` : ''}</div>`);
     }
-    return `<section class="wb-chat-turn">${parts.join('')}</section>`;
+    const name = sender ? `<div class="wb-chat-sender">${esc(sender)}</div>` : '';
+    return `<section class="wb-chat-turn">${user}<div class="wb-chat-ai">${name}<div class="wb-chat-ai-bubble">${parts.join('')}</div></div></section>`;
   }
   function turnsOf(messages) {
     const turns = [];
@@ -215,5 +219,68 @@
     return turns;
   }
 
-  return { markdown, inline, svg, isOpen, toggle, copies, workLabel, toolDetail, toolKind, rowsHtml, userHtml, turnHtml, turnsOf };
+  // The "/" list of a composer (the one DOM helper here): typing "/" (or "$"
+  // for a Codex skill) at the start of the message lists the AI's commands and
+  // skills; arrows move, Tab or Enter picks, Esc closes. `load()` resolves the
+  // catalog items { name, description, source, insert }.
+  const SOURCE = { builtin: '기본 명령', skill: '스킬', plugin: '플러그인', user: '내 명령', project: '프로젝트 명령' };
+  function slashMenu({ input, box, load }) {
+    let items = [], index = 0, token = 0;
+    const query = () => {
+      const match = input.value.slice(0, input.selectionStart ?? input.value.length).match(/^\s*([/$])([\w.:-]*)$/u);
+      return match ? match[2].toLowerCase() : null;
+    };
+    function close() { token += 1; items = []; box.hidden = true; box.innerHTML = ''; }
+    function draw() {
+      box.hidden = false;
+      box.innerHTML = items.length ? items.map((item, n) => `<button type="button" role="option" aria-selected="${n === index}" data-slash="${n}"><b>${esc(item.insert)}</b><span>${esc(item.description)}</span><small>${esc(t(SOURCE[item.source] || ''))}</small></button>`).join('')
+        : `<p>${esc(t('맞는 명령이나 스킬이 없어요'))}</p>`;
+      box.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
+    }
+    async function update() {
+      const q = query();
+      if (q === null) { close(); return; }
+      const mine = ++token;
+      let all = [];
+      try { all = await load(); } catch { all = []; }
+      if (mine !== token || query() !== q) return;
+      const key = item => `${item.name} ${item.insert}`.toLowerCase();
+      items = [...all.filter(item => item.name.toLowerCase().startsWith(q) || item.insert.slice(1).toLowerCase().startsWith(q)),
+        ...all.filter(item => !(item.name.toLowerCase().startsWith(q) || item.insert.slice(1).toLowerCase().startsWith(q))
+          && (key(item).includes(q) || String(item.description || '').toLowerCase().includes(q)))].slice(0, 80);
+      index = 0; draw();
+    }
+    function pick(n) {
+      const item = items[n];
+      if (!item) return;
+      const rest = input.value.slice(input.selectionStart ?? input.value.length).replace(/^\S*/u, '').trimStart();
+      input.value = `${item.insert} ${rest}`;
+      const caret = item.insert.length + 1;
+      input.setSelectionRange?.(caret, caret);
+      close(); input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    input.addEventListener('input', update);
+    input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) close(); }, 150));
+    box.addEventListener('mousedown', event => event.preventDefault());
+    box.addEventListener('click', event => { const button = event.target.closest('[data-slash]'); if (button) pick(Number(button.dataset.slash)); });
+    return {
+      open: () => !box.hidden,
+      close,
+      // Call first from the composer's keydown; true when the list used the key.
+      keydown(event) {
+        if (box.hidden || event.isComposing || event.keyCode === 229) return false;
+        if (event.key === 'Escape') { event.preventDefault(); close(); return true; }
+        if (!items.length) return false;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          index = (index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length; draw(); return true;
+        }
+        if ((event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) || event.key === 'Tab') { event.preventDefault(); pick(index); return true; }
+        return false;
+      },
+    };
+  }
+
+  return { markdown, inline, svg, isOpen, toggle, copies, workLabel, toolDetail, toolKind, rowsHtml, userHtml, turnHtml, turnsOf, slashMenu };
 });
