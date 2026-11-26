@@ -3,7 +3,7 @@
 // Tailscale state, connected phones, and the SSH way as an advanced fallback.
 (() => {
   const STATE_TEXT = {
-    off: '꺼져 있어요. 켜면 같은 Tailscale 계정의 휴대폰에서 이 컴퓨터의 터미널을 열 수 있어요.',
+    off: '꺼져 있어요. 켜면 같은 Tailscale 계정의 휴대폰에서 이 컴퓨터의 Claude·Codex 대화를 보고 보낼 수 있어요.',
     starting: '켜는 중…',
     on: '켜져 있어요. 휴대폰에서 아래 주소를 여세요.',
     'no-tailscale': 'Tailscale이 설치되어 있지 않아요. 이 컴퓨터와 휴대폰에 Tailscale을 설치하고 같은 계정으로 로그인하세요.',

@@ -9,7 +9,8 @@ const vm = require('node:vm');
 const esc = value => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const root = { addEventListener() {}, querySelectorAll: () => [], querySelector: () => null };
 const sandbox = { window: {}, setInterval() {}, requestAnimationFrame() {}, crypto: { randomUUID: () => 'x' } };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../renderer/terminal-chat.js'), 'utf8'), sandbox);
+vm.createContext(sandbox);
+for (const file of ['chat-render.js', 'terminal-chat.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../../renderer', file), 'utf8'), sandbox);
 const chat = sandbox.window.WhiteboxTerminalChat({ root, api: {}, t: value => value, esc, session: () => null, member: () => null, panes: () => new Map(), visibleIds: () => [] });
 
 const nested = chat.markdown('- 원인\n  - 하위 항목\n  - https://github.com/minjund/Whitebox/pull/191\n- 다음');

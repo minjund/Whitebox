@@ -1,14 +1,15 @@
 'use strict';
 // The phone page lets in only this computer's own Tailscale user, from the
-// right host name, with the page token; the live socket relays one terminal.
+// right host name, with the page token; it shows Claude and Codex terminals as
+// conversations, sends through the guarded chat send and answers with fixed keys.
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { PhoneWeb, PhoneWebStore, encodeFrame, decodeFrames, acceptKey } = require('../../src/phoneWeb');
+const zlib = require('node:zlib');
+const { PhoneWeb, PhoneWebStore, chatList } = require('../../src/phoneWeb');
 const { parseStatus, parseWhois, findCli } = require('../../src/tailscale');
 
 const root = path.join(__dirname, '..', '..');
@@ -20,62 +21,13 @@ function fetchRaw({ port, pathname = '/', host, method = 'GET', headers = {}, bo
     const req = http.request({ host: '127.0.0.1', port, path: pathname, method, headers: { host: host || `127.0.0.1:${port}`, ...headers } }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks);
+        resolve({ status: res.statusCode, headers: res.headers, raw, text: (res.headers['content-encoding'] === 'gzip' ? zlib.gunzipSync(raw) : raw).toString('utf8') });
+      });
     });
     req.on('error', reject);
     if (body) req.end(JSON.stringify(body)); else req.end();
-  });
-}
-
-// A raw WebSocket client: masked frames out, server frames in.
-function openSocket({ port, query, origin, host }) {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(port, '127.0.0.1');
-    const key = crypto.randomBytes(16).toString('base64');
-    let buffer = Buffer.alloc(0), upgraded = false;
-    const messages = [], waiters = [];
-    const deliver = () => { while (waiters.length && messages.length) waiters.shift()(messages.shift()); };
-    const client = {
-      status: 0,
-      next: () => new Promise(done => { waiters.push(done); deliver(); }),
-      send(value, opcode = 1) {
-        const body = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value));
-        const mask = crypto.randomBytes(4);
-        const header = body.length < 126 ? Buffer.from([0x80 | opcode, 0x80 | body.length]) : Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | 126]), Buffer.from([body.length >> 8, body.length & 255])]);
-        const masked = Buffer.from(body.map((byte, index) => byte ^ mask[index & 3]));
-        socket.write(Buffer.concat([header, mask, masked]));
-      },
-      closed: new Promise(done => socket.on('close', done)),
-      end() { socket.end(); }
-    };
-    socket.on('error', reject);
-    socket.on('connect', () => socket.write([`GET /api/attach?${query} HTTP/1.1`, `Host: ${host || `127.0.0.1:${port}`}`, 'Upgrade: websocket', 'Connection: Upgrade',
-      `Sec-WebSocket-Key: ${key}`, 'Sec-WebSocket-Version: 13', origin ? `Origin: ${origin}` : '', '', ''].filter((line, index, all) => line || index >= all.length - 2).join('\r\n')));
-    socket.on('data', chunk => {
-      buffer = Buffer.concat([buffer, chunk]);
-      if (!upgraded) {
-        const end = buffer.indexOf('\r\n\r\n');
-        if (end < 0) return;
-        const head = buffer.subarray(0, end).toString();
-        client.status = Number(head.split(' ')[1]);
-        buffer = buffer.subarray(end + 4);
-        if (client.status !== 101) { resolve(client); return; }
-        assert.ok(head.includes(`Sec-WebSocket-Accept: ${acceptKey(key)}`), 'the handshake answers the key');
-        upgraded = true;
-        resolve(client);
-      }
-      // Server frames are unmasked.
-      while (buffer.length >= 2) {
-        let length = buffer[1] & 0x7f, at = 2;
-        if (length === 126) { if (buffer.length < 4) break; length = buffer.readUInt16BE(2); at = 4; }
-        if (buffer.length < at + length) break;
-        const opcode = buffer[0] & 0x0f, data = buffer.subarray(at, at + length);
-        buffer = buffer.subarray(at + length);
-        if (opcode === 1) messages.push(JSON.parse(data.toString('utf8')));
-        if (opcode === 8) messages.push({ type: '__close' });
-      }
-      deliver();
-    });
   });
 }
 
@@ -94,31 +46,29 @@ function openSocket({ port, query, origin, host }) {
   assert.equal(seen.env.TAILSCALE_BE_CLI, '1', 'the Tailscale CLI runs in CLI mode');
   assert.deepEqual(seen.args, ['status', '--json']);
 
-  // Frames round-trip, masked from the client.
-  const masked = Buffer.concat([Buffer.from([0x81, 0x80 | 2]), Buffer.from([1, 2, 3, 4]), Buffer.from([0x68 ^ 1, 0x69 ^ 2])]);
-  assert.equal(decodeFrames(masked).frames[0].data.toString(), 'hi', 'client frames are unmasked');
-  assert.throws(() => decodeFrames(encodeFrame('x')), /Unmasked/, 'an unmasked client frame is refused');
-
   let who = { userId: 'u1', device: 's23', os: 'android' }, whoisFails = false, tailscaleState = 'running';
   const tailscale = {
     status: async () => tailscaleState === 'running' ? { state: 'running', ip: '127.0.0.1', dnsName: 'mac.tail1.ts.net', shortName: 'mac', userId: 'u1' } : { state: tailscaleState },
     whois: async () => { if (whoisFails) throw new Error('no whois'); return who; }
   };
   const calls = [];
-  const request = async (method, params) => { calls.push({ method, params }); return method === 'remote.list' ? { panels: [{ id: 'p1', name: 'Panel', terminals: [{ id: 't1', title: 'claude', running: true, state: 'working' }] }] } : { ok: true }; };
-  const views = [];
-  const attach = async params => {
-    if (params.surface_id === 'missing') throw new Error('Choose a running terminal ID from the list.');
-    const listeners = { frame: [], close: [] };
-    const view = { params, sent: [], closed: false, result: { surface_id: params.surface_id, title: 'claude' },
-      on(type, callback) { listeners[type].push(callback); if (type === 'frame') setImmediate(() => callback({ type: 'paint', data: '\x1b[Hhello', cols: params.cols, rows: params.rows })); return view; },
-      send(message) { view.sent.push(message); }, close() { view.closed = true; }, pause() {}, resume() {},
-      emit(type, value) { listeners[type].forEach(callback => callback(value)); } };
-    views.push(view);
-    return view;
+  const panels = [{ id: 'p1', name: 'Panel', terminals: [
+    { id: 't1', title: 'claude', running: true, provider: 'claude', state: 'working' },
+    { id: 't2', title: 'zsh', running: true, provider: '', state: 'idle' },
+    { id: 't3', title: 'gemini', running: true, provider: 'gemini', state: 'idle' },
+    { id: 't4', title: 'codex', running: false, provider: 'codex', state: 'idle' }] },
+    { id: 'p2', name: 'Shells', terminals: [{ id: 't5', title: 'zsh', running: true, provider: '' }] }];
+  const request = async (method, params) => { calls.push({ method, params }); return method === 'remote.list' ? { panels } : { ok: true }; };
+  const messages = Array.from({ length: 200 }, (_, index) => ({ id: `m${index}`, role: index % 2 ? 'assistant' : 'user', text: `말 ${index} `.repeat(20), timestamp: '' }));
+  const chatCalls = [];
+  const chat = {
+    read: async params => { chatCalls.push({ read: params }); return params.revision === 'r1' ? { available: true, unchanged: true, revision: 'r1', state: 'waiting', question: 'Do you want to proceed?\n❯ 1. Yes\n  2. No' }
+      : { available: true, revision: 'r1', provider: 'claude', providerPid: 42, creationId: 'c1', state: 'working', messages }; },
+    send: async payload => { chatCalls.push({ send: payload }); return { ok: true, job: { id: payload.id } }; },
+    stop: async payload => { chatCalls.push({ stop: payload }); return { ok: true }; },
   };
   const store = new PhoneWebStore(path.join(dir, 'phone-web.json'));
-  const web = new PhoneWeb({ tailscale, request, attach, root, store, port: BASE, pollMs: 60000 });
+  const web = new PhoneWeb({ tailscale, request, chat, root, store, port: BASE, pollMs: 60000 });
 
   await web.start();
   assert.equal(web.status().state, 'off', 'the phone page is off by default');
@@ -145,9 +95,16 @@ function openSocket({ port, query, origin, host }) {
   assert.equal((await fetchRaw({ port, host: `mac:${port}` })).status, 200, 'the MagicDNS short name is accepted');
   assert.equal((await fetchRaw({ port, host: `evil.example:${port}` })).status, 421, 'another host name (DNS rebinding) is refused');
   assert.equal((await fetchRaw({ port, pathname: '/phone.js' })).headers['content-type'], 'text/javascript; charset=utf-8');
-  assert.equal((await fetchRaw({ port, pathname: '/engine/ghostty-web.es.js' })).status, 200, 'the terminal engine is served');
+  assert.equal((await fetchRaw({ port, pathname: '/engine/ghostty-web.es.js' })).status, 404, 'no terminal engine: the phone shows conversations only');
+  const shared = await fetchRaw({ port, pathname: '/chat-render.js', headers: { 'accept-encoding': 'gzip' } });
+  assert.equal(shared.status, 200);
+  assert.equal(shared.text, fs.readFileSync(path.join(root, 'renderer', 'chat-render.js'), 'utf8'), 'the desktop chat renderer is served as is');
+  assert.equal(shared.headers['content-encoding'], 'gzip', 'text is gzipped for the phone');
+  assert.ok(shared.raw.length < shared.text.length / 2);
+  assert.equal((await fetchRaw({ port, pathname: '/chat.css' })).text, fs.readFileSync(path.join(root, 'renderer', 'styles-terminal-chat.css'), 'utf8'), 'and the desktop chat styles');
+  assert.doesNotMatch(page.headers['content-security-policy'], /wasm|ws:/, 'no WebAssembly or socket is allowed any more');
   assert.equal((await fetchRaw({ port, pathname: '/../package.json' })).status, 404, 'no other files');
-  assert.equal((await fetchRaw({ port, pathname: '/engine/../../package.json' })).status, 404);
+  assert.equal((await fetchRaw({ port, pathname: '/terminal-chat.js' })).status, 404, 'only the shared files from renderer/');
 
   who = { userId: 'someone-else', device: 'laptop', os: 'linux' };
   assert.equal((await fetchRaw({ port })).status, 403, 'a different Tailscale user is refused');
@@ -156,43 +113,44 @@ function openSocket({ port, query, origin, host }) {
   whoisFails = false;
   who = { userId: 'u1', device: 's23', os: 'android' };
 
+  const token = { 'x-whitebox-token': web.token };
+  const post = (pathname, body) => fetchRaw({ port, pathname, method: 'POST', headers: { ...token, 'content-type': 'application/json' }, body });
   assert.equal((await fetchRaw({ port, pathname: '/api/list' })).status, 401, 'the API needs the page token');
-  const list = await fetchRaw({ port, pathname: '/api/list', headers: { 'x-whitebox-token': web.token } });
+  const list = await fetchRaw({ port, pathname: '/api/list', headers: token });
   assert.equal(list.status, 200);
-  assert.equal(JSON.parse(list.text).panels[0].terminals[0].id, 't1');
-  const sent = await fetchRaw({ port, pathname: '/api/send', method: 'POST', headers: { 'x-whitebox-token': web.token, 'content-type': 'application/json' }, body: { surface_id: 't1', text: '안녕' } });
-  assert.equal(sent.status, 200);
-  assert.deepEqual(calls.at(-1), { method: 'remote.send', params: { surface_id: 't1', text: '안녕', submit: true } }, 'the compose box sends text and Enter');
+  assert.deepEqual(JSON.parse(list.text), { panels: [{ id: 'p1', name: 'Panel', terminals: [panels[0].terminals[0]] }] }, 'only running Claude and Codex terminals are listed; shells, Gemini and empty panels are hidden');
+  assert.deepEqual(chatList({ panels: [{ id: 'p', name: 'n', terminals: [{ id: 'a', running: true, provider: 'codex' }] }] }).panels[0].terminals.map(item => item.id), ['a'], 'Codex is listed');
 
-  const query = new URLSearchParams({ surface_id: 't1', cols: 40, rows: 20, t: web.token }).toString();
-  assert.equal((await openSocket({ port, query, origin: 'http://evil.example' })).status, 403, 'another origin cannot open the live socket');
-  assert.equal((await openSocket({ port, query: 'surface_id=t1&t=wrong', origin: `http://127.0.0.1:${port}` })).status, 401, 'the live socket needs the token');
-  const live = await openSocket({ port, query, origin: `http://127.0.0.1:${port}` });
-  assert.equal(live.status, 101);
-  const opened = await live.next();
-  assert.equal(opened.type, 'open');
-  assert.equal(opened.result.surface_id, 't1');
-  const paint = await live.next();
-  assert.deepEqual(paint, { type: 'paint', data: '\x1b[Hhello', cols: 40, rows: 20 }, 'the screen arrives first');
-  assert.deepEqual(views[0].params, { surface_id: 't1', cols: 40, rows: 20 }, 'the phone size is passed on');
-  live.send({ type: 'input', data: 'y' });
-  live.send({ type: 'resize', cols: 50, rows: 22 });
-  live.send({ type: 'focus' });
-  live.send({ type: 'bogus' });
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.deepEqual(views[0].sent, [{ type: 'input', data: 'y' }, { type: 'resize', cols: 50, rows: 22 }, { type: 'focus' }], 'keys, size and focus go to the terminal; nothing else');
+  const read = await fetchRaw({ port, pathname: '/api/chat?surface_id=t1', headers: { ...token, 'accept-encoding': 'gzip' } });
+  assert.equal(read.status, 200);
+  const conversation = JSON.parse(read.text);
+  assert.equal(read.headers['content-encoding'], 'gzip', 'the conversation is gzipped');
+  assert.equal(conversation.messages.length, 150, 'the phone gets the latest 150 rows');
+  assert.equal(conversation.messages.at(-1).id, 'm199');
+  assert.equal(conversation.truncated, true, 'and is told there is more');
+  assert.deepEqual(chatCalls.at(-1), { read: { surfaceId: 't1', revision: '' } });
+  const again = JSON.parse((await fetchRaw({ port, pathname: '/api/chat?surface_id=t1&revision=r1', headers: token })).text);
+  assert.equal(again.unchanged, true, 'an unchanged conversation is not sent again');
+  assert.match(again.question, /1\. Yes/, 'a waiting AI comes with the screen words of its question');
+
+  const target = { panel_id: 'p1', surface_id: 't1', creation_id: 'c1', provider_pid: 42, provider: 'claude' };
+  const id = '0b3a5c1e-1111-4222-8333-444455556666';
+  assert.equal((await post('/api/chat/send', { id, text: '고쳐줘', ...target })).status, 200);
+  assert.deepEqual(chatCalls.at(-1), { send: { id, message: '고쳐줘', groupId: 'p1', targetId: 't1', targetCreationId: 'c1', targetProviderPid: 42, targetProvider: 'claude' } },
+    'a message goes through the guarded chat send with the exact AI session');
+  assert.equal((await post('/api/chat/stop', target)).status, 200);
+  assert.deepEqual(chatCalls.at(-1), { stop: { groupId: 'p1', targetId: 't1', targetCreationId: 'c1', targetProviderPid: 42, targetProvider: 'claude' } }, 'stop names the exact AI session');
+  for (const key of ['1', '2', '3', 'enter', 'esc']) {
+    assert.equal((await post('/api/key', { surface_id: 't1', key })).status, 200);
+    assert.deepEqual(calls.at(-1), { method: 'remote.key', params: { surface_id: 't1', key } });
+  }
+  const before = calls.length;
+  for (const key of ['ctrl-c', 'y', 'up', 'tab']) assert.equal((await post('/api/key', { surface_id: 't1', key })).status, 400, `${key} is not an answer key`);
+  assert.equal(calls.length, before, 'refused keys never reach the terminal');
+  assert.equal((await post('/api/send', { surface_id: 't1', text: 'ls' })).status, 404, 'there is no raw text input');
+  assert.equal((await fetchRaw({ port, pathname: '/api/attach', headers: token })).status, 404, 'and no live terminal');
   const connected = web.status().devices;
-  assert.deepEqual(connected.map(device => [device.device, device.live]), [['s23', true]], 'the connected phone is listed');
-  views[0].emit('frame', { type: 'output', data: 'more' });
-  assert.deepEqual(await live.next(), { type: 'output', data: 'more' });
-  live.end();
-  await live.closed;
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(views[0].closed, true, 'closing the page detaches the view');
-  assert.equal(web.status().devices[0].live, false);
-
-  const missing = await openSocket({ port, query: new URLSearchParams({ surface_id: 'missing', t: web.token }).toString(), origin: `http://127.0.0.1:${port}` });
-  assert.equal((await missing.next()).type, 'end', 'a terminal that is gone ends the socket with a reason');
+  assert.deepEqual(connected.map(device => [device.device, device.live]), [['s23', true]], 'a phone that polls is listed as connected');
 
   // Tailscale signs out: the page closes; it comes back with Tailscale.
   tailscaleState = 'stopped';
@@ -213,5 +171,5 @@ function openSocket({ port, query, origin, host }) {
   await web.dispose();
   blocker.close();
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log('PASS phone web: Tailscale address only, same Tailscale user, host and origin checks, page token, live relay, busy port, switch saved');
+  console.log('PASS phone web: Tailscale address only, same Tailscale user, host check, page token, Claude/Codex list, gzipped conversation (latest 150), guarded send and stop, answer keys only, no terminal engine, busy port, switch saved');
 })().catch(error => { console.error(error); process.exit(1); });

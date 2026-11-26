@@ -1,3 +1,6 @@
+/* The conversation itself is drawn by the desktop chat styles (/chat.css,
+   renderer/styles-terminal-chat.css); this file sets their colours for the
+   phone and lays out the list, the header, the question box and the composer. */
 :root {
   color-scheme: dark;
   --bg: #111214;
@@ -11,9 +14,14 @@
   --done: #5cc98a;
   --idle: #6b7178;
   --danger: #ff7b72;
+  /* The desktop chat's tokens. */
+  --wb-bg: var(--bg); --wb-panel: var(--panel); --wb-line: var(--line); --wb-text: var(--text); --wb-muted: var(--muted);
+  --wb-soft: #24272b; --wb-accent: var(--accent); --wb-panel-color: #7d9fc8; --wb-usage-warn: var(--waiting); --wb-summary-risk: var(--danger);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif; -webkit-text-size-adjust: 100%; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.4 var(--font-sans); -webkit-text-size-adjust: 100%; }
 body { overscroll-behavior: none; }
 button { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
@@ -27,7 +35,6 @@ button { font: inherit; color: inherit; }
 .panel h2 { margin: 16px 16px 6px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
 .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 16px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; }
 .row:active { background: var(--panel); }
-.row[disabled] { opacity: .45; }
 .row .name { flex: 1; min-width: 0; }
 .row .name strong { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .name span { color: var(--muted); font-size: 13px; }
@@ -41,15 +48,26 @@ button { font: inherit; color: inherit; }
 .title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .title strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title span { color: var(--muted); font-size: 12px; }
-#screen { flex: 1; min-height: 0; overflow: hidden; padding: 4px 4px 0; background: #0c0d0e; }
-#screen > * { height: 100%; }
-.ended { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 16px; background: #2a1414; color: #ffb4ad; font-size: 14px; }
-.ended span { flex: 1; }
-.ended button, .compose button { border: 0; border-radius: 9px; padding: 8px 14px; background: var(--accent); color: #0b1220; font-weight: 600; }
-.keys { display: flex; gap: 6px; overflow-x: auto; padding: 8px 8px 4px; flex: none; scrollbar-width: none; }
-.keys::-webkit-scrollbar { display: none; }
-.keys button { flex: none; min-width: 44px; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font-size: 14px; }
-.keys button.on { background: var(--accent); color: #0b1220; border-color: var(--accent); }
-.compose { display: flex; gap: 8px; align-items: flex-end; padding: 6px 8px 8px; flex: none; }
-.compose textarea { flex: 1; resize: none; max-height: 120px; min-height: 40px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
-.compose button { height: 40px; }
+
+/* Chat view. */
+#terminalWorkspace .wb-chat-log { padding: 14px 16px 8px; font-size: 15px; -webkit-overflow-scrolling: touch; }
+/* No hover on a phone: the time and copy button under a request stay visible. */
+#terminalWorkspace .wb-chat-trailing { opacity: 1; }
+#terminalWorkspace .wb-chat-bubble { max-width: 88%; }
+#terminalWorkspace .wb-chat-work { margin: 0 -8px; }
+#terminalWorkspace .wb-chat-composer { margin: 0 8px 8px; padding: 6px; flex: none; }
+#terminalWorkspace .wb-chat-composer textarea { min-height: 40px; max-height: 140px; resize: none; font-size: 16px; }
+#terminalWorkspace .wb-chat-send { min-height: 40px; padding: 0 16px; border-radius: 10px; font-size: 15px; }
+#terminalWorkspace .wb-chat-composer:has(textarea:disabled) { opacity: .5; }
+.stop { flex: none; height: 32px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent); border-radius: 8px; background: transparent; color: var(--danger); font-size: 13px; font-weight: 600; }
+.confirm { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #2a1414; color: #ffb4ad; font-size: 14px; flex: none; }
+.confirm span { flex: 1; }
+.confirm button { height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.confirm button[data-stop=yes] { border-color: var(--danger); background: var(--danger); color: #1a0b0a; font-weight: 600; }
+.question { flex: none; margin: 0 8px 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--waiting) 50%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--waiting) 9%, var(--bg)); }
+.question strong { display: block; margin-bottom: 6px; color: var(--waiting); font-size: 14px; }
+.question pre { max-height: 32dvh; margin: 0 0 8px; overflow: auto; color: var(--text); font: 12px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all; }
+.keys { display: flex; gap: 6px; flex-wrap: wrap; }
+.keys button { flex: 1 0 44px; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font-size: 15px; font-weight: 600; }
+.keys button:active { background: var(--accent); color: #0b1220; }
+.off { flex: none; margin: 0 8px 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); color: var(--muted); font-size: 14px; text-align: center; }
