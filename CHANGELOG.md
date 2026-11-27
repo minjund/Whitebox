@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.6.0 - 2026-11-27
+
+- The phone page can start a session: each panel has [+ New session]; pick Claude or Codex and a new terminal opens in that panel's folder (it also appears on the computer) and its chat opens at once, showing "Starting…" until the AI is ready. A panel without Claude or Codex yet is still listed so you can start one there.
+- A running AI whose conversation log is not found yet (a fresh session, an idle Codex) can still be written to from the phone instead of the page turning read-only.
+
 ## 2.5.0 - 2026-11-26
 
 - The chat view reads like a messenger: it uses the pane's whole width, your messages are bubbles on the right and each AI answer (with its work rows) is one bubble on the left under the AI's name. The phone page looks the same.

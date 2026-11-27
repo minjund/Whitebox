@@ -269,6 +269,20 @@ const { completedTurn, completionStamp, inputReady } = require('../src/terminalR
   await creator.sync(creationPayload());
   assert.equal(creator.jobs.get(uncertainCreation.jobs[0].id).state,'interrupted');
   await creator.sync(creationPayload()); assert.equal(launches.length,4,'lost launch acknowledgement never replays');
+  // The phone asks for a new session: no source terminal, same adopt-then-launch path.
+  launchUnknown=false;
+  await assert.rejects(creator.remoteCreate({groupId:'creation-panel',provider:'bash'}),/Claude or Codex/);
+  await assert.rejects(creator.remoteCreate({groupId:'missing-panel',provider:'claude'}),/panel is gone/);
+  const phoneNew=await creator.remoteCreate({groupId:'creation-panel',provider:'claude'});
+  assert.match(phoneNew.surfaceId,/^terminal:created-/);
+  const beforeAdopt=await creator.sync({groups:[{id:'creation-panel',cwd:directory,members:peers.filter(p=>p.id!==phoneNew.surfaceId)}],frames:[]});
+  assert.ok(beforeAdopt.jobs.some(job=>job.id===phoneNew.id&&job.terminal?.id===phoneNew.surfaceId),'the panel sees the phone job before it adopts the terminal');
+  const launchesBefore=launches.length;
+  await creator.sync(creationPayload());
+  assert.deepEqual(launches.slice(launchesBefore),[{id:phoneNew.surfaceId,command:'claude'}],'claude starts once in the adopted terminal');
+  assert.equal(creator.jobs.get(phoneNew.id).state,'completed');
+  await creator.sync(creationPayload()); assert.equal(launches.length,launchesBefore+1,'never launched twice');
+  console.log('PASS phone new session: Claude/Codex only, known panel, adopt then launch once');
   console.log('PASS new-terminal batch: same-panel creation, adoption before launch, wait IDs, validation, timeout and uncertain delivery without replay');
   console.log('Panel control: real socket/CLI, source ancestry, same-panel routing, paste/Enter including multi-line submit, moves, no instruction injection passed');
   console.log('Terminal collaboration: scoped delivery, drafts, busy targets, exact replies, deduplication, timeout, restart and creation passed');

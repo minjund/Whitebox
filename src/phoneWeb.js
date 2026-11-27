@@ -382,6 +382,14 @@ class PhoneWeb extends EventEmitter {
     };
     if (url.pathname === '/api/chat/send') return this.json(res, req, await this.chat.send({ id: String(body.id || ''), message: String(body.text || ''), interrupt: body.interrupt === true, ...target }));
     if (url.pathname === '/api/chat/stop') return this.json(res, req, await this.chat.stop(target));
+    // A new Claude or Codex terminal in one panel; the page opens its chat.
+    if (url.pathname === '/api/new') {
+      if (!this.chat.create) return this.fail(res, 404, 'Not found');
+      const provider = String(body.provider || ''), groupId = String(body.panel_id || '');
+      if (!['claude', 'codex'].includes(provider) || !/^[a-zA-Z0-9:._-]{1,200}$/u.test(groupId)) return this.fail(res, 400, 'Choose Claude or Codex and a panel');
+      const created = await this.chat.create({ groupId, provider });
+      return this.json(res, req, { surface_id: created.surfaceId, panel: created.panel, provider: created.provider });
+    }
     if (url.pathname === '/api/key') {
       const key = String(body.key || '');
       if (!ANSWER_KEYS.has(key)) return this.fail(res, 400, 'Unknown key');
@@ -395,7 +403,8 @@ class PhoneWeb extends EventEmitter {
 function chatList(value) {
   const panels = (value?.panels || []).map(panel => ({ id: panel.id, name: panel.name,
     terminals: (panel.terminals || []).filter(item => item.running && CHAT_PROVIDERS.has(item.provider)) }));
-  return { panels: panels.filter(panel => panel.terminals.length) };
+  // A panel with no Claude or Codex yet stays listed: its "+" starts one there.
+  return { panels };
 }
 
 function phoneConversation(result) {

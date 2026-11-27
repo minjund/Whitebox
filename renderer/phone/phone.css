@@ -35,6 +35,14 @@ button { font: inherit; color: inherit; }
 .notice { margin: 12px 16px; padding: 10px 12px; border-radius: 10px; background: #2a1f12; color: #f6d39a; font-size: 14px; }
 #panels { overflow-y: auto; flex: 1; padding: 4px 0 24px; }
 .panel h2 { margin: 16px 16px 6px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.panel-head { display: flex; align-items: center; gap: 8px; padding-right: 12px; }
+.panel-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-head .add { flex: none; margin-top: 10px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text, inherit); font-size: 13px; }
+.panel-head .add[aria-expanded=true] { border-color: var(--working); }
+.new-pick { display: flex; gap: 8px; padding: 4px 16px 12px; }
+.new-pick button { flex: 1; height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 15px; font-weight: 600; }
+.new-pick button:disabled { opacity: .5; }
+.panel-empty { margin: 0 16px 8px; color: var(--muted); font-size: 13px; }
 .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 16px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; }
 .row:active { background: var(--panel); }
 .row .name { flex: 1; min-width: 0; }
@@ -74,3 +82,6 @@ button { font: inherit; color: inherit; }
 .keys button:active { background: var(--accent); color: #0b1220; }
 .off { flex: none; margin: 0 8px 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); color: var(--muted); font-size: 14px; text-align: center; }
 #terminalWorkspace .wb-chat-force { min-height: 40px; border-radius: 10px; font-size: 14px; }
+/* While the AI works two buttons show; on a phone they get their own row under the input. */
+#terminalWorkspace #compose:has(#force:not([hidden])) { flex-wrap: wrap; justify-content: flex-end; }
+#terminalWorkspace #compose:has(#force:not([hidden])) textarea { flex: 1 0 100%; }
