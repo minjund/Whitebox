@@ -60,6 +60,13 @@ const STRINGS = {
   '플러그인': ['Plugin', '插件'],
   '내 명령': ['My command', '我的命令'],
   '프로젝트 명령': ['Project command', '项目命令'],
+  '새 세션': ['New session', '新会话'],
+  '이 패널에 새 세션 열기': ['Open a new session in this panel', '在此面板中打开新会话'],
+  '아직 Claude·Codex가 없어요.': ['No Claude or Codex here yet.', '这里还没有 Claude 或 Codex。'],
+  '컴퓨터에 열린 패널이 없어요. 컴퓨터에서 패널을 먼저 만드세요.': ['No panels are open on the computer. Create one there first.', '电脑上没有打开的面板。请先在电脑上创建一个。'],
+  '{p}를 시작하는 중…': ['Starting {p}…', '正在启动 {p}…'],
+  '새 세션을 열지 못했어요': ['Could not open a new session', '未能打开新会话'],
+  '이 터미널의 대화 기록을 아직 찾지 못했어요. 메시지는 보낼 수 있어요.': ["This terminal's conversation log was not found yet. You can still send a message.", '尚未找到此终端的对话记录，但仍可发送消息。'],
   // chat-render.js
   '파일 {n}개 편집': ['Files edited: {n}', '编辑了 {n} 个文件'],
   '명령 {n}개 실행': ['Commands run: {n}', '运行了 {n} 条命令'],
@@ -124,16 +131,40 @@ async function loadList() {
     notice(/not ready/i.test(error.message) ? t('컴퓨터의 Whitebox 화면이 준비되지 않았어요. 앱이 켜져 있는지 확인하세요.') : t('컴퓨터에 연결할 수 없어요. Whitebox와 Tailscale이 켜져 있는지 확인하세요. 다시 시도하는 중…'));
   } finally { listLoading = false; }
 }
+let lastPanels = [], choosing = '', creating = false;
 function renderList(panels) {
+  lastPanels = panels;
   const root = $('#panels');
   root.replaceChildren();
-  if (!panels.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = t('열린 Claude·Codex 터미널이 없어요.'); root.append(empty); return; }
+  if (!panels.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = t('컴퓨터에 열린 패널이 없어요. 컴퓨터에서 패널을 먼저 만드세요.'); root.append(empty); return; }
   for (const panel of panels) {
     const section = document.createElement('section');
     section.className = 'panel';
+    const head = document.createElement('div');
+    head.className = 'panel-head';
     const heading = document.createElement('h2');
     heading.textContent = panel.name || 'Panel';
-    section.append(heading);
+    const add = document.createElement('button');
+    add.type = 'button'; add.className = 'add'; add.textContent = `+ ${t('새 세션')}`;
+    add.setAttribute('aria-label', t('이 패널에 새 세션 열기'));
+    add.setAttribute('aria-expanded', String(choosing === panel.id));
+    add.addEventListener('click', () => { choosing = choosing === panel.id ? '' : panel.id; renderList(lastPanels); });
+    head.append(heading, add);
+    section.append(head);
+    if (choosing === panel.id) {
+      const pick = document.createElement('div');
+      pick.className = 'new-pick';
+      for (const provider of ['claude', 'codex']) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.dataset.provider = provider;
+        button.textContent = provider === 'codex' ? 'Codex' : 'Claude';
+        button.disabled = creating;
+        button.addEventListener('click', () => newSession(panel, provider));
+        pick.append(button);
+      }
+      section.append(pick);
+    }
+    if (!panel.terminals.length) { const none = document.createElement('p'); none.className = 'panel-empty'; none.textContent = t('아직 Claude·Codex가 없어요.'); section.append(none); }
     for (const terminal of panel.terminals) {
       const state = stateOf(terminal);
       const row = document.createElement('button');
@@ -158,6 +189,19 @@ function renderList(panels) {
     }
     root.append(section);
   }
+}
+// "+ 새 세션": a new Claude or Codex terminal in that panel, then its chat at once.
+async function newSession(panel, provider) {
+  if (creating) return;
+  creating = true; renderList(lastPanels);
+  try {
+    const created = await api('/api/new', { panel_id: panel.id, provider });
+    choosing = '';
+    const name = provider === 'codex' ? 'Codex' : 'Claude';
+    openChat({ id: created.surface_id, panelId: panel.id, panel: panel.name, title: `${name} · ${t('새 세션')}`, provider, startedAt: Date.now() });
+  } catch (error) {
+    notice(`${t('새 세션을 열지 못했어요')}: ${error.message}`);
+  } finally { creating = false; if (!current) renderList(lastPanels); }
 }
 function showList() {
   closeChat();
@@ -207,7 +251,17 @@ async function poll() {
     const query = new URLSearchParams({ surface_id: target.id, revision: view?.revision || '' });
     const result = await api(`/api/chat?${query}`);
     if (current !== target) return;
-    if (!result.available) {
+    const running = !result.available && result.reason === 'log' && result.providerPid > 0;
+    const starting = !result.available && !running && target.startedAt && Date.now() - target.startedAt < 90000;
+    if (running) {
+      // The AI runs but its log is not there yet (a fresh session): it can be written to.
+      view = { ...(view || {}), messages: view?.messages || [], off: false, starting: false, fresh: Boolean(target.startedAt), working: result.state === 'working',
+        state: result.state, question: result.question || '', creationId: result.creationId, provider: result.provider, providerPid: result.providerPid, revision: '',
+        error: view?.messages?.length || target.startedAt ? '' : t('이 터미널의 대화 기록을 아직 찾지 못했어요. 메시지는 보낼 수 있어요.') };
+    } else if (starting) {
+      // A session just asked for from the phone: its AI is still starting.
+      view = { messages: [], off: false, starting: true, working: false, state: '', question: '', error: '' };
+    } else if (!result.available) {
       // The AI exited or the terminal closed: keep what was read, read-only.
       view = { ...(view || { messages: [] }), off: true, working: false, state: '', question: '',
         error: view?.messages?.length ? '' : t('이 터미널의 대화 기록을 아직 찾지 못했어요.') };
@@ -230,6 +284,7 @@ async function poll() {
 function logHtml() {
   const parts = [];
   if (!view) parts.push(`<p class="wb-chat-empty">${esc(t('대화를 불러오는 중…'))}</p>`);
+  else if (view.starting) parts.push(`<div class="wb-chat-working"><i aria-hidden="true"></i>${esc(t('{p}를 시작하는 중…').replace('{p}', current.provider === 'codex' ? 'Codex' : 'Claude'))}</div>`);
   else if (view.error) parts.push(`<p class="wb-chat-empty">${esc(view.error)}</p>`);
   else {
     if (view.truncated) parts.push(`<p class="wb-chat-more">${esc(t('더 이전 대화는 컴퓨터에서 볼 수 있어요.'))}</p>`);
@@ -281,7 +336,7 @@ let flash = { text: '', until: 0 };
 function setOff(off) {
   const line = $('#off'), text = off ? t('AI가 꺼져 있어요. 지난 대화만 볼 수 있어요.') : Date.now() < flash.until ? flash.text : '';
   line.hidden = !text; line.textContent = text;
-  $('#text').disabled = off; $('#send').disabled = off; $('#force').disabled = off;
+  $('#text').disabled = off; $('#send').disabled = off || !view?.providerPid; $('#force').disabled = off || !view?.providerPid;
 }
 
 function submit({ interrupt = false } = {}) {

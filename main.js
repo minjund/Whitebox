@@ -990,10 +990,16 @@ function startPhoneWeb() {
           request('remote.read', { surface_id: surfaceId, lines: 30 }).catch(() => null),
         ]);
         const state = screen?.state || '';
+        // A running AI with no log yet (a fresh Claude, an idle Codex) can still
+        // be written to: the phone needs its identity, which the panel knows.
+        const member = [...(terminalCollaboration?.groups?.values() || [])].flatMap(group => group.members).find(item => item.id === surfaceId && item.creationId === live.creationId);
+        const identity = !conversation.available && conversation.reason === 'log' && member?.providerPid > 0 && ['claude', 'codex'].includes(member.provider)
+          ? { provider: member.provider, providerPid: member.providerPid } : {};
         // An AI's question is shown as the screen's own words; the phone answers with keys.
-        return { ...conversation, creationId: live.creationId, state, question: state === 'waiting' ? String(screen.text || '') : '' };
+        return { ...conversation, ...identity, creationId: live.creationId, state, question: state === 'waiting' ? String(screen.text || '') : '' };
       },
       send: payload => collaboration().chatSend(payload),
+      create: payload => collaboration().remoteCreate(payload),
       commands: ({ surfaceId, provider, providerPid }) => slashCommandsFor(surfaceId, provider, providerPid),
       stop: payload => collaboration().chatStop(payload),
     },

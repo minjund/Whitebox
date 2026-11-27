@@ -109,6 +109,7 @@ function selfSigned(name) {
       : { available: true, revision: 'r1', provider: 'claude', providerPid: 42, creationId: 'c1', state: 'working', messages }; },
     send: async payload => { chatCalls.push({ send: payload }); return { ok: true, job: { id: payload.id } }; },
     stop: async payload => { chatCalls.push({ stop: payload }); return { ok: true }; },
+    create: async params => { chatCalls.push({ create: params }); return { id: 'job', surfaceId: 'terminal:new', panel: 'Panel', provider: params.provider }; },
     commands: async params => { chatCalls.push({ commands: params }); return [{ name: 'compact', description: '대화 압축', source: 'builtin', insert: '/compact', file: '/secret/path' }]; },
   };
   const store = new PhoneWebStore(path.join(dir, 'phone-web.json'));
@@ -162,7 +163,8 @@ function selfSigned(name) {
   assert.equal((await fetchRaw({ port, pathname: '/api/list' })).status, 401, 'the API needs the page token');
   const list = await fetchRaw({ port, pathname: '/api/list', headers: token });
   assert.equal(list.status, 200);
-  assert.deepEqual(JSON.parse(list.text), { panels: [{ id: 'p1', name: 'Panel', terminals: [panels[0].terminals[0]] }] }, 'only running Claude and Codex terminals are listed; shells, Gemini and empty panels are hidden');
+  assert.deepEqual(JSON.parse(list.text), { panels: [{ id: 'p1', name: 'Panel', terminals: [panels[0].terminals[0]] }, { id: 'p2', name: 'Shells', terminals: [] }] },
+    'only running Claude and Codex terminals are listed; shells and Gemini are hidden, a panel without them stays for its "+"');
   assert.deepEqual(chatList({ panels: [{ id: 'p', name: 'n', terminals: [{ id: 'a', running: true, provider: 'codex' }] }] }).panels[0].terminals.map(item => item.id), ['a'], 'Codex is listed');
 
   const read = await fetchRaw({ port, pathname: '/api/chat?surface_id=t1', headers: { ...token, 'accept-encoding': 'gzip' } });
@@ -184,6 +186,13 @@ function selfSigned(name) {
     'a message goes through the guarded chat send with the exact AI session');
   assert.equal((await post('/api/chat/send', { id, text: '멈추고 이거', interrupt: true, ...target })).status, 200);
   assert.equal(chatCalls.at(-1).send.interrupt, true, '"stop and send" is passed on');
+  const created = await post('/api/new', { panel_id: 'p1', provider: 'codex' });
+  assert.deepEqual(chatCalls.at(-1), { create: { groupId: 'p1', provider: 'codex' } });
+  assert.deepEqual(JSON.parse(created.text), { surface_id: 'terminal:new', panel: 'Panel', provider: 'codex' }, 'a new session names its terminal so the page opens its chat');
+  const calledBefore = chatCalls.length;
+  for (const bad of [{ panel_id: 'p1', provider: 'bash' }, { panel_id: '../x y', provider: 'claude' }, { provider: 'claude' }]) assert.equal((await post('/api/new', bad)).status, 400, `refused: ${JSON.stringify(bad)}`);
+  assert.equal(chatCalls.length, calledBefore, 'a refused request never creates a terminal');
+  assert.equal((await fetchRaw({ port, pathname: '/api/new', method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ panel_id: 'p1', provider: 'claude' }) })).status, 401, 'creating needs the page token');
   const commandList = await fetchRaw({ port, pathname: '/api/commands?surface_id=t1&provider=claude&provider_pid=42', headers: token });
   assert.deepEqual(chatCalls.at(-1), { commands: { surfaceId: 't1', provider: 'claude', providerPid: 42 } });
   assert.deepEqual(JSON.parse(commandList.text), { commands: [{ name: 'compact', description: '대화 압축', source: 'builtin', insert: '/compact' }] }, 'the "/" list carries names and what to type, nothing else');

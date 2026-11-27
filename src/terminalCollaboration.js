@@ -178,7 +178,9 @@ class TerminalCollaboration {
     this.pinnedJobIds = new Set((Array.isArray(chatJobs) ? chatJobs : []).slice(0, 100).map(request => request?.id).filter(id => typeof id === 'string'));
     this.pruneJobs();
     const visible = new Set([...this.groups.values()].flatMap(group => group.members.map(member => member.id)));
-    const jobs = new Map([...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)).slice(-80).map(job => [job.id, job]));
+    // A terminal the phone asked for has no source terminal; its panel adopts it.
+    const jobs = new Map([...this.jobs.values()].filter(job => visible.has(job.sourceId) || visible.has(job.targetId)
+      || job.origin === 'phone' && this.groups.has(job.groupId)).slice(-80).map(job => [job.id, job]));
     // The display window must not hide a delivery needed to archive a reply.
     // Look up only exact, app-owned submissions; missing records never authorize replay.
     for (const request of (Array.isArray(chatJobs) ? chatJobs : []).slice(0, 100)) {
@@ -345,6 +347,32 @@ class TerminalCollaboration {
       return { ok: true, stopped: running.map(job => job.id) };
     });
   }
+  // A new Claude or Codex terminal in a panel, asked for from the phone page
+  // (same Tailscale user). Same path as `whitebox new-terminal`: the panel
+  // adopts the shell first, then the provider is started once; a lost launch
+  // acknowledgement is never replayed.
+  remoteCreate({ groupId, provider } = {}) {
+    return this.serialize(async () => {
+      if (!['claude', 'codex'].includes(provider) || !safeId(groupId)) throw new Error('Choose Claude or Codex and a panel.');
+      if (!this.updatedAt || this.now() - this.updatedAt > 30000) throw new Error('Whitebox screen is not ready. Check that the app is open.');
+      const group = this.groups.get(groupId);
+      if (!group) throw new Error('That panel is gone; open the list again.');
+      const pending = [...this.jobs.values()].filter(job => job.groupId === groupId && job.operation === 'new' && ['queued', 'starting', 'sending'].includes(job.state)).length;
+      if (pending >= 2) throw new Error('A new terminal is still starting in this panel. Wait for it first.');
+      if (group.members.length + pending >= 64) throw new Error('This panel supports at most 64 terminals.');
+      const id = randomUUID();
+      const job = { id, operation: 'new', origin: 'phone', sourceId: '', targetId: '', groupId, provider, request: '', state: 'queued', createdAt: this.now() };
+      this.jobs.set(id, job); this.save(job);
+      try {
+        const terminal = await this.createTerminal({ type: process.platform === 'win32' ? 'powershell' : 'shell', cwd: group.cwd, creationId: `workspace:collaboration:${id}`, cols: 100, rows: 30 });
+        if (!terminal?.id || terminal.creationUnavailable || terminal.status !== 'running') throw new Error('새 터미널의 실행 상태를 확인하지 못했습니다.');
+        Object.assign(job, { terminal, targetId: terminal.id, state: 'starting' });
+      } catch (error) { Object.assign(job, { state: 'failed', error: String(error.message || error) }); }
+      this.save(job);
+      if (job.state === 'failed') throw new Error(job.error);
+      return { id, surfaceId: job.targetId, panel: group.name, provider };
+    });
+  }
   connect(groupId, sourceId) { return this.serialize(() => this.connectNow(groupId, sourceId)); }
   async connectNow(groupId, sourceId) {
     const { member } = this.member(groupId, sourceId);
@@ -387,7 +415,7 @@ class TerminalCollaboration {
         const live = await this.manager().get(job.targetId, false);
         if (!live || live.creationId !== job.terminal.creationId || live.pid !== job.terminal.pid || live.status !== 'running') throw new Error('새 터미널의 실행 세션이 바뀌었습니다.');
         const group = this.groups.get(job.groupId);
-        if (!group?.members.some(member => member.id === job.sourceId)) throw new Error('생성 요청을 보낸 터미널이 패널에서 이동했습니다.');
+        if (job.origin === 'phone' ? !group : !group?.members.some(member => member.id === job.sourceId)) throw new Error('생성 요청을 보낸 터미널이 패널에서 이동했습니다.');
         if (!group.members.some(member => member.id === live.id && member.creationId === live.creationId)) {
           if (this.now() - job.createdAt > 30000) throw new Error('새 터미널의 패널 연결을 확인하지 못했습니다. 자동 재시작하지 않습니다.');
           continue;
