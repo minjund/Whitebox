@@ -144,6 +144,8 @@ let backgroundQuestionnaire = null;
 let terminalReview = null;
 let terminalCollaboration = null;
 let phoneWeb = null;
+// Phone notifications (Web Push) for finished work and questions.
+let phoneAlerts = null;
 const { TerminalCompletionTracker, applyCompletionBadge } = require('./src/terminalCompletionBadge');
 const terminalCompletions = new TerminalCompletionTracker(count => {
   applyCompletionBadge({ app, window: mainWindow, nativeImage }, count);
@@ -233,6 +235,10 @@ const MAIN_COPY = {
     attentionBody: '{provider} · {title}',
     completionTitle: '작업 완료',
     completionFallback: 'AI 작업이 완료되었습니다.',
+    phonePushDone: '{provider} 작업 완료',
+    phonePushWaiting: '{provider} 확인 필요',
+    phonePushDoneBody: '작업이 끝났어요.',
+    phonePushWaitingBody: '답을 기다리고 있어요.',
     terminalHostReconnecting: '명령창 연결을 자동으로 복구하는 중입니다.',
     terminalHostReconnected: '명령창 연결을 복구했습니다.',
     terminalHostReconnectFailed: '명령창 연결 복구가 지연되고 있습니다. 자동으로 다시 시도합니다: {reason}',
@@ -279,6 +285,10 @@ const MAIN_COPY = {
     attentionBody: '{provider} · {title}',
     completionTitle: 'Task completed',
     completionFallback: 'The AI task is complete.',
+    phonePushDone: '{provider} finished',
+    phonePushWaiting: '{provider} needs you',
+    phonePushDoneBody: 'The work is done.',
+    phonePushWaitingBody: 'Waiting for your answer.',
     terminalHostReconnecting: 'Restoring the terminal connection automatically.',
     terminalHostReconnected: 'Terminal connection restored.',
     terminalHostReconnectFailed: 'Terminal recovery is delayed and will retry automatically: {reason}',
@@ -325,6 +335,10 @@ const MAIN_COPY = {
     attentionBody: '{provider} · {title}',
     completionTitle: '任务已完成',
     completionFallback: 'AI 任务已完成。',
+    phonePushDone: '{provider} 已完成',
+    phonePushWaiting: '{provider} 需要确认',
+    phonePushDoneBody: '工作已完成。',
+    phonePushWaitingBody: '正在等待你的回答。',
     terminalHostReconnecting: '正在自动恢复终端连接。',
     terminalHostReconnected: '终端连接已恢复。',
     terminalHostReconnectFailed: '终端连接恢复延迟，将自动重试：{reason}',
@@ -972,6 +986,8 @@ function startPhoneWeb() {
   const directory = userFile('terminal-collaboration');
   const loopback = /^(127\.\d+\.\d+\.\d+|::1)$/.test(process.env.WHITEBOX_PHONE_WEB_HOST || '') ? process.env.WHITEBOX_PHONE_WEB_HOST : '';
   const { PhoneWeb, PhoneWebStore, PORT } = require('./src/phoneWeb');
+  const { PhonePush, PhonePushStore, PhoneAlerts } = require('./src/phonePush');
+  const push = new PhonePush({ store: new PhonePushStore(userFile('phone-push.json')), log: error => reportRecoverableError('phone-push', error) });
   const request = (method, params) => require('./bin/panel-control').request(method, params, { directory });
   const collaboration = () => {
     if (!terminalCollaboration) throw new Error('Whitebox is not ready yet.');
@@ -1005,9 +1021,22 @@ function startPhoneWeb() {
     },
     root: __dirname,
     store: new PhoneWebStore(userFile('phone-web.json')),
+    push,
     port: Number(process.env.WHITEBOX_PHONE_WEB_PORT) || PORT,
     bindHost: loopback,
     log: error => reportRecoverableError('phone-web', error),
+  });
+  phoneAlerts = new PhoneAlerts({
+    push,
+    // Only while the phone page is on; a chat open on the phone is not notified.
+    enabled: () => Boolean(phoneWeb?.enabled),
+    viewing: id => Boolean(phoneWeb?.viewing(id)),
+    summary: async member => {
+      const result = await terminalConversation().read({ id: member.id, creationId: member.creationId, revision: '' });
+      return [...(result?.messages || [])].reverse().find(message => message.role === 'assistant')?.text || '';
+    },
+    text: (key, values) => mainText(key, values),
+    log: error => reportRecoverableError('phone-push', error),
   });
   phoneWeb.on('change', () => sendTerminal('phone:status', phoneWebStatus()));
   phoneWeb.start().catch(error => reportRecoverableError('phone-web', error));
@@ -2758,6 +2787,10 @@ function registerIpcHandlers() {
     await phoneWeb.setEnabled(Boolean(enabled));
     return phoneWebStatus();
   });
+  handleTrusted('phone:push-remove', id => {
+    phoneWeb?.push?.remove({ id: String(id || '') });
+    return phoneWebStatus();
+  });
   handleTrusted('terminals:review', payload => terminalReview.capture(payload));
   handleTrusted('terminals:completion-read', payload => terminalCompletions.read(payload));
   handleTrusted('terminals:collaboration', async payload => {
@@ -2771,7 +2804,11 @@ function registerIpcHandlers() {
         terminalReview?.forget(terminal.id);
         sendTerminal('terminals:state', { change: 'removed', session: terminal, sessions: visibleTerminalSessions(terminalManager.list()) });
       } });
-    if (payload?.operation === 'sync') return terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
+    if (payload?.operation === 'sync') {
+      const synced = terminalCompletions.update(await terminalCollaboration.sync(payload), payload.groups);
+      phoneAlerts?.observe(synced);
+      return synced;
+    }
     if (payload?.operation === 'connect') return terminalCollaboration.connect(payload.groupId, payload.sourceId);
     if (payload?.operation === 'chat-send') return terminalCollaboration.chatSend(payload);
     if (payload?.operation === 'chat-respond') return terminalCollaboration.chatRespond(payload);

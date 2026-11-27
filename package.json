@@ -1,6 +1,6 @@
 {
   "name": "whitebox-ai",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "A terminal workspace that connects every AI task to its own understanding and review.",
   "main": "main.js",
   "author": "wincube AX",
@@ -89,7 +89,7 @@
     "dist:mac": "electron-builder --mac --publish never",
     "pack": "electron-builder --dir",
     "prepublishOnly": "npm run check:source && npm test && npm run check:package",
-    "test:workspace": "node scripts/terminal-workspace-layout-test.js && node scripts/terminal-activity-test.js && node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/remote-phone-test.js && node scripts/tests/phone-web.js && node scripts/panel-provider-test.js && node scripts/terminal-chat-delivery-test.js && node scripts/tests/terminal-chat-markdown.js && node scripts/tests/terminal-name.js && node scripts/slash-command-catalog-test.js && electron scripts/terminal-workspace-check.js --project-reorder-only && electron scripts/terminal-workspace-check.js --startup-ready-only && electron scripts/terminal-workspace-check.js --startup-reconnect-only && electron scripts/terminal-workspace-check.js --chat-only && electron scripts/terminal-workspace-check.js --groups-only && electron scripts/terminal-workspace-check.js --hide-only && electron scripts/terminal-workspace-check.js && electron scripts/terminal-workspace-check.js --responsive-only && node scripts/workspace-attention-runner.js",
+    "test:workspace": "node scripts/terminal-workspace-layout-test.js && node scripts/terminal-activity-test.js && node scripts/terminal-review-test.js && node scripts/terminal-collaboration-test.js && node scripts/remote-phone-test.js && node scripts/tests/phone-web.js && node scripts/panel-provider-test.js && node scripts/terminal-chat-delivery-test.js && node scripts/tests/terminal-chat-markdown.js && node scripts/tests/terminal-name.js && node scripts/slash-command-catalog-test.js && node scripts/phone-push-test.js && electron scripts/terminal-workspace-check.js --project-reorder-only && electron scripts/terminal-workspace-check.js --startup-ready-only && electron scripts/terminal-workspace-check.js --startup-reconnect-only && electron scripts/terminal-workspace-check.js --chat-only && electron scripts/terminal-workspace-check.js --groups-only && electron scripts/terminal-workspace-check.js --hide-only && electron scripts/terminal-workspace-check.js && electron scripts/terminal-workspace-check.js --responsive-only && node scripts/workspace-attention-runner.js",
     "test": "node scripts/regression-test.js && node scripts/terminal-guard-hook-test.js && node scripts/execution-activity-test.js && node scripts/workspace-source-contract.js && node scripts/update-restart-regression.js && node scripts/update-review-requeue-test.js && node scripts/electron-asar-cleanup-check.js",
     "test:performance": "node --expose-gc scripts/performance-monitor-check.js && node scripts/performance-fixture-runner.js",
     "test:result-review": "node scripts/terminal-review-test.js",

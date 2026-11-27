@@ -1,6 +1,8 @@
 // Whitebox phone app: keeps the page's frame on the phone so the installed app
 // opens at once, even when the computer cannot be reached. Conversations and
 // every /api/ call always go to the computer and are never stored here.
+// It also shows the computer's notifications (finished work, a question) and
+// opens that chat when one is tapped.
 const CACHE = 'whitebox-phone';
 const SHELL = ['/', '/phone.css', '/phone.js', '/chat.css', '/chat-render.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon.png'];
 // A computer that is off does not answer at all over Tailscale; past this the stored frame is shown.
@@ -38,3 +40,27 @@ async function fresh(request, key) {
   } catch {}
   return (await cache.match(key)) || network;
 }
+
+self.addEventListener('push', event => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch {}
+  event.waitUntil(self.registration.showNotification(String(data.title || 'Whitebox'), {
+    body: String(data.body || ''), tag: String(data.tag || 'whitebox'), renotify: true, icon: '/icon-192.png',
+    data: { surfaceId: String(data.surfaceId || '') }
+  }));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const surfaceId = event.notification.data?.surfaceId || '';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows.find(client => new URL(client.url).origin === self.location.origin);
+    if (open) {
+      await open.focus();
+      open.postMessage({ type: 'open', surfaceId });
+      return;
+    }
+    await self.clients.openWindow(surfaceId ? `/?open=${encodeURIComponent(surfaceId)}` : '/');
+  })());
+});
