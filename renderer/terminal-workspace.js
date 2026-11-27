@@ -54,10 +54,8 @@
   let updateState = null, updateEventSeen = false, updateRevision = 0, updateOperation = '', updateActionError = '', announcedUpdateVersion = '';
 
   const handledCollaborations = new Set();
-  const collaborationStates = new Map(), collaborationNotices = new Map();
   // Screen text goes to main only when a pane's frame changed (see sync).
   const collaborationFrames = window.WhiteboxTerminalFrameDelta?.createFrameTracker() || null;
-  let collaborationLoaded = false;
   const reviewRevisions = new Map();
   function acceptReview(id, value) {
     const session = sessions.get(id);
@@ -1723,15 +1721,7 @@
     refreshPaneChrome(); renderInstances();
     collaborationJobs = result.jobs || [];
     chat.observe(collaborationJobs);
-    for (const job of collaborationJobs) {
-      if (collaborationLoaded && job.state === 'completed' && collaborationStates.get(job.id) !== 'completed') {
-        collaborationNotices.set(job.id, Date.now() + 7000);
-        setTimeout(renderCollaborationStatus, 7100);
-      }
-      collaborationStates.set(job.id, job.state);
-    }
     pruneCollaborationRecords();
-    collaborationLoaded = true;
     for (const job of collaborationJobs) {
       if (job.terminal && !handledCollaborations.has(`new:${job.id}`)) {
         const owner = panelOwner(job.groupId);
@@ -1758,32 +1748,23 @@
     renderCollaborationStatus();
     if ($('#wbError').dataset.scope === 'collaboration') $('#wbError').hidden = true;
   }
-  // Job bookkeeping otherwise grows for the app's lifetime. Expired notices
-  // are inert; states and handled ids of jobs main no longer reports are kept
-  // up to a bound (save() already persists only the newest 200 handled ids).
+  // Handled ids otherwise grow for the app's lifetime. Ids of jobs main no
+  // longer reports are kept up to a bound (save() already persists only the
+  // newest 200).
   const COLLABORATION_RECORD_LIMIT = 200;
-  function pruneCollaborationRecords(now = Date.now()) {
+  function pruneCollaborationRecords() {
     const current = new Set(collaborationJobs.map(job => job.id));
-    for (const [id, until] of collaborationNotices) if (until <= now) collaborationNotices.delete(id);
-    for (const id of collaborationStates.keys()) {
-      if (collaborationStates.size <= COLLABORATION_RECORD_LIMIT) break;
-      if (!current.has(id)) collaborationStates.delete(id);
-    }
     for (const key of handledCollaborations) {
       if (handledCollaborations.size <= COLLABORATION_RECORD_LIMIT) break;
       if (!current.has(key.startsWith('new:') ? key.slice(4) : key)) handledCollaborations.delete(key);
     }
   }
+  // Deliveries between AIs are not shown above the screen: the AI that asked
+  // gets the reply itself. The bar only reports a lost collaboration link,
+  // and clears once a sync succeeds again.
   function renderCollaborationStatus() {
-    const related = collaborationJobs.filter(job => job.operation !== 'chat' && (job.sourceId === activeId() || job.targetId === activeId()));
-    // Only deliveries in progress show at the top. A failed or interrupted one
-    // is reported to the AI that asked, so it does not stay above the screen.
-    const jobs = related.filter(job => !['failed', 'interrupted'].includes(job.state)
-      && (job.state !== 'completed' || (collaborationNotices.get(job.id) || 0) > Date.now())).slice(-3);
-    const status = $('#wbCollaborationStatus'); status.hidden = !jobs.length;
-    const labels = { queued: t('전달 대기'), starting: t('시작 중…'), sending: t('전달 중'), running: t('상대 답변 대기'), completed: t('응답 도착'), failed: t('전달 실패'), interrupted: t('확인 필요') };
-    const markup = job => `<div><strong>${esc(job.terminal && job.state === 'completed' ? t('새 터미널 열림') : labels[job.state] || job.state)}</strong><span>${esc((job.targetId || '').slice(-5))} · ${esc(job.request || t('새 터미널'))}</span>${job.error ? `<small>${esc(job.error)}</small>` : ''}</div>`;
-    status.innerHTML = jobs.map(markup).join('');
+    const status = $('#wbCollaborationStatus');
+    status.hidden = true; status.textContent = '';
   }
   function captureReviews(force = false, manualTarget = null) {
     if (!api.terminalReview) return Promise.resolve();
