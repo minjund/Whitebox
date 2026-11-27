@@ -28,6 +28,22 @@ exactly the expected platform artifacts; every downloaded draft asset must be
 byte-identical to its verified build artifact, and the canonical Windows Setup
 and frozen-client manual alias must be byte-identical before npm publication.
 
+## Version numbers
+
+Pick the next version from what the release changes, compared with the latest
+published release:
+
+- Fixes only (a bug fix, a wording or layout correction, a test or release
+  script change): raise the last number, for example `2.6.0` -> `2.6.1`.
+- Anything new a user can do or see (a new button, screen, command or setting,
+  or a changed behaviour that is not only a fix): raise the middle number and
+  reset the last, for example `2.6.0` -> `2.7.0`.
+- A release that mixes fixes and new features counts as new features.
+- The first number changes only when the user asks for it.
+
+Updates only compare versions, so either choice installs the same way. A
+published tag is never renumbered.
+
 Recovery may overlay the reviewed workspace E2E driver from the validation
 commit while exercising the immutable tag's application sources. It must
 restore that test file and prove a clean tracked tree before packaging. The
