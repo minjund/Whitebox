@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld('whitebox', {
   },
   phoneStatus: () => ipcRenderer.invoke('phone:status'),
   setPhoneEnabled: enabled => ipcRenderer.invoke('phone:set-enabled', Boolean(enabled)),
+  removePhonePush: id => ipcRenderer.invoke('phone:push-remove', String(id || '')),
   onPhoneStatus: callback => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('phone:status', handler);

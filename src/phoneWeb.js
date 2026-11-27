@@ -5,7 +5,8 @@
 // tailnet has no HTTPS) and reads every Claude and Codex terminal
 // as a conversation (the same transcript the desktop chat panes read). There
 // is no terminal view on the phone: input goes through the guarded chat send,
-// and an AI's question is answered with a few fixed keys.
+// and an AI's question is answered with a few fixed keys. A phone can turn on
+// notifications for finished work and questions (src/phonePush.js).
 //
 // Who may come in:
 // - The server listens on the Tailscale address only, never on Wi-Fi.
@@ -64,7 +65,7 @@ class PhoneWebStore {
 function peerAddress(socket) { return String(socket?.remoteAddress || '').replace(/^::ffff:/, ''); }
 
 class PhoneWeb extends EventEmitter {
-  constructor({ tailscale, request, chat, root, store, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser(),
+  constructor({ tailscale, request, chat, root, store, push = null, port = PORT, bindHost = '', log = () => {}, pollMs = 15000, now = Date.now, user = safeUser(),
     certTtlMs = CERT_TTL_MS, certRetryMs = CERT_RETRY_MS } = {}) {
     super();
     this.tailscale = tailscale;
@@ -72,6 +73,9 @@ class PhoneWeb extends EventEmitter {
     this.chat = chat;
     this.root = root;
     this.store = store;
+    this.push = push;
+    // When the phone last read each terminal's chat: one being read is not notified.
+    this.viewed = new Map();
     this.basePort = port;
     // Tests bind a loopback address instead of asking Tailscale for one.
     this.bindHost = bindHost;
@@ -273,9 +277,13 @@ class PhoneWeb extends EventEmitter {
       ip: this.self?.ip || '',
       port,
       user: this.user,
-      devices
+      devices,
+      pushDevices: this.push ? this.push.list() : []
     };
   }
+
+  // A chat the phone polled in the last few seconds is on its screen now.
+  viewing(surfaceId) { return this.now() - (this.viewed.get(surfaceId) || 0) < 6000; }
 
   // Host names this server answers to.
   hosts() {
@@ -342,7 +350,7 @@ class PhoneWeb extends EventEmitter {
     const url = new URL(req.url, 'http://phone.invalid');
     if (url.pathname.startsWith('/api/')) {
       if (req.headers['x-whitebox-token'] !== this.token) return this.fail(res, 401, 'Reload the page');
-      return this.api(req, res, url);
+      return this.api(req, res, url, admitted);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return this.fail(res, 405, 'Method not allowed');
     return this.file(req, res, url.pathname);
@@ -362,9 +370,14 @@ class PhoneWeb extends EventEmitter {
     this.send(res, req, this.headers(TYPES[path.extname(file)] || 'application/octet-stream'), body);
   }
 
-  async api(req, res, url) {
+  async api(req, res, url, admitted = {}) {
     if (req.method === 'GET' && url.pathname === '/api/list') return this.json(res, req, chatList(await this.request('remote.list', {})));
     if (req.method === 'GET' && url.pathname === '/api/chat') {
+      const surfaceId = String(url.searchParams.get('surface_id') || '');
+      if (surfaceId) {
+        this.viewed.set(surfaceId, this.now());
+        for (const [id, at] of this.viewed) if (this.now() - at > 60000) this.viewed.delete(id);
+      }
       const result = await this.chat.read({ surfaceId: String(url.searchParams.get('surface_id') || ''), revision: String(url.searchParams.get('revision') || '') });
       return this.json(res, req, phoneConversation(result));
     }
@@ -389,6 +402,25 @@ class PhoneWeb extends EventEmitter {
       if (!['claude', 'codex'].includes(provider) || !/^[a-zA-Z0-9:._-]{1,200}$/u.test(groupId)) return this.fail(res, 400, 'Choose Claude or Codex and a panel');
       const created = await this.chat.create({ groupId, provider });
       return this.json(res, req, { surface_id: created.surfaceId, panel: created.panel, provider: created.provider });
+    }
+    // Notifications: the page asks for the key, then hands over its push address.
+    if (url.pathname === '/api/push') {
+      if (!this.push) return this.fail(res, 404, 'Not found');
+      return this.json(res, req, { public_key: this.push.publicKey(), on: this.push.has(String(body.endpoint || '')) });
+    }
+    if (url.pathname === '/api/push/on') {
+      if (!this.push) return this.fail(res, 404, 'Not found');
+      try {
+        this.push.subscribe({ endpoint: body.endpoint, p256dh: body.keys?.p256dh, auth: body.keys?.auth, device: admitted.device?.device, os: admitted.device?.os });
+      } catch (error) { return this.fail(res, 400, error.message); }
+      this.emit('change', this.status());
+      return this.json(res, req, { on: true });
+    }
+    if (url.pathname === '/api/push/off') {
+      if (!this.push) return this.fail(res, 404, 'Not found');
+      this.push.remove({ endpoint: String(body.endpoint || '') });
+      this.emit('change', this.status());
+      return this.json(res, req, { on: false });
     }
     if (url.pathname === '/api/key') {
       const key = String(body.key || '');

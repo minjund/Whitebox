@@ -4,7 +4,9 @@
 // guarded chat send (while the AI works it goes in at once and is read at the
 // next gap; "stop and send" ends the current turn first), "/" lists the AI's
 // commands and skills, and an AI's question is shown as the screen's own
-// words with a few keys to answer it.
+// words with a few keys to answer it. [Notify me] asks the computer to send a
+// notification when AI work finishes or waits (src/phonePush.js); tapping it
+// opens that chat.
 const token = document.querySelector('meta[name="wb-token"]').content;
 const $ = selector => document.querySelector(selector);
 const POLL_MS = 1500;
@@ -66,6 +68,12 @@ const STRINGS = {
   '컴퓨터에 열린 패널이 없어요. 컴퓨터에서 패널을 먼저 만드세요.': ['No panels are open on the computer. Create one there first.', '电脑上没有打开的面板。请先在电脑上创建一个。'],
   '{p}를 시작하는 중…': ['Starting {p}…', '正在启动 {p}…'],
   '새 세션을 열지 못했어요': ['Could not open a new session', '未能打开新会话'],
+  '알림 받기': ['Notify me', '接收通知'],
+  '알림 켜짐': ['Notifications on', '通知已开启'],
+  '휴대폰 설정에서 이 앱의 알림을 허용해 주세요.': ['Allow notifications for this app in the phone settings.', '请在手机设置中允许此应用的通知。'],
+  '알림을 켜지 못했어요': ['Could not turn on notifications', '未能开启通知'],
+  '푸시 서버가 답하지 않아요. 잠시 뒤 다시 눌러 보세요.': ['The push service did not answer. Try again in a moment.', '推送服务没有响应，请稍后再试。'],
+  '알림을 껐어요. 다시 누르면 켜져요.': ['Turned off. Tap again to turn on.', '已关闭。再次点按即可开启。'],
   '이 터미널의 대화 기록을 아직 찾지 못했어요. 메시지는 보낼 수 있어요.': ["This terminal's conversation log was not found yet. You can still send a message.", '尚未找到此终端的对话记录，但仍可发送消息。'],
   // chat-render.js
   '파일 {n}개 편집': ['Files edited: {n}', '编辑了 {n} 个文件'],
@@ -127,6 +135,7 @@ async function loadList() {
     const { panels } = await api('/api/list');
     notice('');
     renderList(panels || []);
+    if (opening) openFromList(opening);
   } catch (error) {
     notice(/not ready/i.test(error.message) ? t('컴퓨터의 Whitebox 화면이 준비되지 않았어요. 앱이 켜져 있는지 확인하세요.') : t('컴퓨터에 연결할 수 없어요. Whitebox와 Tailscale이 켜져 있는지 확인하세요. 다시 시도하는 중…'));
   } finally { listLoading = false; }
@@ -189,6 +198,19 @@ function renderList(panels) {
     }
     root.append(section);
   }
+}
+// A tapped notification names a terminal: open its chat once the list has it.
+let opening = new URLSearchParams(location.search).get('open') || '';
+if (opening) history.replaceState(null, '', location.pathname);
+function openFromList(id) {
+  for (const panel of lastPanels) {
+    const terminal = panel.terminals.find(item => item.id === id);
+    if (!terminal) continue;
+    opening = '';
+    openChat({ id: terminal.id, panelId: panel.id, panel: panel.name, title: terminal.title || terminal.provider || terminal.id, provider: terminal.provider });
+    return;
+  }
+  opening = '';
 }
 // "+ 새 세션": a new Claude or Codex terminal in that panel, then its chat at once.
 async function newSession(panel, provider) {
@@ -462,6 +484,70 @@ if (!standalone) {
   else if (ios) hint(t('공유 버튼 › 홈 화면에 추가를 누르면 앱처럼 쓸 수 있어요.'));
 }
 $('#install').textContent = t('앱으로 설치');
+
+// --- Notifications. Push needs the service worker, so https only.
+const pushSupported = isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+let pushOn = false, pushBusy = false;
+function drawPush() {
+  const button = $('#notify');
+  button.hidden = !pushSupported;
+  button.textContent = t(pushOn ? '알림 켜짐' : '알림 받기');
+  button.classList.toggle('on', pushOn);
+  button.setAttribute('aria-pressed', String(pushOn));
+  button.disabled = pushBusy;
+}
+// A subscription made for another key (the computer made a new one) cannot be used.
+function sameKey(subscription, key) {
+  const own = subscription?.options?.applicationServerKey;
+  if (!own) return true;
+  return btoa(String.fromCharCode(...new Uint8Array(own))).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '') === key;
+}
+async function pushState() {
+  if (pushSupported) {
+    try {
+      const subscription = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      const { public_key: key, on } = await api('/api/push', { endpoint: subscription?.endpoint || '' });
+      pushOn = Boolean(subscription && on && sameKey(subscription, key) && Notification.permission === 'granted');
+    } catch {}
+  }
+  drawPush();
+}
+$('#notify').addEventListener('click', async () => {
+  if (pushBusy) return;
+  pushBusy = true; drawPush();
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (pushOn) {
+      await api('/api/push/off', { endpoint: subscription?.endpoint || '' });
+      await subscription?.unsubscribe();
+      pushOn = false;
+      hint(t('알림을 껐어요. 다시 누르면 켜져요.'));
+    } else {
+      if (await Notification.requestPermission() !== 'granted') { hint(t('휴대폰 설정에서 이 앱의 알림을 허용해 주세요.')); return; }
+      const { public_key: key } = await api('/api/push', { endpoint: '' });
+      if (subscription && !sameKey(subscription, key)) { await subscription.unsubscribe(); subscription = null; }
+      // The browser registers with its push service first; that can hang when
+      // the service cannot be reached, so the button does not stay stuck.
+      subscription = subscription || await Promise.race([
+        registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(t('푸시 서버가 답하지 않아요. 잠시 뒤 다시 눌러 보세요.'))), 30000)),
+      ]);
+      await api('/api/push/on', subscription.toJSON());
+      pushOn = true;
+      hint('');
+    }
+  } catch (error) { hint(`${t('알림을 켜지 못했어요')}: ${error.message}`); }
+  finally { pushBusy = false; drawPush(); }
+});
+// The app was already open when a notification was tapped.
+if (pushSupported) navigator.serviceWorker.addEventListener('message', event => {
+  if (event.data?.type !== 'open' || !event.data.surfaceId) return;
+  opening = event.data.surfaceId;
+  if (current?.id === opening) { opening = ''; return; }
+  showList();
+});
+pushState();
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('#install').hidden = false; });
 window.addEventListener('appinstalled', () => { installPrompt = null; $('#install').hidden = true; hint(''); });
 $('#install').addEventListener('click', async () => {

@@ -3,6 +3,11 @@
 Notable user-facing changes are documented here. Release tags and generated
 GitHub release notes remain the authoritative version history.
 
+## 2.7.0 - 2026-11-27
+
+- Phone notifications: tap [Notify me] on the phone page and the phone is told when an AI finishes the work you gave it or stops to wait for your answer, even with the page closed. Tapping a notification opens that chat. A chat open on the phone is not notified. Notifications go through the browser's push service (Google's for Chrome on Android) encrypted for that phone; it can see when one is sent but not what it says. Settings › Remote lists the phones that get notifications and turns each off.
+- The bar above a terminal that showed "Waiting for peer reply" with the whole request one AI gave another is gone; only a lost collaboration link is still reported there.
+
 ## 2.6.0 - 2026-11-27
 
 - The phone page can start a session: each panel has [+ New session]; pick Claude or Codex and a new terminal opens in that panel's folder (it also appears on the computer) and its chat opens at once, showing "Starting…" until the AI is ready. A panel without Claude or Codex yet is still listed so you can start one there.
